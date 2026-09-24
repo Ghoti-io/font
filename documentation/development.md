@@ -7,7 +7,7 @@ include/ghoti.io/font/      Public headers, one per module, by tier (design.md s
 src/core/                   Result strings, limits, the allocator
 src/font.c                  The version
 tests/unit/                 Unit tests (gtest)
-tests/data/fonts/           The subset corpus, one directory per family with its licence (from phase 0)
+tests/data/fonts/           Synthetic fixtures built by tools/fixtures/, this library's own; no third-party font is committed (from phase 0)
 tests/data/golden/          Coverage hashes for the cross-platform gate (from phase 1)
 tests/fuzz/                 libFuzzer harnesses and seed corpus (from phase 0)
 tools/fixtures/             make_fixtures.py, over fontTools in its container (from phase 0)
@@ -27,8 +27,9 @@ arrives with:
    `check-reader` greps for anything else under `src/` and fails.
 3. Every public name in `namespace.h`; `check-symbols` fails otherwise.
 4. A `_dump` for every parsed table, so that `ttx_diff` can compare it.
-5. Its fixtures, subset and renamed by `tools/fixtures/make_fixtures.py`, with
-   the family's licence beside them (design.md section 14.5).
+5. Its fixtures, built by `tools/fixtures/make_fixtures.py` in the `fonttools`
+   image from outlines drawn here, and committed; real fonts are reached only
+   through the oracle image (design.md section 14.5).
 6. **A fuzz harness**, registered with
    `$(eval $(call fuzz-rule,fuzz_<name>,<name>))`, with its options byte
    driving `GFNT_Limits` - and the truncation sweep over each of its tables.

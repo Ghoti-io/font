@@ -38,7 +38,7 @@ Each word is a mechanism:
 | **Cross-platform** | Tiers 0-3 (§4) touch no operating-system API and behave identically everywhere by construction. Tier 4 - font discovery - is the only code that does, one file per platform, with the Windows and macOS branches marked per `CONVENTIONS.md` §11. |
 | **Dependency-light** | `cutil`, `unicode`, and `compress` (gzip for `.pcf.gz`/`.psf.gz`, zlib for WOFF 1). `image` is optional, for PNG-bearing colour strikes and as a raster surface. Nothing else: not FreeType, not HarfBuzz, not fontconfig, not ICU. Each is an oracle in the tests and none is linked (§14). |
 | **Enterprise-ready** | No global state: no process-wide font cache, no default face, no environment read outside tier 4 (§15.3). A face is immutable after load and shareable across threads; caches are objects the caller owns. Embedding permissions are reported and never enforced (§17.9). "Which face answered this glyph" and "which strike answered this size" are queryable, because fallback that cannot be audited is a bug report waiting to happen (§2 M8). |
-| **Useful** | Three consumers are enumerated in §13 with their exact needs, and the library is designed against all three, not the first one. It can always draw *something*: one subset face is compiled in (§14.6). |
+| **Useful** | Three consumers are enumerated in §13 with their exact needs, and the library is designed against all three, not the first one. It draws *something* for any glyph it cannot find - glyph 0 is synthesised (§5.4) - and bundles no font of its own (§14.6): the application's fonts and the system's, through tier 4, are the only fonts there are. |
 
 ### 1.1 The shape is borrowed, deliberately
 
@@ -105,7 +105,7 @@ field's, and font engineering has a long list.
 | M21 | Subsetting that drops glyphs only reachable through `GSUB` | Ligatures missing from PDFs for a decade | Glyph closure walks composites and, by option, the layout tables (§12.3) |
 | M22 | Rasterising at a size the caller passed straight from untrusted input | A 65,535-ppem glyph is a gigabyte | `GFNT_Limits::max_ppem` and `max_raster_bytes` (§15.2) |
 | M23 | Memory-mapping a font file that is then truncated | `SIGBUS` on the next read; no C-level recovery | `GFNT_Blob` copies by default; mapping is an explicit choice with the hazard in its documentation (§5.1) |
-| M24 | No font at all, so no text at all | Containers, fresh Windows images, embedded targets, CI | One subset face compiled in (§14.6); the library can always draw a diagnostic string |
+| M24 | A font library that bundles a font, so every consumer ships a third-party licence obligation it never chose | Toolkits that embed a fallback face; its notice then travels with every binary every downstream distributor produces | No font is bundled (§14.6). Glyph 0 is synthesised in code, so a face with no usable glyphs still draws boxes; an application ships its own fallback as its own asset, or finds the system's through tier 4 |
 
 ---
 
@@ -885,7 +885,7 @@ memory.** Fonts have three excellent oracles and one of them can also
 
 | Claim | Oracle | Driver | Image |
 | --- | --- | --- | --- |
-| every table parses to the same fields | **fontTools** `ttx`: every table of every corpus font dumped to XML and compared field by field with this library's `_dump` | `tools/oracle/ttx_diff.py`, `make check-oracle-ttx` | `fonttools`, built here: `python` by digest + `fonttools==` and `brotli==` exact; the **same image generates the fixtures** (§14.8) |
+| every table parses to the same fields | **fontTools** `ttx`: every table of every synthetic fixture and every real font in the image dumped to XML and compared field by field with this library's `_dump` | `tools/oracle/ttx_diff.py`, `make check-oracle-ttx` | `fonttools`, built here: `python` by digest + `fonttools==` and `brotli==` exact, plus Debian's font packages by full apt version; the **same image builds the synthetic fixtures** (§14.5) |
 | `cmap` maps every codepoint identically | fontTools `getBestCmap()` and every subtable, over all 1,114,112 codepoints per font | `tools/oracle/cmap_diff.py` | `fonttools` |
 | outlines are identical | **FreeType** `FT_Load_Glyph` with `FT_LOAD_NO_HINTING \| FT_LOAD_NO_SCALE`, every glyph of every corpus font, point by point | `tools/oracle/ft_outline.c` | `freetype`, built here: the driver links only FreeType and is compiled inside its image; apt version pinned in full |
 | coverage is close | FreeType `FT_Render_Glyph` at several ppem, compared with a per-pixel tolerance (the two rasterisers are the same algorithm family and differ by rounding) | `tools/oracle/ft_raster.c` | `freetype` |
@@ -950,66 +950,74 @@ build host and in the cross container. A hash that differs between the two
 is a host-dependent read or a `float` that crept in, and this is the only
 gate that sees it.
 
-### 14.5 The corpus, and its licences
+### 14.5 Fixtures are ours; real fonts stay in the oracle image
 
-Every other library here commits fixtures freely. This one cannot: fonts are
-licensed and large. The rules:
+Every other library here commits fixtures freely, and a font library's first
+instinct is to commit fonts. It is the wrong instinct: fonts are licensed,
+large, and not needed in the repository at all, because the two jobs a corpus
+does want different fonts.
 
-- **Licences: OFL 1.1, Apache-2.0, the Bitstream Vera licence, MIT, BSD, CC0.**
-  Nothing from the GPL family in the published repository, whatever exception
-  it carries. No system font, no foundry font.
-- **OFL's Reserved Font Name clause binds on every subset.** A modified OFL
-  font may not keep its reserved name, so every subset fixture is renamed
-  (`NotoSans` → `NotoSans-GhotiTest`) by the subsetter, and each font's
-  licence text ships beside it in `tests/data/fonts/<family>/`.
-- **Every fixture is subset**, by `tools/fixtures/make_fixtures.py` over
-  fontTools, to the glyphs the tests need, and `make check-fixtures`
-  regenerates and fails on a byte difference, as `regex` and `text` do for
-  generated tables. DejaVu Sans is 700 KB per face and Noto CJK is tens of
-  megabytes; the libraries are published, and repository size is a cost.
-- **fontTools also *builds* fixtures.** `fontTools.fontBuilder` constructs a
-  font from parts, which is how the corpus gets a format-2 `cmap`, an `sbix`
-  table from OFL-licensed PNGs, a `COLR` v1 paint graph with every paint
-  format, a font whose tables disagree about `numGlyphs`, and every other
-  shape no shipping font has - without hand-writing bytes.
-- **Hand-built byte arrays for the refusal arms**: a bad checksum, a `loca`
-  past `glyf`, a composite referencing itself, a charstring with depth 11.
-  Real fonts measure conformance; built ones measure refusal; a corpus grown
-  from fixes measures the fixes.
+- **Unit tests want fixtures that exercise a code path** - a format-2 `cmap`,
+  a composite three deep, a `loca` running backwards, a `numGlyphs` that
+  disagrees across tables, a `COLR` v1 graph with every paint format, an
+  `sbix` strike, a variable font with three axes. No shipping font has most
+  of these, and the ones that exist are megabytes. `tools/fixtures/
+  make_fixtures.py` builds them with `fontTools.fontBuilder` from a handful of
+  outlines drawn here, in the `fonttools` image so that the bytes are
+  reproducible, and they are committed under `tests/data/fonts/`: a few
+  kilobytes each, this library's copyright, LGPL like everything around them,
+  **no third-party licence anywhere in the tree**. `make check-fixtures`
+  regenerates and fails on a byte difference.
+- **Conformance wants the population that is not ours** - Noto Sans
+  Devanagari through this shaper against HarfBuzz, DejaVu through this
+  rasteriser against FreeType, every font a stock system has through
+  `ttx_diff`. Those fonts live **in the oracle image only**, installed from
+  Debian's font packages (`fonts-dejavu-core`, `fonts-noto-core`,
+  `fonts-noto-cjk`, `fonts-noto-color-emoji`, `xfonts-terminus`, and whatever
+  else a differential names) pinned by full apt version as the container
+  prototype pins pcre2. They are never copied into the repository, so no
+  licence question arises in it, and `make test` never needs them: only the
+  `check-oracle-*` targets do.
 
-What the corpus must contain, and where each comes from:
+The lesson this suite learned on its own corpora - one grown from your fixes
+measures the fixes - is what the second half is for, and it makes the
+differentials mandatory rather than nice to have. Synthetic fixtures alone
+would flatter; the real-font differentials are the outside population, and a
+shaper that passes every fixture and fails `hb_diff` on Noto is exactly the
+case this arrangement exists to catch. A CI without the oracle image is
+running half the gates and must say so (§14.7).
 
-| Need | Font | Licence |
-| --- | --- | --- |
-| hinted TrueType, `kern` + `GPOS` | DejaVu Sans | Bitstream Vera |
-| TrueType with large `GSUB` | Noto Sans | OFL |
-| CFF, CID-keyed CFF, `.ttc`, `cmap` 12 and 14, CJK | Noto Serif CJK / Source Han Sans | OFL |
-| variable, many axes | Roboto Flex; Inter | OFL |
-| Arabic joining, `rlig`, kashida | Amiri; Noto Sans Arabic | OFL |
-| Devanagari, Bengali, Tamil, ... one per Indic shaper | the Noto Sans family per script | OFL |
-| Thai, Khmer, Myanmar (`SA`) | Noto Sans Thai / Khmer / Myanmar | OFL |
-| Hebrew | Noto Sans Hebrew | OFL |
-| `CBDT` colour emoji; `COLR` v1 | Noto Color Emoji, both builds | OFL |
-| `COLR` v1 with every paint format | built with fontTools | - |
-| `sbix` | built with fontTools from Noto Emoji PNGs | Apache-2.0 art |
-| PCF, BDF, PSF | Terminus | OFL |
-| pixel fonts | Cozette (MIT), Spleen (BSD-2) | |
-| `.hex` | GNU Unifont, under its OFL option | OFL |
-| Type 1 + AFM | converted from an OFL font (fontTools or FontForge), never URW's, whose licensing has moved | OFL |
-| WOFF 1, WOFF 2 | generated from any of the above | |
-| every refusal | hand-built | - |
+Two cases fall between:
 
-### 14.6 The compiled-in face
+- **A real font's quirk that needs a regression test.** Reproduce it
+  synthetically: the quirk is a byte pattern, and `fontBuilder` can emit any
+  byte pattern. If it genuinely cannot be reduced, a subset of the real font
+  may be committed - renamed per its licence's reserved-name clause, with the
+  licence text beside it - as a decision recorded in the commit, never as the
+  habit.
+- **The golden-bitmap gate (§14.4)** measures this rasteriser's determinism,
+  not any font; the synthetic fixtures serve it.
 
-One subset outline face is generated into a C array by the same fixture tool
-and compiled into tier 0: DejaVu Sans, hints stripped, subset to Latin-1,
-Latin Extended-A, the box-drawing and geometric-shape blocks, and `.notdef`,
-renamed `Ghoti Fallback Sans` per its licence, about 40 KB. It runs the real
-sfnt-`glyf`-raster path rather than being a second implementation, so a
-fallback that renders is evidence the library works. The generator emits both
-the library's licence header and the font's, per `CONVENTIONS.md` §8, so a
-regeneration cannot drop either. `.notdef` is additionally synthesised in code
-(§5.4), so even the absence of the table draws a box.
+Hand-built byte arrays remain for the refusal arms that even `fontBuilder`
+will not emit - a bad checksum, a directory entry past the blob.
+
+### 14.6 No font is bundled
+
+The first draft compiled a subset face into tier 0 so that the library could
+always draw a diagnostic string. It does not, and the reason is M24: a font
+embedded in a library ships inside every consumer's binary, and its licence
+notice - Vera's, OFL's - then has to travel with every binary every downstream
+distributor of every consumer produces. A font library has no business making
+that decision for its consumers.
+
+What the library promises instead is narrower and needs no licence. **Glyph 0
+is synthesised in code** (§5.4), so a face with no usable glyphs still draws a
+hollow box per character and a run that no face could map still has geometry.
+**Tier 4 enumerates the system's fonts** (§11), so an application that wants a
+fallback finds one where the operating system keeps them. An application that
+must draw text with no fonts on the system - a container, a fresh Windows
+image - ships a font as its own asset under its own licence, which is where
+that decision belongs; `cjelly` may well do so, and that is `cjelly`'s call.
 
 ### 14.7 The oracles run in containers
 
@@ -1028,8 +1036,8 @@ seam that note leaves open and this library takes.
 Four things are specific to font oracles:
 
 - **The fixture generator runs in the `fonttools` image, and that is what
-  makes `check-fixtures` mean anything.** A subset's bytes depend on the
-  fontTools version that produced them; a host upgrade would fail the
+  makes `check-fixtures` mean anything.** A built fixture's bytes depend on
+  the fontTools version that produced them; a host upgrade would fail the
   byte-identity check for no reason, and a pinned image cannot drift. The
   same image answers `ttx_diff`, `cmap_diff` and `subset_diff`, so the
   fixture and the oracle agree on what a table *is*.
@@ -1047,9 +1055,10 @@ Four things are specific to font oracles:
   the Python tools are exposed the same way, and the image is where the
   locale is written down.
 
-The corpus fonts are never copied into an image: they are in the repository,
-mounted read-only at the same path on both sides, so a licence question about
-an image never arises.
+The real fonts live only in the oracle image, installed from Debian's
+packages; the synthetic fixtures live only in the repository, mounted
+read-only at the same path on both sides. Neither crosses, and no licence
+question arises in the repository (§14.5).
 
 ### 14.8 The gates are themselves tested
 
@@ -1160,9 +1169,12 @@ answered on 2026-09-23/24; the rest stand as recommended.
    embeds (§13.3) decides.
 10. **Fixed point everywhere; no `float` in a core type** (§5.2).
 11. **Discovery is a tier, fontconfig is not linked** (§11).
-12. **`DejaVu Sans` is the compiled-in face** (§14.6). Noto Sans would do; DejaVu
-    is smaller once its hints are stripped and its licence has no RFN clause to
-    trip on, only a rename requirement.
+12. **No font is bundled, and no third-party font is committed** (§14.5,
+    §14.6). The first draft compiled DejaVu Sans in and committed subset OFL
+    fonts as fixtures; the licence obligation the first would have propagated
+    to every consumer, and the fact that the second is not needed once the
+    fixtures are built here and the real fonts live in the oracle image, are
+    the reasons both were dropped. Decided 2026-09-24.
 13. **Cluster level is monotone graphemes by default** (§9.3).
 14. **The zero line-metrics policy is the font's own request** (§10.3), not a
     platform's.
@@ -1181,8 +1193,8 @@ that the scheduling is a choice rather than a constraint.
 
 | Phase | Work | Size | Gate | Unlocks |
 | --- | --- | --- | --- | --- |
-| **0** | Scaffold from `model` per `CONVENTIONS.md` §12; `core.h`, the fixed-point types, `GFNT_Limits`, `GFNT_Error`; `blob.h`; **the checked reader and `check-reader`**; sfnt and `ttcf` directories; `head`, `maxp`, `hhea`/`hmtx`, `OS/2`, `post`, `name`; `cmap` 4 and 12; **the strike list, `GFNT_StrikePolicy`, `GFNT_GlyphKind` and `GFNT_Variation` in the API**; `_dump` for every table; `fuzz_sfnt`, `fuzz_cmap`; the fixture tool and the first subset fixtures; `ttx_diff` and `cmap_diff` | M | `check-symbols`, `check-layering`, `check-reader`; `ttx_diff` clean over the corpus; every gate observed to fail | **F1: "what is this file, what does it contain, which glyph is this codepoint, how wide is it"** |
-| **1** | `glyf`/`loca` with composites; `outline.h`; the scan converter and `GFNT_Coverage`; the `GIMG_Raster` bridge; **the compiled-in face**; `ft_outline`, `ft_raster`; the golden-bitmap gate on both architectures; `fuzz_glyf`, `fuzz_raster`; the truncation sweep | L | outlines identical to FreeType for every glyph of every TrueType fixture; golden hashes identical across architectures | **F2: `cjelly` draws unhinted Latin. Its v0.1 "text (Latin fallback)" is reachable here** |
+| **0** | Scaffold from `model` per `CONVENTIONS.md` §12; `core.h`, the fixed-point types, `GFNT_Limits`, `GFNT_Error`; `blob.h`; **the checked reader and `check-reader`**; sfnt and `ttcf` directories; `head`, `maxp`, `hhea`/`hmtx`, `OS/2`, `post`, `name`; `cmap` 4 and 12; **the strike list, `GFNT_StrikePolicy`, `GFNT_GlyphKind` and `GFNT_Variation` in the API**; `_dump` for every table; `fuzz_sfnt`, `fuzz_cmap`; the fixture tool and the first synthetic fixtures; the oracle image with Debian's fonts; `ttx_diff` and `cmap_diff` | M | `check-symbols`, `check-layering`, `check-reader`; `ttx_diff` clean over the corpus; every gate observed to fail | **F1: "what is this file, what does it contain, which glyph is this codepoint, how wide is it"** |
+| **1** | `glyf`/`loca` with composites; `outline.h`; the scan converter and `GFNT_Coverage`; the `GIMG_Raster` bridge; `ft_outline`, `ft_raster`; the golden-bitmap gate on both architectures; `fuzz_glyf`, `fuzz_raster`; the truncation sweep | L | outlines identical to FreeType for every glyph of every TrueType fixture; golden hashes identical across architectures | **F2: `cjelly` draws unhinted Latin. Its v0.1 "text (Latin fallback)" is reachable here** |
 | **1b** | PSF, BDF, PCF over `compress`'s gzip; `.hex`; `EBLC`/`EBDT`; the strike policy exercised by real strikes; `bitmap_diff` | M | `bdftopcf` round trip; every strike of Terminus renders identically from BDF, PCF and PSF | **F3: the 1,885 bitmap fonts on a stock Linux box load; console and pixel UIs** |
 | **2** | `charstring.h` with Type 2; `CFF ` and CID-keyed; bare CFF; Type 1 and AFM/PFM on the same module; `cmap` 0, 2, 6, 8, 10, 13, 14; `kern`; WOFF 1; `fuzz_cff`, `fuzz_type1`, `fuzz_woff` | L | FreeType outline differential over every CFF and Type 1 fixture; `ttx_diff` over the new tables | **F4: most desktop fonts, all of TeX, and every font program a PDF embeds** |
 | **3** | `GDEF`/`GSUB`/`GPOS`/`BASE` parsing and the applier; the default shaper; the language registry; `GFNT_ShapedRun` **with the cluster map from the first line**; Latin, Greek, Cyrillic, Hebrew; fallback mark positioning; `hb_diff`; `fuzz_layout_tables`, `fuzz_shape` | L | `hb-shape` identical for the Latin/Greek/Cyrillic/Hebrew corpus on every fixture | **F5: ligatures, real kerning, marks; `cjelly`'s accessibility requirement is satisfiable** |

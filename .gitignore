@@ -1,9 +1,8 @@
 # Build output
 build
 
-# Debug artifacts. Not *.txt: the conformance files, the corpus licences
-# and the vector files are .txt, and a blanket ignore would swallow a
-# fixture with git status staying clean.
+# Debug artifacts. Not *.txt: the vector and golden files are .txt, and a
+# blanket ignore would swallow a fixture with git status staying clean.
 *.gdb
 
 # IDE / CTest run output (not used by project Makefile)

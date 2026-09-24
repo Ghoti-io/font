@@ -1,0 +1,7 @@
+Name: Ghoti.io Font(BRANCH)
+Description: Fonts: every file family, shaping, rasterisation and paragraph layout
+Version: (VERSION)
+URL: https://github.com/coreyp1/font
+Libs: -L(PC_LIB_DIR) -l(SUITE)-(PROJECT)(BRANCH)
+CFlags: -I(PC_INCLUDE_DIR)
+Requires: (REQUIRES)

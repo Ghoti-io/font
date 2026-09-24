@@ -1,0 +1,5 @@
+# Seeds are committed; libFuzzer's findings written here are not.
+*
+!.gitignore
+!*/
+!*.seed

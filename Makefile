@@ -409,7 +409,8 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage target does, because --coverage links the gcov runtime, whose
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
-TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps
+TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
+	check-reader
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -611,7 +612,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 ####################################################################
 
 # General commands
-.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering check-stamps check-aliasing
+.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering check-stamps check-aliasing check-reader
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -808,6 +809,19 @@ check-stamps: ## Fail if a compile rule names no flags stamp, or a stamp omits a
 # tools/check-stamps.py is the flag-stamp half of model's check-lists.py,
 # which is generic; the rest of that script is model's own lists.
 	@python3 tools/check-stamps.py
+
+check-reader: ## Fail if anything under src/ reads font bytes around the reader
+# documentation/design.md section 6: every read of file data goes through
+# GFNT_Reader. That is the mechanism behind the threat model rather than a
+# style preference - a table cannot reach into its neighbour because the
+# reader it holds spans only its own extent - and it is also what makes a
+# fuzzer crash mean something, because a crash then implicates the reader or a
+# read that went around it rather than every parser in the library.
+#
+# The checker runs each of its patterns against a planted violation in the
+# same invocation, so a pattern that has rotted into matching nothing fails
+# the build instead of reporting a clean tree.
+	@python3 tools/check-reader.py
 
 ####################################################################
 # Tier layering

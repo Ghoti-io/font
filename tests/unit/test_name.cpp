@@ -11,6 +11,7 @@
 #include "test_helpers.h"
 #include "sfnt_builder.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -426,6 +427,45 @@ TEST(NameDump, NamesEveryRecordAndSaysWhenOneCannotBeDecoded) {
   EXPECT_NE(text.find("not decodable"), std::string::npos) << text;
 }
 
+TEST(NameDump, EscapesTheControlCharactersARealNameCarries) {
+  // Every multi-line copyright notice has newlines in it, and a dump whose
+  // records can run over several lines is one no tool can read back.
+  // tools/oracle/ttx_diff.py parses these lines, which is what makes this the
+  // difference between a dump and an interface.
+  Font font({name_table(gfnttest::build_name({
+      {3, 1, 0x409, GFNT_NAME_COPYRIGHT,
+          gfnttest::utf16be("Line one\nLine two\tand\\back")},
+  }))});
+
+  gfnttest::CapturedOutput out;
+  ASSERT_NE(out.get(), nullptr);
+  ASSERT_EQ(gfnt_face_name_dump(font.face, out.get()), GFNT_OK);
+  std::string text = out.finish();
+
+  EXPECT_NE(text.find("'Line one\\nLine two\\tand\\\\back'"),
+      std::string::npos)
+      << text;
+  EXPECT_EQ(std::count(text.begin(), text.end(), '\n'), 2)
+      << "a header line and one record line, whatever the record contains:\n"
+      << text;
+}
+
+TEST(NameDump, LeavesRealTextAlone) {
+  // Only C0 and DEL are escaped. The decoder's output is UTF-8 by
+  // construction, and mangling it here would make the dump a worse record than
+  // the font.
+  std::vector<uint8_t> utf16;
+  gfnttest::put_u16(utf16, 0x00E9);  // 'é'
+  gfnttest::put_u16(utf16, 0x4E2D);  // a Han character
+  Font font({name_table(gfnttest::build_name(
+      {{3, 1, 0x409, GFNT_NAME_FAMILY, utf16}}))});
+
+  gfnttest::CapturedOutput out;
+  ASSERT_NE(out.get(), nullptr);
+  ASSERT_EQ(gfnt_face_name_dump(font.face, out.get()), GFNT_OK);
+  EXPECT_NE(out.finish().find("'\xC3\xA9\xE4\xB8\xAD'"), std::string::npos);
+}
+
 TEST(NameDump, RefusesNullsAndReportsEveryWriteFailure) {
   Font font({name_table(gfnttest::build_name({
       {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti Sans")},
@@ -435,14 +475,19 @@ TEST(NameDump, RefusesNullsAndReportsEveryWriteFailure) {
   EXPECT_EQ(gfnt_face_name_dump(nullptr, nullptr), GFNT_ERR_INVALID);
 
   size_t failures = 0;
-  for (size_t allow = 0; allow < 5; allow++) {
+  for (size_t allow = 0; allow < 9; allow++) {
     gfnttest::FailingSink sink(allow);
     ASSERT_NE(sink.get(), nullptr);
     if (gfnt_face_name_dump(font.face, sink.get()) == GFNT_ERR_IO) {
       failures++;
     }
   }
-  EXPECT_EQ(failures, 3u) << "a header line and one line per record";
+  // One header line, then three writes per record: the prefix, the text, and
+  // the closing quote. The text is one write because neither of these names has
+  // anything to escape - which is the property the escaping is written in runs
+  // for, and the reason this count is derivable rather than guessed.
+  EXPECT_EQ(failures, 7u) << "one header and three writes for each of two "
+                             "records";
 }
 
 TEST(Name, EveryEntryPointRefusesNullArguments) {

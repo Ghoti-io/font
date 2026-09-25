@@ -620,7 +620,8 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Fuzz commands
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-run-sfnt fuzz-run-cmap
 # Oracle commands
-.PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean check-oracle-cmap check-oracle-cmap-exhaustive
+.PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
+.PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -858,6 +859,13 @@ oracle-corpus: ## Copy the image's fonts to build/oracle/corpus for both sides
 oracle-corpus-clean: ## Remove the materialised corpus (it is cache, not content)
 	@rm -rf build/oracle/corpus
 	@printf "removed build/oracle/corpus\n"
+
+check-oracle-ttx: ## Diff every parsed table's fields against fontTools
+check-oracle-ttx: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/ttx_diff.py --quiet
+
+check-oracle: ## Run every oracle differential there is
+check-oracle: check-oracle-ttx check-oracle-cmap
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)

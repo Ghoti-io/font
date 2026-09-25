@@ -38,6 +38,8 @@
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/name.h>
+#include <stdio.h>
+#include <string.h>
 #include "../sfnt/sfnt.h"
 
 /** The `name` tag, spelled once. */
@@ -422,6 +424,79 @@ void gfnt_name_free(const GFNT_Allocator * allocator, char * text) {
   allocator->free_fn(allocator->ctx, text);
 }
 
+/**
+ * Write a decoded name with its control characters escaped.
+ *
+ * A name record routinely contains newlines - every multi-line copyright notice
+ * does - and a dump whose records can run over several lines is one no tool can
+ * read back and no person can scan. `tools/oracle/ttx_diff.py` parses these
+ * lines, so this is the difference between a dump and a dump that is an
+ * interface.
+ *
+ * Written as runs rather than character by character: the first version called
+ * fprintf once per byte, which turned one name into fifty writes and made the
+ * write-failure sweep in tests/unit/test_name.cpp depend on the *content* of a
+ * record rather than on the number of lines. A name with nothing to escape is
+ * one write now.
+ */
+static GFNT_Result gfnt_name_dump_escaped(FILE * out, const char * text) {
+  const char * run = text;
+  const unsigned char * at = (const unsigned char *)text;
+
+  for (; *at; ++at) {
+    const char * escape = NULL;
+    char hex[5];
+
+    switch (*at) {
+      case '\n':
+        escape = "\\n";
+        break;
+      case '\r':
+        escape = "\\r";
+        break;
+      case '\t':
+        escape = "\\t";
+        break;
+      case '\\':
+        escape = "\\\\";
+        break;
+      default:
+        // Only C0 and DEL are escaped. Everything else is UTF-8 by
+        // construction - the decoder produced it - and mangling it here would
+        // make the dump a worse record than the font.
+        if (*at < 0x20u || *at == 0x7Fu) {
+          snprintf(hex, sizeof hex, "\\x%02X", (unsigned)*at);
+          escape = hex;
+        }
+        break;
+    }
+    if (!escape) {
+      continue;
+    }
+
+    if ((const char *)at > run) {
+      size_t length = (size_t)((const char *)at - run);
+
+      if (fwrite(run, 1, length, out) != length) {
+        return GFNT_ERR_IO;
+      }
+    }
+    if (fprintf(out, "%s", escape) < 0) {
+      return GFNT_ERR_IO;
+    }
+    run = (const char *)at + 1;
+  }
+
+  if (*run) {
+    size_t length = strlen(run);
+
+    if (fwrite(run, 1, length, out) != length) {
+      return GFNT_ERR_IO;
+    }
+  }
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_face_name_dump(const GFNT_Face * face, FILE * out) {
   size_t count = 0;
   GFNT_Result result;
@@ -461,14 +536,21 @@ GFNT_Result gfnt_face_name_dump(const GFNT_Face * face, FILE * out) {
     }
     if (fprintf(out,
             "name record %zu: platform %u, encoding %u, language %u, "
-            "name %u: '%s'\n",
+            "name %u: '",
             i, record.platform_id, record.encoding_id, record.language_id,
-            record.name_id, text)
+            record.name_id)
         < 0) {
       gfnt_name_free(NULL, text);
       return GFNT_ERR_IO;
     }
+    result = gfnt_name_dump_escaped(out, text);
     gfnt_name_free(NULL, text);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    if (fprintf(out, "'\n") < 0) {
+      return GFNT_ERR_IO;
+    }
   }
   return GFNT_OK;
 }

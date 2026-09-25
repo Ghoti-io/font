@@ -622,6 +622,8 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
+# Fixture commands
+.PHONY: fixtures fixtures-list check-fixtures
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -875,6 +877,39 @@ check-oracle-cmap-exhaustive: ## The same, over all 1,114,112 codepoints
 check-oracle-cmap-exhaustive: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/cmap_diff.py --quiet \
 		--exhaustive $(ORACLE_FONTS)
+
+####################################################################
+# Fixtures
+####################################################################
+#
+# documentation/design.md section 14.5: the unit fixtures are ours, built by
+# tools/fixtures/make_fixtures.py from outlines in that file, and committed
+# under tests/data/fonts/. No third-party font is committed to this repository;
+# the real fonts a differential needs live only in the oracle image.
+#
+# The generator runs in the *same* pinned image as the differentials, which is
+# what makes byte identity a meaningful claim (section 14.7): a fixture's bytes
+# are whatever fontTools 4.66.0 wrote, so a host upgrade cannot move them and
+# the fixture and the oracle agree on what a table is.
+#
+# `check-fixtures` is not in TEST_GATES, for the same reason no oracle target
+# is. What `make test` does cover is stronger than it looks: testFixtures loads
+# every committed fixture and asserts what it contains, so a corrupted or
+# missing fixture fails the suite on a machine with no container engine. What
+# needs the image is only the claim that the bytes can be *regenerated*.
+
+FIXTURES := tools/fixtures
+
+fixtures: ## Regenerate the committed fixtures and install them (deliberate)
+	@python3 $(FIXTURES)/check_fixtures.py --update
+
+fixtures-list: ## Print the fixture set and what each one exercises
+# In the image, because the generator imports fontTools to be able to name its
+# own set. tests/data/fonts/MANIFEST says the same thing with no container.
+	@$(ORACLE_RUN) fonttools -- python3 $(FIXTURES)/make_fixtures.py --list
+
+check-fixtures: ## The committed fixtures are byte-identical to a fresh generation
+	@python3 $(FIXTURES)/check_fixtures.py --quiet
 
 ####################################################################
 # Tier layering

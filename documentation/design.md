@@ -1237,11 +1237,29 @@ answered on 2026-09-23/24; the rest stand as recommended.
 
 Phases, in dependency order, with the milestone each unlocks. Sizes follow
 `regex`'s `plan.md` and `chron`: S up to a week, M two to four, L four to
-eight, for one engineer who knows the suite. **Tiers 0 and 1 need no Unicode
-and can proceed in parallel with `unicode`'s phases B-E; tier 2 waits for
-`unicode` phase C and tier 3 for its phase B.** The decided order across the
-two libraries is `unicode` first; this table records the actual dependency so
-that the scheduling is a choice rather than a constraint.
+eight, for one engineer who knows the suite. **Tiers 0 and 1 need no Unicode at
+all; tier 2 needs `unicode`'s phase B and tier 3 needs its B and C.** This
+sentence had B and C the wrong way round until 2026-09-24: phase B is
+normalisation, bidi and the shaping properties - joining, Indic, USE, emoji,
+mirroring, vertical orientation - which is what a shaper consumes, and phase C
+is segmentation, which is what a paragraph layout consumes. `unicode`'s design
+§16 phase table is the authority on which is which.
+
+As of 2026-09-24 `unicode`'s phases A, B, C and D are built and installed, so
+every Unicode input tiers 2 and 3 need already exists: `guni_joining_type` and
+`guni_joining_group`, the Indic categories, the emoji properties,
+`guni_vertical_orientation`, `guni_bidi_levels` and `guni_bidi_reorder`,
+`guni_normalize` in all four forms, and `break.h` with all four algorithms, the
+iterator shape this library asked for, `GUNI_BreakProvider` for the dictionary
+seam and CSS Text's line-break tailorings. Phases E and F are `regex` and
+`ctang` dropping their duplicates and cannot change what this library consumes.
+`unicode`'s §16 says nothing in `font` that needs Unicode starts before E, which
+is a scheduling decision on that side rather than a technical block on this one;
+either way phase 0 here needed none of it and was built against `cutil` alone.
+
+The decided order across the two libraries is `unicode` first; this table records
+the actual dependency so that the scheduling is a choice rather than a
+constraint.
 
 | Phase | Work | Size | Gate | Unlocks |
 | --- | --- | --- | --- | --- |

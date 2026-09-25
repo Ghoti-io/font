@@ -29,6 +29,7 @@ than quietly comparing nothing.
 import sys
 
 from fontTools.ttLib import TTFont
+from fontTools.ttLib.tables.O_S_2f_2 import panoseFormat
 
 # canonical key -> the attribute names fontTools might use for it.
 FIELDS = {
@@ -79,6 +80,35 @@ FIELDS = {
         "xHeight": ("sxHeight",),
         "capHeight": ("sCapHeight",),
         "vendorID": ("achVendID",),
+        # Everything below was parsed by this library, printed by its dump, and
+        # compared by nothing. The fixtures are what exposed it: `os2-v5.ttf`
+        # was built for the optical point sizes and this differential reported
+        # it clean, because `usLowerOpticalPointSize` appeared in neither table.
+        # A field the reference never emits is a field the gate cannot score,
+        # and an unscored field reads exactly like an agreeing one.
+        "subscriptXSize": ("ySubscriptXSize",),
+        "subscriptYSize": ("ySubscriptYSize",),
+        "subscriptXOffset": ("ySubscriptXOffset",),
+        "subscriptYOffset": ("ySubscriptYOffset",),
+        "superscriptXSize": ("ySuperscriptXSize",),
+        "superscriptYSize": ("ySuperscriptYSize",),
+        "superscriptXOffset": ("ySuperscriptXOffset",),
+        "superscriptYOffset": ("ySuperscriptYOffset",),
+        "strikeoutSize": ("yStrikeoutSize",),
+        "strikeoutPosition": ("yStrikeoutPosition",),
+        "familyClass": ("sFamilyClass",),
+        "unicodeRange1": ("ulUnicodeRange1",),
+        "unicodeRange2": ("ulUnicodeRange2",),
+        "unicodeRange3": ("ulUnicodeRange3",),
+        "unicodeRange4": ("ulUnicodeRange4",),
+        "codePageRange1": ("ulCodePageRange1",),
+        "codePageRange2": ("ulCodePageRange2",),
+        "defaultChar": ("usDefaultChar",),
+        "breakChar": ("usBreakChar",),
+        "maxContext": ("usMaxContext",),
+        "lowerOpticalPointSize": ("usLowerOpticalPointSize",),
+        "upperOpticalPointSize": ("usUpperOpticalPointSize",),
+        "panose": ("panose",),
     },
     "post": {
         "version": ("formatType",),
@@ -113,6 +143,43 @@ def escape(text):
     return "".join(out)
 
 
+# The ten PANOSE members, in the order the specification gives them - taken
+# from fontTools' own struct description rather than retyped here.
+#
+# The first version did retype them, spelled the eighth "bLetterform", and used
+# `getattr(panose, name, 0)`. fontTools spells it "bLetterForm", so the default
+# turned the typo into a zero and the differential reported 262 disagreements
+# against this library on a field where the library was right. A default on a
+# lookup that should never miss is how a broken instrument produces confident
+# numbers; there is no default now, and a name that stops existing raises.
+PANOSE_ORDER = tuple(
+    line.split(":")[0].strip()
+    for line in panoseFormat.strip().splitlines() if ":" in line)
+assert len(PANOSE_ORDER) == 10, PANOSE_ORDER
+
+
+def render(key, value):
+    """One field as the differential compares it.
+
+    Two of these are not the plain attribute:
+
+      * `panose` is an object in fontTools and ten bytes in the file. Its ten
+        members are emitted in the order the specification gives them, which is
+        the order this library's dump prints them.
+      * the optical point sizes are stored in the file as twentieths of a point
+        and fontTools exposes them **in points**, dividing on the way out and
+        multiplying on the way in. This library reports what the file holds, so
+        the reference's value is multiplied back. Getting this wrong in either
+        direction is a factor of twenty, which no corpus font could have caught:
+        there is no OS/2 version 5 in it.
+    """
+    if key == "panose":
+        return " ".join(str(getattr(value, name)) for name in PANOSE_ORDER)
+    if key in ("lowerOpticalPointSize", "upperOpticalPointSize"):
+        return str(round(float(value) * 20))
+    return str(value)
+
+
 def main(argv):
     if len(argv) != 3:
         sys.stderr.write("usage: fonttools_tables.py <font> <face-index>\n")
@@ -137,7 +204,8 @@ def main(argv):
             for candidate in candidates:
                 if hasattr(parsed, candidate):
                     out.write("%s.%s\t%s\n"
-                              % (table, key, getattr(parsed, candidate)))
+                              % (table, key,
+                                 render(key, getattr(parsed, candidate))))
                     break
             else:
                 # Not an error: OS/2 version 1 has no sxHeight, and a field a

@@ -104,6 +104,26 @@ PATTERNS = [
      r"capHeight (-?\d+)$",
      ["OS/2.firstCharIndex", "OS/2.lastCharIndex", "OS/2.xHeight",
       "OS/2.capHeight"]),
+    # The four lines below were printed by the dump and read by nothing until
+    # the fixtures arrived. See FIELDS in fonttools_tables.py.
+    (r"^OS/2: subscript (-?\d+)/(-?\d+)/(-?\d+)/(-?\d+), "
+     r"superscript (-?\d+)/(-?\d+)/(-?\d+)/(-?\d+), "
+     r"strikeout (-?\d+)/(-?\d+)$",
+     ["OS/2.subscriptXSize", "OS/2.subscriptYSize", "OS/2.subscriptXOffset",
+      "OS/2.subscriptYOffset", "OS/2.superscriptXSize",
+      "OS/2.superscriptYSize", "OS/2.superscriptXOffset",
+      "OS/2.superscriptYOffset", "OS/2.strikeoutSize",
+      "OS/2.strikeoutPosition"]),
+    (r"^OS/2: familyClass (-?\d+), panose ((?:\d+ ){9}\d+)$",
+     ["OS/2.familyClass", "OS/2.panose"]),
+    (r"^OS/2: unicodeRange 0x([0-9A-F]+) 0x([0-9A-F]+) 0x([0-9A-F]+) "
+     r"0x([0-9A-F]+), codePageRange 0x([0-9A-F]+) 0x([0-9A-F]+)$",
+     ["OS/2.unicodeRange1", "OS/2.unicodeRange2", "OS/2.unicodeRange3",
+      "OS/2.unicodeRange4", "OS/2.codePageRange1", "OS/2.codePageRange2"]),
+    (r"^OS/2: defaultChar (\d+), breakChar (\d+), maxContext (\d+), "
+     r"opticalSize (\d+)\.\.(\d+)$",
+     ["OS/2.defaultChar", "OS/2.breakChar", "OS/2.maxContext",
+      "OS/2.lowerOpticalPointSize", "OS/2.upperOpticalPointSize"]),
     (r"^post: version 0x([0-9A-F]+), italicAngle 0x([0-9A-F]+), "
      r"isFixedPitch (\d+)$",
      ["post.version", "post.italicAngle", "post.isFixedPitch"]),
@@ -191,6 +211,10 @@ def agree(key, ours, theirs):
         return abs(int(ours, 16) / 65536.0 - float(theirs)) <= FIXED
     if key == "OS/2.vendorID":
         return ours == sanitise(theirs)
+    if key == "OS/2.panose":
+        return ours.split() == theirs.split()
+    if key.startswith(("OS/2.unicodeRange", "OS/2.codePageRange")):
+        return int(ours, 16) == int(float(theirs))
     if key.startswith("name."):
         return ours == theirs
     if key.startswith(("directory.", "cmap.subtable.")):
@@ -309,6 +333,42 @@ def compare(path, face, report):
     return compared, disagreements, deferred, their_undecodable, shape
 
 
+FIXTURES = os.path.join(oracle_env.ROOT, "tests", "data", "fonts")
+
+
+def fixtures():
+    """The committed synthetic fixtures, as (path, face) pairs.
+
+    They are in the population by default, and not as a convenience. The real
+    corpus holds OS/2 versions 1, 3 and 4 only, and a planted defect that read
+    version 2's fields out of a version 1 table survived a sample of it; the
+    fixtures are where versions 0, 2 and 5 exist at all. Until they were
+    generated this gate had no way to compare an OS/2 version 5 against
+    anything, and the sentence it printed about that was the honest form of a
+    gap rather than a measurement.
+
+    No materialising step: the repository is mounted read-only at its own path
+    inside the image, so both sides open the same file (design.md section 14.7).
+    Every face of a collection is listed, because a `ttcf` whose second face is
+    never asked is a shared-table arithmetic nobody checked.
+    """
+    if not os.path.isdir(FIXTURES):
+        return []
+    found = []
+    for name in sorted(os.listdir(FIXTURES)):
+        if not name.endswith((".ttf", ".otf", ".ttc")):
+            continue
+        path = os.path.join(FIXTURES, name)
+        faces = 1
+        if name.endswith(".ttc"):
+            with open(path, "rb") as handle:
+                handle.seek(8)
+                faces = int.from_bytes(handle.read(4), "big")
+        for face in range(faces):
+            found.append((path, face))
+    return found
+
+
 def main(argv):
     quiet = "--quiet" in argv
     limit = None
@@ -321,7 +381,7 @@ def main(argv):
         if argument == "--fonts":
             limit = int(argv[index + 1])
             skip_next = True
-        elif argument == "--quiet":
+        elif argument in ("--quiet", "--no-fixtures"):
             continue
         else:
             rest.append(argument)
@@ -330,10 +390,21 @@ def main(argv):
         sys.stderr.write("%s is not built; run `make examples`\n" % DRIVER)
         return 1
 
-    fonts = rest or corpus.fonts("sfnt")
-    if limit is not None:
-        step = max(1, len(fonts) // limit)
-        fonts = fonts[::step][:limit]
+    if rest:
+        fonts = [(path, 0) for path in rest]
+        synthetic = 0
+    else:
+        fonts = [(path, 0) for path in corpus.fonts("sfnt")]
+        if limit is not None:
+            step = max(1, len(fonts) // limit)
+            fonts = fonts[::step][:limit]
+        # --fonts thins the *corpus*, never the fixtures: thinning is a smoke
+        # test and the fixtures are the only cover for three OS/2 versions, so
+        # dropping them is how a smoke test stops covering the arm a defect is
+        # in. They are cheap - sixteen faces of about 1.7 kB.
+        chosen = [] if "--no-fixtures" in argv else fixtures()
+        synthetic = len(chosen)
+        fonts = chosen + fonts
     if not fonts:
         sys.stderr.write("no fonts to compare\n")
         return 1
@@ -350,9 +421,10 @@ def main(argv):
     # corpus, because the four were all version 4.
     coverage = {"OS/2 version": {}, "post version": {}}
 
-    for path in fonts:
+    for path, face in fonts:
         try:
-            keys, differed, mac_roman, theirs, shape = compare(path, 0, report)
+            keys, differed, mac_roman, theirs, shape = compare(path, face,
+                report)
         except Skip as why:
             skipped.append((path, str(why)))
             continue
@@ -364,12 +436,17 @@ def main(argv):
             if value is not None:
                 coverage[axis][value] = coverage[axis].get(value, 0) + 1
         if not quiet:
+            label = os.path.basename(path)
+            if face:
+                label += ":%d" % face
             sys.stdout.write("  %-52s %4d fields%s\n"
-                % (os.path.basename(path), keys,
+                % (label, keys,
                    ", disagreements: %d" % differed if differed else ""))
 
-    print("ttx_diff: %d fonts, %d fields compared, %d disagreements"
-          % (len(fonts) - len(skipped), compared, disagreements))
+    print("ttx_diff: %d faces (%d synthetic fixtures, %d real fonts), %d "
+          "fields compared, %d disagreements"
+          % (len(fonts) - len(skipped), synthetic, len(fonts) - synthetic,
+             compared, disagreements))
     print("ttx_diff: %d Macintosh Roman name record(s) above ASCII, which this "
           "library defers and this gate counts rather than scores (design.md "
           "section 7.2); %d record(s) fontTools itself could not decode"
@@ -380,8 +457,13 @@ def main(argv):
         print("ttx_diff: %s covered: %s"
               % (axis, ", ".join("%s x%d" % (value, count)
                                  for value, count in sorted(seen.items()))))
-    print("ttx_diff: what this corpus does not contain, the unit tests are the "
-          "only cover for - OS/2 versions 0, 2 and 5 among them")
+    if synthetic:
+        print("ttx_diff: the versions the real corpus lacks - OS/2 0, 2 and 5 - "
+              "come from the fixtures; a run with --no-fixtures covers neither "
+              "them nor the OTTO and ttcf shapes")
+    else:
+        print("ttx_diff: no fixtures in this run, so OS/2 versions 0, 2 and 5 "
+              "went uncompared and the unit tests are their only cover")
     for path, why in skipped:
         print("ttx_diff: skipped %s: %s" % (os.path.basename(path), why))
 

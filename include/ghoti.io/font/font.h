@@ -33,6 +33,7 @@
 #include <ghoti.io/font/allocator.h>
 #include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/core.h>
+#include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
 
 #endif // GHOTI_IO_GFNT_FONT_H

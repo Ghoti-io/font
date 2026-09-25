@@ -32,6 +32,7 @@
 
 #include <ghoti.io/font/allocator.h>
 #include <ghoti.io/font/blob.h>
+#include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/metrics.h>

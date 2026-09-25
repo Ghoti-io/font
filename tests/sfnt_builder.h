@@ -416,6 +416,163 @@ inline std::vector<uint8_t> build_post(uint32_t version = 0x00030000) {
   return post;
 }
 
+/**
+ * `cmap` subtables. Format 4's idRangeOffset is computed by the builder rather
+ * than by the test, because a test that computed it would be checking the
+ * parser against the same arithmetic it is meant to be checking (M10).
+ */
+
+/** One format 4 segment: a delta run, or an explicit glyph array. */
+struct Segment4 {
+  uint16_t start;
+  uint16_t end;
+  int16_t delta = 0;                  ///< Used when `glyphs` is empty.
+  std::vector<uint16_t> glyphs = {};  ///< Used when it is not: the array path.
+};
+
+/** A `cmap` format 4 subtable over the given segments, in order. */
+inline std::vector<uint8_t> build_cmap_format4(
+    const std::vector<Segment4> & segments) {
+  size_t count = segments.size();
+  std::vector<uint8_t> out;
+
+  size_t glyph_bytes = 0;
+  for (const auto & segment : segments) {
+    glyph_bytes += segment.glyphs.size() * 2;
+  }
+  size_t length = 14 + count * 8 + 2 + glyph_bytes;
+
+  put_u16(out, 4);
+  put_u16(out, static_cast<uint16_t>(length));
+  put_u16(out, 0);                                   // language
+  put_u16(out, static_cast<uint16_t>(count * 2));    // segCountX2
+  uint16_t entry_selector = 0;
+  while ((1u << (entry_selector + 1)) <= count) {
+    entry_selector++;
+  }
+  put_u16(out, static_cast<uint16_t>(2u << entry_selector)); // searchRange
+  put_u16(out, entry_selector);
+  put_u16(out, static_cast<uint16_t>(count * 2 - (2u << entry_selector)));
+
+  for (const auto & segment : segments) {
+    put_u16(out, segment.end);
+  }
+  put_u16(out, 0);                                   // reservedPad
+  for (const auto & segment : segments) {
+    put_u16(out, segment.start);
+  }
+  for (const auto & segment : segments) {
+    put_s16(out, segment.delta);
+  }
+
+  size_t id_range_offsets = out.size();
+  out.resize(id_range_offsets + count * 2, 0);
+  size_t glyph_at = out.size();
+  for (size_t i = 0; i < count; i++) {
+    if (segments[i].glyphs.empty()) {
+      continue;
+    }
+    // The offset the format defines: from this idRangeOffset entry's own
+    // address to the segment's first glyph.
+    patch_u16(out, id_range_offsets + i * 2,
+        static_cast<uint16_t>(glyph_at - (id_range_offsets + i * 2)));
+    for (uint16_t glyph : segments[i].glyphs) {
+      put_u16(out, glyph);
+    }
+    glyph_at = out.size();
+  }
+  return out;
+}
+
+/** Where a format 4 subtable's idRangeOffset array starts. */
+inline size_t format4_id_range_offsets(size_t segment_count) {
+  return 14 + segment_count * 2 + 2 + segment_count * 2 + segment_count * 2;
+}
+
+/** One format 12 group. */
+struct Group12 {
+  uint32_t start;
+  uint32_t end;
+  uint32_t start_glyph;
+};
+
+/** A `cmap` format 12 subtable over the given groups, in order. */
+inline std::vector<uint8_t> build_cmap_format12(
+    const std::vector<Group12> & groups) {
+  std::vector<uint8_t> out;
+  put_u16(out, 12);
+  put_u16(out, 0);                                       // reserved
+  put_u32(out, static_cast<uint32_t>(16 + groups.size() * 12)); // length
+  put_u32(out, 0);                                       // language
+  put_u32(out, static_cast<uint32_t>(groups.size()));
+  for (const auto & group : groups) {
+    put_u32(out, group.start);
+    put_u32(out, group.end);
+    put_u32(out, group.start_glyph);
+  }
+  return out;
+}
+
+/** A `cmap` format 0 subtable: 256 single-byte mappings. */
+inline std::vector<uint8_t> build_cmap_format0(
+    const std::vector<std::pair<uint8_t, uint8_t>> & mappings) {
+  std::vector<uint8_t> out;
+  put_u16(out, 0);
+  put_u16(out, 262);  // length
+  put_u16(out, 0);    // language
+  out.resize(6 + 256, 0);
+  for (const auto & mapping : mappings) {
+    out[6 + mapping.first] = mapping.second;
+  }
+  return out;
+}
+
+/** A `cmap` format 6 subtable: a trimmed array. */
+inline std::vector<uint8_t> build_cmap_format6(uint16_t first,
+    const std::vector<uint16_t> & glyphs) {
+  std::vector<uint8_t> out;
+  put_u16(out, 6);
+  put_u16(out, static_cast<uint16_t>(10 + glyphs.size() * 2));
+  put_u16(out, 0);    // language
+  put_u16(out, first);
+  put_u16(out, static_cast<uint16_t>(glyphs.size()));
+  for (uint16_t glyph : glyphs) {
+    put_u16(out, glyph);
+  }
+  return out;
+}
+
+/** One encoding record and the subtable it points at. */
+struct CmapRecord {
+  uint16_t platform_id;
+  uint16_t encoding_id;
+  std::vector<uint8_t> subtable;
+};
+
+/** A whole `cmap` table: the record list, then the subtables. */
+inline std::vector<uint8_t> build_cmap(const std::vector<CmapRecord> & records) {
+  std::vector<uint8_t> out;
+  put_u16(out, 0);                                        // version
+  put_u16(out, static_cast<uint16_t>(records.size()));
+  size_t offsets = out.size();
+  out.resize(offsets + records.size() * 8, 0);
+
+  for (size_t i = 0; i < records.size(); i++) {
+    size_t at = offsets + i * 8;
+    patch_u16(out, at, records[i].platform_id);
+    patch_u16(out, at + 2, records[i].encoding_id);
+    patch_u32(out, at + 4, static_cast<uint32_t>(out.size()));
+    out.insert(out.end(), records[i].subtable.begin(),
+        records[i].subtable.end());
+  }
+  return out;
+}
+
+/** Where the nth encoding record sits within a `cmap` table. */
+inline size_t cmap_record_offset(size_t index) {
+  return 4 + index * 8;
+}
+
 } // namespace gfnttest
 
 #endif // GHOTI_IO_GFNT_TESTS_SFNT_BUILDER_H

@@ -37,6 +37,7 @@
 #define GHOTI_IO_GFNT_SFNT_H
 
 #include <ghoti.io/cutil/mutex.h>
+#include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/metrics.h>
@@ -125,6 +126,8 @@ struct GFNT_Face {
   GFNT_Post post;
   GFNT_Cached glyph_count_state;    ///< The numGlyphs minimum (M12).
   GFNT_GlyphCount glyph_count;
+  GFNT_Cached cmap_best_state;      ///< Which `cmap` subtable answers lookups.
+  GFNT_CmapSubtable cmap_best;
 };
 
 /**

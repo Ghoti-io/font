@@ -59,6 +59,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "oracle"))
 import oracle_env
 
+
+class GeneratorRefused(Exception):
+    """The generator ran and said no. Distinct from an unreachable image."""
+
 ROOT = oracle_env.ROOT
 COMMITTED = os.path.join(ROOT, "tests", "data", "fonts")
 GENERATED = os.path.join(ROOT, "build", "fixtures", "generated")
@@ -102,7 +106,11 @@ def generate(out_dir):
         ["python3", GENERATOR, "--out", out_dir], scratch=out_dir)
     finished = subprocess.run(argv, capture_output=True, text=True)
     if finished.returncode != 0:
-        raise oracle_env.OracleUnavailable(
+        # Not OracleUnavailable: the image was reached and the generator ran and
+        # refused. Reporting that as "cannot reach the reference" sends the
+        # reader to their container setup when the actual message - a cross-check
+        # that failed, a vector whose shape changed - is right there.
+        raise GeneratorRefused(
             "the fixture generator failed:\n%s%s"
             % (finished.stdout, finished.stderr))
     return sorted(n for n in os.listdir(out_dir))
@@ -232,8 +240,8 @@ def main(argv=None):
         try:
             provenance = oracle_env.provenance(["fonttools"])
             generated = generate(GENERATED)
-        except oracle_env.OracleUnavailable as unavailable:
-            sys.stderr.write("fixtures: %s\n" % unavailable)
+        except (GeneratorRefused, oracle_env.OracleUnavailable) as why:
+            sys.stderr.write("fixtures: %s\n" % why)
             return 1
         written, removed = install(COMMITTED, GENERATED, generated)
         print(provenance)
@@ -255,6 +263,11 @@ def main(argv=None):
             COMMITTED, GENERATED, generated)
         problems += byte_problems
         problems += control(COMMITTED, GENERATED, generated)
+    except GeneratorRefused as refused:
+        for problem in problems:
+            sys.stderr.write("check-fixtures: %s\n" % problem)
+        sys.stderr.write("check-fixtures: %s\n" % refused)
+        return 1
     except oracle_env.OracleUnavailable as unavailable:
         # Fails, rather than skipping, and unlike every check-oracle-* target.
         # The difference is what is being checked. A differential compares

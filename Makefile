@@ -624,6 +624,8 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 # Fixture commands
 .PHONY: fixtures fixtures-list check-fixtures
+# Generated vectors
+.PHONY: gen-vectors check-vectors
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -910,6 +912,39 @@ fixtures-list: ## Print the fixture set and what each one exercises
 
 check-fixtures: ## The committed fixtures are byte-identical to a fresh generation
 	@python3 $(FIXTURES)/check_fixtures.py --quiet
+
+####################################################################
+# Generated vectors
+####################################################################
+#
+# documentation/design.md section 14: a vector comes from an oracle and is never
+# written from memory. Two of them are generated from the pinned image and
+# committed - the 258-entry standard Macintosh glyph order that `post` format
+# 1.0 is and format 2.0 indexes into, and the single-byte Macintosh `name`
+# encodings.
+#
+# Three gates cover them and the split is deliberate, as `unicode`'s UCD tables
+# are split:
+#
+#   check-vectors   a table edited by hand, or a generator changed without
+#                   regenerating          needs the image
+#   testVectors     the compiled-in tables against the committed text in
+#                   tests/data/vectors/   needs nothing, runs in `make test`
+#   check-oracle-ttx   the tables' *use*: every post glyph name and Macintosh
+#                   name record of 344 faces    needs the image
+#
+# Only the last can find a table wrong about reality; only the first two can
+# find one edited. A gate that skips when its data is absent is the mistake
+# section 2's M4 names, so neither container gate skips - and the one that needs
+# no container is why that costs nothing.
+
+VECTORS := tools/vectors
+
+gen-vectors: ## Regenerate the committed vectors from the pinned image
+	@python3 $(VECTORS)/check_vectors.py --update
+
+check-vectors: ## Fail if a committed vector is not what the generator emits
+	@python3 $(VECTORS)/check_vectors.py --quiet
 
 ####################################################################
 # Tier layering

@@ -219,6 +219,17 @@ def main(argv):
                       % (index, subtable.platformID, subtable.platEncID,
                          subtable.format))
 
+    # The `post` glyph names, but only where the font actually has them:
+    # fontTools *invents* names ("glyph00012") for a format 3.0 font, and
+    # emitting those would score this library's honest refusal as a
+    # disagreement with a name nobody wrote.
+    if "post" in font and font["post"].formatType in (1.0, 2.0):
+        order = font.getGlyphOrder()
+        for index, name in enumerate(order):
+            out.write("glyphname.%d\t%s\n" % (index, escape(name)))
+    elif "post" in font:
+        out.write("glyphnames.absent\t1\n")
+
     if "name" in font:
         for record in font["name"].names:
             key = "name.%d.%d.%d.%d" % (record.platformID, record.platEncID,

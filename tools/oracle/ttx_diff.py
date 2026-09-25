@@ -132,6 +132,8 @@ PATTERNS = [
     (r"^numGlyphs: (\d+) maxp (\d+)$", ["numGlyphs.minimum", "maxp.numGlyphs"]),
     (r"^cmap subtable (\d+): platform (\d+), encoding (\d+), format (\d+), "
      r"offset \d+$", "cmap"),
+    (r"^glyph name (\d+): '(.*)'$", "glyphname"),
+    (r"^glyph names: none in this font$", "glyphnames-absent"),
     (r"^name record \d+: platform (\d+), encoding (\d+), language (\d+), "
      r"name (\d+): '(.*)'$", "name"),
     (r"^name record \d+: platform (\d+), encoding (\d+), language (\d+), "
@@ -172,6 +174,11 @@ def parse_ours(text):
                 platform, encoding, language, name_id, value = found.groups()
                 values["name.%d.%d.%d.%d" % (int(platform), int(encoding),
                                              int(language), int(name_id))] = value
+            elif keys == "glyphname":
+                index, value = found.groups()
+                values["glyphname.%d" % int(index)] = value
+            elif keys == "glyphnames-absent":
+                values["glyphnames.absent"] = "1"
             elif keys == "name-undecodable":
                 platform, encoding, language, name_id = found.groups()
                 undecodable.add("name.%d.%d.%d.%d"
@@ -215,7 +222,7 @@ def agree(key, ours, theirs):
         return ours.split() == theirs.split()
     if key.startswith(("OS/2.unicodeRange", "OS/2.codePageRange")):
         return int(ours, 16) == int(float(theirs))
-    if key.startswith("name."):
+    if key.startswith(("name.", "glyphname.")):
         return ours == theirs
     if key.startswith(("directory.", "cmap.subtable.")):
         return ours == theirs
@@ -230,26 +237,72 @@ def agree(key, ours, theirs):
         return ours == theirs
 
 
-def deferred_mac_roman(key, text):
-    """Whether this library declining this record is the documented deferral.
+# Macintosh platEncID values this library refuses: the multi-byte CJK encodings,
+# which are a data set of their own rather than a 128-entry table.
+MAC_MULTIBYTE = {1, 2, 3, 25}
 
-    design.md section 7.2 defers Mac Roman: a Macintosh record is decoded as far
-    as ASCII and refused above it, because the 128-codepoint table belongs to an
-    oracle rather than to memory. This differential found what that costs - the
-    Liberation family's description record says "Courier New(tm)", and the
-    trademark sign is 0xAA in Mac Roman - and a permanently red gate is a gate
-    nobody reads, so the case is counted rather than scored.
+# Microsoft platEncID values that are not UTF-16BE, and are therefore multi-byte
+# legacy encodings this library refuses for the same reason.
+MICROSOFT_MULTIBYTE = {2, 3, 4, 5, 6}
 
-    **It is checked, not excused.** The category is only allowed for a
-    Macintosh Roman record whose reference text actually contains something
-    above ASCII. A Macintosh record this library declined whose text is pure
-    ASCII would be a defect in the ASCII path, and stays a disagreement - which
-    is the difference between a known difference and an exclusion that absorbs
-    the thing it was meant to expose.
+
+UNIQUE_SUFFIX = re.compile(r"^(?P<base>.+)\.(?P<ordinal>\d+)$")
+
+
+def uniquified_glyph_name(key, ours, mine, theirs):
+    """Whether the reference renamed a duplicate glyph name and we did not.
+
+    Four Liberation faces name two different glyphs `uni00AD` in the same `post`
+    table - verified in the raw bytes, at indices 111 and 2578. fontTools' glyph
+    order has to be a set of unique keys, so its `post` decode renames the
+    second to `uni00AD.1`. This library reports what the file says, which is what
+    a caller asking "what is this glyph called" should get.
+
+    **Checked, not excused**, and the third clause is the check: the reference's
+    name must be ours plus a `.<digits>` suffix, *and* an earlier glyph must
+    actually carry the bare name. A font that genuinely contains a glyph named
+    `foo.1` which this library misread as `foo` fails the third clause and stays
+    a disagreement - which is the difference between a known difference and an
+    exclusion that absorbs what it was meant to expose.
     """
-    if not key.startswith("name.1.0."):
+    if not key.startswith("glyphname."):
         return False
-    return any(ord(character) > 0x7F for character in text)
+    found = UNIQUE_SUFFIX.match(theirs)
+    if not found or found.group("base") != mine:
+        return False
+    index = int(key.split(".", 1)[1])
+    # An *earlier* index, because that is the one the reference would have left
+    # alone; a later duplicate does not explain a rename of this one.
+    for other in range(index):
+        if ours.get("glyphname.%d" % other) == mine:
+            return True
+    return False
+
+
+def refusal_is_documented(key):
+    """Whether this library declining this record is a documented refusal.
+
+    **The Mac Roman deferral is gone.** Until the vectors were generated this
+    function excused every Macintosh record above ASCII, and the category had
+    fourteen members across 344 faces. Those records are now decoded and scored
+    like any other, so what is left is the genuinely unimplemented set: the
+    multi-byte encodings.
+
+    It stays checked rather than becoming an exclusion. A refusal of a
+    single-byte Macintosh encoding - anything this library has a table for - is
+    a disagreement, because that is the path the tables exist to serve. So is a
+    refusal of a Unicode or Windows UTF-16BE record. Only an encoding ID from
+    the two sets above may be declined.
+    """
+    parts = key.split(".")
+    if len(parts) != 5 or parts[0] != "name":
+        return False
+    platform, encoding = int(parts[1]), int(parts[2])
+    if platform == 1:
+        return encoding in MAC_MULTIBYTE
+    if platform == 3:
+        return encoding in MICROSOFT_MULTIBYTE
+    return False
 
 
 class Skip(Exception):
@@ -274,12 +327,14 @@ def compare(path, face, report):
 
     compared = 0
     disagreements = 0
-    deferred = 0
+    declined = 0
     shown = 0
+    uniquified = 0
+    mac_pairs = set()
     for key, value in sorted(theirs.items()):
         if key not in ours:
-            if key in our_undecodable and deferred_mac_roman(key, value):
-                deferred += 1
+            if key in our_undecodable and refusal_is_documented(key):
+                declined += 1
                 continue
             # A key the reference has and the dump does not: either the dump
             # stopped printing a field, or this library did not parse a table
@@ -294,6 +349,9 @@ def compare(path, face, report):
             continue
         compared += 1
         if agree(key, ours[key], value):
+            continue
+        if uniquified_glyph_name(key, ours, ours[key], value):
+            uniquified += 1
             continue
         disagreements += 1
         if shown < PER_FONT and report[0] < TOTAL:
@@ -330,7 +388,18 @@ def compare(path, face, report):
         "OS/2 version": ours.get("OS/2.version"),
         "post version": ours.get("post.version"),
     }
-    return compared, disagreements, deferred, their_undecodable, shape
+    # Which Macintosh (encoding, language) pairs this face carried. All 658
+    # Macintosh records in the real corpus are (0, Mac Roman), so without the
+    # fixtures this axis has exactly one value and seven generated tables go
+    # unexercised - the same shape as the OS/2 versions the corpus lacks.
+    for key in ours:
+        if key.startswith("name.1."):
+            parts = key.split(".")
+            if len(parts) == 5:
+                shape.setdefault("Macintosh name (encoding, language)", None)
+                mac_pairs.add("(%s,%s)" % (parts[2], parts[3]))
+    return compared, disagreements, declined, their_undecodable, shape, \
+        mac_pairs, uniquified
 
 
 FIXTURES = os.path.join(oracle_env.ROOT, "tests", "data", "fonts")
@@ -411,7 +480,8 @@ def main(argv):
 
     compared = 0
     disagreements = 0
-    deferred = 0
+    declined = 0
+    uniquified_names = 0
     theirs_declined = 0
     skipped = []
     report = [0]
@@ -420,21 +490,25 @@ def main(argv):
     # a plant that only affects OS/2 version 1 passed a four-font sample of this
     # corpus, because the four were all version 4.
     coverage = {"OS/2 version": {}, "post version": {}}
+    mac_coverage = {}
 
     for path, face in fonts:
         try:
-            keys, differed, mac_roman, theirs, shape = compare(path, face,
-                report)
+            keys, differed, refused, theirs, shape, pairs, renamed = compare(
+                path, face, report)
         except Skip as why:
             skipped.append((path, str(why)))
             continue
         compared += keys
         disagreements += differed
-        deferred += mac_roman
+        declined += refused
+        uniquified_names += renamed
         theirs_declined += theirs
         for axis, value in shape.items():
             if value is not None:
                 coverage[axis][value] = coverage[axis].get(value, 0) + 1
+        for pair in pairs:
+            mac_coverage[pair] = mac_coverage.get(pair, 0) + 1
         if not quiet:
             label = os.path.basename(path)
             if face:
@@ -447,10 +521,19 @@ def main(argv):
           "fields compared, %d disagreements"
           % (len(fonts) - len(skipped), synthetic, len(fonts) - synthetic,
              compared, disagreements))
-    print("ttx_diff: %d Macintosh Roman name record(s) above ASCII, which this "
-          "library defers and this gate counts rather than scores (design.md "
-          "section 7.2); %d record(s) fontTools itself could not decode"
-          % (deferred, theirs_declined))
+    if uniquified_names:
+        print("ttx_diff: %d glyph name(s) the reference renamed to keep its "
+              "glyph order unique, where the file repeats a name and this "
+              "library reports what the file says; checked against an earlier "
+              "glyph actually carrying the bare name" % uniquified_names)
+    print("ttx_diff: %d record(s) this library declined and is documented to "
+          "decline - the multi-byte Macintosh and Microsoft encodings only; "
+          "%d record(s) fontTools itself could not decode"
+          % (declined, theirs_declined))
+    if mac_coverage:
+        print("ttx_diff: Macintosh name (encoding, language) covered: %s"
+              % ", ".join("%s x%d" % (pair, count)
+                          for pair, count in sorted(mac_coverage.items())))
     for axis, seen in coverage.items():
         if not seen:
             continue
@@ -458,12 +541,13 @@ def main(argv):
               % (axis, ", ".join("%s x%d" % (value, count)
                                  for value, count in sorted(seen.items()))))
     if synthetic:
-        print("ttx_diff: the versions the real corpus lacks - OS/2 0, 2 and 5 - "
-              "come from the fixtures; a run with --no-fixtures covers neither "
-              "them nor the OTTO and ttcf shapes")
+        print("ttx_diff: what only the fixtures cover: OS/2 versions 0, 2 and "
+              "5, post format 1.0, every Macintosh encoding but Roman, and the "
+              "OTTO and ttcf shapes. --no-fixtures covers none of them.")
     else:
-        print("ttx_diff: no fixtures in this run, so OS/2 versions 0, 2 and 5 "
-              "went uncompared and the unit tests are their only cover")
+        print("ttx_diff: no fixtures in this run, so OS/2 versions 0, 2 and 5, "
+              "post format 1.0 and every non-Roman Macintosh encoding went "
+              "uncompared; the unit tests are their only cover")
     for path, why in skipped:
         print("ttx_diff: skipped %s: %s" % (os.path.basename(path), why))
 

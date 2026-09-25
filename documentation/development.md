@@ -8,18 +8,22 @@ src/core/                   Result strings, limits, the allocator, fixed point, 
 src/blob/                   GFNT_Blob: bytes, length, ownership
 src/reader/                 The checked reader - every read of font bytes goes through it
 src/sfnt/                   The offset table, the directory, collections, GFNT_Face
-src/tables/                 head, hhea, OS/2, post, and the metrics accessors over them
+src/tables/                 head, hhea, OS/2, post and its glyph names, the metrics accessors
+src/tables/post_names.h     Generated: the 258 standard Macintosh glyph names
 src/cmap/                   Codepoint to glyph
 src/name/                   Name records, decoded to UTF-8
+src/name/mac_encodings.h    Generated: the single-byte Macintosh encodings and their selector
 src/glyph/                  The glyph kinds and the strike policy
 src/font.c                  The version
 tests/unit/                 Unit tests (gtest)
 tests/sfnt_builder.h        Builds sfnt bytes for the tests; see its header for what it is not
 tests/data/fonts/           Synthetic fixtures built by tools/fixtures/, this library's own; no third-party font is committed
+tests/data/vectors/         The generated vectors as text, read by testVectors
 tests/data/golden/          Coverage hashes for the cross-platform gate (from phase 1)
 tests/fuzz/                 libFuzzer harnesses, and seeds under corpus/<name>/*.seed
 tools/fuzz-seeds.py         Writes those seeds; they are generated, not hand-written
 tools/fixtures/             make_fixtures.py and check_fixtures.py, over fontTools in its container
+tools/vectors/              make_vectors.py and check_vectors.py, likewise
 tools/oracle/               The differentials, and the pinned fontTools image they run in
 tools/check-reader.py       The reader gate
 tools/check-stamps.py       The flag-stamp gate
@@ -117,7 +121,7 @@ a failure, which is what a CI with the images wants.
 
 ## The fixtures
 
-`tests/data/fonts/` holds sixteen synthetic fonts and a `MANIFEST` saying what
+`tests/data/fonts/` holds eighteen synthetic fonts and a `MANIFEST` saying what
 each one exercises. They are **generated, not written**: `make fixtures` runs
 `tools/fixtures/make_fixtures.py` in the pinned `fonttools` image and installs
 what it produces, and `make check-fixtures` regenerates and fails on a byte
@@ -161,6 +165,43 @@ That suite is also the one place the unit tests are not self-referential. Every
 other expectation under `tests/` is one this library wrote for itself -
 `tests/sfnt_builder.h` says so in its own header - and these are bytes fontTools
 wrote.
+
+## The generated vectors
+
+Two tables are generated from the pinned image and committed: the 258-entry
+standard Macintosh glyph order that `post` format 1.0 *is* and format 2.0 indexes
+into, and the eight single-byte Macintosh `name` encodings. Neither is written by
+hand - design.md section 14's rule is that a vector comes from an oracle.
+
+```bash
+make gen-vectors           # regenerate and install (read the diff)
+make check-vectors         # the committed tables are what the generator emits
+```
+
+Three gates cover them, and knowing which finds what is the point:
+
+| gate | finds | needs |
+| --- | --- | --- |
+| `check-vectors` | a hand-edited table, or a generator changed without regenerating | the image |
+| `testVectors` | the same, on a fresh clone | nothing |
+| `check-oracle-ttx` | a table **wrong about reality**, over 346 faces | the image |
+
+`testVectors` is why the two container gates can fail rather than skip: something
+still covers the tables without an engine. It reads every entry through the
+public API - `post-v1.ttf` is the standard order, and
+`name-mac-encodings.ttf` carries all 128 high bytes of each encoding - so nothing
+here includes a generated header from a test.
+
+Two things to know before changing `tools/vectors/`:
+
+1. **The Macintosh encoding ID does not choose the table.** `platEncID` 0 is keyed
+   by `langID`, and Icelandic, Turkish, Croatian, Central European and Romanian
+   all live under it. Every Macintosh record in the 327-font corpus is
+   `(0, Roman)`, so this is a rule only a fixture can check.
+2. **Mac Roman is cross-checked against glibc's `MACINTOSH` charmap**, and the
+   generator fails unless the disagreements are exactly the two it documents - or
+   if one of them stops disagreeing. Generating from one source would be
+   circular, since fontTools decodes `name` records with the same CPython codec.
 
 ## Memory
 

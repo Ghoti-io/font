@@ -408,24 +408,37 @@ variation sequences are exposed as `gfnt_cmap_lookup_variation(face, cp, vs)`.
 A reverse map (glyph → first codepoint) is built lazily for `post`-less fonts
 and for PDF text extraction.
 
-**Built so far**, and two deferrals that are the same deferral. `post`'s
-header fields are read and its **glyph names are not**: format 2.0 spells the
-first 258 of them as indices into the standard Macintosh glyph order, and that
-list is a 258-entry vector. Macintosh `name` records decode as far as ASCII and
-no further, because the rest needs the 128-codepoint Mac Roman table. §14's rule
-is that a vector comes from an oracle and is never written from memory, and
-fontTools holds both of these. **Both are now unblocked rather than blocked:**
-the fixture generator exists (§14.5), `post-v2.ttf` carries both a
-standard-order index and an extra name, and `name-macroman.ttf` carries the same
-0xAA that the twelve real records carry - so each vector can be generated from
-the pinned image and checked against a fixture built for it. `vhea`/`vmtx`, `gasp` and `kern` are not built either, and are
+**Both of §7.2's deferrals are built, as of 2026-09-25.** `post` glyph names
+and Macintosh `name` decoding were one deferral wearing two hats: each needed a
+vector, and §14's rule is that a vector comes from an oracle and is never
+written from memory. `tools/vectors/make_vectors.py` generates both from the
+pinned image - the 258-entry standard Macintosh glyph order and the eight
+single-byte Macintosh encodings - and three gates cover them
+(§14.8). `gfnt_face_glyph_name`, `gfnt_face_glyph_for_name` and
+`gfnt_face_glyph_names_dump` read format 1.0 and 2.0; 2.5 and 4.0 are refused by
+name rather than guessed. `vhea`/`vmtx`, `gasp` and `kern` are not built, and are
 phases of their own.
 
-**`name`**: every record decoded by `(platformID, encodingID)` - Unicode and
-Windows UTF-16BE, Windows symbol, Macintosh Roman and the other Mac encodings
-by table, format 1 language tags - to UTF-8, with the preference order Windows
-English, then Unicode, then Macintosh, then anything, documented and
-overridable by a language argument. Name IDs 0-25 by constant; family, style,
+**`name`**: every record decoded by `(platformID, encodingID, langID)` - Unicode
+and Windows UTF-16BE, Windows symbol, and the single-byte Macintosh encodings by
+generated table - to UTF-8, with the preference order Windows English, then
+Unicode, then Macintosh, then anything, documented and overridable by a language
+argument.
+
+**The Macintosh encoding is not chosen by the encoding ID.** `platEncID` 0 is
+keyed by `langID`: Mac Roman for most languages, and Icelandic, Turkish,
+Croatian, Central European or Romanian for thirteen of them. Reading it as Mac
+Roman throughout decodes those records to the wrong letters *without failing*,
+which is the worst shape of wrong available here - so the relation is restricted
+at both ends and the rule table is generated rather than written. The multi-byte
+Macintosh and Microsoft encodings (Japanese, the two Chinese, Korean, Shift-JIS
+and friends) are refused: they are a data set of their own, and a byte-per-
+codepoint guess would produce plausible mojibake, which is worse than an error.
+
+All 658 Macintosh records across the 327-font oracle corpus are
+`(platEncID 0, Mac Roman)`, so the language-keyed rules and the seven non-Roman
+tables have **no coverage from real fonts at all**. `name-mac-encodings.ttf`
+exists for them, and carries every one of the 128 high bytes in each encoding. Name IDs 0-25 by constant; family, style,
 full, PostScript and the typographic and WWS families by function.
 
 ### 7.3 `glyf` and `loca`
@@ -1026,8 +1039,8 @@ will not emit - a bad checksum, a directory entry past the blob.
 **All of this exists today.** `tests/sfnt_builder.h` is the organised form of
 those hand-built arrays: it assembles an sfnt, a `ttcf`, and each table this
 library reads, so that a test can break exactly one field and name what it broke.
-`tools/fixtures/make_fixtures.py` writes the generated half - sixteen fonts and a
-`MANIFEST`, in the same pinned image as the differentials - and `check-fixtures`
+`tools/fixtures/make_fixtures.py` writes the generated half - eighteen fonts and
+a `MANIFEST`, in the same pinned image as the differentials - and `check-fixtures`
 regenerates and compares bytes, so a fixture is a thing that can be rebuilt
 rather than a byte array with extra steps. The `fonttools` image and both
 differentials are built (§18.1), so the real-font population is reachable too.
@@ -1109,7 +1122,54 @@ packages; the synthetic fixtures live only in the repository, mounted
 read-only at the same path on both sides. Neither crosses, and no licence
 question arises in the repository (§14.5).
 
-### 14.8 The gates are themselves tested
+### 14.8 Generated vectors, and which gate covers what
+
+Two vectors are generated from the pinned image and committed:
+`src/tables/post_names.h` (the 258-entry standard Macintosh glyph order) and
+`src/name/mac_encodings.h` (the eight single-byte Macintosh encodings and the
+`(platEncID, langID)` rules that choose between them). The generator is
+`tools/vectors/make_vectors.py`; `make gen-vectors` installs, `make check-vectors`
+verifies.
+
+**Three gates, and the split is the design** - the same split `unicode` uses for
+its UCD tables, and for the same reason:
+
+| gate | finds | needs |
+| --- | --- | --- |
+| `check-vectors` | a table edited by hand, or a generator changed without regenerating | the image |
+| `testVectors` | the same, on a fresh clone | nothing; runs in `make test` |
+| `check-oracle-ttx` | a table **wrong about reality**, over 346 faces | the image |
+
+Only the third can find the generator wrong; only the first two can find a
+table edited. `testVectors` is what makes the container gates' honesty free: they
+can fail rather than skip when the image is absent, because something still
+covers the tables without it. It reaches every entry through the public API
+rather than by including the generated header - `post-v1.ttf` *is* the standard
+order, so naming its 258 glyphs walks the whole vector, and
+`name-mac-encodings.ttf` carries all 128 high bytes of each encoding.
+
+**One source is not enough for a transcription, so Mac Roman is cross-checked.**
+The table is generated from CPython's codecs, because that is what fontTools'
+`name` decoding uses and therefore what a clean differential *means*; on its own
+that is circular. So the generator also reads glibc's `MACINTOSH` charmap through
+`iconv` - an independent transcription that happens to be in the same image - and
+requires the disagreements to be exactly two, each with its reason recorded:
+
+- **0xC6**: glibc U+0394 GREEK CAPITAL DELTA, CPython U+2206 INCREMENT. glibc is
+  internally inconsistent here, giving 0xB7 as U+2211 N-ARY SUMMATION rather than
+  Greek Sigma, so it splits a pair Apple's mapping keeps together.
+- **0xF0**: the Apple logo, private use either way - U+F8FF (Apple's registered
+  corporate-use codepoint) against glibc's U+E01E.
+
+A third byte disagreeing fails the generator, and so does one of these two
+*ceasing* to disagree: a category that excuses nothing is a category that stops
+being read. The first attempt at this cross-check used fontTools' own
+`encodings.MacRoman` through the Adobe Glyph List and reported 39 disagreements -
+because that table is a glyph *order*, not the encoding, and fills the control
+range with letters. Two tables under one name answering different questions is
+not a second source.
+
+### 14.9 The gates are themselves tested
 
 Every gate above has been observed to fail before it is trusted: a byte
 flipped in a corpus font fails `ttx_diff`; a point moved in the outline
@@ -1250,6 +1310,30 @@ answered on 2026-09-23/24; the rest stand as recommended.
     subtable and then refusing every lookup would leave a caller with a font
     every other implementation maps; the audit trail is what keeps that from
     being a silent substitution (M8).
+18. **A glyph name is what the file says, even when the file repeats it.** Four
+    Liberation faces name two different glyphs `uni00AD`; fontTools renames the
+    second to `uni00AD.1` because its glyph order must be a set of unique keys.
+    This library reports the file's name, because a caller asking what a glyph is
+    called wants the font's answer and not a disambiguator nobody wrote, and
+    `gfnt_face_glyph_for_name` documents that it returns the first match.
+    `ttx_diff` carries the difference as a **checked** category: the reference's
+    name must be ours plus a `.<digits>` suffix *and* an earlier glyph must
+    actually carry the bare name, so a font genuinely containing `foo.1` that
+    this library misread as `foo` stays a disagreement. Decided 2026-09-25.
+19. **The multi-byte Macintosh and Microsoft `name` encodings are refused**
+    (§7.2), where the single-byte ones are tabulated. A byte-per-codepoint guess
+    at Shift-JIS produces text that looks like text, which is worse than an
+    error; the CJK mappings are a data set of their own and would arrive the same
+    way the single-byte ones did, from an oracle. Decided 2026-09-25.
+20. **A glyph name is allocated and freed, not borrowed.** Format 1.0 and the
+    standard-order indices could hand back a pointer into a static table while
+    format 2.0's stored strings cannot, and an ownership rule that depends on
+    which branch answered is a rule callers get wrong. It follows
+    `gfnt_face_name`/`gfnt_name_free`, already the library's precedent.
+    The reverse lookup is a linear scan over a stack buffer of the format's own
+    maximum, so *it* allocates nothing: an index would have to be built,
+    memoised and invalidated for a question most callers never ask.
+    Decided 2026-09-25.
 
 ---
 
@@ -1326,17 +1410,17 @@ and six Debian font packages by full apt version - with `oracle_env.py`,
 | --- | --- | ---: |
 | `check-oracle-cmap` | every codepoint fontTools maps, both its neighbours, and a stride sample, per font | 327 fonts, 587,186 codepoints, **0** |
 | `check-oracle-cmap-exhaustive` | all 1,114,112 codepoints per font | 364,314,624 comparisons, **0** |
-| `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory and every `name` record | 344 faces, 35,449 fields, **0** |
-| `check-fixtures` | every committed fixture against a fresh generation | 17 files, 30,994 bytes, **0** |
+| `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory, every `name` record and every `post` glyph name | 346 faces, 291,965 fields, **0** |
+| `check-fixtures` | every committed fixture against a fresh generation | 19 files, 36,076 bytes, **0** |
+| `check-vectors` | the generated vectors against a fresh generation | 5 files, 54,939 bytes, **0** |
 
-`ttx_diff` also measures what §7.2's Mac Roman deferral costs: twelve records
-across the real fonts, all of them a Macintosh description carrying a trademark
-sign, plus the two in `name-macroman.ttf` built to match them. They are counted
-rather than scored, and the category is narrow enough to stay honest - it
-applies only where the reference's text is actually above ASCII.
+`ttx_diff`'s Mac Roman category is **gone**, which is the clearest measure of
+what the vectors bought: it counted fourteen records it could not score, and now
+scores them. What remains is one checked category of four glyph names (decision
+18) and zero declined records.
 
 **The fixtures are built, as of 2026-09-25**, and they changed what `ttx_diff`
-can see. `tools/fixtures/make_fixtures.py` writes sixteen fonts and a `MANIFEST`
+can see. `tools/fixtures/make_fixtures.py` writes eighteen fonts and a `MANIFEST`
 from outlines in that file, in the same pinned image; `check-fixtures`
 regenerates them and compares bytes; `testFixtures` loads every one of them
 without a container, so the unit suite has an input it did not write itself.
@@ -1363,9 +1447,38 @@ moved:
   order now comes from fontTools' own struct description and the lookup has no
   default. An instrument with a fallback reports on the fallback.
 
-**Still not built:** `post`'s format 2.0 glyph names and Macintosh Roman
-decoding (§7.2) - no longer blocked, since `post-v2.ttf` and `name-macroman.ttf`
-are the fixtures they were waiting for.
+**The vectors are built, as of 2026-09-25**, and phase 0 is complete.
+`tools/vectors/make_vectors.py` generates the standard Macintosh glyph order and
+the eight single-byte Macintosh encodings from the pinned image;
+`gfnt_face_glyph_name`, `gfnt_face_glyph_for_name` and the Macintosh `name`
+decode read them; `check-vectors`, `testVectors` and `ttx_diff` cover them from
+three directions (§14.8). Four findings, each of which is why a figure above
+moved:
+
+- **The encoding ID does not choose the Macintosh table.** `platEncID` 0 is keyed
+  by `langID` - Icelandic, Turkish, Croatian, Central European and Romanian all
+  live under it - so "encoding 0 means Mac Roman" would have decoded thirteen
+  languages' records to the wrong letters without ever failing. The rule table is
+  generated for that reason, and all 658 Macintosh records in the real corpus are
+  `(0, Roman)`, so nothing but a fixture could have caught it.
+- **A `post` format 2.0 boundary nothing crossed.** A planted off-by-one at the
+  standard/stored index boundary passed a two-font oracle run with zero
+  disagreements: `post-v2.ttf` used indices 0-3 and 258 and never 257. 38 of the
+  corpus's 291 format 2.0 fonts do use 257, so the full run catches it - but the
+  fixtures are what travel with a thinned one, so the fixture now holds the
+  boundary and the plant is caught at `--fonts 2`.
+- **A second source has to answer the same question.** Cross-checking Mac Roman
+  against fontTools' own `encodings.MacRoman` through the AGL reported 39
+  disagreements, because that table is a glyph order rather than the encoding
+  (§14.8). glibc's `MACINTOSH` charmap is a real second source and agrees on 126
+  of 128.
+- **fontTools renames duplicate glyph names.** Four Liberation faces genuinely
+  name two glyphs `uni00AD`; the reference appends `.1` to keep its glyph order
+  unique. Verified in the raw bytes before the category was written, which is the
+  only way to tell that apart from being wrong (decision 18).
+
+**Not built, and each a phase of its own:** the multi-byte Macintosh and
+Microsoft `name` encodings (§7.2), `vhea`/`vmtx`, `gasp`, `kern`, WOFF 1.
 The `freetype`, `harfbuzz`, `pango` and `xfonts` images are phases of their own.
 `maxp` has no `_dump` because nothing reads its fields beyond `numGlyphs`; it
 gets one when something does. `vhea`/`vmtx`, `gasp` and `kern` are unbuilt, as is

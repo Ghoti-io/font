@@ -61,6 +61,8 @@ sudo make install
 | `make oracle-build` | Build that container from its pinned Containerfile |
 | `make check-fixtures` | Fail if a committed fixture is not what the generator writes |
 | `make fixtures` | Regenerate the fixtures and install them |
+| `make check-vectors` | Fail if a generated table is not what the generator emits |
+| `make gen-vectors` | Regenerate the standard glyph order and the Mac encodings |
 | `make coverage` | Line coverage, per file |
 | `make fuzz` | Build and run every fuzzer (`FUZZ_TIME=3600` for a real campaign) |
 | `make docs` | Doxygen, into `./docs` |
@@ -89,11 +91,17 @@ Everything is prefixed `gfnt_` / `GFNT_`, under `<ghoti.io/font/...>`.
   whose zero is the font's own request.
 - **`cmap.h`** - codepoint to glyph through formats 0, 4, 6 and 12, the
   documented subtable preference order, and which subtable answered.
-- **`name.h`** - name records decoded to UTF-8 by platform and encoding, with
-  the preference order and a language override.
+- **`name.h`** - name records decoded to UTF-8 by platform, encoding **and
+  language**, with the preference order and a language override. The language is
+  not decoration: Macintosh encoding 0 is Mac Roman for most languages and
+  Icelandic, Turkish, Croatian, Central European or Romanian for thirteen of
+  them, and reading it as Roman throughout gives the wrong letters without
+  failing.
 - **`glyph.h`** - `GFNT_GlyphKind`, `GFNT_Strike` and `GFNT_StrikePolicy`: the
   shape of "which strike answers this size", in the API from the start because
-  adding it later would break every caller.
+  adding it later would break every caller. Also `gfnt_face_glyph_name()` and
+  `gfnt_face_glyph_for_name()` over `post` formats 1.0 and 2.0, for PDF text
+  extraction.
 - **`font.h`** - the umbrella for tier 0.
 
 The modules design.md section 4.1 names that do **not** exist yet: `bitmap.h`,
@@ -101,9 +109,12 @@ The modules design.md section 4.1 names that do **not** exist yet: `bitmap.h`,
 `discover.h`, `write.h`. Absent, not stubbed: there is no function here that
 returns `GFNT_ERR_UNSUPPORTED` in place of a parser. Where a table this library
 does not parse yet would change an answer - a font whose strikes are in an
-`EBLC`, a `cmap` subtable in format 13, a Macintosh name above ASCII - the call
+`EBLC`, a `cmap` subtable in format 13, a Macintosh name in Shift-JIS - the call
 says `GFNT_ERR_UNSUPPORTED` and names what it could not read, rather than
-reporting an empty result that cannot be told from the truth.
+reporting an empty result that cannot be told from the truth. The same code says
+"this font states it has no glyph names", which is a different fact from "this
+library cannot read them" and is spelled out in the diagnostic rather than
+flattened into an empty string.
 
 ## Status
 
@@ -132,17 +143,24 @@ never in this repository. Every field of every table this library parses agrees
 the oracle targets are separate.
 
 The unit fixtures are **generated, not written**: `tools/fixtures/
-make_fixtures.py` builds sixteen synthetic fonts in that same pinned image,
+make_fixtures.py` builds eighteen synthetic fonts in that same pinned image,
 `make check-fixtures` regenerates them and fails on a byte difference, and
 `make test` loads every one of them without needing a container. No third-party
 font is committed here at all - every fixture is drawn from outlines in that
 script and says so in its own `name` table.
 
-**What phase 0 still owes** is `post`'s format 2.0 glyph names and Macintosh
-Roman decoding (section 7.2). Both were waiting on the fixture generator and are
-now merely unwritten. Section 18.1 of
-[documentation/design.md](documentation/design.md) lists the remainder item by
-item.
+Two tables are **generated, not written**, for the same reason: the 258-entry
+standard Macintosh glyph order behind `post` glyph names, and the single-byte
+Macintosh `name` encodings. `make check-vectors` regenerates and compares them,
+`make test` checks them against committed text with no container, and
+`check-oracle-ttx` checks them against 346 real faces. Mac Roman is cross-checked
+against glibc's charmap, because generating from one source and comparing against
+that same source proves nothing.
+
+**Phase 0 is complete.** Section 18.1 of
+[documentation/design.md](documentation/design.md) lists what each later phase
+adds; the nearest unbuilt things are `glyf`/`loca` and the scan converter
+(phase 1), and the multi-byte Macintosh `name` encodings.
 
 ## License
 

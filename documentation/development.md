@@ -15,11 +15,11 @@ src/glyph/                  The glyph kinds and the strike policy
 src/font.c                  The version
 tests/unit/                 Unit tests (gtest)
 tests/sfnt_builder.h        Builds sfnt bytes for the tests; see its header for what it is not
-tests/data/fonts/           Synthetic fixtures built by tools/fixtures/, this library's own; no third-party font is committed (not built yet)
+tests/data/fonts/           Synthetic fixtures built by tools/fixtures/, this library's own; no third-party font is committed
 tests/data/golden/          Coverage hashes for the cross-platform gate (from phase 1)
 tests/fuzz/                 libFuzzer harnesses, and seeds under corpus/<name>/*.seed
 tools/fuzz-seeds.py         Writes those seeds; they are generated, not hand-written
-tools/fixtures/             make_fixtures.py, over fontTools in its container (not built yet)
+tools/fixtures/             make_fixtures.py and check_fixtures.py, over fontTools in its container
 tools/oracle/               The differentials, and the pinned fontTools image they run in
 tools/check-reader.py       The reader gate
 tools/check-stamps.py       The flag-stamp gate
@@ -114,6 +114,53 @@ Three things to know before changing anything under `tools/oracle/`:
 
 `GHOTI_ORACLE_REQUIRED=1` turns an unreachable reference from a loud SKIPPED into
 a failure, which is what a CI with the images wants.
+
+## The fixtures
+
+`tests/data/fonts/` holds sixteen synthetic fonts and a `MANIFEST` saying what
+each one exercises. They are **generated, not written**: `make fixtures` runs
+`tools/fixtures/make_fixtures.py` in the pinned `fonttools` image and installs
+what it produces, and `make check-fixtures` regenerates and fails on a byte
+difference.
+
+```bash
+make fixtures-list         # what each fixture is for
+make check-fixtures        # the committed bytes equal a fresh generation
+make fixtures              # regenerate and install (a deliberate act)
+```
+
+Four things to know before touching them:
+
+1. **Editing a fixture by hand is not a thing you can do.** The gate compares
+   bytes; a hand edit fails it. Change `make_fixtures.py`, run `make fixtures`,
+   and let the commit say why the bytes moved.
+2. **Determinism is the contract, and it is easy to break.** Anything that
+   varies with the clock, the locale or the interpreter has to be pinned in the
+   generator - see its docstring, which names the two that bit: `FontBuilder`
+   writes the current time into `head` regardless of the defaults table, and a
+   `TTFont` re-opened from a file has `recalcTimestamp` *on*, so the one fixture
+   that is read back before it is written was different on every run while the
+   other fifteen were stable.
+3. **`head.created` must be at or above 0x7C259DC0.** fontTools treats anything
+   below that as a misencoded unix timestamp and silently adds the constant, so
+   a fixture dated 1904 reads back as 1970 and `ttx_diff` scores `created` as a
+   disagreement on every fixture - the reference being helpful, the library
+   being right, and the gate red for neither's reason.
+4. **They are in `ttx_diff`'s population by default**, and `--fonts N` thins
+   the real corpus without thinning them. That is the point: the corpus holds
+   OS/2 versions 1, 3 and 4 only, so versions 0, 2 and 5 exist nowhere else, and
+   a thinned run that dropped the fixtures would be a smoke test that stopped
+   covering the arm a defect is in - which has happened here once already.
+
+`make test` does not need a container to cover them: `testFixtures` loads every
+committed fixture and asserts what it contains, so a corrupted or missing
+fixture fails the suite anywhere. What needs the image is only the claim that
+the bytes can be *regenerated*, which is what `check-fixtures` is.
+
+That suite is also the one place the unit tests are not self-referential. Every
+other expectation under `tests/` is one this library wrote for itself -
+`tests/sfnt_builder.h` says so in its own header - and these are bytes fontTools
+wrote.
 
 ## Memory
 

@@ -414,8 +414,11 @@ first 258 of them as indices into the standard Macintosh glyph order, and that
 list is a 258-entry vector. Macintosh `name` records decode as far as ASCII and
 no further, because the rest needs the 128-codepoint Mac Roman table. §14's rule
 is that a vector comes from an oracle and is never written from memory, and
-fontTools holds both of these, so both wait for the fixture generator that can
-check them. `vhea`/`vmtx`, `gasp` and `kern` are not built either, and are
+fontTools holds both of these. **Both are now unblocked rather than blocked:**
+the fixture generator exists (§14.5), `post-v2.ttf` carries both a
+standard-order index and an extra name, and `name-macroman.ttf` carries the same
+0xAA that the twelve real records carry - so each vector can be generated from
+the pinned image and checked against a fixture built for it. `vhea`/`vmtx`, `gasp` and `kern` are not built either, and are
 phases of their own.
 
 **`name`**: every record decoded by `(platformID, encodingID)` - Unicode and
@@ -1020,16 +1023,23 @@ Two cases fall between:
 Hand-built byte arrays remain for the refusal arms that even `fontBuilder`
 will not emit - a bad checksum, a directory entry past the blob.
 
-**Half of this exists today.** `tests/sfnt_builder.h` is the organised form of
+**All of this exists today.** `tests/sfnt_builder.h` is the organised form of
 those hand-built arrays: it assembles an sfnt, a `ttcf`, and each table this
 library reads, so that a test can break exactly one field and name what it broke.
-The `fonttools` image and both differentials are built (§18.1), so the real-font
-population is reachable and the unit suite is no longer the only authority. What
-is still missing is the *generator*: `tools/fixtures/make_fixtures.py`, the
-committed fixtures under `tests/data/fonts/`, and `check-fixtures`. Until those
-exist, the fixtures a unit test uses are assembled in the test binary rather than
-committed as bytes, which means a fixture cannot be inspected with `ttx` and the
-two deferrals in §7.2 have nothing to generate their tables from.
+`tools/fixtures/make_fixtures.py` writes the generated half - sixteen fonts and a
+`MANIFEST`, in the same pinned image as the differentials - and `check-fixtures`
+regenerates and compares bytes, so a fixture is a thing that can be rebuilt
+rather than a byte array with extra steps. The `fonttools` image and both
+differentials are built (§18.1), so the real-font population is reachable too.
+
+The generator's own contract is determinism, and two of its pins are not
+obvious. `FontBuilder` writes the current time into `head` whatever its defaults
+table says, and a `TTFont` re-opened from a file has `recalcTimestamp` on - so
+the collection, the one fixture re-read before it is written, differed on every
+run while the other fifteen were stable. And `head.created` cannot be 0:
+fontTools reads any timestamp below 0x7C259DC0 as a misencoded unix timestamp
+and adds that constant, so a fixture dated 1904 comes back as 1970 and every
+fixture disagrees on `created` for neither side's fault.
 
 ### 14.6 No font is bundled
 
@@ -1290,7 +1300,7 @@ constraint.
 
 Kept here rather than in a commit message because a reader asking "can it do X
 yet" has this page open, and because the list is what the next phase starts
-from. Last revised 2026-09-24.
+from. Last revised 2026-09-25.
 
 **Built, with tests:** the scaffold; `core.h` with the three fixed-point types,
 their arithmetic, `GFNT_Tag`, `GFNT_Error` and `GFNT_Limits`; `blob.h` over
@@ -1316,16 +1326,46 @@ and six Debian font packages by full apt version - with `oracle_env.py`,
 | --- | --- | ---: |
 | `check-oracle-cmap` | every codepoint fontTools maps, both its neighbours, and a stride sample, per font | 327 fonts, 587,186 codepoints, **0** |
 | `check-oracle-cmap-exhaustive` | all 1,114,112 codepoints per font | 364,314,624 comparisons, **0** |
-| `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory and every `name` record | 327 fonts, 26,908 fields, **0** |
+| `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory and every `name` record | 344 faces, 35,449 fields, **0** |
+| `check-fixtures` | every committed fixture against a fresh generation | 17 files, 30,994 bytes, **0** |
 
 `ttx_diff` also measures what §7.2's Mac Roman deferral costs: twelve records
-across those 327 fonts, all of them a Macintosh description carrying a trademark
-sign. They are counted rather than scored, and the category is narrow enough to
-stay honest - it applies only where the reference's text is actually above ASCII.
+across the real fonts, all of them a Macintosh description carrying a trademark
+sign, plus the two in `name-macroman.ttf` built to match them. They are counted
+rather than scored, and the category is narrow enough to stay honest - it
+applies only where the reference's text is actually above ASCII.
 
-**Still not built, and phase 0 is not finished without it:** `tools/fixtures/`,
-the committed fixtures and `check-fixtures`, which is what makes a fixture's
-bytes reproducible and what unblocks `post`'s glyph names and Mac Roman (§7.2).
+**The fixtures are built, as of 2026-09-25**, and they changed what `ttx_diff`
+can see. `tools/fixtures/make_fixtures.py` writes sixteen fonts and a `MANIFEST`
+from outlines in that file, in the same pinned image; `check-fixtures`
+regenerates them and compares bytes; `testFixtures` loads every one of them
+without a container, so the unit suite has an input it did not write itself.
+Three findings came out of building them, and each is the reason a number above
+moved:
+
+- **`ttx_diff` had never compared twenty-two `OS/2` fields.** Subscript,
+  superscript, strikeout, family class, PANOSE, both Unicode range pairs, both
+  code page ranges, the default and break characters, max context, and both
+  optical point sizes were parsed by this library, printed by its dump, and read
+  by nothing. `os2-v5.ttf` was built to exercise the optical sizes and the
+  differential reported it clean, which is how the gap surfaced: a field the
+  reference does not emit reads exactly like a field that agrees. The comparison
+  is 8,541 fields wider for it.
+- **The corpus's missing `OS/2` versions now exist.** It holds versions 1, 3 and
+  4 only. A planted defect that read version 2's fields from a version 1 table
+  once survived a four-font sample (§14.7); with the fixtures in the population
+  by default, that plant and an optical-size transposition are both caught by a
+  `--fonts 4` run, because the fixtures are never what thinning drops.
+- **A default in the reference produced 262 confident disagreements.** The
+  PANOSE emitter spelled one member `bLetterform` where fontTools spells it
+  `bLetterForm`, and read it with `getattr(..., 0)`; the default turned a typo
+  into a zero and the gate blamed this library for a field it had right. The
+  order now comes from fontTools' own struct description and the lookup has no
+  default. An instrument with a fallback reports on the fallback.
+
+**Still not built:** `post`'s format 2.0 glyph names and Macintosh Roman
+decoding (§7.2) - no longer blocked, since `post-v2.ttf` and `name-macroman.ttf`
+are the fixtures they were waiting for.
 The `freetype`, `harfbuzz`, `pango` and `xfonts` images are phases of their own.
 `maxp` has no `_dump` because nothing reads its fields beyond `numGlyphs`; it
 gets one when something does. `vhea`/`vmtx`, `gasp` and `kern` are unbuilt, as is

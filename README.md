@@ -59,6 +59,8 @@ sudo make install
 | `make check-reader` | Fail if anything reads font bytes around the checked reader |
 | `make check-oracle` | Both differentials against fontTools, in its pinned container |
 | `make oracle-build` | Build that container from its pinned Containerfile |
+| `make check-fixtures` | Fail if a committed fixture is not what the generator writes |
+| `make fixtures` | Regenerate the fixtures and install them |
 | `make coverage` | Line coverage, per file |
 | `make fuzz` | Build and run every fuzzer (`FUZZ_TIME=3600` for a real campaign) |
 | `make docs` | Doxygen, into `./docs` |
@@ -124,15 +126,21 @@ no discovery, no writer.
 against fontTools in a pinned container over 327 real fonts - DejaVu, Liberation,
 the URW base 35 in CFF, Noto core, Noto Color Emoji - which live in the image and
 never in this repository. Every field of every table this library parses agrees
-(26,908 fields), and so does every codepoint of every `cmap`: 587,186 in the
-quick run and all 364,314,624 in `make check-oracle-cmap-exhaustive`. `make test`
-needs no container and says so; the oracle targets are separate.
+(35,449 fields over 344 faces), and so does every codepoint of every `cmap`:
+587,186 in the quick run and all 364,314,624 in
+`make check-oracle-cmap-exhaustive`. `make test` needs no container and says so;
+the oracle targets are separate.
 
-**What phase 0 still owes** is the fixture generator:
-`tools/fixtures/make_fixtures.py`, the committed fixtures, and `check-fixtures`.
-Until those exist a unit fixture is assembled in the test binary rather than
-committed as bytes, and the two deferrals in section 7.2 - `post`'s glyph names
-and Mac Roman - have no pinned generator to produce their tables. Section 18.1 of
+The unit fixtures are **generated, not written**: `tools/fixtures/
+make_fixtures.py` builds sixteen synthetic fonts in that same pinned image,
+`make check-fixtures` regenerates them and fails on a byte difference, and
+`make test` loads every one of them without needing a container. No third-party
+font is committed here at all - every fixture is drawn from outlines in that
+script and says so in its own `name` table.
+
+**What phase 0 still owes** is `post`'s format 2.0 glyph names and Macintosh
+Roman decoding (section 7.2). Both were waiting on the fixture generator and are
+now merely unwritten. Section 18.1 of
 [documentation/design.md](documentation/design.md) lists the remainder item by
 item.
 

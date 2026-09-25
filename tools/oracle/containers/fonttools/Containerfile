@@ -16,6 +16,18 @@
 # worth the weight before then.
 FROM docker.io/library/python:3.14-slim@sha256:7bf6c3111fe094f8ee1a1cbcdc63c4cfb345b0e3df42d5aa9a90b3b4b022ab6d
 
+# The locale, written down rather than inherited. design.md section 14.7 says
+# every built-here image pins C.UTF-8, and this one did not: the base image
+# leaves LANG unset and the interpreter happened to choose UTF-8 on its own,
+# which is a default and not a pin. notes/suite/CONTAINERS.md section 1.1 is
+# the reason the distinction matters - an unset LANG produced fifty false
+# disagreements in the vim oracle. Two paths here are exposed to it: the Mac
+# Roman name records the fixture generator encodes, and any byte a differential
+# prints. Neither should depend on what a future base image decides.
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONHASHSEED=0
+
 # fontTools answers for every table, and brotli is what it needs to read or
 # write WOFF 2 - which this library defers (section 16), but the oracle should
 # be able to read one when the question comes up.

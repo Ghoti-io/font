@@ -573,6 +573,58 @@ inline size_t cmap_record_offset(size_t index) {
   return 4 + index * 8;
 }
 
+/** One `name` record and the bytes it points at. */
+struct NameRecord {
+  uint16_t platform_id;
+  uint16_t encoding_id;
+  uint16_t language_id;
+  uint16_t name_id;
+  std::vector<uint8_t> text;  ///< Encoded as the platform requires.
+};
+
+/** UTF-16BE bytes for an ASCII string, which is what a Windows record holds. */
+inline std::vector<uint8_t> utf16be(const std::string & ascii) {
+  std::vector<uint8_t> out;
+  for (char c : ascii) {
+    put_u16(out, static_cast<uint8_t>(c));
+  }
+  return out;
+}
+
+/** Raw bytes, for a Macintosh record or a deliberately broken one. */
+inline std::vector<uint8_t> raw_bytes(const std::string & text) {
+  return std::vector<uint8_t>(text.begin(), text.end());
+}
+
+/** A `name` table of the given records, format 0. */
+inline std::vector<uint8_t> build_name(const std::vector<NameRecord> & records,
+    uint16_t format = 0) {
+  std::vector<uint8_t> out;
+  size_t storage_offset = 6 + records.size() * 12;
+
+  put_u16(out, format);
+  put_u16(out, static_cast<uint16_t>(records.size()));
+  put_u16(out, static_cast<uint16_t>(storage_offset));
+
+  std::vector<uint8_t> storage;
+  for (const auto & record : records) {
+    put_u16(out, record.platform_id);
+    put_u16(out, record.encoding_id);
+    put_u16(out, record.language_id);
+    put_u16(out, record.name_id);
+    put_u16(out, static_cast<uint16_t>(record.text.size()));
+    put_u16(out, static_cast<uint16_t>(storage.size()));
+    storage.insert(storage.end(), record.text.begin(), record.text.end());
+  }
+  out.insert(out.end(), storage.begin(), storage.end());
+  return out;
+}
+
+/** Where the nth `name` record's fields sit. */
+inline size_t name_record_offset(size_t index) {
+  return 6 + index * 12;
+}
+
 } // namespace gfnttest
 
 #endif // GHOTI_IO_GFNT_TESTS_SFNT_BUILDER_H

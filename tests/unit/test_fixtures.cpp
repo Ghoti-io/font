@@ -26,6 +26,7 @@
 
 #include "test_helpers.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -74,25 +75,39 @@ struct Fixture {
   Fixture & operator=(const Fixture &) = delete;
 };
 
-/** Every font the generator writes, in MANIFEST order. */
-const std::vector<std::string> & every_fixture() {
-  static const std::vector<std::string> names = {
-      "basic.ttf",
-      "cff.otf",
-      "cmap-format0.ttf",
-      "cmap-format12.ttf",
-      "cmap-format6.ttf",
-      "cmap-symbol.ttf",
-      "collection.ttc",
-      "name-macroman.ttf",
-      "os2-v0.ttf",
-      "os2-v1.ttf",
-      "os2-v2.ttf",
-      "os2-v3.ttf",
-      "os2-v4.ttf",
-      "os2-v5.ttf",
-      "post-v2.ttf",
-      "post-v3.ttf",
+/**
+ * Every font the generator writes, in MANIFEST order, with its glyph count.
+ *
+ * The count is per fixture rather than shared: `post-v1.ttf` has all 258
+ * standard glyphs because that is what its format means, and `post-v2.ttf` has
+ * six because one of them sits on the standard/stored boundary. One shared
+ * constant would have had to be relaxed until it asserted nothing.
+ */
+struct Entry {
+  const char * name;
+  size_t glyphs;
+};
+
+const std::vector<Entry> & every_fixture() {
+  static const std::vector<Entry> names = {
+      {"basic.ttf", kNumGlyphs},
+      {"cff.otf", kNumGlyphs},
+      {"cmap-format0.ttf", kNumGlyphs},
+      {"cmap-format12.ttf", kNumGlyphs},
+      {"cmap-format6.ttf", kNumGlyphs},
+      {"cmap-symbol.ttf", kNumGlyphs},
+      {"collection.ttc", kNumGlyphs},
+      {"name-mac-encodings.ttf", kNumGlyphs},
+      {"name-macroman.ttf", kNumGlyphs},
+      {"os2-v0.ttf", kNumGlyphs},
+      {"os2-v1.ttf", kNumGlyphs},
+      {"os2-v2.ttf", kNumGlyphs},
+      {"os2-v3.ttf", kNumGlyphs},
+      {"os2-v4.ttf", kNumGlyphs},
+      {"os2-v5.ttf", kNumGlyphs},
+      {"post-v1.ttf", 258},
+      {"post-v2.ttf", kNumGlyphs + 1},
+      {"post-v3.ttf", kNumGlyphs},
   };
   return names;
 }
@@ -118,13 +133,13 @@ std::vector<std::string> cmap_shape(const GFNT_Face * face) {
 }
 
 TEST(Fixtures, EveryCommittedFixtureLoads) {
-  for (const std::string & name : every_fixture()) {
+  for (const Entry & entry : every_fixture()) {
+    const std::string name = entry.name;
     Fixture fixture(name);
     ASSERT_EQ(fixture.result, GFNT_OK) << name;
 
-    // Shared by construction: the same five outlines, the same em. A fixture
-    // that has drifted from the generator fails here rather than in whichever
-    // suite happens to use it next.
+    // The em is shared by construction. A fixture that has drifted from the
+    // generator fails here rather than in whichever suite uses it next.
     uint16_t upem = 0;
     EXPECT_EQ(gfnt_face_units_per_em(fixture.face, &upem, nullptr), GFNT_OK)
         << name;
@@ -133,7 +148,7 @@ TEST(Fixtures, EveryCommittedFixtureLoads) {
     size_t glyphs = 0;
     EXPECT_EQ(gfnt_face_num_glyphs(fixture.face, &glyphs, nullptr), GFNT_OK)
         << name;
-    EXPECT_EQ(glyphs, kNumGlyphs) << name;
+    EXPECT_EQ(glyphs, entry.glyphs) << name;
     EXPECT_FALSE(gfnt_face_num_glyphs_disagreement(fixture.face, nullptr))
         << name;
   }
@@ -143,7 +158,8 @@ TEST(Fixtures, EveryFixtureNamesItselfAndItsLicence) {
   // A fixture that escapes into a font directory should answer for itself, and
   // the licence question this repository does not have is one the fixture
   // states rather than one a reader infers from its absence (section 14.5).
-  for (const std::string & name : every_fixture()) {
+  for (const Entry & entry : every_fixture()) {
+    const std::string name = entry.name;
     Fixture fixture(name);
     ASSERT_EQ(fixture.result, GFNT_OK) << name;
 
@@ -444,55 +460,76 @@ TEST(Fixtures, ThePostFixturesCarryTheTwoFormatsThisLibraryMeets) {
   EXPECT_EQ(post->is_fixed_pitch, header->is_fixed_pitch);
 }
 
-TEST(Fixtures, TheMacRomanFixtureHoldsAByteAboveAscii) {
+TEST(Fixtures, TheMacRomanRecordsDecodeToTheSameTextAsTheirWindowsTwins) {
   Fixture fixture("name-macroman.ttf");
   ASSERT_EQ(fixture.result, GFNT_OK);
 
-  // Section 7.2 decodes Macintosh Roman as far as ASCII and refuses above it,
-  // rather than guessing 128 codepoints from memory. This fixture is the
-  // refusal's witness: a Macintosh record holding 0xAA, which is U+2122.
+  // This fixture was built as the witness for a *refusal*: section 7.2 decoded
+  // Macintosh Roman as far as ASCII and stopped, because the rest needed a
+  // 128-codepoint table that had to come from an oracle rather than from memory.
+  // The table is generated now, so the same fixture proves the opposite - and
+  // proves it the strongest way this font allows, because it carries each string
+  // twice: once as Mac Roman bytes and once as Windows UTF-16BE. Two encodings,
+  // one text, and the comparison needs no expected value written down here.
   size_t count = 0;
   ASSERT_EQ(gfnt_face_name_count(fixture.face, &count, nullptr), GFNT_OK);
   ASSERT_GT(count, 0u);
 
-  size_t macintosh = 0;
-  size_t refused = 0;
+  std::map<uint16_t, std::string> macintosh;
+  std::map<uint16_t, std::string> windows;
   for (size_t i = 0; i < count; ++i) {
     GFNT_NameRecord record{};
     ASSERT_EQ(gfnt_face_name_at(fixture.face, i, &record, nullptr), GFNT_OK);
-    if (record.platform_id != GFNT_PLATFORM_MACINTOSH) {
-      continue;
-    }
-    ++macintosh;
+
     char * text = nullptr;
-    const GFNT_Result result = gfnt_face_name_decode(fixture.face, &record,
-        nullptr, &text, nullptr, nullptr);
-    if (result == GFNT_ERR_UNSUPPORTED) {
-      ++refused;
-      continue;
+    ASSERT_EQ(gfnt_face_name_decode(fixture.face, &record, nullptr, &text,
+                  nullptr, nullptr),
+        GFNT_OK) << "record " << i << " (platform " << record.platform_id
+                 << ", encoding " << record.encoding_id << ")";
+    if (record.platform_id == GFNT_PLATFORM_MACINTOSH) {
+      macintosh[record.name_id] = text;
     }
-    ASSERT_EQ(result, GFNT_OK);
+    else if (record.platform_id == GFNT_PLATFORM_WINDOWS) {
+      windows[record.name_id] = text;
+    }
     gfnt_name_free(nullptr, text);
   }
-  EXPECT_GT(macintosh, 0u) << "the fixture must carry Macintosh records";
-  EXPECT_EQ(refused, 2u)
-      << "exactly the trademark and description records hold 0xAA";
 
-  // And the font is still fully usable: the Windows records decode, so a
-  // refusal on one record is not a refusal of the face.
-  char * family = nullptr;
-  ASSERT_EQ(gfnt_face_name(fixture.face, GFNT_NAME_FAMILY, GFNT_LANGUAGE_ANY,
-                nullptr, &family, nullptr, nullptr),
-      GFNT_OK);
-  EXPECT_EQ(std::string(family), "Ghoti Fixture Name MacRoman");
-  gfnt_name_free(nullptr, family);
+  ASSERT_GT(macintosh.size(), 0u) << "the fixture must carry Macintosh records";
+  size_t paired = 0;
+  size_t above_ascii = 0;
+  for (const auto & pair : macintosh) {
+    if (!windows.count(pair.first)) {
+      continue;
+    }
+    EXPECT_EQ(pair.second, windows[pair.first])
+        << "name ID " << pair.first << " differs between its Mac Roman and "
+        << "its UTF-16BE spelling";
+    ++paired;
+    for (unsigned char byte : pair.second) {
+      if (byte > 0x7F) {
+        ++above_ascii;
+        break;
+      }
+    }
+  }
+  EXPECT_GE(paired, 8u) << "most name IDs are written in both encodings";
+  // Counted, so that a fixture rebuilt without the non-ASCII records cannot
+  // make this test pass by leaving it nothing to check.
+  EXPECT_EQ(above_ascii, 2u)
+      << "the trademark and description records are the two holding 0xAA";
+
+  EXPECT_NE(macintosh[GFNT_NAME_TRADEMARK].find("\xE2\x84\xA2"),
+      std::string::npos)
+      << "0xAA in Mac Roman is U+2122, which is E2 84 A2 in UTF-8";
 }
 
 TEST(Fixtures, NoFixtureClaimsAStrikeOrAnUnreadableTable) {
   // Bitmap strikes arrive in phase 1b. Until then every fixture is outlines,
   // and the strike list must say so by refusing rather than by answering zero -
   // the distinction M9 exists for.
-  for (const std::string & name : every_fixture()) {
+  for (const Entry & entry : every_fixture()) {
+    const std::string name = entry.name;
     Fixture fixture(name);
     ASSERT_EQ(fixture.result, GFNT_OK) << name;
     size_t strikes = 1;

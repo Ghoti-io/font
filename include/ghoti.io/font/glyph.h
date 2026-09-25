@@ -45,6 +45,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -167,6 +168,75 @@ GFNT_API GFNT_Result gfnt_face_strike_at(const GFNT_Face * face, size_t index,
 GFNT_API GFNT_Result gfnt_face_select_strike(const GFNT_Face * face,
     uint32_t ppem, GFNT_StrikePolicy policy, GFNT_Strike * out_strike,
     bool * out_from_outlines, GFNT_Error * error);
+
+/**
+ * @brief This glyph's name, from the `post` table.
+ *
+ * documentation/design.md section 7.2. Format 2.0 names the first 258 glyphs by
+ * index into the standard Macintosh glyph order and the rest by strings stored
+ * in the table; format 1.0 *is* that order. The order itself is generated from
+ * the reference (section 14) rather than written from memory.
+ *
+ * The caller owns the string and frees it with ::gfnt_glyph_name_free().
+ *
+ * @param face The face.
+ * @param glyph The glyph.
+ * @param allocator Allocator for the string, or NULL for the default.
+ * @param out_name Receives a NUL-terminated name. Written only on success.
+ * @param out_length Receives its length, excluding the NUL, or NULL.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID for a glyph this font does not name;
+ *   ::GFNT_ERR_UNSUPPORTED when the font **states** it has no names (`post`
+ *   format 3.0) or uses a `post` version whose names this library does not
+ *   read; ::GFNT_ERR_CORRUPT, or ::GFNT_ERR_OOM.
+ *
+ * @note "This font has no glyph names" and "this library cannot read this
+ *   font's glyph names" are both ::GFNT_ERR_UNSUPPORTED, and the diagnostic
+ *   distinguishes them. Neither is an empty string, which would be a name.
+ */
+GFNT_API GFNT_Result gfnt_face_glyph_name(const GFNT_Face * face,
+    uint32_t glyph, const GFNT_Allocator * allocator, char ** out_name,
+    size_t * out_length, GFNT_Error * error);
+
+/**
+ * @brief Release a name from ::gfnt_face_glyph_name().
+ *
+ * @param allocator The same allocator that was passed in, or NULL.
+ * @param name The string, or NULL.
+ */
+GFNT_API void gfnt_glyph_name_free(const GFNT_Allocator * allocator,
+    char * name);
+
+/**
+ * @brief The first glyph with this name.
+ *
+ * A linear scan, deliberately: this is a text-extraction path asked once per
+ * distinct name, and an index would have to be built, memoised and invalidated
+ * for a question most callers never ask.
+ *
+ * @param face The face.
+ * @param name The name to find, NUL-terminated.
+ * @param out_glyph Receives the glyph. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID when no glyph has that name;
+ *   ::GFNT_ERR_UNSUPPORTED when the font has no names to search.
+ */
+GFNT_API GFNT_Result gfnt_face_glyph_for_name(const GFNT_Face * face,
+    const char * name, uint32_t * out_glyph, GFNT_Error * error);
+
+/**
+ * @brief Write every glyph's name to a stream, one per line.
+ *
+ * For the differentials: `tools/oracle/ttx_diff.py` compares this against
+ * fontTools' glyph order. A font with no names says so on one line rather than
+ * printing nothing, because a differential reads nothing as agreement.
+ *
+ * @param face The face.
+ * @param out The stream.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID or ::GFNT_ERR_IO.
+ */
+GFNT_API GFNT_Result gfnt_face_glyph_names_dump(const GFNT_Face * face,
+    FILE * out);
 
 #ifdef __cplusplus
 }

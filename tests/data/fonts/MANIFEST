@@ -17,6 +17,7 @@ cmap-format12.ttf	cmap format 12 on (3,10) past the BMP, beside a format 4
 cmap-format6.ttf	cmap format 6 on (1,0): a trimmed array with firstCode
 cmap-symbol.ttf	cmap (3,0) symbol only: U+0041 reachable only via the 0xF0xx rule
 collection.ttc	ttcf: two faces sharing tables, with different OS/2 versions
+name-mac-encodings.ttf	name: every single-byte Macintosh encoding, all 128 high bytes each
 name-macroman.ttf	name: a Macintosh Roman record holding U+2122 as byte 0xAA
 os2-v0.ttf	OS/2 version 0: no code page ranges, no x-height, no optical size
 os2-v1.ttf	OS/2 version 1: code page ranges and nothing later
@@ -24,5 +25,6 @@ os2-v2.ttf	OS/2 version 2: x-height, cap height, default and break char
 os2-v3.ttf	OS/2 version 3: version 2's fields with version 3's fsType rules
 os2-v4.ttf	OS/2 version 4: the common case in the oracle corpus
 os2-v5.ttf	OS/2 version 5: optical point sizes, stored as twentieths
-post-v2.ttf	post format 2.0: standard-order indices and one extra name
+post-v1.ttf	post format 1.0: all 258 standard glyphs, no stored names
+post-v2.ttf	post format 2.0: standard indices including 257, and one extra name
 post-v3.ttf	post format 3.0: a header that states it has no names

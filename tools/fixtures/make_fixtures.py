@@ -69,6 +69,8 @@ from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTCollection, TTFont, newTable
+from fontTools.ttLib.tables._n_a_m_e import NameRecord
+from fontTools.ttLib.tables._p_o_s_t import standardGlyphOrder
 from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 
 UPEM = 1000
@@ -97,6 +99,12 @@ GLYPH_ORDER = [".notdef", "space", "A", "B", "ghoti.alt"]
 ADVANCES = {".notdef": 600, "space": 300, "A": 640, "B": 620, "ghoti.alt": 700}
 
 VENDOR = "GHTI"
+
+# The last index into the standard Macintosh glyph order, which is the boundary
+# `post` format 2.0 turns on: this index means the last standard name and the
+# next one means the first stored string. Spelled from the vector's own length so
+# it cannot drift from it.
+GFNT_POST_LAST_STANDARD = len(standardGlyphOrder) - 1
 
 # Every `OS/2` field this library reads, and every one of them distinctive.
 #
@@ -373,14 +381,150 @@ def build_cmap_symbol(out):
 
 
 def build_post_v2(out):
-    """`post` format 2.0, with a name in the standard order and one outside it.
+    """`post` format 2.0, across the boundary the format turns on.
 
     "A", "B" and "space" are in the standard Macintosh order and are spelled as
-    indices into it; "ghoti.alt" is not, and is spelled as a Pascal string in
-    the table's own list. Reading this table needs the 258-entry standard vector
-    that section 7.2 defers to exactly this generator.
+    indices into it; "ghoti.alt" is not, and is spelled as a Pascal string in the
+    table's own list. Reading this table needs the 258-entry standard vector that
+    section 7.2 deferred to exactly this generator.
+
+    **"dcroat" is here because it is standard name 257, the last one.** The first
+    version of this fixture used indices 0-3 and 258, which leaves the boundary
+    itself untested: a planted off-by-one that treated index 257 as a stored name
+    rather than the last standard one passed a two-font smoke run with zero
+    disagreements. 38 of the corpus's 291 format 2.0 fonts do use index 257, so
+    the full run catches it - but the fixtures are what travel with a thinned
+    one, and a boundary is exactly the thing a fixture should hold.
     """
-    fb = truetype("Post v2", unicode_cmap(), glyph_names=True)
+    boundary = standardGlyphOrder[GFNT_POST_LAST_STANDARD]
+    order = GLYPH_ORDER + [boundary]
+    glyphs = tt_glyphs()
+    pen = TTGlyphPen(None)
+    draw_a(pen)
+    glyphs[boundary] = pen.glyph()
+    metrics = {n: (ADVANCES[n], 0) for n in GLYPH_ORDER}
+    metrics[boundary] = (580, 0)
+
+    fb = FontBuilder(UPEM, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics(metrics)
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, [subtable(4, 0, 3, {0x20: "space", 0x41: "A", 0x42: "B"}),
+                  subtable(4, 3, 1, {0x20: "space", 0x41: "A", 0x42: "B",
+                                     0x111: boundary})])
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names("Post v2"), mac=True)
+    fb.setupPost(keepGlyphNames=True)
+    pin(fb)
+    fb.save(out)
+
+
+def build_post_v1(out):
+    """`post` format 1.0: the font *is* the standard Macintosh glyph order.
+
+    All 258 glyphs, in that order, because that is what the format means - a
+    format 1.0 table stores no names at all and a reader answers from the
+    generated vector alone. Most of the glyphs are empty, which keeps the
+    fixture at a few kilobytes; the three that are also in the ordinary
+    repertoire are drawn.
+
+    No font in the oracle corpus is format 1.0 - it holds 291 format 2.0 and 51
+    format 3.0 and nothing else - so this fixture is the only cover that path
+    has, the same position `os2-v0`, `os2-v2` and `os2-v5` are in.
+    """
+    order = list(standardGlyphOrder)
+    if len(order) != 258:
+        raise SystemExit("the standard glyph order is not 258 names")
+
+    glyphs = {}
+    metrics = {}
+    for name in order:
+        pen = TTGlyphPen(None)
+        OUTLINES.get(name, draw_space)(pen)
+        glyphs[name] = pen.glyph()
+        metrics[name] = (ADVANCES.get(name, 500), 0)
+
+    fb = FontBuilder(UPEM, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics(metrics)
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, [subtable(4, 3, 1, {0x20: "space", 0x41: "A", 0x42: "B"})])
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names("Post v1"), mac=True)
+    fb.setupPost(keepGlyphNames=False)
+    # fontTools writes a format 1.0 table as the bare header, which is what the
+    # format is; it is not offered by setupPost because a font is rarely allowed
+    # to claim it.
+    fb.font["post"].formatType = 1.0
+    pin(fb)
+    fb.save(out)
+
+
+# The Macintosh (platEncID, langID) pairs this fixture exercises, and what each
+# one must decode as. Taken from fontTools' own encoding map - see
+# tools/vectors/make_vectors.py, which generates the library's table from the
+# same place.
+#
+# The point of the pairs under platEncID 0 is that the encoding ID does not
+# decide: 0 with langID 17 is Turkish, not Roman, and a reader that ignores the
+# language decodes real letters to the wrong real letters without failing.
+MAC_ENCODING_CASES = [
+    (0, 0, "mac_roman"),
+    (0, 15, "mac_iceland"),
+    (0, 17, "mac_turkish"),
+    (0, 18, "mac_croatian"),
+    (0, 24, "mac_latin2"),
+    (0, 37, "mac_romanian"),
+    (6, 0, "mac_greek"),
+    (7, 0, "mac_cyrillic"),
+    (29, 0, "mac_latin2"),
+    (35, 0, "mac_turkish"),
+    (37, 0, "mac_iceland"),
+]
+
+
+def build_name_mac_encodings(out):
+    """One Macintosh record per single-byte encoding, each holding every byte.
+
+    The record's text is **all of 0x80 to 0xFF** decoded through that encoding,
+    so two tables that differ anywhere differ here, and a reader that chose the
+    wrong one cannot produce the right string by accident. fontTools encodes the
+    text back to bytes with the same codec, so the fixture's bytes are the
+    reference's opinion of the encoding rather than this repository's.
+
+    Why it has to exist: all 658 Macintosh name records across the 327-font
+    corpus are (platEncID 0, Mac Roman). The language-keyed rules and the seven
+    non-Roman tables have no coverage from real fonts at all, and a table with
+    no coverage is a table nobody has read.
+    """
+    fb = FontBuilder(UPEM, isTTF=True)
+    fb.setupGlyphOrder(GLYPH_ORDER)
+    fb.setupGlyf(tt_glyphs())
+    fb.setupHorizontalMetrics({n: (ADVANCES[n], 0) for n in GLYPH_ORDER})
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, unicode_cmap())
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names("Name Mac Encodings"), mac=True)
+    fb.setupPost(keepGlyphNames=False)
+
+    table = fb.font["name"]
+    high = bytes(range(0x80, 0x100))
+    for encoding, language, codec in MAC_ENCODING_CASES:
+        record = NameRecord()
+        record.platformID = 1
+        record.platEncID = encoding
+        record.langID = language
+        # Sample text (19), so that one nameID can carry every case: records are
+        # keyed by (platform, encoding, language, nameID) and these differ in the
+        # first three.
+        record.nameID = 19
+        record.string = high.decode(codec)
+        table.names.append(record)
+    table.names.sort(key=lambda r: (r.platformID, r.platEncID, r.langID,
+                                    r.nameID))
+    pin(fb)
     fb.save(out)
 
 
@@ -494,12 +638,16 @@ FIXTURES = {
         "cmap format 12 on (3,10) past the BMP, beside a format 4"),
     "cmap-symbol.ttf": (build_cmap_symbol,
         "cmap (3,0) symbol only: U+0041 reachable only via the 0xF0xx rule"),
+    "post-v1.ttf": (build_post_v1,
+        "post format 1.0: all 258 standard glyphs, no stored names"),
     "post-v2.ttf": (build_post_v2,
-        "post format 2.0: standard-order indices and one extra name"),
+        "post format 2.0: standard indices including 257, and one extra name"),
     "post-v3.ttf": (build_post_v3,
         "post format 3.0: a header that states it has no names"),
     "name-macroman.ttf": (build_name_macroman,
         "name: a Macintosh Roman record holding U+2122 as byte 0xAA"),
+    "name-mac-encodings.ttf": (build_name_mac_encodings,
+        "name: every single-byte Macintosh encoding, all 128 high bytes each"),
     "cff.otf": (build_cff,
         "OTTO flavour: a CFF outline table, every metric table unchanged"),
     "collection.ttc": (build_collection,

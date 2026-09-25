@@ -125,6 +125,12 @@ int main(int argc, char ** argv) {
   if (gfnt_face_name_dump(face, stdout) != GFNT_OK) {
     printf("name: absent\n");
   }
+  // The `post` glyph names, last because they are the longest section. A font
+  // with none says so on a line of its own (see the dump), because a
+  // differential reads silence as agreement.
+  if (gfnt_face_glyph_names_dump(face, stdout) != GFNT_OK) {
+    printf("glyph names: absent\n");
+  }
 
   gfnt_face_free(face);
   gfnt_blob_destroy(blob);

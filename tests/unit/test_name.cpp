@@ -169,13 +169,34 @@ TEST(Name, AMacintoshRecordDecodesAsFarAsAscii) {
   EXPECT_EQ(result, GFNT_OK);
 }
 
-TEST(Name, AMacintoshRecordAboveAsciiIsUnsupportedNotWrong) {
-  // Decoding it needs the Mac Roman table, and section 14's rule is that a
-  // vector comes from an oracle rather than from memory. Guessing Latin-1 here
-  // would put a wrong character in a family name, which is worse than saying
-  // so.
+TEST(Name, AMacintoshRecordAboveAsciiIsDecodedThroughItsTable) {
+  // This test asserted a *refusal* until the vectors were generated: decoding
+  // needed the 128-entry Mac Roman table, and section 14's rule is that a vector
+  // comes from an oracle rather than from memory, so guessing Latin-1 - which
+  // would have put a wrong character in a family name - was worse than saying
+  // so. The table is generated now, and 0xA5 in Mac Roman is U+2022 BULLET,
+  // which Latin-1 would have made U+00A5 YEN SIGN. The two readings are the
+  // whole reason the table was not written from memory.
   Font font({name_table(gfnttest::build_name(
       {{1, 0, 0, GFNT_NAME_FAMILY, {'G', 'h', 0xA5, 'i'}}}))});
+  GFNT_NameRecord record{};
+  ASSERT_EQ(gfnt_face_name_at(font.face, 0, &record, nullptr), GFNT_OK);
+  char * out = nullptr;
+  ASSERT_EQ(gfnt_face_name_decode(font.face, &record, nullptr, &out, nullptr,
+                &font.error),
+      GFNT_OK);
+  EXPECT_STREQ(out, "Gh\xE2\x80\xA2i");
+  gfnt_name_free(nullptr, out);
+}
+
+TEST(Name, AnEncodingThisLibraryDoesNotDecodeIsUnsupported) {
+  // Macintosh encoding 1 is Japanese: multi-byte, a data set of its own, and
+  // refused rather than guessed a byte at a time. Encoding 6 used to be the
+  // subject here and is Macintosh Greek, which is now tabulated - a test whose
+  // subject has become supported is a test that would have started asserting
+  // the wrong thing.
+  Font font({name_table(gfnttest::build_name(
+      {{1, 1, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("whatever")}}))});
   GFNT_NameRecord record{};
   ASSERT_EQ(gfnt_face_name_at(font.face, 0, &record, nullptr), GFNT_OK);
   char * out = nullptr;
@@ -185,15 +206,40 @@ TEST(Name, AMacintoshRecordAboveAsciiIsUnsupportedNotWrong) {
   EXPECT_NE(font.error.message, nullptr);
 }
 
-TEST(Name, AnEncodingThisLibraryDoesNotDecodeIsUnsupported) {
-  Font font({name_table(gfnttest::build_name(
-      {{1, 6, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("whatever")}}))});
-  GFNT_NameRecord record{};
-  ASSERT_EQ(gfnt_face_name_at(font.face, 0, &record, nullptr), GFNT_OK);
-  char * out = nullptr;
-  EXPECT_EQ(gfnt_face_name_decode(font.face, &record, nullptr, &out, nullptr,
+TEST(Name, TheMacintoshLanguageDecidesWhichTableDecodesEncodingZero) {
+  // platEncID 0 is Mac Roman for most languages and five other encodings for
+  // thirteen of them. 0xDB is U+20AC EURO SIGN in Mac Roman and U+20AC in
+  // Icelandic too, so the byte that separates them is 0xA0: U+2020 DAGGER in
+  // Roman and U+00DD LATIN CAPITAL LETTER Y WITH ACUTE in Icelandic.
+  //
+  // Two records that differ only in their language ID must therefore decode
+  // differently. A library that read encoding 0 as Mac Roman throughout would
+  // pass every other test in this file.
+  Font font({name_table(gfnttest::build_name({
+      {1, 0, 0, GFNT_NAME_FAMILY, {'x', 0xA0}},
+      {1, 0, 15, GFNT_NAME_FAMILY, {'x', 0xA0}},
+  }))});
+
+  GFNT_NameRecord roman{};
+  GFNT_NameRecord iceland{};
+  ASSERT_EQ(gfnt_face_name_at(font.face, 0, &roman, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_name_at(font.face, 1, &iceland, nullptr), GFNT_OK);
+  ASSERT_EQ(roman.language_id, 0u);
+  ASSERT_EQ(iceland.language_id, 15u);
+
+  char * first = nullptr;
+  char * second = nullptr;
+  ASSERT_EQ(gfnt_face_name_decode(font.face, &roman, nullptr, &first, nullptr,
                 nullptr),
-      GFNT_ERR_UNSUPPORTED);
+      GFNT_OK);
+  ASSERT_EQ(gfnt_face_name_decode(font.face, &iceland, nullptr, &second,
+                nullptr, nullptr),
+      GFNT_OK);
+  EXPECT_STREQ(first, "x\xE2\x80\xA0");  // U+2020 DAGGER
+  EXPECT_STREQ(second, "x\xC3\x9D");     // U+00DD Y WITH ACUTE
+  EXPECT_STRNE(first, second);
+  gfnt_name_free(nullptr, first);
+  gfnt_name_free(nullptr, second);
 }
 
 TEST(Name, ThePreferenceOrderTakesWindowsEnglishFirst) {
@@ -414,7 +460,11 @@ TEST(Name, EveryAllocationFailureIsReportedAndLeaksNothing) {
 TEST(NameDump, NamesEveryRecordAndSaysWhenOneCannotBeDecoded) {
   Font font({name_table(gfnttest::build_name({
       {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti Sans")},
-      {1, 6, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("whatever")},
+      // Macintosh Japanese: multi-byte, and the only kind of record left that
+      // this library declines. Encoding 6 stood here and is Greek, which is now
+      // tabulated - so the dump would have decoded it and the assertion below
+      // would have been testing nothing.
+      {1, 1, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("whatever")},
   }))});
 
   gfnttest::CapturedOutput out;

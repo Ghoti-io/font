@@ -24,11 +24,18 @@
  * `name`: the record list, the decode, and the preference order.
  *
  * documentation/design.md section 7.2 and M15. The encoding decides the
- * decode: UTF-16BE for the Unicode and Windows platforms, ASCII for the
- * Macintosh platform as far as this library goes today, and
- * ::GFNT_ERR_UNSUPPORTED for everything else - which is a different answer
- * from ::GFNT_ERR_CORRUPT, because the font is fine and this library is the
- * one that is short a table.
+ * decode: UTF-16BE for the Unicode and Windows platforms, a generated table for
+ * the single-byte Macintosh encodings, and ::GFNT_ERR_UNSUPPORTED for the
+ * multi-byte ones - which is a different answer from ::GFNT_ERR_CORRUPT,
+ * because the font is fine and this library is the one that is short a table.
+ *
+ * **The Macintosh encoding is not chosen by the encoding ID alone.** `platEncID`
+ * 0 is keyed by `langID`: it is Mac Roman for most languages and Icelandic,
+ * Turkish, Croatian, Central European or Romanian for thirteen of them. Reading
+ * it as Mac Roman throughout would decode those records to the wrong letters
+ * without failing, which is the worst shape of wrong available here. The
+ * decision is a generated table, `src/name/mac_encodings.h`, and the rule it
+ * encodes came from the reference rather than from memory (section 14).
  *
  * Reference: OpenType Specification 1.9, "name - Naming Table", and its
  * platform and encoding ID appendices.
@@ -38,9 +45,11 @@
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/name.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include "../sfnt/sfnt.h"
+#include "mac_encodings.h"
 
 /** The `name` tag, spelled once. */
 #define GFNT_NAME_TAG GFNT_TAG('n', 'a', 'm', 'e')
@@ -161,15 +170,48 @@ GFNT_Result gfnt_face_name_at(const GFNT_Face * face, size_t index,
 /**
  * Whether this library can decode a record in this platform and encoding.
  */
-static bool gfnt_name_decodable(uint16_t platform, uint16_t encoding) {
+/**
+ * Which generated table decodes a Macintosh record, or ::GFNT_MAC_TABLE_NONE.
+ *
+ * Both ends of the relation, because one end does not decide: the rules are
+ * scanned for an exact (encoding, language) match first and for the encoding's
+ * default second. A linear scan over twenty-three rules is not worth indexing.
+ */
+static int32_t gfnt_name_mac_table(uint16_t encoding, uint16_t language) {
+  int32_t fallback = GFNT_MAC_TABLE_NONE;
+  bool named = false;
+
+  for (size_t i = 0; i < GFNT_MAC_RULE_COUNT; ++i) {
+    if (gfnt_mac_rules[i].encoding != encoding) {
+      continue;
+    }
+    if (gfnt_mac_rules[i].language == (int32_t)language) {
+      return gfnt_mac_rules[i].table;
+    }
+    if (gfnt_mac_rules[i].language == GFNT_MAC_LANGUAGE_ANY) {
+      fallback = gfnt_mac_rules[i].table;
+      named = true;
+    }
+  }
+  // An encoding ID with no rule at all is not the same as one whose rule says
+  // "no table": the first is an ID this library has never heard of and the
+  // second is a multi-byte encoding it deliberately refuses. Both refuse, and
+  // the diagnostic below tells them apart.
+  return named ? fallback : GFNT_MAC_TABLE_NONE;
+}
+
+static bool gfnt_name_decodable(uint16_t platform, uint16_t encoding,
+    uint16_t language) {
   // Every string under the Unicode and Windows platforms is UTF-16BE,
   // whichever encoding ID it names - including the Windows symbol encoding,
   // whose strings are ordinary UCS-2 even though its cmap is not.
   if (platform == GFNT_PLATFORM_UNICODE || platform == GFNT_PLATFORM_WINDOWS) {
     return true;
   }
-  // Macintosh Roman, but only as far as ASCII: see the header.
-  return platform == GFNT_PLATFORM_MACINTOSH && encoding == 0;
+  if (platform == GFNT_PLATFORM_MACINTOSH) {
+    return gfnt_name_mac_table(encoding, language) != GFNT_MAC_TABLE_NONE;
+  }
+  return false;
 }
 
 /**
@@ -219,19 +261,26 @@ static GFNT_Result gfnt_name_transcode(GFNT_Reader * storage,
   size_t written = 0;
 
   if (record->platform_id == GFNT_PLATFORM_MACINTOSH) {
+    const int32_t table =
+        gfnt_name_mac_table(record->encoding_id, record->language_id);
+
+    if (table == GFNT_MAC_TABLE_NONE) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
+          GFNT_GLYPH_NONE,
+          "a Macintosh name encoding this library does not decode: the "
+          "multi-byte CJK encodings are a data set of their own");
+    }
     for (size_t i = 0; i < record->length; ++i) {
       uint8_t byte = 0;
 
       if (gfnt_reader_u8_at(storage, record->offset + i, &byte) != GFNT_OK) {
         return GFNT_ERR_CORRUPT;
       }
-      if (byte >= 0x80u) {
-        return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG,
-            record->offset + i, GFNT_GLYPH_NONE,
-            "a Macintosh name record above ASCII; the Mac Roman table is not "
-            "here yet");
-      }
-      written += gfnt_name_utf8(byte, out ? out + written : NULL);
+      // Below 0x80 every one of these encodings is ASCII, which the generator
+      // asserts rather than tabulating, so the table holds the high half only.
+      written += gfnt_name_utf8(
+          byte < 0x80u ? byte : gfnt_mac_high[table][byte - 0x80u],
+          out ? out + written : NULL);
     }
     *out_length = written;
     return GFNT_OK;
@@ -296,7 +345,8 @@ GFNT_Result gfnt_face_name_decode(const GFNT_Face * face,
     return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_NAME_TAG, 0,
         GFNT_GLYPH_NONE, "no face, no record, or nowhere to put the string");
   }
-  if (!gfnt_name_decodable(record->platform_id, record->encoding_id)) {
+  if (!gfnt_name_decodable(record->platform_id, record->encoding_id,
+          record->language_id)) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
         GFNT_GLYPH_NONE, "a name encoding this library does not decode yet");
   }
@@ -394,7 +444,8 @@ GFNT_Result gfnt_face_name(const GFNT_Face * face, uint16_t name_id,
     if (language_id != GFNT_LANGUAGE_ANY && record.language_id != language_id) {
       continue;
     }
-    if (!gfnt_name_decodable(record.platform_id, record.encoding_id)) {
+    if (!gfnt_name_decodable(record.platform_id, record.encoding_id,
+            record.language_id)) {
       continue;
     }
     rank = gfnt_name_rank(&record);

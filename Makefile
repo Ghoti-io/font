@@ -618,7 +618,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Debug build commands
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 # Fuzz commands
-.PHONY: fuzz fuzz-clean
+.PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-run-sfnt fuzz-run-cmap
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -1306,12 +1306,17 @@ fuzz-run-$2: $$(FUZZ_APP_DIR)/$1
 		-max_total_time=$$(FUZZ_TIME) -print_final_stats=1
 endef
 
-# No harness yet. Each arrives as $(eval $(call fuzz-rule,fuzz_<name>,<name>))
-# with a seed in tests/fuzz/corpus/<name>/, per documentation/development.md.
+# One harness per container and per table family, each with the options byte
+# driving GFNT_Limits (documentation/design.md section 14.2). fuzz_sfnt takes a
+# whole font; fuzz_cmap takes a cmap table and the harness wraps a font around
+# it, so the fuzzer does not spend its budget rediscovering the directory.
+$(eval $(call fuzz-rule,fuzz_sfnt,sfnt))
+$(eval $(call fuzz-rule,fuzz_cmap,cmap))
+
+FUZZERS := sfnt cmap
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
-fuzz:
-	@printf "fuzz: no harnesses yet; see documentation/design.md and development.md\n"
+fuzz: $(addprefix fuzz-run-,$(FUZZERS))
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 	-@rm -rf $(FUZZ_DIR)

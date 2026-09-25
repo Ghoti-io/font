@@ -45,13 +45,30 @@
 // are deliberately absent: they are cutil's, and cutil has already renamed
 // them.
 #define GFNT_Allocator GHOTIIO_FONT(GFNT_Allocator)
+#define GFNT_Error GHOTIIO_FONT(GFNT_Error)
+#define GFNT_F16Dot16 GHOTIIO_FONT(GFNT_F16Dot16)
+#define GFNT_F26Dot6 GHOTIIO_FONT(GFNT_F26Dot6)
+#define GFNT_F2Dot14 GHOTIIO_FONT(GFNT_F2Dot14)
 #define GFNT_Limits GHOTIIO_FONT(GFNT_Limits)
 #define GFNT_Result GHOTIIO_FONT(GFNT_Result)
+#define GFNT_Tag GHOTIIO_FONT(GFNT_Tag)
 
 // Public functions.
 #define gfnt_allocator_default GHOTIIO_FONT(gfnt_allocator_default)
+#define gfnt_error_clear GHOTIIO_FONT(gfnt_error_clear)
+#define gfnt_error_dump GHOTIIO_FONT(gfnt_error_dump)
+#define gfnt_error_set GHOTIIO_FONT(gfnt_error_set)
+#define gfnt_f16dot16_div GHOTIIO_FONT(gfnt_f16dot16_div)
+#define gfnt_f16dot16_mul GHOTIIO_FONT(gfnt_f16dot16_mul)
+#define gfnt_f26dot6_ceil GHOTIIO_FONT(gfnt_f26dot6_ceil)
+#define gfnt_f26dot6_floor GHOTIIO_FONT(gfnt_f26dot6_floor)
+#define gfnt_f26dot6_round GHOTIIO_FONT(gfnt_f26dot6_round)
+#define gfnt_f2dot14_to_f16dot16 GHOTIIO_FONT(gfnt_f2dot14_to_f16dot16)
 #define gfnt_limits_default GHOTIIO_FONT(gfnt_limits_default)
 #define gfnt_result_string GHOTIIO_FONT(gfnt_result_string)
+#define gfnt_scale_for_ppem GHOTIIO_FONT(gfnt_scale_for_ppem)
+#define gfnt_tag_string GHOTIIO_FONT(gfnt_tag_string)
+#define gfnt_units_to_pixels GHOTIIO_FONT(gfnt_units_to_pixels)
 #define gfnt_version_number GHOTIIO_FONT(gfnt_version_number)
 #define gfnt_version_string GHOTIIO_FONT(gfnt_version_string)
 /// @endcond

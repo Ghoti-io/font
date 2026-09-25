@@ -45,6 +45,8 @@
 // are deliberately absent: they are cutil's, and cutil has already renamed
 // them.
 #define GFNT_Allocator GHOTIIO_FONT(GFNT_Allocator)
+#define GFNT_Blob GHOTIIO_FONT(GFNT_Blob)
+#define GFNT_BlobOwnership GHOTIIO_FONT(GFNT_BlobOwnership)
 #define GFNT_Error GHOTIIO_FONT(GFNT_Error)
 #define GFNT_F16Dot16 GHOTIIO_FONT(GFNT_F16Dot16)
 #define GFNT_F26Dot6 GHOTIIO_FONT(GFNT_F26Dot6)
@@ -55,6 +57,14 @@
 
 // Public functions.
 #define gfnt_allocator_default GHOTIIO_FONT(gfnt_allocator_default)
+#define gfnt_blob_create_file GHOTIIO_FONT(gfnt_blob_create_file)
+#define gfnt_blob_create_memory GHOTIIO_FONT(gfnt_blob_create_memory)
+#define gfnt_blob_create_mmap GHOTIIO_FONT(gfnt_blob_create_mmap)
+#define gfnt_blob_data GHOTIIO_FONT(gfnt_blob_data)
+#define gfnt_blob_destroy GHOTIIO_FONT(gfnt_blob_destroy)
+#define gfnt_blob_dump GHOTIIO_FONT(gfnt_blob_dump)
+#define gfnt_blob_is_mapped GHOTIIO_FONT(gfnt_blob_is_mapped)
+#define gfnt_blob_size GHOTIIO_FONT(gfnt_blob_size)
 #define gfnt_error_clear GHOTIIO_FONT(gfnt_error_clear)
 #define gfnt_error_dump GHOTIIO_FONT(gfnt_error_dump)
 #define gfnt_error_set GHOTIIO_FONT(gfnt_error_set)

@@ -31,6 +31,7 @@
 #define GHOTI_IO_GFNT_FONT_H
 
 #include <ghoti.io/font/allocator.h>
+#include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/macros.h>
 

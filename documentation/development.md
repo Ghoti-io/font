@@ -20,7 +20,7 @@ tests/data/golden/          Coverage hashes for the cross-platform gate (from ph
 tests/fuzz/                 libFuzzer harnesses, and seeds under corpus/<name>/*.seed
 tools/fuzz-seeds.py         Writes those seeds; they are generated, not hand-written
 tools/fixtures/             make_fixtures.py, over fontTools in its container (not built yet)
-tools/oracle/               The differentials (not built yet)
+tools/oracle/               The differentials, and the pinned fontTools image they run in
 tools/check-reader.py       The reader gate
 tools/check-stamps.py       The flag-stamp gate
 ```

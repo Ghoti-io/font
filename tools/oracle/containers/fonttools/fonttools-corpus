@@ -1,0 +1,9 @@
+#!/bin/sh
+# The sfnt corpus: every font in this image that tier 0 can open.
+#
+# A list in the image rather than a glob in each differential, so that "which
+# fonts did that run cover" has one answer and adding a package is one edit.
+# Terminus is deliberately absent: it ships several hundred PCF files, one per
+# encoding, and nothing here reads PCF yet - see fonttools-corpus-bitmap.
+find /usr/share/fonts -type f \( -name '*.ttf' -o -name '*.otf' \
+    -o -name '*.ttc' -o -name '*.otc' \) | sort

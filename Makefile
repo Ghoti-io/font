@@ -619,6 +619,8 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 # Fuzz commands
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-run-sfnt fuzz-run-cmap
+# Oracle commands
+.PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean check-oracle-cmap check-oracle-cmap-exhaustive
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -822,6 +824,49 @@ check-reader: ## Fail if anything under src/ reads font bytes around the reader
 # same invocation, so a pattern that has rotted into matching nothing fails
 # the build instead of reporting a clean tree.
 	@python3 tools/check-reader.py
+
+####################################################################
+# Oracles
+####################################################################
+#
+# documentation/design.md section 14.7 and notes/suite/CONTAINERS.md. The
+# references run in pinned containers, never on the host by default, and
+# `make test` needs none of them: these targets are separate because a
+# contributor without a container engine must still be able to run the suite
+# and see that they did not run the differentials.
+#
+# GHOTI_ORACLE_REQUIRED=1 turns an unreachable reference from a loud SKIPPED
+# into a failure, which is what a CI with the images wants.
+
+ORACLE := tools/oracle
+ORACLE_RUN := python3 $(ORACLE)/oracle_run.py
+
+oracle-build: ## Build the fontTools oracle image from its pinned Containerfile
+	@printf "\n### Building the fontTools oracle image ###\n"
+	podman build -t ghoti-font-oracle-fonttools:4.66.0 \
+		-f $(ORACLE)/containers/fonttools/Containerfile \
+		$(ORACLE)/containers/fonttools
+
+oracle-version: ## Print which reference would answer, and fail if none would
+oracle-version:
+	@GHOTI_ORACLE_REQUIRED=1 $(ORACLE_RUN) fonttools -- true \
+		&& printf "the reference is reachable and matches its pin\n"
+
+oracle-corpus: ## Copy the image's fonts to build/oracle/corpus for both sides
+	@python3 $(ORACLE)/corpus.py sfnt
+
+oracle-corpus-clean: ## Remove the materialised corpus (it is cache, not content)
+	@rm -rf build/oracle/corpus
+	@printf "removed build/oracle/corpus\n"
+
+check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
+check-oracle-cmap: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/cmap_diff.py --quiet
+
+check-oracle-cmap-exhaustive: ## The same, over all 1,114,112 codepoints
+check-oracle-cmap-exhaustive: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/cmap_diff.py --quiet \
+		--exhaustive $(ORACLE_FONTS)
 
 ####################################################################
 # Tier layering

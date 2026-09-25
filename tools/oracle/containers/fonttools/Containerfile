@@ -1,0 +1,59 @@
+# The fontTools oracle: the reference for "does this table parse to the same
+# fields", and the image that also builds this library's fixtures.
+#
+# documentation/design.md section 14.7. Everything the build reads is pinned,
+# because this image is **built here** and two builds of one Containerfile are
+# not two copies of one image (notes/suite/CONTAINERS.md section 2.6). So the
+# base is pinned by digest, the Python packages by exact version, and Debian's
+# font packages by full apt version - and the run-time version check in
+# oracle_env.py is the real guarantee, which is why it runs in both modes here
+# where `unicode` was able to relax it.
+#
+# The apt pins will eventually fail to resolve when the archive moves past
+# them. That is the intended failure: a bare `apt-get install fonts-dejavu-core`
+# would silently install a different DejaVu and report the corpus as changed.
+# snapshot.debian.org is the durable answer when it first happens; it is not
+# worth the weight before then.
+FROM docker.io/library/python:3.14-slim@sha256:7bf6c3111fe094f8ee1a1cbcdc63c4cfb345b0e3df42d5aa9a90b3b4b022ab6d
+
+# fontTools answers for every table, and brotli is what it needs to read or
+# write WOFF 2 - which this library defers (section 16), but the oracle should
+# be able to read one when the question comes up.
+RUN pip install --no-cache-dir --no-compile \
+      fonttools==4.66.0 \
+      brotli==1.2.0
+
+# The fonts a differential names. They live **only here**: no third-party font
+# is committed to this repository (section 14.6), and the two jobs a corpus does
+# want different fonts - the unit fixtures exercise code paths and are this
+# library's own, while conformance wants the population that is not.
+#
+# What each is for:
+#   fonts-dejavu-core        TrueType outlines, a `kern` table, five cmap subtables
+#   fonts-liberation2        TrueType, a second foundry's idea of the same tables
+#   fonts-urw-base35         CFF outlines in an sfnt - the `OTTO` flavour
+#   fonts-noto-core          breadth of scripts, and OS/2 version 4 in bulk
+#   fonts-noto-color-emoji   cmap format 12 past the BMP, format 14 variation
+#                            sequences, and CBDT/CBLC strikes for phase 6
+#   xfonts-terminus          PCF bitmap strikes, for phase 1b; nothing reads
+#                            them yet and they cost two megabytes
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+      fonts-dejavu-core=2.37-8 \
+      fonts-liberation2=1:2.1.5-3 \
+      fonts-urw-base35=20200910-8 \
+      fonts-noto-core=20201225-2 \
+      fonts-noto-color-emoji=2.051-0+deb13u1 \
+      xfonts-terminus=4.48-3.1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The three scripts an oracle driver runs, copied in rather than written with
+# printf inside a RUN. The first draft did use printf, and its \x27 escapes
+# reached the file as literal backslash-x-2-7 - a quoting layer between the
+# check and the fact it checks, which is the same reason `unicode`'s ICU image
+# compiles a version program instead of parsing icuinfo's XML.
+COPY fonttools-version fonttools-corpus fonttools-corpus-bitmap \
+     /usr/local/bin/
+RUN chmod +x /usr/local/bin/fonttools-version \
+      /usr/local/bin/fonttools-corpus \
+      /usr/local/bin/fonttools-corpus-bitmap

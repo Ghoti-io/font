@@ -1,0 +1,4 @@
+#!/bin/sh
+# What oracle_env.py's probe runs: the version of the reference that will
+# answer, from the package itself rather than from the image's tag.
+exec python3 -c 'import fontTools; print("fontTools", fontTools.version)'

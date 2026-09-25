@@ -1,0 +1,6 @@
+#!/bin/sh
+# The bitmap corpus: PCF strikes, for phase 1b. Nothing reads these yet, and
+# they are listed separately because there are several hundred of them - one per
+# encoding - and mixing them into the sfnt corpus would make every differential's
+# denominator mostly files it skipped.
+find /usr/share/fonts -type f -name '*.pcf.gz' | sort

@@ -1,0 +1,39 @@
+# The oracle images, pinned.
+#
+# One line per oracle, tab-separated: <name> <image-ref> <version> <what it
+# answers>.
+#
+# Two kinds of pin and they are not the same guarantee
+# (notes/suite/CONTAINERS.md section 2.6). A stock image is pinned by digest and
+# the digest is the whole guarantee. An image **built here** cannot be: two
+# builds of one Containerfile are not two copies of one image. What is pinned
+# instead is everything the build reads - the base by digest, pip packages by
+# exact version, Debian's font packages by full apt version - and the run-time
+# version check is the real guarantee, which is why oracle_env.check_pin() runs
+# in *both* modes in this library. `unicode` relaxed that check in host mode
+# because every image it names is a stock one; here there is no stock image to
+# name, so the relaxation would leave nothing checking anything.
+#
+# The version field is what the reference must say it is when asked. Raising a
+# pin is deliberate: a new fontTools is new answers, and a new answer that
+# disagrees is a finding to triage rather than a regression to fix.
+#
+# Building it:
+#   podman build -t ghoti-font-oracle-fonttools:4.66.0 \
+#       -f tools/oracle/containers/fonttools/Containerfile \
+#       tools/oracle/containers/fonttools
+# `make oracle-build` does exactly that.
+
+# fontTools, and the real fonts. Both halves are deliberate: this is the
+# reference for every table's fields (ttx_diff) and for every codepoint's glyph
+# (cmap_diff), *and* the image the fixture generator will run in, so that a
+# fixture's bytes depend on a pinned fontTools rather than on whatever the host
+# has (design.md section 14.7).
+fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0	Every sfnt table's fields, every cmap's mapping, and the corpus of real fonts
+
+# Not here yet, and each is a phase rather than an afternoon:
+#   freetype   outline and coverage differentials (phase 1), built here,
+#              driver compiled inside the image against FreeType alone
+#   harfbuzz   hb-shape, already a batch tool (phase 3)
+#   pango      pango-view, for paragraph layout (phase 3b)
+#   xfonts     bdftopcf and psftools, for the bitmap formats (phase 1b)

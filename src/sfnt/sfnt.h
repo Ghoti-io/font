@@ -36,8 +36,10 @@
 #ifndef GHOTI_IO_GFNT_SFNT_H
 #define GHOTI_IO_GFNT_SFNT_H
 
+#include <ghoti.io/cutil/mutex.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
+#include <ghoti.io/font/metrics.h>
 #include "../reader/reader.h"
 
 #ifdef __cplusplus
@@ -58,6 +60,34 @@ typedef struct GFNT_SfntTable {
 } GFNT_SfntTable;
 
 /**
+ * One table's memoised parse: whether it has been attempted, what came of it,
+ * and the diagnostic if that was a failure.
+ *
+ * A failure is memoised as firmly as a success - a corrupt table is corrupt
+ * every time it is asked for, and reparsing it to rediscover that is work a
+ * hostile font would be delighted to charge for. The diagnostic is kept so
+ * that the second caller gets the same explanation as the first.
+ */
+typedef struct GFNT_Cached {
+  bool done;          ///< Whether the parse has been attempted.
+  GFNT_Result result; ///< What it returned.
+  GFNT_Error error;   ///< The diagnostic, when it failed.
+} GFNT_Cached;
+
+/**
+ * How many glyphs a face has, and whether its tables agreed about it.
+ *
+ * M12: `maxp` says one number and `hmtx`, `loca` and CFF's `CharStrings` each
+ * imply another. The minimum governs, and the disagreement is kept so that a
+ * caller can report it.
+ */
+typedef struct GFNT_GlyphCount {
+  size_t count;      ///< The minimum across every table that indexes glyphs.
+  size_t maxp;       ///< What `maxp` claimed on its own.
+  bool disagreement; ///< Whether some table implied fewer than `maxp`.
+} GFNT_GlyphCount;
+
+/**
  * One font from a blob.
  *
  * `blob` is borrowed - the caller keeps it alive, and every face of a
@@ -73,6 +103,28 @@ struct GFNT_Face {
   size_t directory_offset;          ///< Where this face's offset table is.
   GFNT_SfntTable * tables;          ///< Directory entries, in file order.
   size_t table_count;               ///< How many.
+
+  /**
+   * Guards every cache below, and nothing else.
+   *
+   * A face is immutable after load except for these memos, so one face can be
+   * shared read-only across threads (design.md section 15.3). The memos are
+   * written through a const GFNT_Face * - the cast is in gfnt_table_cached()
+   * and is the only one in the library.
+   */
+  GCU_MUTEX_T lock;
+  bool lock_ready;                  ///< Whether `lock` was created.
+
+  GFNT_Cached head_state;           ///< `head`, parsed on first use.
+  GFNT_Head head;
+  GFNT_Cached hhea_state;           ///< `hhea`, parsed on first use.
+  GFNT_Hhea hhea;
+  GFNT_Cached os2_state;            ///< `OS/2`, parsed on first use.
+  GFNT_Os2 os2;
+  GFNT_Cached post_state;           ///< `post`, parsed on first use.
+  GFNT_Post post;
+  GFNT_Cached glyph_count_state;    ///< The numGlyphs minimum (M12).
+  GFNT_GlyphCount glyph_count;
 };
 
 /**

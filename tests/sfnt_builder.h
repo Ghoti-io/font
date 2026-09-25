@@ -49,6 +49,8 @@
 #define GHOTI_IO_GFNT_TESTS_SFNT_BUILDER_H
 
 #include <cstdint>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <ghoti.io/font/macros.h>
@@ -238,6 +240,180 @@ inline std::vector<uint8_t> build_collection(
     patch_u32(out, offsets + i * 4, static_cast<uint32_t>(start));
   }
   return out;
+}
+
+/**
+ * The tables the metric suites need, each built to its specification's layout
+ * so that a test can then break exactly one field.
+ */
+
+/** A `head` table: 54 bytes, with the fields a test varies as parameters. */
+inline std::vector<uint8_t> build_head(uint16_t units_per_em = 1000,
+    int16_t index_to_loc_format = 0, uint32_t magic = 0x5F0F3CF5u) {
+  std::vector<uint8_t> head;
+  put_u16(head, 1);                    // majorVersion
+  put_u16(head, 0);                    // minorVersion
+  put_u32(head, 0x00015000);           // fontRevision, 1.328125
+  put_u32(head, 0xAABBCCDD);           // checkSumAdjustment
+  put_u32(head, magic);                // magicNumber
+  put_u16(head, 0x000B);               // flags
+  put_u16(head, units_per_em);
+  put_u64(head, 0xFFFFFFFFFFFFFFFFull); // created: -1 second
+  put_u64(head, 3000000000ull);        // modified
+  put_s16(head, -100);                 // xMin
+  put_s16(head, -250);                 // yMin
+  put_s16(head, 1200);                 // xMax
+  put_s16(head, 900);                  // yMax
+  put_u16(head, 0x0002);               // macStyle: italic
+  put_u16(head, 8);                    // lowestRecPPEM
+  put_s16(head, 2);                    // fontDirectionHint
+  put_s16(head, index_to_loc_format);
+  put_s16(head, 0);                    // glyphDataFormat
+  return head;
+}
+
+/** A `maxp` table. Version 0.5 is six bytes; 1.0 pads to its 32. */
+inline std::vector<uint8_t> build_maxp(uint16_t num_glyphs,
+    uint32_t version = 0x00010000) {
+  std::vector<uint8_t> maxp;
+  put_u32(maxp, version);
+  put_u16(maxp, num_glyphs);
+  if (version != 0x00005000) {
+    maxp.resize(32, 0);
+  }
+  return maxp;
+}
+
+/** An `hhea` table: 36 bytes. */
+inline std::vector<uint8_t> build_hhea(int16_t ascender, int16_t descender,
+    int16_t line_gap, uint16_t number_of_h_metrics,
+    int16_t metric_data_format = 0) {
+  std::vector<uint8_t> hhea;
+  put_u16(hhea, 1);                 // majorVersion
+  put_u16(hhea, 0);                 // minorVersion
+  put_s16(hhea, ascender);
+  put_s16(hhea, descender);
+  put_s16(hhea, line_gap);
+  put_u16(hhea, 1500);              // advanceWidthMax
+  put_s16(hhea, -30);               // minLeftSideBearing
+  put_s16(hhea, -40);               // minRightSideBearing
+  put_s16(hhea, 1250);              // xMaxExtent
+  put_s16(hhea, 1);                 // caretSlopeRise
+  put_s16(hhea, 0);                 // caretSlopeRun
+  put_s16(hhea, 0);                 // caretOffset
+  for (int i = 0; i < 4; i++) {
+    put_s16(hhea, 0);               // reserved
+  }
+  put_s16(hhea, metric_data_format);
+  put_u16(hhea, number_of_h_metrics);
+  return hhea;
+}
+
+/**
+ * An `hmtx` table: @p metrics long entries of (advance, lsb), then one short
+ * entry per trailing glyph.
+ */
+inline std::vector<uint8_t> build_hmtx(
+    const std::vector<std::pair<uint16_t, int16_t>> & metrics,
+    const std::vector<int16_t> & trailing_bearings = {}) {
+  std::vector<uint8_t> hmtx;
+  for (const auto & entry : metrics) {
+    put_u16(hmtx, entry.first);
+    put_s16(hmtx, entry.second);
+  }
+  for (int16_t bearing : trailing_bearings) {
+    put_s16(hmtx, bearing);
+  }
+  return hmtx;
+}
+
+/** The fields of `OS/2` the tests vary. */
+struct Os2Spec {
+  uint16_t version = 4;
+  uint16_t fs_type = 0;
+  uint16_t fs_selection = 0;
+  uint16_t weight_class = 400;
+  int16_t typo_ascender = 800;
+  int16_t typo_descender = -200;
+  int16_t typo_line_gap = 100;
+  uint16_t win_ascent = 900;
+  uint16_t win_descent = 250;
+  int16_t x_height = 500;
+  int16_t cap_height = 700;
+};
+
+/** An `OS/2` table of the spec's version, exactly as long as that version. */
+inline std::vector<uint8_t> build_os2(const Os2Spec & spec = Os2Spec{}) {
+  std::vector<uint8_t> os2;
+  put_u16(os2, spec.version);
+  put_s16(os2, 600);                 // xAvgCharWidth
+  put_u16(os2, spec.weight_class);
+  put_u16(os2, 5);                   // usWidthClass
+  put_u16(os2, spec.fs_type);
+  put_s16(os2, 650);                 // ySubscriptXSize
+  put_s16(os2, 600);                 // ySubscriptYSize
+  put_s16(os2, 0);                   // ySubscriptXOffset
+  put_s16(os2, 75);                  // ySubscriptYOffset
+  put_s16(os2, 650);                 // ySuperscriptXSize
+  put_s16(os2, 600);                 // ySuperscriptYSize
+  put_s16(os2, 0);                   // ySuperscriptXOffset
+  put_s16(os2, 350);                 // ySuperscriptYOffset
+  put_s16(os2, 50);                  // yStrikeoutSize
+  put_s16(os2, 250);                 // yStrikeoutPosition
+  put_s16(os2, 0x0801);              // sFamilyClass
+  for (int i = 0; i < 10; i++) {
+    put_u8(os2, static_cast<uint8_t>(i + 1)); // panose
+  }
+  for (int i = 0; i < 4; i++) {
+    put_u32(os2, 0x10000000u * (i + 1)); // ulUnicodeRange1..4
+  }
+  for (char c : std::string("GHTI")) {
+    put_u8(os2, static_cast<uint8_t>(c));
+  }
+  put_u16(os2, spec.fs_selection);
+  put_u16(os2, 0x0020);              // usFirstCharIndex
+  put_u16(os2, 0xFFFD);              // usLastCharIndex
+  put_s16(os2, spec.typo_ascender);
+  put_s16(os2, spec.typo_descender);
+  put_s16(os2, spec.typo_line_gap);
+  put_u16(os2, spec.win_ascent);
+  put_u16(os2, spec.win_descent);
+  if (spec.version >= 1) {
+    put_u32(os2, 0x0000001Fu);       // ulCodePageRange1
+    put_u32(os2, 0u);                // ulCodePageRange2
+  }
+  if (spec.version >= 2) {
+    put_s16(os2, spec.x_height);
+    put_s16(os2, spec.cap_height);
+    put_u16(os2, 0);                 // usDefaultChar
+    put_u16(os2, 0x0020);            // usBreakChar
+    put_u16(os2, 3);                 // usMaxContext
+  }
+  if (spec.version >= 5) {
+    put_u16(os2, 80);                // usLowerOpticalPointSize
+    put_u16(os2, 240);               // usUpperOpticalPointSize
+  }
+  return os2;
+}
+
+/** A `post` table: the 32-byte header, plus whatever a version adds. */
+inline std::vector<uint8_t> build_post(uint32_t version = 0x00030000) {
+  std::vector<uint8_t> post;
+  put_u32(post, version);
+  put_u32(post, 0xFFF40000);         // italicAngle: -12.0
+  put_s16(post, -75);                // underlinePosition
+  put_s16(post, 50);                 // underlineThickness
+  put_u32(post, 1);                  // isFixedPitch
+  put_u32(post, 0);                  // minMemType42
+  put_u32(post, 0);                  // maxMemType42
+  put_u32(post, 0);                  // minMemType1
+  put_u32(post, 0);                  // maxMemType1
+  if (version == 0x00020000) {
+    // numberOfGlyphs and one index, which this library does not read yet.
+    put_u16(post, 1);
+    put_u16(post, 0);
+  }
+  return post;
 }
 
 } // namespace gfnttest

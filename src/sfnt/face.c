@@ -207,6 +207,13 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
   face->index = index;
   face->directory_offset = directory_offset;
 
+  if (GCU_MUTEX_CREATE(face->lock) != 0) {
+    gfnt_face_free(face);
+    return gfnt_error_set(error, GFNT_ERR_INTERNAL, 0, 0, GFNT_GLYPH_NONE,
+        "the platform refused a mutex for the face's table cache");
+  }
+  face->lock_ready = true;
+
   result = gfnt_sfnt_parse_directory(face, error);
   if (result != GFNT_OK) {
     gfnt_face_free(face);
@@ -224,6 +231,9 @@ void gfnt_face_free(GFNT_Face * face) {
     return;
   }
   allocator = face->allocator;
+  if (face->lock_ready) {
+    GCU_MUTEX_DESTROY(face->lock);
+  }
   allocator->free_fn(allocator->ctx, face->tables);
   // The blob is the caller's, and every other face of a collection is still
   // using it.

@@ -838,6 +838,9 @@ check-reader: ## Fail if anything under src/ reads font bytes around the reader
 # Headers and directories that do not exist yet are listed so that they are
 # placed the moment they do; grep ignores a missing path.
 
+# src/glyph/ is not in design.md section 15's sketch of this tree: the glyph
+# kinds and the strike policy are face-level questions rather than a table
+# parser, so they get the module their header is named after.
 TIER0_FILES := include/ghoti.io/font/core.h include/ghoti.io/font/blob.h \
 	include/ghoti.io/font/face.h include/ghoti.io/font/metrics.h \
 	include/ghoti.io/font/cmap.h include/ghoti.io/font/name.h \
@@ -849,7 +852,7 @@ TIER0_FILES := include/ghoti.io/font/core.h include/ghoti.io/font/blob.h \
 	src/cmap/*.c src/cmap/*.h src/name/*.c src/name/*.h src/glyf/*.c src/glyf/*.h \
 	src/cff/*.c src/cff/*.h src/type1/*.c src/type1/*.h src/charstring/*.c src/charstring/*.h \
 	src/bitmap/*.c src/bitmap/*.h src/color/*.c src/color/*.h src/var/*.c src/var/*.h \
-	src/data/*.c src/data/*.h src/font.c
+	src/glyph/*.c src/glyph/*.h src/data/*.c src/data/*.h src/font.c
 TIER0_FORBIDDEN := font/(outline|raster|shape|layout|discover|write)\.h
 
 TIER1_FILES := include/ghoti.io/font/outline.h include/ghoti.io/font/raster.h \

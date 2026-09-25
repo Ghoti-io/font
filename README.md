@@ -17,7 +17,23 @@ threat model and the plan are in
 ```c
 #include <ghoti.io/font/font.h>
 
-printf("%s\n", gfnt_version_string());
+GFNT_Blob * blob = NULL;
+GFNT_Face * face = NULL;
+GFNT_Error error;
+uint32_t glyph = 0;
+int32_t advance = 0;
+
+if (gfnt_blob_create_file("Example.ttf", NULL, NULL, &blob, &error) == GFNT_OK
+    && gfnt_face_load(blob, 0, NULL, NULL, &face, &error) == GFNT_OK
+    && gfnt_face_glyph_for_codepoint(face, 'A', &glyph, &error) == GFNT_OK
+    && gfnt_face_glyph_advance(face, glyph, NULL, &advance, &error) == GFNT_OK) {
+  printf("'A' is glyph %u, %d font units wide\n", glyph, advance);
+}
+else {
+  gfnt_error_dump(&error, stderr);
+}
+gfnt_face_free(face);
+gfnt_blob_destroy(blob);
 ```
 
 ## Building
@@ -40,6 +56,7 @@ sudo make install
 | `make test-valgrind-quiet` | Same, under Valgrind |
 | `make test-asan` | Rebuild with ASan+UBSan and run the suite |
 | `make check-layering` | Fail if a lower tier includes a higher tier's header |
+| `make check-reader` | Fail if anything reads font bytes around the checked reader |
 | `make coverage` | Line coverage, per file |
 | `make fuzz` | Build and run every fuzzer (`FUZZ_TIME=3600` for a real campaign) |
 | `make docs` | Doxygen, into `./docs` |
@@ -48,25 +65,65 @@ sudo make install
 
 Everything is prefixed `gfnt_` / `GFNT_`, under `<ghoti.io/font/...>`.
 
-- **`core.h`** - `GFNT_Result`, `gfnt_result_string()`, `GFNT_Limits` with
-  every cap design.md section 15.2 names, and the version.
+- **`core.h`** - `GFNT_Result` and `gfnt_result_string()`; the three
+  fixed-point types (26.6, 16.16, 2.14) and their arithmetic, which is where
+  the byte-identical-everywhere claim comes from; `GFNT_Tag`; `GFNT_Error`,
+  which carries the table, the offset within it and the glyph, because
+  "corrupt" is not a diagnostic; `GFNT_Limits` with every cap design.md section
+  15.2 names; and the version.
 - **`allocator.h`** - `GFNT_Allocator`, which is cutil's `GCU_Allocator`, so an
   allocator written for any library in the suite works with all of them.
+- **`blob.h`** - the bytes of a font, copied, borrowed, read from a file, or
+  mapped. Reading is the default and mapping is a separate call whose
+  documentation says `SIGBUS`.
+- **`face.h`** - one font from a blob and an index into it: the sfnt version,
+  the table directory, table ranges and checksums, `ttcf` collections, and
+  `GFNT_Variation`, which every accessor a variation could change already takes.
+- **`metrics.h`** - `head`, `hhea`, `OS/2` and `post`; `unitsPerEm`; the glyph
+  count as the minimum across every table that indexes glyphs; per-glyph
+  advances and side bearings from `hmtx`; and line metrics under a named policy
+  whose zero is the font's own request.
+- **`cmap.h`** - codepoint to glyph through formats 0, 4, 6 and 12, the
+  documented subtable preference order, and which subtable answered.
+- **`name.h`** - name records decoded to UTF-8 by platform and encoding, with
+  the preference order and a language override.
+- **`glyph.h`** - `GFNT_GlyphKind`, `GFNT_Strike` and `GFNT_StrikePolicy`: the
+  shape of "which strike answers this size", in the API from the start because
+  adding it later would break every caller.
 - **`font.h`** - the umbrella for tier 0.
 
-The modules design.md section 4.1 names - `blob.h`, `face.h`, `metrics.h`,
-`cmap.h`, `glyph.h`, `outline.h`, `raster.h`, `shape.h`, `layout.h`,
-`discover.h`, `write.h` and the rest - do not exist yet. Absent, not stubbed:
-there is no function here that returns `GFNT_ERR_UNSUPPORTED` in place of a
-parser.
+The modules design.md section 4.1 names that do **not** exist yet: `bitmap.h`,
+`color.h`, `charstring.h`, `outline.h`, `raster.h`, `shape.h`, `layout.h`,
+`discover.h`, `write.h`. Absent, not stubbed: there is no function here that
+returns `GFNT_ERR_UNSUPPORTED` in place of a parser. Where a table this library
+does not parse yet would change an answer - a font whose strikes are in an
+`EBLC`, a `cmap` subtable in format 13, a Macintosh name above ASCII - the call
+says `GFNT_ERR_UNSUPPORTED` and names what it could not read, rather than
+reporting an empty result that cannot be told from the truth.
 
 ## Status
 
-Scaffold. The library builds, installs, and passes its gates - `check-symbols`,
-`check-layering` (all five tiers and the writer, over headers that do not exist
-yet), `check-aliasing`, `check-stamps` - with the core module and nothing else.
-Phase 0 of [documentation/design.md](documentation/design.md) section 18 is
-the next thing, and it waits on nothing in `unicode`; tier 2 does.
+**Most of phase 0.** Tier 0 opens an sfnt or a `ttcf` collection, walks the
+table directory, and answers the four questions phase 0 exists for: what is
+this file, what does it contain, which glyph is this codepoint, and how wide is
+it. `head`, `maxp`, `hhea`, `hmtx`, `OS/2`, `post`, `cmap` (formats 0, 4, 6 and
+12) and `name` are parsed, each on first use and memoised; every read goes
+through the checked reader, and `check-reader` fails the build on one that does
+not. The gates are `check-symbols`, `check-layering`, `check-aliasing`,
+`check-stamps` and `check-reader`, all run by `make test`, each observed to fail
+on a planted defect before it was trusted. Two fuzzers (`fuzz_sfnt`,
+`fuzz_cmap`) run clean under ASan and UBSan over a smoke-length campaign, and
+the truncation sweep cuts every table to every length it could have.
+
+Nothing above tier 0 exists: no outlines, no rasteriser, no shaping, no layout,
+no discovery, no writer.
+
+**What phase 0 still owes** is the half that keeps the rest honest: the
+fontTools fixture generator, the pinned oracle images, and the `ttx_diff` and
+`cmap_diff` differentials. Until those exist, every test here is one this
+library wrote for itself, which is exactly the half
+[documentation/design.md](documentation/design.md) section 14.5 says flatters.
+Section 18.1 of that page lists the remainder item by item.
 
 ## License
 

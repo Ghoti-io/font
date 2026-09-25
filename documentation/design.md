@@ -1,10 +1,12 @@
 # The design of ghoti.io-font
 
-**Status:** design; the scaffold is built and nothing else is. This page
-says what will exist and why, so that the code can be judged against it
-rather than the other way round. A change of mind lands here first, in the
-same commit as the code that needs it (`CONVENTIONS.md` §9), and §18 marks
-what is built. The workspace's `notes/font/SCOPE.md` is the scoping record
+**Status:** design, with most of phase 0 built. Tier 0 reads the sfnt
+container, the metric tables, `cmap` and `name`; §18.1 lists what of phase 0 is
+built and what is not, and it is the authority on what exists. Nothing above
+tier 0 exists at all. This page says what will exist and why, so
+that the code can be judged against it rather than the other way round. A
+change of mind lands here first, in the same commit as the code that needs it
+(`CONVENTIONS.md` §9). The workspace's `notes/font/SCOPE.md` is the scoping record
 that preceded this - the measured inventory and the format survey. The
 `unicode` library (`libs/unicode/documentation/design.md`) is a prerequisite
 for tiers 2 and 3.
@@ -314,7 +316,14 @@ This is not a style choice. It is the mechanism behind §1.2, and it is also
 what makes the fuzzers meaningful: with one reader, a fuzzer that finds a
 crash has found a defect in the reader or a read that bypassed it, and
 `check-reader` - a grep for `base[`, `*(uint16_t *)` and their kin under
-`src/` outside `reader.c` - fails the build on the second kind.
+`src/` outside `reader.c` - fails the build on the second kind. **Built**, with
+two fields beyond the three above: the reader carries the table's tag and the
+caller's `GFNT_Error *`, which is what lets a failed read record which table
+and which offset at the point of failure rather than at a call site that has
+forgotten. `check-reader` also confines `gfnt_blob_data()` to the blob and the
+reader, and runs each of its patterns against a planted violation in the same
+invocation, so a pattern that has rotted into matching nothing fails the build
+instead of reporting a clean tree.
 
 ### 6.1 Endianness and alignment
 
@@ -398,6 +407,16 @@ fontTools over every codepoint (M10). Format 14's default and non-default
 variation sequences are exposed as `gfnt_cmap_lookup_variation(face, cp, vs)`.
 A reverse map (glyph → first codepoint) is built lazily for `post`-less fonts
 and for PDF text extraction.
+
+**Built so far**, and two deferrals that are the same deferral. `post`'s
+header fields are read and its **glyph names are not**: format 2.0 spells the
+first 258 of them as indices into the standard Macintosh glyph order, and that
+list is a 258-entry vector. Macintosh `name` records decode as far as ASCII and
+no further, because the rest needs the 128-codepoint Mac Roman table. §14's rule
+is that a vector comes from an oracle and is never written from memory, and
+fontTools holds both of these, so both wait for the fixture generator that can
+check them. `vhea`/`vmtx`, `gasp` and `kern` are not built either, and are
+phases of their own.
 
 **`name`**: every record decoded by `(platformID, encodingID)` - Unicode and
 Windows UTF-16BE, Windows symbol, Macintosh Roman and the other Mac encodings
@@ -1001,6 +1020,16 @@ Two cases fall between:
 Hand-built byte arrays remain for the refusal arms that even `fontBuilder`
 will not emit - a bad checksum, a directory entry past the blob.
 
+**What exists today is the last paragraph and nothing else.**
+`tests/sfnt_builder.h` is the organised form of those hand-built arrays: it
+assembles an sfnt, a `ttcf`, and each table this library reads, so that a test
+can break exactly one field and name what it broke. Neither the `fonttools`
+image nor the committed fixtures nor any `check-oracle-*` target exists yet, so
+every test in the suite is a synthetic one - which is precisely the half that
+flatters (§14.5's own point), and the reason the phase table keeps `ttx_diff`
+and `cmap_diff` as unbuilt phase 0 work rather than treating the unit suite as
+a substitute for them.
+
 ### 14.6 No font is bundled
 
 The first draft compiled a subset face into tier 0 so that the library could
@@ -1119,6 +1148,14 @@ promise and the options byte drives every one of them.
 
 A face is immutable after load and its lazily validated tables are memoised
 under a `cutil` mutex, so one face may be shared read-only across threads.
+**The lock is never held across a parse**: one table's parse legitimately needs
+another's - the `numGlyphs` minimum has to read `hhea` and `hmtx` to know what
+they imply - and a non-recursive mutex held across that deadlocks against
+itself on the first font that has both tables, on one thread and not only under
+contention. So a parse runs into caller-supplied scratch storage and only the
+publication takes the lock; two threads may therefore parse the same table at
+once, reach the same answer from the same immutable bytes, and the first to
+finish publishes.
 Every other object - outline, coverage, buffer, shaped run, paragraph, font
 set, cache - is used from one thread at a time. There is no process-wide
 state: no default face, no global cache, no environment read outside
@@ -1178,6 +1215,21 @@ answered on 2026-09-23/24; the rest stand as recommended.
 13. **Cluster level is monotone graphemes by default** (§9.3).
 14. **The zero line-metrics policy is the font's own request** (§10.3), not a
     platform's.
+15. **A table's parse runs outside the face's lock** (§15.3). Decided by a
+    deadlock: the first implementation held the lock across the parse, and the
+    `numGlyphs` minimum - which reads `hhea` and `hmtx` - hung the test suite on
+    the first font that had both. Decided 2026-09-24.
+16. **An unreadable strike list is `ERR_UNSUPPORTED`, never a count of zero**
+    (§5.3). A library that answers "no strikes" for a font carrying `EBLC`
+    tells its caller a bitmap font has no bitmaps, and nothing downstream can
+    tell that from the truth. The same rule governs every accessor whose table
+    is not parsed yet, which is what keeps "absent, not stubbed" (§16) from
+    quietly becoming "absent, and reported as empty".
+17. **`cmap` subtable selection passes over a format this library cannot read**
+    (§7.2), and reports which subtable answered. Selecting the highest-preference
+    subtable and then refusing every lookup would leave a caller with a font
+    every other implementation maps; the audit trail is what keeps that from
+    being a silent substitution (M8).
 
 ---
 
@@ -1205,6 +1257,36 @@ that the scheduling is a choice rather than a constraint.
 | **6** | `COLR` v0/v1 and `CPAL`; `CBDT`/`CBLC` and `sbix` with the `image` bridge; `GFNT_AtlasEntry` and atlas emission; `fuzz_color` | L | fontTools-built `COLR` v1 fixture with every paint format parsed to the same graph as `ttx` shows | **F10: emoji; `cjelly`'s GPU path fed from a baked atlas** |
 | **7** | Complex shapers, one per phase, each declared: Arabic (joining, `rlig`/`calt`, the no-`GSUB` fallback) M; Thai/Lao M; Hangul S; Devanagari L, then each further Indic script M; Khmer M; Myanmar M; the USE L | per script | `hb_diff` identical for that script's corpus before the shaper is declared | **F11: each script, as it lands** |
 | **—** | Deliberately absent until argued for: §16 | | | |
+
+### 18.1 What of phase 0 is built
+
+Kept here rather than in a commit message because a reader asking "can it do X
+yet" has this page open, and because the list is what the next phase starts
+from. Last revised 2026-09-24.
+
+**Built, with tests:** the scaffold; `core.h` with the three fixed-point types,
+their arithmetic, `GFNT_Tag`, `GFNT_Error` and `GFNT_Limits`; `blob.h` over
+memory, a file read whole, and an explicit `mmap`; the checked reader and
+`check-reader`; the sfnt offset table and directory, `ttcf` versions 1.0 and
+2.0, and table checksums reported rather than enforced; `head`, `maxp`,
+`hhea`, `hmtx`, `OS/2` versions 0-5 and `post`'s header, each parsed once per
+face and memoised; the `numGlyphs` minimum across `maxp` and `hmtx` (M12); the
+line-metrics policies with the font's own request as their zero (M4); `cmap`
+formats 0, 4, 6 and 12 with the preference order and the symbol subtable's
+`0xF0xx` mapping; `name` decoded to UTF-8 by platform and encoding;
+`GFNT_GlyphKind`, `GFNT_Strike`, `GFNT_StrikePolicy` and `GFNT_Variation` in
+the API; a `_dump` for the blob, the face, `head`, `hhea`, `OS/2`, `post`,
+`cmap` and `name`; `fuzz_sfnt` and `fuzz_cmap` with generated seeds; and the
+truncation sweep of §14.3 over every length of every table.
+
+**Not built, and phase 0 is not finished without it:** `tools/fixtures/`, the
+committed fixtures, and every oracle - the `fonttools` image, `ttx_diff`,
+`cmap_diff`, `check-fixtures`. Until those exist every test here is synthetic,
+which is the half §14.5 says flatters, so the differentials are the remaining
+work rather than a nicety. `post`'s glyph names and Mac Roman name records wait
+on the same image (§7.2). `maxp` has no `_dump` because nothing reads its
+fields beyond `numGlyphs`; it gets one when something does. `vhea`/`vmtx`,
+`gasp` and `kern` are unbuilt, as is WOFF 1.
 
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz`,
 `check-symbols`, `check-layering`, `check-reader`, `check-fixtures` and

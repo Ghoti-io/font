@@ -83,6 +83,38 @@ A minute each is a smoke test. A real campaign belongs in its own prefix with
 an `OWNER` file, per the workspace's `CLAUDE.md`: a soak that outlives a shared
 rebuild must not be invalidated by one.
 
+## The oracles
+
+`make test` needs no container, and that is deliberate: a contributor without a
+container engine must still be able to run the suite and see that they did not
+run the differentials. The oracle targets are therefore separate.
+
+```bash
+make oracle-build          # build the fontTools image from its pinned recipe
+make oracle-version        # prove the reference is reachable and matches its pin
+make check-oracle          # both differentials, quiet
+make check-oracle-cmap-exhaustive   # all 1,114,112 codepoints per font, ~20 min
+```
+
+Three things to know before changing anything under `tools/oracle/`:
+
+1. **The image is built here, so the run-time version check is the only
+   guarantee.** `oracle_env.check_pin()` therefore runs in both modes, unlike the
+   `unicode` copy this came from - see its docstring, and
+   `notes/suite/CONTAINERS.md` section 2.6.
+2. **The corpus lives in the image.** `corpus.py` copies it into
+   `build/oracle/corpus` in one tar so both sides read the same bytes; no
+   third-party font is ever committed here (design.md section 14.6).
+   `make oracle-corpus-clean` removes the copy - it is cache, not content.
+3. **A differential reports its denominators and its coverage**, and fails when
+   they collapse: nothing compared, a corpus that mostly skipped, or too few
+   fields for the number of fonts are each an error rather than a clean report.
+   `ttx_diff` also prints which table versions it met, because a four-font sample
+   of this corpus once passed a planted defect that only affects `OS/2` version 1.
+
+`GHOTI_ORACLE_REQUIRED=1` turns an unreachable reference from a loud SKIPPED into
+a failure, which is what a CI with the images wants.
+
 ## Memory
 
 Every allocation goes through the `GFNT_Allocator` the caller supplied, which

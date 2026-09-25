@@ -1020,15 +1020,16 @@ Two cases fall between:
 Hand-built byte arrays remain for the refusal arms that even `fontBuilder`
 will not emit - a bad checksum, a directory entry past the blob.
 
-**What exists today is the last paragraph and nothing else.**
-`tests/sfnt_builder.h` is the organised form of those hand-built arrays: it
-assembles an sfnt, a `ttcf`, and each table this library reads, so that a test
-can break exactly one field and name what it broke. Neither the `fonttools`
-image nor the committed fixtures nor any `check-oracle-*` target exists yet, so
-every test in the suite is a synthetic one - which is precisely the half that
-flatters (§14.5's own point), and the reason the phase table keeps `ttx_diff`
-and `cmap_diff` as unbuilt phase 0 work rather than treating the unit suite as
-a substitute for them.
+**Half of this exists today.** `tests/sfnt_builder.h` is the organised form of
+those hand-built arrays: it assembles an sfnt, a `ttcf`, and each table this
+library reads, so that a test can break exactly one field and name what it broke.
+The `fonttools` image and both differentials are built (§18.1), so the real-font
+population is reachable and the unit suite is no longer the only authority. What
+is still missing is the *generator*: `tools/fixtures/make_fixtures.py`, the
+committed fixtures under `tests/data/fonts/`, and `check-fixtures`. Until those
+exist, the fixtures a unit test uses are assembled in the test binary rather than
+committed as bytes, which means a fixture cannot be inspected with `ttx` and the
+two deferrals in §7.2 have nothing to generate their tables from.
 
 ### 14.6 No font is bundled
 
@@ -1061,6 +1062,15 @@ silent fallback; the repository is mounted read-only at its own host path with
 container: it reads committed vectors and golden hashes, and the container
 gates are the separate `check-oracle-*` and `vectors` targets, which is the
 seam that note leaves open and this library takes.
+
+**Built, 2026-09-24**, and one thing was learned by building it. A four-font
+sample of the corpus reported a clean run against a planted defect that only
+affects `OS/2` version 1, because the four fonts sampled were all version 4 -
+the corpus holds 271 version 4, 48 version 3 and 8 version 1, and no version 0,
+2 or 5 at all. So `ttx_diff` prints which table versions it met and says which
+the corpus lacks. A differential that does not report its coverage is one whose
+clean result cannot be read, and thinning a corpus for speed is how a gate stops
+covering the arm the defect is in.
 
 Four things are specific to font oracles:
 
@@ -1297,14 +1307,29 @@ the API; a `_dump` for the blob, the face, `head`, `hhea`, `OS/2`, `post`,
 `cmap` and `name`; `fuzz_sfnt` and `fuzz_cmap` with generated seeds; and the
 truncation sweep of §14.3 over every length of every table.
 
-**Not built, and phase 0 is not finished without it:** `tools/fixtures/`, the
-committed fixtures, and every oracle - the `fonttools` image, `ttx_diff`,
-`cmap_diff`, `check-fixtures`. Until those exist every test here is synthetic,
-which is the half §14.5 says flatters, so the differentials are the remaining
-work rather than a nicety. `post`'s glyph names and Mac Roman name records wait
-on the same image (§7.2). `maxp` has no `_dump` because nothing reads its
-fields beyond `numGlyphs`; it gets one when something does. `vhea`/`vmtx`,
-`gasp` and `kern` are unbuilt, as is WOFF 1.
+**The oracles are built, as of 2026-09-24.** `tools/oracle/` carries the
+`fonttools` image - pinned base digest, `fonttools==4.66.0`, `brotli==1.2.0`,
+and six Debian font packages by full apt version - with `oracle_env.py`,
+`oracle_run.py`, the corpus extractor, and two differentials:
+
+| gate | what it compares | result |
+| --- | --- | ---: |
+| `check-oracle-cmap` | every codepoint fontTools maps, both its neighbours, and a stride sample, per font | 327 fonts, 587,186 codepoints, **0** |
+| `check-oracle-cmap-exhaustive` | all 1,114,112 codepoints per font | 364,314,624 comparisons, **0** |
+| `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory and every `name` record | 327 fonts, 26,908 fields, **0** |
+
+`ttx_diff` also measures what §7.2's Mac Roman deferral costs: twelve records
+across those 327 fonts, all of them a Macintosh description carrying a trademark
+sign. They are counted rather than scored, and the category is narrow enough to
+stay honest - it applies only where the reference's text is actually above ASCII.
+
+**Still not built, and phase 0 is not finished without it:** `tools/fixtures/`,
+the committed fixtures and `check-fixtures`, which is what makes a fixture's
+bytes reproducible and what unblocks `post`'s glyph names and Mac Roman (§7.2).
+The `freetype`, `harfbuzz`, `pango` and `xfonts` images are phases of their own.
+`maxp` has no `_dump` because nothing reads its fields beyond `numGlyphs`; it
+gets one when something does. `vhea`/`vmtx`, `gasp` and `kern` are unbuilt, as is
+WOFF 1.
 
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz`,
 `check-symbols`, `check-layering`, `check-reader`, `check-fixtures` and

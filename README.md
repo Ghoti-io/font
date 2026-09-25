@@ -57,6 +57,8 @@ sudo make install
 | `make test-asan` | Rebuild with ASan+UBSan and run the suite |
 | `make check-layering` | Fail if a lower tier includes a higher tier's header |
 | `make check-reader` | Fail if anything reads font bytes around the checked reader |
+| `make check-oracle` | Both differentials against fontTools, in its pinned container |
+| `make oracle-build` | Build that container from its pinned Containerfile |
 | `make coverage` | Line coverage, per file |
 | `make fuzz` | Build and run every fuzzer (`FUZZ_TIME=3600` for a real campaign) |
 | `make docs` | Doxygen, into `./docs` |
@@ -118,12 +120,21 @@ the truncation sweep cuts every table to every length it could have.
 Nothing above tier 0 exists: no outlines, no rasteriser, no shaping, no layout,
 no discovery, no writer.
 
-**What phase 0 still owes** is the half that keeps the rest honest: the
-fontTools fixture generator, the pinned oracle images, and the `ttx_diff` and
-`cmap_diff` differentials. Until those exist, every test here is one this
-library wrote for itself, which is exactly the half
-[documentation/design.md](documentation/design.md) section 14.5 says flatters.
-Section 18.1 of that page lists the remainder item by item.
+**The differentials are built.** `make check-oracle` compares this library
+against fontTools in a pinned container over 327 real fonts - DejaVu, Liberation,
+the URW base 35 in CFF, Noto core, Noto Color Emoji - which live in the image and
+never in this repository. Every field of every table this library parses agrees
+(26,908 fields), and so does every codepoint of every `cmap`: 587,186 in the
+quick run and all 364,314,624 in `make check-oracle-cmap-exhaustive`. `make test`
+needs no container and says so; the oracle targets are separate.
+
+**What phase 0 still owes** is the fixture generator:
+`tools/fixtures/make_fixtures.py`, the committed fixtures, and `check-fixtures`.
+Until those exist a unit fixture is assembled in the test binary rather than
+committed as bytes, and the two deferrals in section 7.2 - `post`'s glyph names
+and Mac Roman - have no pinned generator to produce their tables. Section 18.1 of
+[documentation/design.md](documentation/design.md) lists the remainder item by
+item.
 
 ## License
 

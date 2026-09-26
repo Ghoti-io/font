@@ -26,6 +26,8 @@
 
 #include "test_helpers.h"
 
+#include <algorithm>
+#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -42,6 +44,10 @@ constexpr uint16_t kUpem = 1000;
 constexpr size_t kNumGlyphs = 5;
 constexpr int32_t kAdvanceA = 640;
 constexpr int32_t kAdvanceB = 620;
+
+/** The outline fixtures have a repertoire of their own; see MANIFEST. */
+constexpr size_t kOutlineGlyphs = 11;
+constexpr size_t kCompositeGlyphs = 25;
 
 /** A fixture read from disk, with a blob and a face over it. */
 struct Fixture {
@@ -105,11 +111,39 @@ const std::vector<Entry> & every_fixture() {
       {"os2-v3.ttf", kNumGlyphs},
       {"os2-v4.ttf", kNumGlyphs},
       {"os2-v5.ttf", kNumGlyphs},
+      {"outline-broken-loca.ttf", kOutlineGlyphs},
+      {"outline-composite.ttf", kCompositeGlyphs},
+      {"outline-cubic-flag.ttf", kOutlineGlyphs},
+      {"outline-cubic.ttf", kOutlineGlyphs},
+      {"outline-loca-long.ttf", kOutlineGlyphs},
+      {"outline-simple.ttf", kOutlineGlyphs},
       {"post-v1.ttf", 258},
       {"post-v2.ttf", kNumGlyphs + 1},
       {"post-v3.ttf", kNumGlyphs},
   };
   return names;
+}
+
+/** Every name MANIFEST lists, which is what the generator actually wrote. */
+std::vector<std::string> manifest_names() {
+  std::vector<std::string> out;
+  FILE * handle = fopen(gfnttest::data("fonts/MANIFEST").c_str(), "r");
+  if (!handle) {
+    return out;
+  }
+  char line[1024];
+  while (fgets(line, sizeof line, handle)) {
+    if (line[0] == '#' || line[0] == '\n') {
+      continue;
+    }
+    const char * tab = strchr(line, '\t');
+    if (!tab) {
+      continue;
+    }
+    out.push_back(std::string(line, static_cast<size_t>(tab - line)));
+  }
+  fclose(handle);
+  return out;
 }
 
 /** The subtable formats a fixture's `cmap` lists, as (platform,encoding,format). */
@@ -130,6 +164,22 @@ std::vector<std::string> cmap_shape(const GFNT_Face * face) {
         + std::to_string(subtable.format));
   }
   return out;
+}
+
+TEST(Fixtures, ThisSuitesListIsTheGeneratorsList) {
+  // Without this, a fixture added to the generator is covered by
+  // `check-fixtures` - which walks the directory - and by nothing here, because
+  // every test below iterates a list written by hand. The list and MANIFEST are
+  // two spellings of one set, and the set is the generator's.
+  std::vector<std::string> mine;
+  for (const Entry & entry : every_fixture()) {
+    mine.push_back(entry.name);
+  }
+  std::vector<std::string> theirs = manifest_names();
+  ASSERT_FALSE(theirs.empty()) << "MANIFEST is missing or unreadable";
+  std::sort(mine.begin(), mine.end());
+  std::sort(theirs.begin(), theirs.end());
+  EXPECT_EQ(mine, theirs);
 }
 
 TEST(Fixtures, EveryCommittedFixtureLoads) {

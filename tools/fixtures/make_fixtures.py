@@ -62,6 +62,7 @@ repository that a container has mounted read-only.
 
 import argparse
 import os
+import struct
 import sys
 
 from fontTools.fontBuilder import FontBuilder
@@ -71,6 +72,9 @@ from fontTools.ttLib import TTCollection, TTFont, newTable
 from fontTools.ttLib.tables._n_a_m_e import NameRecord
 from fontTools.ttLib.tables._p_o_s_t import standardGlyphOrder
 from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
+from fontTools.ttLib.tables._g_l_y_f import (Glyph, GlyphComponent,
+    GlyphCoordinates, flagCubic, flagOnCurve)
+from fontTools.ttLib.tables import ttProgram
 
 UPEM = 1000
 
@@ -290,18 +294,31 @@ def _pin_font(font):
 
 
 def truetype(label, subtables, *, os2_version=4, glyph_names=False,
-             mac_names=True, extra_names=None):
+             mac_names=True, extra_names=None, order=None, glyphs=None,
+             advances=None, padding=None, glyph_data_format=0):
     """A TrueType fixture: `glyf`, and every table this library parses.
 
     The table order here is the order `FontBuilder` requires and not a
     preference: `setupOS2` asserts that `hmtx` and `cmap` are already present,
     because it recalculates `xAvgCharWidth` from one and the Unicode ranges and
     first/last character index from the other.
+
+    `order`, `glyphs` and `advances` default to the five-glyph repertoire every
+    phase 0 fixture shares; the outline fixtures pass their own, because what
+    they exercise is a *shape* and a shape needs its own glyphs.
     """
-    fb = FontBuilder(UPEM, isTTF=True)
-    fb.setupGlyphOrder(GLYPH_ORDER)
-    fb.setupGlyf(tt_glyphs())
-    fb.setupHorizontalMetrics({n: (ADVANCES[n], 0) for n in GLYPH_ORDER})
+    order = list(order if order is not None else GLYPH_ORDER)
+    glyphs = glyphs if glyphs is not None else tt_glyphs()
+    advances = advances if advances is not None else ADVANCES
+    fb = FontBuilder(UPEM, isTTF=True, glyphDataFormat=glyph_data_format)
+    fb.setupGlyphOrder(order)
+    fb.setupGlyf(glyphs)
+    if padding is not None:
+        # `loca`'s format follows from whether every glyph offset is even, and
+        # the padding is the only switch that decides it: see
+        # build_outline_loca_long.
+        fb.font["glyf"].padding = padding
+    fb.setupHorizontalMetrics({n: (advances.get(n, 600), 0) for n in order})
     fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
     set_cmap(fb, subtables)
     fb.setupOS2(version=os2_version, achVendID=VENDOR, **OS2_FIELDS)
@@ -614,6 +631,447 @@ def build_collection(out):
 # The description is not decoration. It is written into MANIFEST beside the
 # filename, so `tests/data/fonts/` says what each of its files exercises and
 # cannot drift from this table - the two are one edit.
+
+# ---------------------------------------------------------------------------
+# The outline fixtures (phase 1).
+#
+# Everything above varies a *table*; these vary a **shape**, and they are drawn
+# by setting `glyf`'s points and flags directly rather than through a pen. That
+# is deliberate: a pen normalises. `TTGlyphPen` always starts a contour at an
+# on-curve point, so a font whose contour is *stored* beginning off-curve - which
+# the format allows and real fonts contain - cannot be written with one, and the
+# reader's rule for that case would have no fixture at all.
+#
+# The four constructions below are the whole of what `glyf` leaves to the reader
+# (design.md section 7.3), and two of them are written twice on purpose:
+# `quad-implied` and `off-curve-start` hold the *same curve* with the points
+# rotated, so a reader that gets either rule wrong makes them disagree, and the
+# test asserts they decompose identically.
+
+# 1.0 in F2Dot14 is 16384, so a scale is exact only if it is a multiple of
+# 1/16384. Every scale here is a power-of-two fraction, which keeps fontTools'
+# float arithmetic and this library's fixed-point arithmetic exactly equal and
+# so keeps a differential's zero meaning "the rule agrees" rather than "the
+# rounding happened to land the same way".
+HALF = 0.5
+QUARTER = 0.25
+
+# Component flag bits fontTools preserves rather than recomputing.
+FLAG_ROUND_XY_TO_GRID = 0x0004
+FLAG_USE_MY_METRICS = 0x0200
+FLAG_OVERLAP_COMPOUND = 0x0400
+FLAG_SCALED_COMPONENT_OFFSET = 0x0800
+FLAG_UNSCALED_COMPONENT_OFFSET = 0x1000
+
+
+def raw_glyph(contours, *, cubic=False, program=b""):
+    """A simple glyph from explicit points, flags and contour ends.
+
+    `contours` is a list of lists of `(x, y, on_curve)`. Nothing here is
+    derived: the point order and the on-curve flags are the fixture.
+    """
+    glyph = Glyph()
+    glyph.numberOfContours = len(contours)
+    coordinates = []
+    flags = bytearray()
+    ends = []
+    for contour in contours:
+        for x, y, on_curve in contour:
+            coordinates.append((x, y))
+            if on_curve:
+                flags.append(flagOnCurve)
+            else:
+                flags.append(flagCubic if cubic else 0)
+        ends.append(len(coordinates) - 1)
+    glyph.coordinates = GlyphCoordinates(coordinates)
+    glyph.flags = flags
+    glyph.endPtsOfContours = ends
+    glyph.program = ttProgram.Program()
+    glyph.program.fromBytecode(program)
+    return glyph
+
+
+def component(name, *, x=None, y=None, first=None, second=None, transform=None,
+              flags=0):
+    """One component of a composite.
+
+    fontTools decides `ARG_1_AND_2_ARE_WORDS`, `ARGS_ARE_XY_VALUES` and which
+    of the three transform encodings to write from what is set here, and
+    preserves only the flag bits it cannot derive - which is why `flags` carries
+    just those. So an offset of 100 is written as a byte and one of -200 as a
+    word without either being asked for, and both encodings appear below.
+    """
+    part = GlyphComponent()
+    part.glyphName = name
+    if first is None:
+        part.x = x
+        part.y = y
+    else:
+        part.firstPt = first
+        part.secondPt = second
+    if transform is not None:
+        part.transform = transform
+    part.flags = flags
+    return part
+
+
+def composite_glyph(components, *, program=b""):
+    """A composite glyph from its components."""
+    glyph = Glyph()
+    glyph.numberOfContours = -1
+    glyph.components = list(components)
+    glyph.program = ttProgram.Program()
+    glyph.program.fromBytecode(program)
+    return glyph
+
+
+# A leaf, drawn four ways. The first is the ordinary case and the other three
+# are the constructions a pen cannot write.
+LEAF_EXPLICIT = [[(100, 0, True), (100, 400, False), (400, 400, True),
+                  (400, 0, False)]]
+# Two off-curve points in a row: the on-curve point at (300, 500) is implicit
+# and the reader has to synthesise it.
+LEAF_IMPLIED = [[(100, 0, True), (200, 500, False), (400, 500, False),
+                 (500, 0, True)]]
+# Stored starting off-curve, with exactly one on-curve point and it last: the
+# path begins at that point and every other point is walked in order. One
+# on-curve point is the whole of the case, so this glyph has one.
+LEAF_OFF_START = [[(100, 400, False), (400, 400, False), (400, 0, False),
+                   (100, 0, True)]]
+# The same curve as LEAF_IMPLIED, stored from a different point of the cycle:
+# the first stored point is off-curve and there are *two* on-curve points, so a
+# reader has to pick where to begin. The two defensible answers differ - this
+# library and FreeType begin at the contour's last point, fontTools rotates to
+# the first on-curve point and draws the closing line explicitly - and both
+# describe the same closed contour. That is why the path differential compares
+# contours as cycles: a closed contour's starting vertex is not part of what it
+# means, and this glyph is the fixture that says so.
+LEAF_OFF_START_ROTATED = [[(200, 500, False), (400, 500, False),
+                           (500, 0, True), (100, 0, True)]]
+# Nothing on-curve at all: the path begins at the midpoint between the last
+# point and the first, and every segment's endpoint is implicit.
+LEAF_ALL_OFF = [[(100, 0, False), (100, 400, False), (400, 400, False),
+                 (400, 0, False)]]
+
+OUTLINE_CONTOURS = [
+    [(80, 0, True), (520, 0, True), (520, 700, True), (80, 700, True)],
+    [(160, 80, True), (160, 620, True), (440, 620, True), (440, 80, True)],
+]
+
+# A 200-point contour, which exists for one reason: a component's point index
+# is one byte when it fits in one, and **unsigned** - unlike a one-byte offset,
+# which is signed. The two readings of the same two bytes agree for every index
+# below 128, so a composite that matches point 2 cannot tell them apart. This
+# glyph is long enough to be matched at index 150, where they differ, and a
+# sign-extended read turns a valid font into a refusal.
+#
+# It is a zigzag rather than a circle because a circle needs trigonometry and
+# this generator has none: every coordinate in every fixture is integer
+# arithmetic, so that the bytes do not depend on a libm.
+MANY_POINTS = [[(index * 3, 100 if index % 2 else 0, True)
+                for index in range(200)]]
+
+OUTLINE_GLYPHS = {
+    ".notdef": raw_glyph(OUTLINE_CONTOURS),
+    "space": raw_glyph([]),
+    "quad-explicit": raw_glyph(LEAF_EXPLICIT),
+    "quad-implied": raw_glyph(LEAF_IMPLIED),
+    "off-curve-start": raw_glyph(LEAF_OFF_START),
+    "off-curve-start-rotated": raw_glyph(LEAF_OFF_START_ROTATED),
+    "all-off-curve": raw_glyph(LEAF_ALL_OFF),
+    "two-contours": raw_glyph(OUTLINE_CONTOURS),
+    # One point, which is a contour the format allows and which draws nothing.
+    # It is here because "a contour with no segments" is the shortest path
+    # through the walk and the one a length calculation gets wrong.
+    "single-point": raw_glyph([[(300, 300, True)]]),
+    # Instructions, which are skipped by their stated length and never run
+    # (design.md section 8.5). Two bytes of them, so that a reader which
+    # forgets to skip lands inside the flag stream rather than on its end.
+    "with-instructions": raw_glyph(LEAF_EXPLICIT, program=b"\x00\x01"),
+    "many-points": raw_glyph(MANY_POINTS),
+}
+
+OUTLINE_ORDER = list(OUTLINE_GLYPHS)
+
+COMPOSITE_GLYPHS = dict(OUTLINE_GLYPHS)
+COMPOSITE_GLYPHS.update({
+    # A byte offset, which is every accent in every font.
+    "comp-offset": composite_glyph([
+        component("quad-explicit", x=100, y=50)]),
+    # -200 does not fit a signed byte, so fontTools writes words. The two
+    # encodings of the same field are the pair that catches a reader which
+    # reads one size for both.
+    "comp-word-offset": composite_glyph([
+        component("quad-explicit", x=300, y=-200)]),
+    # A single scale, applied before the offset: the Microsoft reading, which
+    # is the default when neither offset flag is set.
+    "comp-scale": composite_glyph([
+        component("quad-explicit", x=100, y=100,
+                  transform=[[HALF, 0], [0, HALF]])]),
+    # The *same* component and the *same* offset with SCALED_COMPONENT_OFFSET
+    # set, which places it somewhere else. This is a minimal pair: the two
+    # glyphs differ in one flag bit, so a reader that ignores the bit puts them
+    # in the same place and the test that compares them fails.
+    "comp-scaled-offset": composite_glyph([
+        component("quad-explicit", x=100, y=100,
+                  transform=[[HALF, 0], [0, HALF]],
+                  flags=FLAG_SCALED_COMPONENT_OFFSET)]),
+    # And the flag that spells the default out loud, which must place the
+    # component exactly where comp-scale does.
+    "comp-unscaled-offset": composite_glyph([
+        component("quad-explicit", x=100, y=100,
+                  transform=[[HALF, 0], [0, HALF]],
+                  flags=FLAG_UNSCALED_COMPONENT_OFFSET)]),
+    # Two different scales, which is a different encoding and not just a
+    # different number.
+    "comp-xy-scale": composite_glyph([
+        component("quad-explicit", x=0, y=0,
+                  transform=[[HALF, 0], [0, QUARTER]])]),
+    # A shear, whose off-diagonal terms are the two a transposed read swaps.
+    # The matrix is asymmetric in both directions for that reason.
+    "comp-two-by-two": composite_glyph([
+        component("quad-explicit", x=0, y=0,
+                  transform=[[1.0, QUARTER], [0, HALF]])]),
+    # Point matching: the second component moves so that its point 0 lands on
+    # point 2 of what has been assembled so far.
+    "comp-point-match": composite_glyph([
+        component("quad-explicit", x=0, y=0),
+        component("quad-implied", first=2, second=0)]),
+    # Point matching with a transform, which is applied to the component
+    # *before* the two points are made to coincide.
+    "comp-point-match-scaled": composite_glyph([
+        component("quad-explicit", x=0, y=0),
+        component("quad-implied", first=2, second=0,
+                  transform=[[HALF, 0], [0, HALF]])]),
+    # A composite whose component is itself a composite. Its point indices
+    # count from the start of *its own* contribution, which is the thing a
+    # reader gets wrong by using the outline's length instead.
+    "comp-nested": composite_glyph([
+        component("comp-offset", x=200, y=0),
+        component("quad-implied", x=-100, y=300)]),
+    # USE_MY_METRICS, which changes no coordinate and must therefore change no
+    # coordinate: a reader that treats an unknown flag as a transform moves the
+    # component.
+    "comp-use-my-metrics": composite_glyph([
+        component("quad-explicit", x=50, y=0, flags=FLAG_USE_MY_METRICS)]),
+    # ROUND_XY_TO_GRID and OVERLAP_COMPOUND, both of which this library reads
+    # and ignores - the first because there is no hinting to round for.
+    "comp-round-and-overlap": composite_glyph([
+        component("quad-explicit", x=50, y=0,
+                  flags=FLAG_ROUND_XY_TO_GRID | FLAG_OVERLAP_COMPOUND)]),
+    # Point matching at an index that does not fit in a signed byte. 150 is
+    # a point of `many-points`, and reading the index as signed makes it -106,
+    # which is no point at all: the glyph stops loading rather than loading
+    # wrongly, and every index the other fixtures use is below 128 where the
+    # two readings agree.
+    "comp-point-match-high": composite_glyph([
+        component("many-points", x=0, y=0),
+        component("quad-explicit", first=150, second=0)]),
+    # Two components and instructions after them, which is where a composite's
+    # instruction length lives and what a reader walking components has to stop
+    # before.
+    "comp-instructions": composite_glyph([
+        component("quad-explicit", x=0, y=0),
+        component("quad-explicit", x=400, y=0)], program=b"\x00\x01\x02\x03"),
+})
+
+COMPOSITE_ORDER = list(COMPOSITE_GLYPHS)
+
+OUTLINE_ADVANCES = {name: 600 for name in COMPOSITE_ORDER}
+OUTLINE_ADVANCES["space"] = 300
+
+
+def outline_cmap(order):
+    """Map each glyph past `space` to a codepoint from U+0041 up."""
+    mapping = {0x20: "space"}
+    for index, name in enumerate(n for n in order if n not in
+                                 (".notdef", "space")):
+        mapping[0x41 + index] = name
+    return [subtable(4, 3, 1, mapping)]
+
+
+def build_outline_simple(out):
+    """The four constructions `glyf` leaves to the reader, each its own glyph."""
+    fb = truetype("Outline Simple", outline_cmap(OUTLINE_ORDER),
+                  order=OUTLINE_ORDER, glyphs=OUTLINE_GLYPHS,
+                  advances=OUTLINE_ADVANCES, glyph_names=True)
+    fb.save(out)
+
+
+def build_outline_composite(out):
+    """Every composite flag, and the minimal pair that proves one is read."""
+    fb = truetype("Outline Composite", outline_cmap(COMPOSITE_ORDER),
+                  order=COMPOSITE_ORDER, glyphs=COMPOSITE_GLYPHS,
+                  advances=OUTLINE_ADVANCES, glyph_names=True)
+    fb.save(out)
+
+
+def build_outline_loca_long(out):
+    """`head.indexToLocFormat` 1: a long `loca`.
+
+    There is no switch for this. `loca`'s format follows from its own contents -
+    fontTools writes the short form when every offset is even and the table fits
+    in 128 KiB - and `glyf`'s padding is what makes the offsets even. With
+    `padding = 0` and a glyph of odd length, the offsets stop being even and the
+    long form is what can hold them.
+
+    The corpus is why this fixture exists: a short `loca` stores each offset
+    halved, so the two formats are not one code path with a width parameter, and
+    a font small enough to be a fixture is a font that gets the short form by
+    default.
+    """
+    glyphs = dict(OUTLINE_GLYPHS)
+    # An odd-length instruction program makes this glyph's description odd, and
+    # with no padding every later offset odd with it.
+    glyphs["with-instructions"] = raw_glyph(LEAF_EXPLICIT, program=b"\x00")
+    fb = truetype("Outline Loca Long", outline_cmap(OUTLINE_ORDER),
+                  order=OUTLINE_ORDER, glyphs=glyphs,
+                  advances=OUTLINE_ADVANCES, padding=0)
+    fb.save(out)
+    # The fixture is only this fixture if it came out long. Checked here rather
+    # than in a test, because a generator that quietly produced the short form
+    # would leave the test asserting something true of every other fixture.
+    written = TTFont(out)
+    if written["head"].indexToLocFormat != 1:
+        raise SystemExit(
+            "outline-loca-long.ttf came out with indexToLocFormat "
+            "%d: the padding trick no longer forces the long form"
+            % written["head"].indexToLocFormat)
+
+
+def build_outline_cubic(out):
+    """The cubic `glyf` extension, which this library refuses by name.
+
+    Flag bit 0x80 is reserved in OpenType 1.9 and is the cubic control-point
+    flag in the proposed extension that fontTools already writes. A reader that
+    ignores the bit treats a cubic control point as a quadratic one and draws a
+    different shape with no error at all, which is the one outcome worth ruling
+    out: this library reports ::GFNT_ERR_UNSUPPORTED and names the extension.
+
+    The font also has to declare `head.glyphDataFormat` 1 - fontTools refuses to
+    write cubic points into a format 0 font - and that declaration is the other
+    half of the refusal: the format field is the font *stating* the extension,
+    the flag bit is one glyph *using* it, a reader has to honour whichever it
+    meets first, and a font can set the field while containing no cubic glyph.
+    Both are refused, with a different message each, and this fixture trips the
+    field first.
+
+    So this fixture exists to be *refused*, and `testGlyf` asserts the refusal
+    rather than a shape.
+    """
+    glyphs = dict(OUTLINE_GLYPHS)
+    glyphs["quad-explicit"] = raw_glyph(
+        [[(100, 0, True), (100, 400, False), (400, 400, False),
+          (400, 0, True)]], cubic=True)
+    fb = truetype("Outline Cubic", outline_cmap(OUTLINE_ORDER),
+                  order=OUTLINE_ORDER, glyphs=glyphs,
+                  advances=OUTLINE_ADVANCES, glyph_data_format=1)
+    fb.save(out)
+
+
+
+
+def build_outline_cubic_flag(out):
+    """A cubic control point in a font that declares glyphDataFormat 0.
+
+    `outline-cubic.ttf` is refused for what its `head` says, and that refusal
+    fires first - so the per-glyph flag check behind it never ran, and a planted
+    defect that read a cubic control point as a quadratic one was invisible. Two
+    defences, and the outer one hid the inner.
+
+    This fixture separates them. fontTools will not write flag bit 0x80 into a
+    format 0 font, so the font is written as format 1 and the declaration is
+    then patched back to 0: what is left is a font that claims to be ordinary
+    and contains a cubic point, which is the shape a reader has to catch on the
+    flag alone. It is also a real shape - a font written by a tool that set the
+    flag and forgot the field - rather than only a test article.
+    """
+    glyphs = dict(OUTLINE_GLYPHS)
+    glyphs["quad-explicit"] = raw_glyph(
+        [[(100, 0, True), (100, 400, False), (400, 400, False),
+          (400, 0, True)]], cubic=True)
+    fb = truetype("Outline Cubic Flag", outline_cmap(OUTLINE_ORDER),
+                  order=OUTLINE_ORDER, glyphs=glyphs,
+                  advances=OUTLINE_ADVANCES, glyph_data_format=1)
+    fb.save(out)
+
+    with open(out, "rb") as handle:
+        data = bytearray(handle.read())
+    head_offset = table_offset(data, "head")
+    # head.glyphDataFormat is the last field of the table: 52 bytes in.
+    if int.from_bytes(data[head_offset + 52:head_offset + 54], "big",
+                      signed=True) != 1:
+        raise SystemExit("head.glyphDataFormat was not 1 before the patch")
+    struct.pack_into(">h", data, head_offset + 52, 0)
+    with open(out, "wb") as handle:
+        handle.write(bytes(data))
+
+
+def table_offset(data, want):
+    """Where a table starts, from the directory of a written font."""
+    tables = int.from_bytes(data[4:6], "big")
+    for index in range(tables):
+        base = 12 + index * 16
+        if bytes(data[base:base + 4]).decode("latin-1") == want:
+            return int.from_bytes(data[base + 8:base + 12], "big")
+    raise SystemExit("no %s table in the written font" % want)
+
+
+def build_outline_broken_loca(out):
+    """A `loca` entry that runs backwards, which condemns one glyph (M11).
+
+    Written by fontTools and then patched: no font builder will produce this,
+    and a hand-built font would be a second implementation of the sfnt writer
+    whose bugs would look like this library's. So the bytes are edited, and the
+    edit is arithmetic on the directory rather than a literal offset - a
+    hard-coded offset would silently patch the wrong table the first time any
+    other fixture detail changed.
+
+    `loca` holds numGlyphs+1 offsets, and glyph *n* is the bytes between entry
+    *n* and entry *n+1*. So every entry but the last is shared by two glyphs,
+    and lowering one of those breaks both - the first runs backwards and the
+    second starts a byte early and reads nonsense. The first attempt at this
+    fixture lowered entry 5 and condemned two glyphs, which is not the property
+    M11 is about.
+
+    The **last** entry is the one that belongs to a single glyph. Lowering it
+    condemns the final glyph and nothing else, so "one entry running backwards"
+    and "one glyph unreadable" are the same statement, which is what the test
+    asserts.
+    """
+    fb = truetype("Outline Broken Loca", outline_cmap(OUTLINE_ORDER),
+                  order=OUTLINE_ORDER, glyphs=OUTLINE_GLYPHS,
+                  advances=OUTLINE_ADVANCES)
+    fb.save(out)
+
+    with open(out, "rb") as handle:
+        data = bytearray(handle.read())
+    tables = int.from_bytes(data[4:6], "big")
+    entries = {}
+    for index in range(tables):
+        base = 12 + index * 16
+        tag = bytes(data[base:base + 4]).decode("latin-1")
+        entries[tag] = (int.from_bytes(data[base + 8:base + 12], "big"),
+                        int.from_bytes(data[base + 12:base + 16], "big"))
+    loca_offset, loca_length = entries["loca"]
+    head_offset = entries["head"][0]
+    long_format = int.from_bytes(data[head_offset + 50:head_offset + 52],
+                                "big", signed=True)
+    if long_format != 0:
+        raise SystemExit("this fixture assumes a short loca; it came out long")
+    count = loca_length // 2
+    if count < 2:
+        raise SystemExit("loca is too short to hold a glyph")
+    last = count - 1
+    start = int.from_bytes(
+        data[loca_offset + (last - 1) * 2:loca_offset + (last - 1) * 2 + 2],
+        "big")
+    if start == 0:
+        raise SystemExit("the last glyph starts at zero; nothing to run back")
+    struct.pack_into(">H", data, loca_offset + last * 2, start - 1)
+    with open(out, "wb") as handle:
+        handle.write(bytes(data))
+
 FIXTURES = {
     "basic.ttf": (build_basic,
         "TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3"),
@@ -651,6 +1109,27 @@ FIXTURES = {
         "OTTO flavour: a CFF outline table, every metric table unchanged"),
     "collection.ttc": (build_collection,
         "ttcf: two faces sharing tables, with different OS/2 versions"),
+    "outline-simple.ttf": (build_outline_simple,
+        "glyf: an explicit quadratic, an implied midpoint, a contour starting "
+        "off-curve, the same contour stored from another point of its cycle, "
+        "an all-off-curve contour, a one-point contour, instructions, and a "
+        "200-point contour"),
+    "outline-composite.ttf": (build_outline_composite,
+        "glyf composites: byte and word offsets, all three transform "
+        "encodings, scaled and unscaled offsets, point matching below and "
+        "above the signed-byte boundary, nesting, USE_MY_METRICS"),
+    "outline-loca-long.ttf": (build_outline_loca_long,
+        "loca: head.indexToLocFormat 1, so offsets are stored whole rather "
+        "than halved"),
+    "outline-cubic.ttf": (build_outline_cubic,
+        "glyf: head.glyphDataFormat 1, the cubic extension this library "
+        "refuses by name rather than mis-drawing"),
+    "outline-cubic-flag.ttf": (build_outline_cubic_flag,
+        "glyf: flag bit 0x80 in a font declaring glyphDataFormat 0, so the "
+        "per-glyph refusal is the only one that can fire"),
+    "outline-broken-loca.ttf": (build_outline_broken_loca,
+        "loca: the last entry running backwards, so that exactly one glyph is "
+        "corrupt and the rest of the font still answers (M11)"),
 }
 
 MANIFEST_HEADER = """\

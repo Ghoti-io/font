@@ -25,6 +25,12 @@ os2-v2.ttf	OS/2 version 2: x-height, cap height, default and break char
 os2-v3.ttf	OS/2 version 3: version 2's fields with version 3's fsType rules
 os2-v4.ttf	OS/2 version 4: the common case in the oracle corpus
 os2-v5.ttf	OS/2 version 5: optical point sizes, stored as twentieths
+outline-broken-loca.ttf	loca: the last entry running backwards, so that exactly one glyph is corrupt and the rest of the font still answers (M11)
+outline-composite.ttf	glyf composites: byte and word offsets, all three transform encodings, scaled and unscaled offsets, point matching below and above the signed-byte boundary, nesting, USE_MY_METRICS
+outline-cubic-flag.ttf	glyf: flag bit 0x80 in a font declaring glyphDataFormat 0, so the per-glyph refusal is the only one that can fire
+outline-cubic.ttf	glyf: head.glyphDataFormat 1, the cubic extension this library refuses by name rather than mis-drawing
+outline-loca-long.ttf	loca: head.indexToLocFormat 1, so offsets are stored whole rather than halved
+outline-simple.ttf	glyf: an explicit quadratic, an implied midpoint, a contour starting off-curve, the same contour stored from another point of its cycle, an all-off-curve contour, a one-point contour, instructions, and a 200-point contour
 post-v1.ttf	post format 1.0: all 258 standard glyphs, no stored names
 post-v2.ttf	post format 2.0: standard indices including 257, and one extra name
 post-v3.ttf	post format 3.0: a header that states it has no names

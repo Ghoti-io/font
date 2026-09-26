@@ -30,53 +30,15 @@
  * because the inputs come from a font file and signed overflow is undefined
  * behaviour.
  *
- * The negative cases are written as division and remainder rather than as
- * shifts: `>>` on a negative value is implementation-defined in C, and this
- * library's whole determinism claim is that two platforms agree.
+ * The rounding helpers themselves are in `fixed.h`, because the outline
+ * transform and the rasteriser round too and one rule written twice is a rule
+ * that drifts.
  */
 
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/core.h>
 #include <stdbool.h>
-
-/**
- * Clamp a 64-bit intermediate into an int32_t.
- */
-static int32_t gfnt_saturate32(int64_t value) {
-  if (value > INT32_MAX) {
-    return INT32_MAX;
-  }
-  if (value < INT32_MIN) {
-    return INT32_MIN;
-  }
-  return (int32_t)value;
-}
-
-/**
- * Divide by 2^shift, rounding half away from zero.
- *
- * The callers' products are bounded by 2^62, so negating one is safe.
- */
-static int64_t gfnt_round_shift(int64_t product, int shift) {
-  int64_t half = (int64_t)1 << (shift - 1);
-
-  if (product >= 0) {
-    return (product + half) >> shift;
-  }
-  return -((-product + half) >> shift);
-}
-
-/**
- * Divide, rounding half away from zero, with both signs handled explicitly.
- */
-static int64_t gfnt_round_div(int64_t numerator, int64_t denominator) {
-  uint64_t n = (uint64_t)(numerator < 0 ? -numerator : numerator);
-  uint64_t d = (uint64_t)(denominator < 0 ? -denominator : denominator);
-  uint64_t quotient = (n + d / 2) / d;
-  bool negative = (numerator < 0) != (denominator < 0);
-
-  return negative ? -(int64_t)quotient : (int64_t)quotient;
-}
+#include "fixed.h"
 
 GFNT_F16Dot16 gfnt_f16dot16_mul(GFNT_F16Dot16 a, GFNT_F16Dot16 b) {
   return gfnt_saturate32(gfnt_round_shift((int64_t)a * (int64_t)b, 16));

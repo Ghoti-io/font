@@ -967,18 +967,27 @@ TIER0_FILES := include/ghoti.io/font/core.h include/ghoti.io/font/blob.h \
 	include/ghoti.io/font/face.h include/ghoti.io/font/metrics.h \
 	include/ghoti.io/font/cmap.h include/ghoti.io/font/name.h \
 	include/ghoti.io/font/glyph.h include/ghoti.io/font/bitmap.h \
-	include/ghoti.io/font/color.h include/ghoti.io/font/charstring.h \
+	include/ghoti.io/font/color.h \
 	include/ghoti.io/font/font.h include/ghoti.io/font/allocator.h \
 	src/core/*.c src/core/*.h src/reader/*.c src/reader/*.h src/blob/*.c src/blob/*.h \
 	src/sfnt/*.c src/sfnt/*.h src/woff/*.c src/woff/*.h src/tables/*.c src/tables/*.h \
-	src/cmap/*.c src/cmap/*.h src/name/*.c src/name/*.h src/glyf/*.c src/glyf/*.h \
-	src/cff/*.c src/cff/*.h src/type1/*.c src/type1/*.h src/charstring/*.c src/charstring/*.h \
+	src/cmap/*.c src/cmap/*.h src/name/*.c src/name/*.h \
 	src/bitmap/*.c src/bitmap/*.h src/color/*.c src/color/*.h src/var/*.c src/var/*.h \
 	src/glyph/*.c src/glyph/*.h src/data/*.c src/data/*.h src/font.c
 TIER0_FORBIDDEN := font/(outline|raster|shape|layout|discover|write)\.h
 
+# The outline *producers* are tier 1, not tier 0, and this list said otherwise
+# until the first of them existed. design.md section 4.1 gives `glyf` and the
+# charstring interpreters to `outline.h`, so each of them includes a tier 1
+# header by construction - they exist to return a GFNT_Outline. Filing them
+# with the other table parsers grouped them by what they read rather than by
+# what they produce, and the gate would have fired on the first one to land,
+# for the right reason under a misleading message.
 TIER1_FILES := include/ghoti.io/font/outline.h include/ghoti.io/font/raster.h \
-	src/outline/*.c src/outline/*.h src/raster/*.c src/raster/*.h
+	include/ghoti.io/font/charstring.h \
+	src/outline/*.c src/outline/*.h src/raster/*.c src/raster/*.h \
+	src/glyf/*.c src/glyf/*.h src/cff/*.c src/cff/*.h \
+	src/type1/*.c src/type1/*.h src/charstring/*.c src/charstring/*.h
 TIER1_FORBIDDEN := font/(shape|layout|discover|write)\.h
 
 TIER2_FILES := include/ghoti.io/font/shape.h \

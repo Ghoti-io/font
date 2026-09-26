@@ -1,0 +1,81 @@
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Font.
+ *
+ * Ghoti.io Font is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Font is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/**
+ * @file
+ *
+ * `loca` and `glyf`: where one glyph's bytes are, and what they draw.
+ *
+ * documentation/design.md section 7.3. Internal because the public question is
+ * "what is this glyph's outline" (`outline.h`), not "where in `glyf` does it
+ * live"; a caller who wants the bytes has `gfnt_face_table_range()`.
+ */
+
+#ifndef GHOTI_IO_GFNT_GLYF_H
+#define GHOTI_IO_GFNT_GLYF_H
+
+#include <ghoti.io/font/macros.h>
+#include <ghoti.io/font/outline.h>
+#include "../reader/reader.h"
+#include "../sfnt/sfnt.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * Where glyph @p glyph's description is within `glyf`, per `loca`.
+ *
+ * A length of zero means the glyph draws nothing, which every font uses for
+ * `space` and which is not an error (M11's other half: an empty glyph and a
+ * broken one must not be one answer).
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param out_offset Receives the offset from the start of `glyf`.
+ * @param out_length Receives how many bytes the description is.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID for a glyph past `numGlyphs`;
+ *   ::GFNT_ERR_UNSUPPORTED for a face with no `glyf`/`loca`; or
+ *   ::GFNT_ERR_CORRUPT when the entry runs backwards or past `glyf`, which
+ *   is a fact about *that glyph* and not about the font (M11).
+ */
+GFNT_Result gfnt_loca_range(const GFNT_Face * face, uint32_t glyph,
+    size_t * out_offset, size_t * out_length, GFNT_Error * error);
+
+/**
+ * Load one glyph's contours into @p outline, resolving composites.
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param depth How many composite levels are already open; 0 at the top.
+ * @param outline Receives the contours, appended to whatever is there.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED,
+ *   ::GFNT_ERR_CORRUPT, ::GFNT_ERR_LIMIT or ::GFNT_ERR_OOM.
+ */
+GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
+    size_t depth, GFNT_Outline * outline, GFNT_Error * error);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // GHOTI_IO_GFNT_GLYF_H

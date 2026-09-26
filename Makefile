@@ -1128,9 +1128,18 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1 || exit 1; \
 	done
 
+# The verdict is the **exit status**, not the parsed count, and the difference
+# is not academic: a suite whose output this loop cannot parse - a binary that
+# segfaults before gtest prints its summary, an abort under a sanitizer - gave
+# num_tests=0, so the `failures=$$num_tests` fallback added zero to
+# total_failed. The row printed FAIL, the TOTAL line printed PASS, and the
+# target exited 0. Found by a planted defect in the rasteriser that crashed one
+# suite: 8 tests failed, the suite's row said FAIL, and `make test-quiet`
+# returned success. `any_failed` is now what decides, and the count is only
+# what gets printed.
 test-quiet: ## Run tests with minimal output (one line per test suite)
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
-	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; \
+	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; any_failed=0; \
 	printf "\n\033[1;36m%-30s %8s %10s %s\033[0m\n" "Test Suite" "Tests" "Time" "Status"; \
 	printf "\033[1;36m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
 	for test_exe in $(TEST_EXECUTABLES); do \
@@ -1147,16 +1156,18 @@ test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 			total_passed=$$((total_passed + num_tests)); \
 			printf "%-30s %8d %8dms \033[0;32mPASS\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
 		else \
+			any_failed=1; \
 			failures=$$(echo "$$output" | grep -oP '\[\s*FAILED\s*\]\s*\K\d+' | head -1); \
 			[ -z "$$failures" ] && failures=$$num_tests; \
+			[ "$$failures" -eq 0 ] && failures=1; \
 			total_failed=$$((total_failed + failures)); \
 			total_passed=$$((total_passed + num_tests - failures)); \
-			printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
+			printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m (exit %d)\n" "$$test_name" "$$num_tests" "$$time_ms" "$$exit_code"; \
 			failed_suites="$$failed_suites\n\033[0;31m=== $$test_name FAILURES ===\033[0m\n$$output\n"; \
 		fi; \
 	done; \
 	printf "\033[1;36m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
-	if [ $$total_failed -eq 0 ]; then \
+	if [ $$any_failed -eq 0 ]; then \
 		printf "\033[0;32m%-30s %8d %6dms PASS\033[0m\n\n" "TOTAL" "$$total_tests" "$$total_time"; \
 	else \
 		printf "\033[0;31m%-30s %8d %6dms FAIL (%d failed)\033[0m\n" "TOTAL" "$$total_tests" "$$total_time" "$$total_failed"; \

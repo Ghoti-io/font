@@ -617,7 +617,8 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Debug build commands
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 # Fuzz commands
-.PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-run-sfnt fuzz-run-cmap
+.PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
+.PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
@@ -1455,10 +1456,22 @@ endef
 # driving GFNT_Limits (documentation/design.md section 14.2). fuzz_sfnt takes a
 # whole font; fuzz_cmap takes a cmap table and the harness wraps a font around
 # it, so the fuzzer does not spend its budget rediscovering the directory.
+#
+# fuzz_glyf takes a `loca` and a `glyf` together, because the interesting
+# inputs are in the *relationship* between them - an entry running backwards, an
+# entry past the end, a description truncated mid-flag-stream - and a fuzzer
+# given only one of the two has to rediscover the other.
+#
+# fuzz_raster takes no font at all: the rasteriser has no bytes of its own, so
+# the input is read as a list of points and tags. Reaching it through a font
+# would mean every interesting shape had to be a font first, and the shapes that
+# break a scan converter are degenerate rather than malformed.
 $(eval $(call fuzz-rule,fuzz_sfnt,sfnt))
 $(eval $(call fuzz-rule,fuzz_cmap,cmap))
+$(eval $(call fuzz-rule,fuzz_glyf,glyf))
+$(eval $(call fuzz-rule,fuzz_raster,raster))
 
-FUZZERS := sfnt cmap
+FUZZERS := sfnt cmap glyf raster
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

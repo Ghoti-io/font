@@ -203,6 +203,75 @@ def write(path, options, payload):
     print("%s: %d bytes" % (path.relative_to(root), 1 + len(payload)))
 
 
+def write_pair(path, options, second, payload):
+    """A seed for a harness whose header is two bytes rather than one.
+
+    `fuzz_glyf` reads a split point after its options byte and `fuzz_raster`
+    reads a shape byte, so a seed written with one header byte would have its
+    first payload byte eaten - and would still be a valid input, which is how a
+    seed comes to exercise something other than what it was written for.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes([options, second]) + payload)
+    print("%s: %d bytes" % (path.relative_to(root), 2 + len(payload)))
+
+
+def simple_glyph(contours, instructions=b""):
+    """A `glyf` simple glyph from [[(x, y, on_curve), ...], ...]."""
+    points = [point for contour in contours for point in contour]
+    ends = []
+    total = 0
+    for contour in contours:
+        total += len(contour)
+        ends.append(total - 1)
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    out = bytearray(struct.pack(">hhhhh", len(contours),
+                                min(xs) if xs else 0, min(ys) if ys else 0,
+                                max(xs) if xs else 0, max(ys) if ys else 0))
+    for end in ends:
+        out += struct.pack(">H", end)
+    out += struct.pack(">H", len(instructions)) + instructions
+    # One flag byte per point, never repeated: a seed is a starting point and
+    # the fuzzer is what finds the REPEAT encoding.
+    for point in points:
+        out += bytes([1 if point[2] else 0])
+    previous = 0
+    for x in xs:
+        out += struct.pack(">h", x - previous)
+        previous = x
+    previous = 0
+    for y in ys:
+        out += struct.pack(">h", y - previous)
+        previous = y
+    return bytes(out)
+
+
+def composite_glyph(components):
+    """A `glyf` composite from [(glyph, dx, dy), ...], words throughout."""
+    out = bytearray(struct.pack(">hhhhh", -1, 0, 0, 1000, 1000))
+    for index, (glyph, dx, dy) in enumerate(components):
+        flags = 0x0001 | 0x0002  # ARG_1_AND_2_ARE_WORDS | ARGS_ARE_XY_VALUES
+        if index + 1 < len(components):
+            flags |= 0x0020      # MORE_COMPONENTS
+        out += struct.pack(">HHhh", flags, glyph, dx, dy)
+    return bytes(out)
+
+
+def loca_short(offsets):
+    return b"".join(struct.pack(">H", offset // 2) for offset in offsets)
+
+
+def raster_points(contours):
+    """The point records fuzz_raster reads: x, y, tag, five bytes each."""
+    out = bytearray()
+    for contour in contours:
+        for index, (x, y, tag_value) in enumerate(contour):
+            out += struct.pack(">hh", x, y)
+            out += bytes([tag_value | (0x40 if index == 0 else 0)])
+    return bytes(out)
+
+
 def main():
     latin = {
         "head": head(),
@@ -244,6 +313,48 @@ def main():
     write(corpus / "cmap/symbol.seed", 0x41,
           cmap([(3, 0, cmap_format4([(0xF041, 0xF045, -0xF041 + 1),
                                      (0xFFFF, 0xFFFF, 1)]))]))
+
+    # glyf and loca together, with the split byte placed so that the whole loca
+    # and the whole glyf are where the harness looks for them. One seed per
+    # construction the reader has a branch for.
+    leaf = simple_glyph([[(100, 0, True), (100, 400, False),
+                          (400, 400, True), (400, 0, False)]])
+    implied = simple_glyph([[(100, 0, True), (200, 500, False),
+                             (400, 500, False), (500, 0, True)]])
+    hinted = simple_glyph([[(0, 0, True), (100, 0, True), (100, 100, True)]],
+                          instructions=b"\x00\x01\x02")
+    stack = composite_glyph([(1, 100, 50), (2, -200, 300)])
+    for label, glyphs in (("simple", [leaf, implied]),
+                          ("instructions", [hinted]),
+                          ("composite", [leaf, implied, stack])):
+        blob = b""
+        offsets = [0]
+        for glyph in glyphs:
+            blob += glyph + (b"\0" * (-len(glyph) % 2))
+            offsets.append(len(blob))
+        table = loca_short(offsets)
+        # The split byte is a fraction of the payload: 256 * len(loca) / total.
+        total = len(table) + len(blob)
+        split = max(1, min(255, (256 * len(table)) // total))
+        write_pair(corpus / ("glyf/%s.seed" % label), 0x00, split,
+                   table + blob)
+    # And one with a backwards entry, which condemns a single glyph (M11).
+    broken = loca_short([0, len(leaf) + 2, 2]) + leaf + b"\0\0"
+    write_pair(corpus / "glyf/backwards-loca.seed", 0x10,
+               max(1, (256 * 6) // len(broken)), broken)
+
+    # Paths for the rasteriser, which reads no font at all.
+    write_pair(corpus / "raster/square.seed", 0x00, 0x00, raster_points([
+        [(0, 0, 0), (256, 0, 0), (256, 256, 0), (0, 256, 0)]]))
+    write_pair(corpus / "raster/curve.seed", 0x40, 0x08, raster_points([
+        [(0, 0, 0), (256, 640, 1), (512, 0, 0)]]))
+    write_pair(corpus / "raster/cubic.seed", 0x08, 0x00, raster_points([
+        [(0, 0, 0), (0, 640, 2), (512, 640, 2), (512, 0, 0)]]))
+    write_pair(corpus / "raster/hole.seed", 0x10, 0x20, raster_points([
+        [(0, 0, 0), (640, 0, 0), (640, 640, 0), (0, 640, 0)],
+        [(128, 128, 0), (128, 512, 0), (512, 512, 0), (512, 128, 0)]]))
+    write_pair(corpus / "raster/one-point.seed", 0x01, 0x10, raster_points([
+        [(64, 64, 0)]]))
     return 0
 
 

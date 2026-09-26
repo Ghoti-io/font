@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * @ref GFNT_Face: one font, from a blob and an index into it.
+ * @ref GFNT_Face "GFNT_Face": one font, from a blob and an index into it.
  *
  * documentation/design.md sections 5.3 and 7.1. Loading a face parses the
  * table directory and **nothing else**: every table is parsed and validated on

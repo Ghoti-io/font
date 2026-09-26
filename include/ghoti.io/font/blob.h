@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * @ref GFNT_Blob: the bytes of a font, with their length and their ownership.
+ * @ref GFNT_Blob "GFNT_Blob": the bytes of a font, with their length and their ownership.
  *
  * documentation/design.md section 5.1. There is no `GFNT_Stream` in this
  * library and the departure is deliberate: a font is random-access by

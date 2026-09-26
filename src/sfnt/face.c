@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * @ref GFNT_Face: loading one font out of a blob, and what a loaded face will
+ * @ref GFNT_Face "GFNT_Face": loading one font out of a blob, and what a loaded face will
  * answer before any table has been parsed.
  *
  * documentation/design.md sections 5.3, 7.1 and 7.8. A face load reads the

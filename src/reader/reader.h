@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * @ref GFNT_Reader: the one path by which this library reads a byte of a font.
+ * @ref GFNT_Reader "GFNT_Reader": the one path by which this library reads a byte of a font.
  *
  * documentation/design.md section 6. Every read checks that it fits before it
  * happens and returns ::GFNT_ERR_CORRUPT with the offset if it does not, and

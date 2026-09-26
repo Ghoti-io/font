@@ -1,15 +1,10 @@
-# The design of ghoti.io-font
+# Design
 
-**Status:** design, with most of phase 0 built. Tier 0 reads the sfnt
-container, the metric tables, `cmap` and `name`; §18.1 lists what of phase 0 is
-built and what is not, and it is the authority on what exists. Nothing above
-tier 0 exists at all. This page says what will exist and why, so
-that the code can be judged against it rather than the other way round. A
-change of mind lands here first, in the same commit as the code that needs it
-(`CONVENTIONS.md` §9). The workspace's `notes/font/SCOPE.md` is the scoping record
-that preceded this - the measured inventory and the format survey. The
-`unicode` library (`libs/unicode/documentation/design.md`) is a prerequisite
-for tiers 2 and 3.
+What is implemented reads the sfnt container, the metric tables, `cmap`
+and `name`. §18 lists that, and what of it is not built. Outlines,
+rasterisation, shaping, layout, font discovery and writing are not
+implemented. Shaping and layout need the `unicode` library. Reading a file
+and drawing an outline do not.
 
 `font` is the suite's font library: font files in - every family of them, not
 one - and positioned glyphs, coverage bitmaps and laid-out paragraphs out, with
@@ -35,12 +30,12 @@ Each word is a mechanism:
 | Property | Mechanism |
 | --- | --- |
 | **Correct** | Every format is parsed byte by byte from its specification with explicit shifts (`CONVENTIONS.md` §8), and every parse is checked against an outside reader - fontTools, FreeType, HarfBuzz - never against this library's own opinion (§14). Every quantity that is a policy (which ascent, which strike, which line-break strictness) is a named enum with a documented default (§2 M4, M9). Measurement and painting are one code path (§10.2). |
-| **Secure** | The file is the attacker (§1.2). Every read of file data passes through one bounds-checked reader (§6); every recursion has a limit the Standard sets and the library enforces regardless of what the file claims; every unbounded quantity is capped by `GFNT_Limits`; and there is no bytecode interpreter (§2 M3). Fuzzers per format from the first phase, because layers 0-2 are offset arithmetic over hostile input. |
+| **Secure** | The file is the attacker (§1.2). Every read of file data passes through one bounds-checked reader (§6); every recursion has a limit the Standard sets and the library enforces regardless of what the file claims; every unbounded quantity is capped by `GFNT_Limits`; and there is no bytecode interpreter (§2 M3). Fuzzers cover each format that is implemented, because the reads are offset arithmetic over hostile input. |
 | **Deterministic** | Outlines, shaping and rasterisation are integer arithmetic in fixed point (§5.2, §8). The same font, size and text produce **byte-identical coverage on every platform and architecture**, and a golden-bitmap gate proves it on x86-64 and on the big-endian 32-bit cross container (§14.4). No platform rasteriser, no platform shaper, no `float` in a core type. |
-| **Cross-platform** | Tiers 0-3 (§4) touch no operating-system API and behave identically everywhere by construction. Tier 4 - font discovery - is the only code that does, one file per platform, with the Windows and macOS branches marked per `CONVENTIONS.md` §11. |
+| **Cross-platform** | Reading, outlines, shaping and layout touch no operating-system API and behave identically everywhere by construction. Font discovery is the only code that does, one file per platform, with the Windows and macOS branches marked per `CONVENTIONS.md` §11. |
 | **Dependency-light** | `cutil`, `unicode`, and `compress` (gzip for `.pcf.gz`/`.psf.gz`, zlib for WOFF 1). `image` is optional, for PNG-bearing colour strikes and as a raster surface. Nothing else: not FreeType, not HarfBuzz, not fontconfig, not ICU. Each is an oracle in the tests and none is linked (§14). |
-| **Enterprise-ready** | No global state: no process-wide font cache, no default face, no environment read outside tier 4 (§15.3). A face is immutable after load and shareable across threads; caches are objects the caller owns. Embedding permissions are reported and never enforced (§17.9). "Which face answered this glyph" and "which strike answered this size" are queryable, because fallback that cannot be audited is a bug report waiting to happen (§2 M8). |
-| **Useful** | Three consumers are enumerated in §13 with their exact needs, and the library is designed against all three, not the first one. It draws *something* for any glyph it cannot find - glyph 0 is synthesised (§5.4) - and bundles no font of its own (§14.6): the application's fonts and the system's, through tier 4, are the only fonts there are. |
+| **Enterprise-ready** | No global state: no process-wide font cache, no default face, no environment read outside font discovery (§15.3). A face is immutable after load and shareable across threads; caches are objects the caller owns. Embedding permissions are reported and never enforced (§17.9). "Which face answered this glyph" and "which strike answered this size" are queryable, because fallback that cannot be audited is a bug report waiting to happen (§2 M8). |
+| **Useful** | Three consumers are enumerated in §13 with their exact needs, and the library is designed against all three, not the first one. It draws *something* for any glyph it cannot find - glyph 0 is synthesised (§5.4) - and bundles no font of its own (§14.6): the application's fonts and the system's, once discovery exists, are the only fonts there are. |
 
 ### 1.1 The shape is borrowed, deliberately
 
@@ -48,7 +43,7 @@ FreeType's face/glyph/outline model, HarfBuzz's buffer-and-cluster model, and
 fontTools' table-object model are the references for what a font library
 exposes, and each has decades of consumers. Where this library departs, §2
 names the reason; where it does not, the reader can assume the reference's
-semantics and conformance behaviour are the target. The layout tier borrows
+semantics and conformance behaviour are the target. Layout borrows
 its vocabulary - min-content, max-content, line-break strictness, the
 typographic and ink boxes - from CSS Text and CSS Inline Layout, because those
 are the specifications a GUI toolkit's authors already know.
@@ -107,75 +102,78 @@ field's, and font engineering has a long list.
 | M21 | Subsetting that drops glyphs only reachable through `GSUB` | Ligatures missing from PDFs for a decade | Glyph closure walks composites and, by option, the layout tables (§12.3) |
 | M22 | Rasterising at a size the caller passed straight from untrusted input | A 65,535-ppem glyph is a gigabyte | `GFNT_Limits::max_ppem` and `max_raster_bytes` (§15.2) |
 | M23 | Memory-mapping a font file that is then truncated | `SIGBUS` on the next read; no C-level recovery | `GFNT_Blob` copies by default; mapping is an explicit choice with the hazard in its documentation (§5.1) |
-| M24 | A font library that bundles a font, so every consumer ships a third-party licence obligation it never chose | Toolkits that embed a fallback face; its notice then travels with every binary every downstream distributor produces | No font is bundled (§14.6). Glyph 0 is synthesised in code, so a face with no usable glyphs still draws boxes; an application ships its own fallback as its own asset, or finds the system's through tier 4 |
+| M24 | A font library that bundles a font, so every consumer ships a third-party licence obligation it never chose | Toolkits that embed a fallback face; its notice then travels with every binary every downstream distributor produces | No font is bundled (§14.6). Glyph 0 is synthesised in code, so a face with no usable glyphs still draws boxes; an application ships its own fallback as its own asset, or finds the system's through font discovery |
 
 ---
 
 ## 3. The format universe
 
-"Font" is four unrelated families that share a purpose. `notes/font/SCOPE.md`
-§3 has the survey with measurements; what follows is the verdict.
+"Font" is four unrelated families that share a purpose. What follows is
+which of them this library takes, and which of those it reads today.
 
 | Family | Formats | Verdict |
 | --- | --- | --- |
-| **sfnt-wrapped** | `.ttf` (`glyf`), `.otf` (`CFF `), `.ttc`/`.otc`, WOFF 1 | **required**, phases 0-2 |
-| | `EBDT`/`EBLC`/`EBSC` strikes; `COLR` v0 + `CPAL` | **wanted**, phases 1b and 6 |
-| | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | phase 6, `?image` |
-| | variations: `fvar`/`avar`/`gvar`/`HVAR`/`VVAR`/`MVAR`/`STAT` | phase 4; **the API shape from phase 0** (§7.7) |
-| | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, phase 3 |
-| | WOFF 2 | after Brotli lands in `compress`; **not here** |
+| **sfnt-wrapped** | `.ttf`, `.otf`, `.ttc`/`.otc` | **required.** The container, the metric tables, `cmap` and `name` are implemented. `glyf` and `CFF ` are not |
+| | WOFF 1 | **required**, not implemented |
+| | `EBDT`/`EBLC`/`EBSC` strikes; `COLR` v0 + `CPAL` | **wanted**, not implemented |
+| | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | wanted, not implemented; colour bitmaps need `image` |
+| | variations: `fvar`/`avar`/`gvar`/`HVAR`/`VVAR`/`MVAR`/`STAT` | not implemented. The accessor already takes a `GFNT_Variation *` (§7.7) |
+| | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
+| | WOFF 2 | not here; it waits on Brotli in `compress` |
 | | `CFF2`, AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
-| **standalone bitmap** | PCF (`.pcf.gz`), BDF, PSF 1/2 | **wanted**, phase 1b - 1,885 of them on a stock Linux box; cheap |
-| | GNU Unifont `.hex` | wanted as fallback data |
+| **standalone bitmap** | PCF (`.pcf.gz`), BDF, PSF 1/2 | **wanted**, not implemented. 1,885 of them on a stock Linux box |
+| | GNU Unifont `.hex` | wanted as fallback data, not implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
-| **standalone outline** | Type 1 (`.pfb`/`.pfa` + `.afm`/`.pfm`), bare `CFF` | **wanted**, phase 2 - all of TeX, and PDF |
+| **standalone outline** | Type 1 (`.pfb`/`.pfa` + `.afm`/`.pfm`), bare `CFF` | **wanted**, not implemented |
 | | Type 3, Type 42, Multiple Master, standalone SVG fonts, Metafont | absent; Type 3 is a PDF library's (§13.3) |
 | | Hershey strokes | optional; needs no rasteriser |
 | **sidecars** | AFM/PFM, `fonts.dir`/`fonts.alias`, the AGL, the OpenType language registry | with the formats that need them |
 
 ---
 
-## 4. Tiers and modules
+## 4. Modules
 
-Five tiers, split by what a consumer pays for and what each touches. **Nothing
-in tier *n* includes a tier *n+1* header**, and `make check-layering` enforces
-it, as `chron` does.
+What is implemented is the reader: a blob, the checked sfnt reader, metrics,
+`cmap`, names and glyph access. The rest of this table is not implemented.
+A header does not include one it does not need, and `make check-layering`
+enforces that, as `chron` does.
 
-| Tier | Holds | Needs | Consumers |
-| --- | --- | --- | --- |
-| 0 | blob, the checked reader, every table parser, metrics, `cmap`, strikes, glyph access, the glyph union | `cutil`, `compress` | everyone |
-| 1 | outlines as paths; rasterisation to coverage | tier 0 | `image`, `cjelly`, PDF |
-| 2 | shaping: `GDEF`/`GSUB`/`GPOS`, the script shapers, the cluster map | tier 0, `unicode` | `cjelly`, PDF (for text extraction) |
-| 3 | layout: itemisation, bidi, breaking, paragraphs, boxes, hit testing | tier 2, `unicode` | `cjelly`, `image` |
-| 4 | discovery and fallback: directories, matching, the platform APIs | tier 0, the OS | `cjelly` |
-| W | writing and subsetting | tier 0 | PDF, tools |
+| What | Holds | Needs | Who uses it | Implemented |
+| --- | --- | --- | --- | --- |
+| Reading | blob, the checked reader, every table parser, metrics, `cmap`, strikes, glyph access, the glyph union | `cutil`, `compress` | everyone | the sfnt container, metric tables, `cmap` and `name`. §18 is the list |
+| Outlines and raster | outlines as paths; rasterisation to coverage | the reader | `image`, `cjelly`, PDF | no |
+| Shaping | `GDEF`/`GSUB`/`GPOS`, the script shapers, the cluster map | the reader, `unicode` | `cjelly`, PDF (for text extraction) | no |
+| Layout | itemisation, bidi, breaking, paragraphs, boxes, hit testing | shaping, `unicode` | `cjelly`, `image` | no |
+| Discovery | directories, matching, the platform APIs | the reader, the OS | `cjelly` | no |
+| Writing | writing and subsetting | the reader | PDF, tools | no |
 
-`image` links 0, 1 and 3 (it wants "draw this wrapped label") and never pays
-for discovery; a PDF reader links 0-2 and W; `cjelly` links everything. The
-tier boundary is what keeps "should layout be its own library" an open option
-that costs nothing to keep open.
+`image` wants the reader, rasterisation and layout ("draw this wrapped
+label") and never pays for discovery; a PDF reader wants the reader, shaping
+and writing; `cjelly` wants all of it. Keeping layout in its own headers
+leaves "should layout be its own library" an open option that costs nothing
+to keep open.
 
 ### 4.1 The modules
 
-| Header | Tier | Holds |
-| --- | :-: | --- |
-| `core.h` | 0 | `GFNT_Result`, `GFNT_Limits`, `GFNT_Error`, the fixed-point types, version |
-| `blob.h` | 0 | `GFNT_Blob`: bytes with ownership and length; file, memory, mmap |
-| `face.h` | 0 | `GFNT_Face`: one font from a blob; the table directory; `numGlyphs`; the strike list; `GFNT_Variation` |
-| `metrics.h` | 0 | `head`, `hhea`/`hmtx`, `vhea`/`vmtx`, `OS/2`, `post`, `maxp`; ascent/descent policies; per-glyph advances and bounds |
-| `cmap.h` | 0 | codepoint → glyph, all subtable formats; variation selectors; reverse lookup |
-| `name.h` | 0 | `name` records decoded to UTF-8 |
-| `glyph.h` | 0 | `GFNT_Glyph`, the tagged union; the strike-selection policy |
-| `bitmap.h` | 0 | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes |
-| `color.h` | 0 | `COLR`/`CPAL`, `CBDT`, `sbix` |
-| `outline.h` | 1 | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds |
-| `raster.h` | 1 | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge |
-| `charstring.h` | 0 | the Type 1 and Type 2 interpreters, container-independent (§7.4) |
-| `shape.h` | 2 | `GFNT_ShapedRun`, features, the language registry, the script-shaper vtable |
-| `layout.h` | 3 | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers |
-| `discover.h` | 4 | `GFNT_FontSet`, directory scanning, matching, the default fallback provider |
-| `write.h` | W | the sfnt serialiser, the subsetter, WOFF 1, the PDF helpers |
-| `font.h` | 0 | umbrella for tier 0 |
+| Header | Holds |
+| --- | --- |
+| `core.h` | `GFNT_Result`, `GFNT_Limits`, `GFNT_Error`, the fixed-point types, version |
+| `blob.h` | `GFNT_Blob`: bytes with ownership and length; file, memory, mmap |
+| `face.h` | `GFNT_Face`: one font from a blob; the table directory; `numGlyphs`; the strike list; `GFNT_Variation` |
+| `metrics.h` | `head`, `hhea`/`hmtx`, `vhea`/`vmtx`, `OS/2`, `post`, `maxp`; ascent/descent policies; per-glyph advances and bounds |
+| `cmap.h` | codepoint → glyph, all subtable formats; variation selectors; reverse lookup |
+| `name.h` | `name` records decoded to UTF-8 |
+| `glyph.h` | `GFNT_Glyph`, the tagged union; the strike-selection policy |
+| `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes. Not implemented |
+| `color.h` | `COLR`/`CPAL`, `CBDT`, `sbix`. Not implemented |
+| `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Not implemented |
+| `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. Not implemented |
+| `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Not implemented |
+| `shape.h` | `GFNT_ShapedRun`, features, the language registry, the script-shaper vtable. Not implemented |
+| `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
+| `discover.h` | `GFNT_FontSet`, directory scanning, matching, the default fallback provider. Not implemented |
+| `write.h` | the sfnt serialiser, the subsetter, WOFF 1, the PDF helpers. Not implemented |
+| `font.h` | umbrella for what is implemented |
 
 ---
 
@@ -245,7 +243,7 @@ Zero is the policy that cannot surprise a caller who never heard of strikes.
 `GFNT_Variation` is a caller-owned array of normalised axis coordinates
 (`F2Dot14`, `-1..1` after `avar`). **Every accessor that a variation can
 change takes a `const GFNT_Variation *`**, `NULL` meaning the default instance -
-from phase 0, before any variation table is parsed - because adding the
+before any variation table is parsed - because adding the
 parameter later is a break across the whole API and adding it now is an
 unused argument (§7.7).
 
@@ -370,7 +368,7 @@ per-table zlib inflation through `compress`, into a reconstructed sfnt blob
 that the ordinary path then reads. The metadata and private blocks are exposed
 as bytes. **WOFF 2** is not here: it needs Brotli, which belongs in `compress`
 as an eighth method, and it transforms `glyf`/`loca` and `hmtx` in ways that
-are a second reader; when Brotli lands, WOFF 2 is a phase.
+are a second reader. It is not implemented.
 
 **PCF, BDF, PSF, `.hex`** are their own containers and their own glyph sources,
 read through the same reader (PCF, PSF) or the line reader (BDF, `.hex`),
@@ -416,8 +414,7 @@ pinned image - the 258-entry standard Macintosh glyph order and the eight
 single-byte Macintosh encodings - and three gates cover them
 (§14.8). `gfnt_face_glyph_name`, `gfnt_face_glyph_for_name` and
 `gfnt_face_glyph_names_dump` read format 1.0 and 2.0; 2.5 and 4.0 are refused by
-name rather than guessed. `vhea`/`vmtx`, `gasp` and `kern` are not built, and are
-phases of their own.
+name rather than guessed. `vhea`/`vmtx`, `gasp` and `kern` are not built.
 
 **`name`**: every record decoded by `(platformID, encodingID, langID)` - Unicode
 and Windows UTF-16BE, Windows symbol, and the single-byte Macintosh encodings by
@@ -506,8 +503,8 @@ and top-side-bearing deltas through the item variation store and delta-set
 index maps), `MVAR` (the metric tags), `STAT` (axis values formats 1-4, for
 naming an instance), and `GSUB`/`GPOS` `FeatureVariations`.
 Normalisation: user coordinate to `-1..1` by the axis's min/default/max, then
-`avar`. Every accessor took a `GFNT_Variation *` from phase 0; phase 4 makes
-the parameter do something.
+`avar`. Every accessor takes a `GFNT_Variation *`. Nothing reads a variation
+table yet, so the parameter selects the default instance.
 
 ### 7.8 Required tables are per operation
 
@@ -571,7 +568,7 @@ No LCD/ClearType filtering (a three-channel coverage output would be a later
 option), no stem darkening, no dropout control (which only matters for
 un-anti-aliased rendering of hinted outlines, which is absent), no embolden or
 oblique synthesis in the first release - synthetic styles are a fallback
-concern and belong with tier 4 when it wants them.
+concern and belong with font discovery when it wants them.
 
 ### 8.5 Hinting is absent, and stated absent
 
@@ -687,11 +684,11 @@ drew.
 
 | # | Thing | Where |
 | --- | --- | --- |
-| 1 | Shaping | `font`, tier 2 |
-| 2 | Run measurement: advance sum, ink extents | `font`, tier 2 |
-| 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font`, tier 3 |
+| 1 | Shaping | `font` shaping, not implemented |
+| 2 | Run measurement: advance sum, ink extents | `font` shaping, not implemented |
+| 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, not implemented |
 | 4 | Break opportunities: UAX #14 lines, UAX #29 graphemes and words | `unicode`, applied here |
-| 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font`, tier 3 |
+| 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout, not implemented |
 | 6 | Inline layout: inline images and widgets, mixed sizes on one line, ruby | `cjelly` |
 | 7 | Box model: margins, padding, floats, flex, grid, constraints | `cjelly` (its Task 3.1) |
 
@@ -701,7 +698,7 @@ drew.
   width from advances) answers "how much room do I reserve"; the *ink* box
   (the union of positioned glyph bounds) answers "which pixels get touched".
   They differ for nearly every string. Both are returned, both are named.
-- **Measurement without rasterisation.** Layout never touches tier 1's scan
+- **Measurement without rasterisation.** Layout never touches the scan
   converter. Ink bounds come from outline bounds and strike metrics.
 - **Measure and paint are one code path** (M5): the positions layout hands
   the painter are the positions it measured with, in 26.6, and any rounding
@@ -756,7 +753,7 @@ with `Common` and `Inherited` merged into their neighbours), then by bidi level
 (`unicode`'s UAX #9), then by **face**: for each glyph the span's face cannot
 map, the `GFNT_FontProvider` is asked for one that can, given the codepoint,
 script, language and style, and the run is split at face boundaries. The
-provider is a vtable the caller supplies; tier 4 ships one over a `GFNT_FontSet`
+provider is a vtable the caller supplies; discovery, when it exists, ships one over a `GFNT_FontSet`
 (§11), and a caller with its own policy supplies its own. **Every glyph records
 its face**, and a run whose face is not the span's is flagged - M8 - so that
 "why did that glyph look wrong" has an answer.
@@ -782,9 +779,9 @@ box sharing its line.
 
 ---
 
-## 11. Discovery and fallback (tier 4)
+## 11. Discovery and fallback
 
-The only tier that touches the operating system, kept to one file per
+Not implemented. The only part that touches the operating system, kept to one file per
 platform. `GFNT_FontSet` is built by scanning directories - the caller's list,
 or the platform's conventional ones: `$XDG_DATA_DIRS/fonts`,
 `~/.local/share/fonts`, `~/.fonts`, `/usr/share/fonts` and its `X11` bitmap
@@ -812,11 +809,11 @@ Synthetic bold and oblique are §16.
 
 ---
 
-## 12. Writing and subsetting (tier W)
+## 12. Writing and subsetting
 
 The library writes fonts because two consumers need it: a PDF writer must
 embed a *subset* of each font it uses (§13.3), and every fixture in §14.5 is
-produced by subsetting. Writing is tier W, on tier 0 only.
+produced by subsetting. Writing is not implemented. It needs the reader and nothing else.
 
 ### 12.1 The sfnt serialiser
 
@@ -848,7 +845,7 @@ codepoints or dropped; `name` is rewritten with a new family name and the
 licence-required rename (§14.5); `hmtx`, `loca`, `glyf`, `CFF `, `post` and the
 layout tables are pruned to the closure. Layout-table subsetting (pruning
 lookups to the surviving glyphs while keeping them valid) is the hard part
-and is phase 5's second half.
+and is not implemented.
 
 ### 12.4 Other writers
 
@@ -873,7 +870,7 @@ against `pyftsubset` scores the closure.
 
 ### 13.1 `cjelly`
 
-Tiers 0-4 and, for its GPU path, an atlas. `cjelly` owns the atlas and the
+The reader, outlines, shaping, layout and discovery, and, for its GPU path, an atlas. `cjelly` owns the atlas and the
 draw batching; this library gives it `GFNT_Coverage` at any sub-pixel offset,
 the shaped runs with cluster maps its accessibility tree needs
 (`semantics.md`), the paragraph layout with both boxes and hit testing its
@@ -882,15 +879,15 @@ widgets need, min-content and max-content for its constraint solver (Task
 (face, glyph, ppem, sub-pixel bin, variation) to rectangle plus metrics - is
 defined here as `GFNT_AtlasEntry` so that a build step can bake one and
 `cjelly` can load it, and so that the same key serves as the glyph cache key.
-`cjelly`'s v0.1 "text (Latin fallback)" milestone needs tiers 0-1 and nothing
-else.
+`cjelly`'s v0.1 "text (Latin fallback)" milestone needs the reader and
+rasterisation, and nothing else.
 
 ### 13.2 `image`
 
-Tiers 0, 1 and 3: `gimg_draw_text()` is a paragraph laid out here and
+The reader, rasterisation and layout: `gimg_draw_text()` is a paragraph laid out here and
 rasterised into a `GIMG_Raster` through the bridge in §8.2, with the
 compositing (colour, blending, effects) on `image`'s side. `image` never links
-tier 4; the caller hands it a face.
+font discovery; the caller hands it a face.
 
 ### 13.3 A PDF library, should one come
 
@@ -902,9 +899,9 @@ Designed for now because its needs are concrete and cheap to keep open:
 | Fonts with no `cmap`, `name` or `OS/2` | §7.8: per-operation requirements |
 | Glyph names → Unicode for text extraction | `post` names, the **Adobe Glyph List** (vendored, BSD-3), the `uniXXXX`/`uXXXX[XX]` conventions, `gXX`/`cidXX` forms |
 | The standard 14 fonts' metrics without their files | AFM reading (§7.1); the Core 14 AFMs are a fixture the PDF library carries |
-| `StandardEncoding`, `WinAnsiEncoding`, `MacRomanEncoding`, `MacExpertEncoding`, the Symbol and ZapfDingbats built-in encodings | vendored tables in `write.h`'s PDF helpers, phase 5 |
+| `StandardEncoding`, `WinAnsiEncoding`, `MacRomanEncoding`, `MacExpertEncoding`, the Symbol and ZapfDingbats built-in encodings | vendored tables in `write.h`'s PDF helpers; not implemented |
 | Embedding a subset with `CIDToGIDMap` identity, or renumbered with a `Differences` array | §12.3's `retain_gids` and its inverse |
-| A `ToUnicode` CMap and a `W`/`Widths` array for the subset | phase 5 helpers over the subset's cluster and advance data |
+| A `ToUnicode` CMap and a `W`/`Widths` array for the subset | not implemented; they would be built from the subset's cluster and advance data |
 | Predefined CJK CMaps (`Adobe-Japan1-6`, ...) | **not here**: they are a large separate data set (`poppler-data` on Debian) and a provider seam; `Identity-H`/`V` are built in |
 | Type 3 fonts | **not here**: their glyphs are PDF content streams, which is the PDF library's interpreter |
 | `fsType` embedding permissions | reported, never enforced (§17.9); the PDF library decides |
@@ -1043,7 +1040,7 @@ library reads, so that a test can break exactly one field and name what it broke
 a `MANIFEST`, in the same pinned image as the differentials - and `check-fixtures`
 regenerates and compares bytes, so a fixture is a thing that can be rebuilt
 rather than a byte array with extra steps. The `fonttools` image and both
-differentials are built (§18.1), so the real-font population is reachable too.
+differentials are built (§18), so the real-font population is reachable too.
 
 The generator's own contract is determinism, and two of its pins are not
 obvious. `FontBuilder` writes the current time into `head` whatever its defaults
@@ -1056,7 +1053,7 @@ fixture disagrees on `created` for neither side's fault.
 
 ### 14.6 No font is bundled
 
-The first draft compiled a subset face into tier 0 so that the library could
+The first draft compiled a subset face into the reader so that the library could
 always draw a diagnostic string. It does not, and the reason is M24: a font
 embedded in a library ships inside every consumer's binary, and its licence
 notice - Vera's, OFL's - then has to travel with every binary every downstream
@@ -1066,7 +1063,7 @@ that decision for its consumers.
 What the library promises instead is narrower and needs no licence. **Glyph 0
 is synthesised in code** (§5.4), so a face with no usable glyphs still draws a
 hollow box per character and a run that no face could map still has geometry.
-**Tier 4 enumerates the system's fonts** (§11), so an application that wants a
+**Discovery enumerates the system's fonts** (§11), so an application that wants a
 fallback finds one where the operating system keeps them. An application that
 must draw text with no fonts on the system - a container, a fresh Windows
 image - ships a font as its own asset under its own licence, which is where
@@ -1186,13 +1183,13 @@ and this suite's history say why.
 include/ghoti.io/font/
   macros.h  libver.h  libver_gen.h  namespace.h  allocator.h     (CONVENTIONS §4)
   core.h  blob.h  face.h  metrics.h  cmap.h  name.h  glyph.h
-  bitmap.h  color.h  charstring.h                                [tier 0]
-  outline.h  raster.h                                            [tier 1]
-  shape.h                                                        [tier 2]
-  layout.h                                                       [tier 3]
-  discover.h                                                     [tier 4]
-  write.h                                                        [tier W]
-  font.h                                                         umbrella, tier 0
+  bitmap.h  color.h  charstring.h
+  outline.h  raster.h
+  shape.h
+  layout.h
+  discover.h
+  write.h
+  font.h                                                         umbrella for what is implemented
 src/
   core/ reader/ blob/ sfnt/ woff/ tables/ cmap/ name/ glyf/ cff/ type1/
   charstring/ bitmap/ color/ var/ outline/ raster/ layout_tables/ shape/
@@ -1270,13 +1267,13 @@ answered on 2026-09-23/24; the rest stand as recommended.
 
 1. **Layout is in this library, up to the paragraph.** Decided (§10).
 2. **No hinting interpreter.** Decided (§8.5).
-3. **Bitmap fonts are first-class, from phase 0's API.** Decided (§5.3, §5.4).
+3. **Bitmap fonts are first-class in the API.** Decided (§5.3, §5.4). The strike tables are not read yet.
 4. **Outlines and rasterisation both live here**, writing into `GIMG_Raster`
    when `image` is present and a byte buffer when not; `image` stays optional
    (§8.2).
 5. **Shaping is ours**, script by script, declared. `cjelly`'s Overview says
    so and the cluster map is the reason (§9.2).
-6. **`GFNT_Variation` on every accessor from phase 0** (§5.3).
+6. **`GFNT_Variation` on every accessor** (§5.3).
 7. **The charstring interpreters are container-independent** (§7.4).
 8. **No `GFNT_Stream`; a blob and a checked reader** (§5.1, §6).
 9. **`fsType` is reported, never enforced.** A library that refuses to render a
@@ -1285,7 +1282,7 @@ answered on 2026-09-23/24; the rest stand as recommended.
    for them. Reporting is the only defensible position, and the consumer that
    embeds (§13.3) decides.
 10. **Fixed point everywhere; no `float` in a core type** (§5.2).
-11. **Discovery is a tier, fontconfig is not linked** (§11).
+11. **Discovery does not link fontconfig** (§11).
 12. **No font is bundled, and no third-party font is committed** (§14.5,
     §14.6). The first draft compiled DejaVu Sans in and committed subset OFL
     fonts as fixtures; the licence obligation the first would have propagated
@@ -1337,54 +1334,7 @@ answered on 2026-09-23/24; the rest stand as recommended.
 
 ---
 
-## 18. Plan
-
-Phases, in dependency order, with the milestone each unlocks. Sizes follow
-`regex`'s `plan.md` and `chron`: S up to a week, M two to four, L four to
-eight, for one engineer who knows the suite. **Tiers 0 and 1 need no Unicode at
-all; tier 2 needs `unicode`'s phase B and tier 3 needs its B and C.** This
-sentence had B and C the wrong way round until 2026-09-24: phase B is
-normalisation, bidi and the shaping properties - joining, Indic, USE, emoji,
-mirroring, vertical orientation - which is what a shaper consumes, and phase C
-is segmentation, which is what a paragraph layout consumes. `unicode`'s design
-§16 phase table is the authority on which is which.
-
-As of 2026-09-24 `unicode`'s phases A, B, C and D are built and installed, so
-every Unicode input tiers 2 and 3 need already exists: `guni_joining_type` and
-`guni_joining_group`, the Indic categories, the emoji properties,
-`guni_vertical_orientation`, `guni_bidi_levels` and `guni_bidi_reorder`,
-`guni_normalize` in all four forms, and `break.h` with all four algorithms, the
-iterator shape this library asked for, `GUNI_BreakProvider` for the dictionary
-seam and CSS Text's line-break tailorings. Phases E and F are `regex` and
-`ctang` dropping their duplicates and cannot change what this library consumes.
-`unicode`'s §16 says nothing in `font` that needs Unicode starts before E, which
-is a scheduling decision on that side rather than a technical block on this one;
-either way phase 0 here needed none of it and was built against `cutil` alone.
-
-The decided order across the two libraries is `unicode` first; this table records
-the actual dependency so that the scheduling is a choice rather than a
-constraint.
-
-| Phase | Work | Size | Gate | Unlocks |
-| --- | --- | --- | --- | --- |
-| **0** | Scaffold from `model` per `CONVENTIONS.md` §12; `core.h`, the fixed-point types, `GFNT_Limits`, `GFNT_Error`; `blob.h`; **the checked reader and `check-reader`**; sfnt and `ttcf` directories; `head`, `maxp`, `hhea`/`hmtx`, `OS/2`, `post`, `name`; `cmap` 4 and 12; **the strike list, `GFNT_StrikePolicy`, `GFNT_GlyphKind` and `GFNT_Variation` in the API**; `_dump` for every table; `fuzz_sfnt`, `fuzz_cmap`; the fixture tool and the first synthetic fixtures; the oracle image with Debian's fonts; `ttx_diff` and `cmap_diff` | M | `check-symbols`, `check-layering`, `check-reader`; `ttx_diff` clean over the corpus; every gate observed to fail | **F1: "what is this file, what does it contain, which glyph is this codepoint, how wide is it"** |
-| **1** | `glyf`/`loca` with composites; `outline.h`; the scan converter and `GFNT_Coverage`; the `GIMG_Raster` bridge; `ft_outline`, `ft_raster`; the golden-bitmap gate on both architectures; `fuzz_glyf`, `fuzz_raster`; the truncation sweep | L | outlines identical to FreeType for every glyph of every TrueType fixture; golden hashes identical across architectures | **F2: `cjelly` draws unhinted Latin. Its v0.1 "text (Latin fallback)" is reachable here** |
-| **1b** | PSF, BDF, PCF over `compress`'s gzip; `.hex`; `EBLC`/`EBDT`; the strike policy exercised by real strikes; `bitmap_diff` | M | `bdftopcf` round trip; every strike of Terminus renders identically from BDF, PCF and PSF | **F3: the 1,885 bitmap fonts on a stock Linux box load; console and pixel UIs** |
-| **2** | `charstring.h` with Type 2; `CFF ` and CID-keyed; bare CFF; Type 1 and AFM/PFM on the same module; `cmap` 0, 2, 6, 8, 10, 13, 14; `kern`; WOFF 1; `fuzz_cff`, `fuzz_type1`, `fuzz_woff` | L | FreeType outline differential over every CFF and Type 1 fixture; `ttx_diff` over the new tables | **F4: most desktop fonts, all of TeX, and every font program a PDF embeds** |
-| **3** | `GDEF`/`GSUB`/`GPOS`/`BASE` parsing and the applier; the default shaper; the language registry; `GFNT_ShapedRun` **with the cluster map from the first line**; Latin, Greek, Cyrillic, Hebrew; fallback mark positioning; `hb_diff`; `fuzz_layout_tables`, `fuzz_shape` | L | `hb-shape` identical for the Latin/Greek/Cyrillic/Hebrew corpus on every fixture | **F5: ligatures, real kerning, marks; `cjelly`'s accessibility requirement is satisfiable** |
-| **3b** | Tier 3: itemisation over `unicode`'s script runs and bidi; breaking with the three tailorings and the `SA` seam; `GFNT_Paragraph`, lines, both boxes, `min_content`/`max_content`, alignment, greedy wrap, truncation, tabs; hit testing both ways; `GFNT_FontProvider`; `pango_diff`; the layout properties | L | §14.1 properties 3 and 5 over random paragraphs; `pango_diff` with its known differences enumerated | **F6: `cjelly`'s constraint system can ask for min- and max-content; text wraps and can be selected** |
-| **4** | `fvar`/`avar`/`gvar`/`HVAR`/`VVAR`/`MVAR`/`STAT`; `FeatureVariations`; the `GFNT_Variation` parameter made live; `fuzz_var` | L | FreeType outline differential at a lattice of instances; `hb_diff` at instances | **F7: one file per family; weight is a number** |
-| **4b** | Tier 4: directory scanning, the record, `GFNT_FontSet` with serialisation, CSS matching, the default fallback provider; `TODO(windows)` and `TODO(macos)` entries in `notes/suite/WINDOWS-TODO.md` | M | `fc-list` agreement on the set of families found on Linux | **F8: "a font for this string"** |
-| **5** | Tier W: the sfnt and `CFF` writers; the subsetter with composite and `GSUB` closure, `retain_gids`; WOFF 1 writing; the PDF helpers (AGL, the encodings, `ToUnicode`, widths); `subset_diff`; `check-writer`; `fuzz_writer`; the parse-write-parse property over the corpus | L | every written font read back by three readers; `pyftsubset` closure agreement | **F9: PDF embedding is possible; fixtures regenerate from inside the suite** |
-| **6** | `COLR` v0/v1 and `CPAL`; `CBDT`/`CBLC` and `sbix` with the `image` bridge; `GFNT_AtlasEntry` and atlas emission; `fuzz_color` | L | fontTools-built `COLR` v1 fixture with every paint format parsed to the same graph as `ttx` shows | **F10: emoji; `cjelly`'s GPU path fed from a baked atlas** |
-| **7** | Complex shapers, one per phase, each declared: Arabic (joining, `rlig`/`calt`, the no-`GSUB` fallback) M; Thai/Lao M; Hangul S; Devanagari L, then each further Indic script M; Khmer M; Myanmar M; the USE L | per script | `hb_diff` identical for that script's corpus before the shaper is declared | **F11: each script, as it lands** |
-| **—** | Deliberately absent until argued for: §16 | | | |
-
-### 18.1 What of phase 0 is built
-
-Kept here rather than in a commit message because a reader asking "can it do X
-yet" has this page open, and because the list is what the next phase starts
-from. Last revised 2026-09-25.
+## 18. What is implemented
 
 **Built, with tests:** the scaffold; `core.h` with the three fixed-point types,
 their arithmetic, `GFNT_Tag`, `GFNT_Error` and `GFNT_Limits`; `blob.h` over
@@ -1447,7 +1397,7 @@ moved:
   order now comes from fontTools' own struct description and the lookup has no
   default. An instrument with a fallback reports on the fallback.
 
-**The vectors are built, as of 2026-09-25**, and phase 0 is complete.
+**The vectors are built.**
 `tools/vectors/make_vectors.py` generates the standard Macintosh glyph order and
 the eight single-byte Macintosh encodings from the pinned image;
 `gfnt_face_glyph_name`, `gfnt_face_glyph_for_name` and the Macintosh `name`
@@ -1477,25 +1427,9 @@ moved:
   unique. Verified in the raw bytes before the category was written, which is the
   only way to tell that apart from being wrong (decision 18).
 
-**Not built, and each a phase of its own:** the multi-byte Macintosh and
-Microsoft `name` encodings (§7.2), `vhea`/`vmtx`, `gasp`, `kern`, WOFF 1.
-The `freetype`, `harfbuzz`, `pango` and `xfonts` images are phases of their own.
-`maxp` has no `_dump` because nothing reads its fields beyond `numGlyphs`; it
-gets one when something does. `vhea`/`vmtx`, `gasp` and `kern` are unbuilt, as is
-WOFF 1.
-
-Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz`,
-`check-symbols`, `check-layering`, `check-reader`, `check-fixtures` and
-`check-golden` clean from an empty build directory, serially and under `-j`,
-per `CONVENTIONS.md` §12 item 10 - and, for phases 1 onward, clean in the
-cross container. Phases 1b, 4b, 5 and 6 are independent of one another and of
-3/3b; the one hard ordering is 0 → 1 → 2 → 3 → 3b, with 4 needing 3 for
-`FeatureVariations`.
-
-Phases 0 and 1 are the smallest useful thing - between `model` and `cjelly` in
-size, with the scan converter as the only genuinely hard part. Phases 0-2 cover
-most of the world's desktop fonts. The whole table is the largest library in
-the suite, and most of that is phase 7.
+**Not built:** the multi-byte Macintosh and Microsoft `name` encodings
+(§7.2), `vhea`/`vmtx`, `gasp`, `kern` and WOFF 1. `maxp` has no `_dump`
+because nothing reads its fields beyond `numGlyphs`.
 
 ---
 

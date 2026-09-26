@@ -21,10 +21,10 @@
 /**
  * @file
  *
- * Umbrella header for the Ghoti.io Font library: every tier-0 header.
- * A consumer that wants a higher tier includes that tier's header itself,
- * which is what keeps the tier boundary visible at the include line. See
- * documentation/design.md.
+ * Umbrella header for the modules the library implements: the reader,
+ * the metric tables, `cmap`, names and glyph access. Outlines,
+ * rasterisation, shaping, layout, font discovery and writing are not
+ * implemented. See documentation/design.md.
  */
 
 #ifndef GHOTI_IO_GFNT_FONT_H

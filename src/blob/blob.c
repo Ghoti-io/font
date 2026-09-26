@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * @ref GFNT_Blob: bytes, length, ownership.
+ * @ref GFNT_Blob "GFNT_Blob": bytes, length, ownership.
  *
  * documentation/design.md section 5.1. Three sources - copied memory,
  * borrowed memory, and a file read whole - plus a mapping the caller has to

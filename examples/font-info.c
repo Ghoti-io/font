@@ -26,7 +26,7 @@
  * Usage: font-info <font> [face-index] [codepoint...]
  *
  * The example the README's snippet is taken from, and the quickest way to run
- * tier 0 against a font on the machine rather than against a fixture this
+ * the reader against a font on the machine rather than against a fixture this
  * library built for itself. It prints the directory, the tables it can parse,
  * the `cmap` and `name` records, and for each codepoint named on the command
  * line the glyph and its advance.

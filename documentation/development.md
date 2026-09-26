@@ -3,7 +3,7 @@
 ## Layout
 
 ```
-include/ghoti.io/font/      Public headers, one per module, by tier (design.md section 4.1)
+include/ghoti.io/font/      Public headers, one per module (design.md section 4.1)
 src/core/                   Result strings, limits, the allocator, fixed point, diagnostics
 src/blob/                   GFNT_Blob: bytes, length, ownership
 src/reader/                 The checked reader - every read of font bytes goes through it
@@ -31,11 +31,10 @@ tools/check-stamps.py       The flag-stamp gate
 
 ## Adding a module
 
-design.md section 4.1 names the modules and the tier each sits in. A module
-arrives with:
+design.md section 4.1 names the modules. A module arrives with:
 
-1. Its public header under `include/ghoti.io/font/`, listed in its tier's
-   `TIER<n>_FILES` in the Makefile, so that `check-layering` places it. Every
+1. Its public header under `include/ghoti.io/font/`, listed in the Makefile
+   so that `check-layering` places it. Every
    header includes `macros.h` first.
 2. Every read of file data through `GFNT_Reader` (design.md section 6);
    `check-reader` greps for anything else under `src/` and fails.

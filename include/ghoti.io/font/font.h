@@ -21,10 +21,16 @@
 /**
  * @file
  *
- * Umbrella header for the modules the library implements: the reader,
- * the metric tables, `cmap`, names and glyph access. Outlines,
- * rasterisation, shaping, layout, font discovery and writing are not
- * implemented. See documentation/design.md.
+ * Umbrella header for **tier 0**: the reader, the metric tables, `cmap`, names
+ * and glyph access.
+ *
+ * `outline.h` and `raster.h` are implemented and are deliberately **not** here.
+ * They are tier 1 (design.md section 4), and the tier boundary is the dependency
+ * boundary: a consumer that only needs to know which glyph a codepoint maps to
+ * and how wide it is should not link a rasteriser. Include them by name.
+ *
+ * Shaping, layout, font discovery and writing are not implemented at all. See
+ * documentation/design.md section 18.
  */
 
 #ifndef GHOTI_IO_GFNT_FONT_H

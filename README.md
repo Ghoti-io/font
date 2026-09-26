@@ -126,7 +126,9 @@ vector generators.
 ## The API
 
 Everything is prefixed `gfnt_` / `GFNT_`, under `<ghoti.io/font/...>`.
-`<ghoti.io/font/font.h>` is the umbrella for what is built.
+`<ghoti.io/font/font.h>` is the umbrella for the reader. `outline.h` and
+`raster.h` are included by name rather than through it, so a program that only
+asks which glyph a code point maps to does not link a rasteriser.
 
 - **`core.h`** — `GFNT_Result`, `GFNT_Error`, the fixed-point types (26.6, 16.16, 2.14), `GFNT_Limits`, and the version.
 - **`allocator.h`** — `GFNT_Allocator`, which is cutil's `GCU_Allocator`.

@@ -39,8 +39,12 @@
  *
  * **No `float` appears between a font's bytes and a pixel's coverage.** That is
  * section 1's determinism promise - the same font at the same size gives
- * byte-identical pixels on every platform - and `make check-golden` is the gate
- * that keeps it, by hashing the same glyphs here and in a big-endian container.
+ * byte-identical pixels on every platform - and `make check-golden` is what keeps
+ * it, by rendering the committed fixtures here and on three big-endian targets
+ * and requiring the same hashes. What that gate sees is byte order, alignment and
+ * word size; that no `float` is here at all is kept by there being no
+ * floating-point type in these headers and by `-Wfloat-conversion` on every
+ * translation unit, because two IEEE-754 targets would agree about a float.
  *
  * What is deliberately absent (section 8.4): no LCD filtering, no stem
  * darkening, no dropout control, no embolden or oblique synthesis. And no

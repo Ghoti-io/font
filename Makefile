@@ -627,6 +627,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
 .PHONY: gen-vectors check-vectors
+.PHONY: golden check-golden
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -950,6 +951,27 @@ check-fixtures: ## The committed fixtures are byte-identical to a fresh generati
 # no container is why that costs nothing.
 
 VECTORS := tools/vectors
+
+####################################################################
+# The golden-bitmap gate (documentation/design.md section 14.4)
+####################################################################
+
+# Two targets over one committed artifact, answering two questions. `testGolden`
+# in the unit suite re-renders on this machine and catches an unintended change
+# to the rasteriser; `check-golden` builds the library for three big-endian
+# targets and requires the same renderings, which is the only thing here that can
+# see a host-dependent read or a `float` in the path from a font's bytes to a
+# pixel. Neither is in TEST_GATES: the first is a test, and the second needs the
+# workspace's cross container.
+GOLDEN := tools/golden
+
+golden: ## Rewrite the committed renderings (deliberate)
+golden: $(EXAMPLES)
+	@python3 $(GOLDEN)/make_golden.py
+
+check-golden: ## The committed renderings, reproduced on three big-endian targets
+check-golden: $(APP_DIR)/$(TARGET) $(EXAMPLES)
+	@python3 $(GOLDEN)/check_golden.py
 
 gen-vectors: ## Regenerate the committed vectors from the pinned image
 	@python3 $(VECTORS)/check_vectors.py --update

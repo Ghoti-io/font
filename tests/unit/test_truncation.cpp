@@ -32,6 +32,8 @@
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/name.h>
+#include <ghoti.io/font/outline.h>
+#include <ghoti.io/font/raster.h>
 
 using gfnttest::Table;
 
@@ -58,6 +60,14 @@ struct Answers {
   uint16_t weight = 0;
   bool post_ok = false;
   GFNT_F16Dot16 italic = 0;
+  // Per glyph: whether an outline came back, and what it was. `glyf` and `loca`
+  // are cut like every other table, and an outline is the only query that walks
+  // them - without these the sweep would cut both to nothing and report a font
+  // behaving perfectly.
+  std::vector<bool> outline_ok;
+  std::vector<std::string> outline_shape;
+  std::vector<bool> render_ok;
+  std::vector<std::string> render_shape;
 };
 
 /**
@@ -118,6 +128,43 @@ Answers interrogate(GFNT_Face * face, size_t glyph_slots) {
     answers.post_ok = true;
     answers.italic = post->italic_angle;
   }
+
+  for (size_t glyph = 0; glyph < glyph_slots; glyph++) {
+    GFNT_Outline * outline = nullptr;
+    std::string shape;
+    const bool ok = gfnt_face_glyph_outline(face, (uint32_t)glyph, nullptr,
+                        nullptr, &outline, &error)
+        == GFNT_OK;
+    if (ok) {
+      GFNT_Box box{};
+      gfnt_outline_bounds(outline, &box);
+      shape = std::to_string(gfnt_outline_point_count(outline)) + "/"
+          + std::to_string(gfnt_outline_contour_count(outline)) + "/"
+          + std::to_string(box.x_min) + "," + std::to_string(box.y_min) + ","
+          + std::to_string(box.x_max) + "," + std::to_string(box.y_max);
+    }
+    gfnt_outline_destroy(outline);
+    answers.outline_ok.push_back(ok);
+    answers.outline_shape.push_back(shape);
+
+    // And the pixels, because the rasteriser reads the outline rather than the
+    // font: a truncation that produced a *plausible* outline would be caught
+    // here and nowhere else.
+    GFNT_Coverage coverage{};
+    std::string rendered;
+    const bool drawn = gfnt_face_render_glyph(face, (uint32_t)glyph, 16,
+                           nullptr, nullptr, &coverage, &error)
+        == GFNT_OK;
+    if (drawn) {
+      rendered = std::to_string(coverage.width) + "x"
+          + std::to_string(coverage.height) + "+"
+          + std::to_string(coverage.left) + "+" + std::to_string(coverage.top)
+          + ":" + std::to_string(gfnt_coverage_hash(&coverage));
+    }
+    gfnt_coverage_destroy(&coverage);
+    answers.render_ok.push_back(drawn);
+    answers.render_shape.push_back(rendered);
+  }
   return answers;
 }
 
@@ -129,6 +176,26 @@ Answers interrogate(GFNT_Face * face, size_t glyph_slots) {
  * record cannot substitute a different string.
  */
 std::vector<Table> whole_font() {
+  // Five glyphs, and every construction `glyf` leaves to the reader is in one of
+  // them: an explicit quadratic, two off-curve points in a row, a contour
+  // beginning off-curve, and an empty glyph. A truncation that lands inside the
+  // flag stream of one of these has something to get wrong.
+  std::vector<uint8_t> glyf;
+  std::vector<uint8_t> loca;
+  bool long_loca = false;
+  gfnttest::build_glyf_and_loca({
+      gfnttest::build_glyf_glyph({{{100, 0, true}, {100, 400, false},
+          {400, 400, true}, {400, 0, false}}}),
+      {},  // an empty glyph: zero bytes, which loca says by not advancing
+      gfnttest::build_glyf_glyph({{{100, 0, true}, {200, 500, false},
+          {400, 500, false}, {500, 0, true}}}),
+      gfnttest::build_glyf_glyph({{{100, 400, false}, {400, 400, false},
+          {400, 0, false}, {100, 0, true}}}, {0x00, 0x01}),
+      gfnttest::build_glyf_glyph({{{0, 0, true}, {300, 0, true},
+          {300, 300, true}}, {{80, 80, true}, {80, 200, true},
+          {200, 200, true}}}),
+  }, &glyf, &loca, &long_loca);
+
   return {
       {GFNT_TAG('O', 'S', '/', '2'), gfnttest::build_os2(gfnttest::Os2Spec{})},
       {GFNT_TAG('c', 'm', 'a', 'p'), gfnttest::build_cmap({
@@ -147,6 +214,8 @@ std::vector<Table> whole_font() {
            {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti Sweep")},
        })},
       {GFNT_TAG('p', 'o', 's', 't'), gfnttest::build_post()},
+      {GFNT_TAG('g', 'l', 'y', 'f'), glyf},
+      {GFNT_TAG('l', 'o', 'c', 'a'), loca},
   };
 }
 
@@ -293,6 +362,22 @@ TEST(Truncation, EveryTableCutToEveryLengthObeysPropertyOne) {
       if (cut.post_ok) {
         EXPECT_EQ(cut.italic, reference.italic) << where;
       }
+      for (size_t glyph = 0; glyph < glyph_slots; glyph++) {
+        // Property one for a shape: an outline that still comes back is the
+        // outline the whole font gave. A `glyf` cut inside a flag stream can
+        // only refuse; it must not produce a different glyph.
+        if (cut.outline_ok[glyph] && reference.outline_ok[glyph]) {
+          EXPECT_EQ(cut.outline_shape[glyph], reference.outline_shape[glyph])
+              << where << ", glyph " << glyph;
+        }
+        if (cut.render_ok[glyph] && reference.render_ok[glyph]) {
+          EXPECT_EQ(cut.render_shape[glyph], reference.render_shape[glyph])
+              << where << ", glyph " << glyph;
+        }
+        EXPECT_FALSE(cut.outline_ok[glyph] && !reference.outline_ok[glyph])
+            << where << ", glyph " << glyph
+            << ": a cut font answered where the whole one refused";
+      }
 
       if (length == full) {
         // The control at the top of each table's sweep: an untruncated table
@@ -302,6 +387,10 @@ TEST(Truncation, EveryTableCutToEveryLengthObeysPropertyOne) {
         EXPECT_TRUE(cut.count_ok) << where;
         EXPECT_EQ(cut.count, reference.count) << where;
         EXPECT_TRUE(cut.family_ok) << where;
+        for (size_t glyph = 0; glyph < glyph_slots; glyph++) {
+          EXPECT_EQ(cut.outline_ok[glyph], reference.outline_ok[glyph])
+              << where << ", glyph " << glyph;
+        }
         survivals++;
       }
       else {
@@ -319,6 +408,13 @@ TEST(Truncation, EveryTableCutToEveryLengthObeysPropertyOne) {
 
         for (size_t glyph = 0; glyph < glyph_slots && !changed; glyph++) {
           changed = reference.advance_ok[glyph] && !cut.advance_ok[glyph];
+        }
+        // `glyf` and `loca` are read by nothing above: without these two the
+        // sweep cut both of them to nothing and counted no refusal, which its
+        // own per-table denominator then reported as a table nothing depends on.
+        for (size_t glyph = 0; glyph < glyph_slots && !changed; glyph++) {
+          changed = (reference.outline_ok[glyph] && !cut.outline_ok[glyph])
+              || (reference.render_ok[glyph] && !cut.render_ok[glyph]);
         }
         for (size_t i = 0; i < GFNT_ARRAY_SIZE(kCodepoints) && !changed; i++) {
           changed = reference.glyph_ok[i] && !cut.glyph_ok[i];

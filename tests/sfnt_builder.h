@@ -272,6 +272,123 @@ inline std::vector<uint8_t> build_head(uint16_t units_per_em = 1000,
   return head;
 }
 
+/**
+ * One contour for ::build_glyf(): points as (x, y, on_curve).
+ */
+struct GlyfPoint {
+  int16_t x;
+  int16_t y;
+  bool on_curve;
+};
+
+/**
+ * A simple `glyf` glyph from explicit contours.
+ *
+ * Every flag byte is written on its own - no `REPEAT` - and every coordinate as
+ * a signed 16-bit delta, so the bytes are the shortest thing a reader has to
+ * accept rather than the shortest a writer could produce. The compact encodings
+ * are the fixtures' job (fontTools writes those); this exists so that the
+ * truncation sweep has a `glyf` it can cut, which no fixture can give it: a
+ * fixture is a whole file.
+ */
+inline std::vector<uint8_t> build_glyf_glyph(
+    const std::vector<std::vector<GlyfPoint>> & contours,
+    const std::vector<uint8_t> & instructions = {}) {
+  std::vector<uint8_t> out;
+  std::vector<GlyfPoint> points;
+  int16_t x_min = 0;
+  int16_t y_min = 0;
+  int16_t x_max = 0;
+  int16_t y_max = 0;
+  bool first = true;
+
+  for (const auto & contour : contours) {
+    for (const GlyfPoint & point : contour) {
+      points.push_back(point);
+      if (first) {
+        x_min = x_max = point.x;
+        y_min = y_max = point.y;
+        first = false;
+        continue;
+      }
+      x_min = point.x < x_min ? point.x : x_min;
+      y_min = point.y < y_min ? point.y : y_min;
+      x_max = point.x > x_max ? point.x : x_max;
+      y_max = point.y > y_max ? point.y : y_max;
+    }
+  }
+  put_s16(out, static_cast<int16_t>(contours.size()));
+  put_s16(out, x_min);
+  put_s16(out, y_min);
+  put_s16(out, x_max);
+  put_s16(out, y_max);
+  size_t total = 0;
+  for (const auto & contour : contours) {
+    total += contour.size();
+    put_u16(out, static_cast<uint16_t>(total - 1));
+  }
+  put_u16(out, static_cast<uint16_t>(instructions.size()));
+  out.insert(out.end(), instructions.begin(), instructions.end());
+  for (const GlyfPoint & point : points) {
+    out.push_back(point.on_curve ? 0x01 : 0x00);
+  }
+  int16_t previous = 0;
+  for (const GlyfPoint & point : points) {
+    put_s16(out, static_cast<int16_t>(point.x - previous));
+    previous = point.x;
+  }
+  previous = 0;
+  for (const GlyfPoint & point : points) {
+    put_s16(out, static_cast<int16_t>(point.y - previous));
+    previous = point.y;
+  }
+  return out;
+}
+
+/**
+ * A `glyf` table from several glyphs, and the `loca` that indexes it.
+ *
+ * Both come back together because they are one fact spelled twice: a `loca`
+ * built against a different `glyf` is the defect M11 is about, and a builder
+ * that let a caller pair them by hand would make that defect the easy mistake.
+ * The short form is written when every offset is even, which is what the format
+ * decides on.
+ */
+inline void build_glyf_and_loca(const std::vector<std::vector<uint8_t>> & glyphs,
+    std::vector<uint8_t> * out_glyf, std::vector<uint8_t> * out_loca,
+    bool * out_long) {
+  std::vector<uint8_t> glyf;
+  std::vector<size_t> offsets;
+
+  for (const std::vector<uint8_t> & glyph : glyphs) {
+    offsets.push_back(glyf.size());
+    glyf.insert(glyf.end(), glyph.begin(), glyph.end());
+    while (glyf.size() % 2 != 0) {
+      glyf.push_back(0);
+    }
+  }
+  offsets.push_back(glyf.size());
+
+  bool long_form = false;
+  for (size_t offset : offsets) {
+    if (offset % 2 != 0 || offset > 0x1FFFE) {
+      long_form = true;
+    }
+  }
+  std::vector<uint8_t> loca;
+  for (size_t offset : offsets) {
+    if (long_form) {
+      put_u32(loca, static_cast<uint32_t>(offset));
+    }
+    else {
+      put_u16(loca, static_cast<uint16_t>(offset / 2));
+    }
+  }
+  *out_glyf = glyf;
+  *out_loca = loca;
+  *out_long = long_form;
+}
+
 /** A `maxp` table. Version 0.5 is six bytes; 1.0 pads to its 32. */
 inline std::vector<uint8_t> build_maxp(uint16_t num_glyphs,
     uint32_t version = 0x00010000) {

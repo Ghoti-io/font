@@ -164,7 +164,7 @@ and those outlines are rasterised. Charstrings, bitmap strikes, colour,
 variations, shaping, layout, font discovery and writing are not implemented.
 
 Every glyph of 312 real fonts is compared against fontTools — 1,999,069 fields
-over 37,214 glyphs — and the committed renderings are reproduced byte for byte on
+over 37,218 glyphs — and the committed renderings are reproduced byte for byte on
 s390x, powerpc64 and sparc64, which is what the fixed-point arithmetic is for.
 
 ## License

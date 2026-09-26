@@ -1075,7 +1075,7 @@ The generator's own contract is determinism, and two of its pins are not
 obvious. `FontBuilder` writes the current time into `head` whatever its defaults
 table says, and a `TTFont` re-opened from a file has `recalcTimestamp` on - so
 the collection, the one fixture re-read before it is written, differed on every
-run while the other fifteen were stable. And `head.created` cannot be 0:
+run while every other fixture was stable. And `head.created` cannot be 0:
 fontTools reads any timestamp below 0x7C259DC0 as a misencoded unix timestamp
 and adds that constant, so a fixture dated 1904 comes back as 1970 and every
 fixture disagrees on `created` for neither side's fault.
@@ -1447,6 +1447,22 @@ shaped the way it is:
   planted defects were each caught by exactly one fixture glyph, and at
   `glyf_diff`'s default stride of seven all three fell between samples. The
   fixtures are compared at every glyph now, whatever `--stride` says.
+- **No fixture carried a repeated flag**, and the gates could not have told
+  anyone. `glyf` may write one flag byte and a count in place of a run of
+  identical flags, and every fixture glyph alternated - a zigzag changes its y
+  delta at every point, a leaf turns at every corner - so fontTools compressed
+  none of them. The arm that expands a run was reached only through the oracle's
+  real fonts, where every font has one, which left the construction invisible to
+  `make test` on a machine with no container engine. Found by measuring line
+  coverage rather than by a plant, which is the case for measuring it: ten lines
+  of `glyf.c` were unexecuted and nothing else said so. `outline-simple.ttf` now
+  carries a bar whose two edges are runs of 259 identical flags - more than a
+  one-byte count can express, so one run is two records - and `testGlyf` asserts
+  the *records* as well as the expanded points, because compressing is the
+  writer's choice and a test that read only the points would pass again the day
+  fontTools stopped. The over-long count that has to be refused is hand-built
+  with its own control, for the same reason the broken `loca` is patched bytes:
+  no writer will produce it.
 
 **The oracles are built, as of 2026-09-24.** `tools/oracle/` carries the
 `fonttools` image - pinned base digest, `fonttools==4.66.0`, `brotli==1.2.0`,
@@ -1456,11 +1472,11 @@ and six Debian font packages by full apt version - with `oracle_env.py`,
 | gate | what it compares | result |
 | --- | --- | ---: |
 | `check-oracle-cmap` | every codepoint fontTools maps, both its neighbours, and a stride sample, per font | 327 fonts, 587,186 codepoints, **0** |
-| `check-oracle-glyf` | every glyph's points, flags, contours, both boxes and its decomposed path | 312 fonts, 37,214 glyphs, 1,999,069 fields, **0** |
-| `check-golden` | the committed renderings, rebuilt for s390x, powerpc64 and sparc64 | 2,275 renderings x 3 targets, **0** |
+| `check-oracle-glyf` | every glyph's points, flags, contours, both boxes and its decomposed path | 312 fonts, 37,218 glyphs, 2,001,169 fields, **0** |
+| `check-golden` | the committed renderings, rebuilt for s390x, powerpc64 and sparc64 | 2,425 renderings x 3 targets, **0** |
 | `check-oracle-cmap-exhaustive` | all 1,114,112 codepoints per font | 364,314,624 comparisons, **0** |
-| `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory, every `name` record and every `post` glyph name | 346 faces, 291,965 fields, **0** |
-| `check-fixtures` | every committed fixture against a fresh generation | 19 files, 36,076 bytes, **0** |
+| `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory, every `name` record and every `post` glyph name | 352 faces, 292,609 fields, **0** |
+| `check-fixtures` | every committed fixture against a fresh generation | 25 files, 56,968 bytes, **0** |
 | `check-vectors` | the generated vectors against a fresh generation | 5 files, 54,939 bytes, **0** |
 
 `ttx_diff`'s Mac Roman category is **gone**, which is the clearest measure of
@@ -1469,7 +1485,7 @@ scores them. What remains is one checked category of four glyph names (decision
 18) and zero declined records.
 
 **The fixtures are built, as of 2026-09-25**, and they changed what `ttx_diff`
-can see. `tools/fixtures/make_fixtures.py` writes eighteen fonts and a `MANIFEST`
+can see. `tools/fixtures/make_fixtures.py` writes twenty-four fonts and a `MANIFEST`
 from outlines in that file, in the same pinned image; `check-fixtures`
 regenerates them and compares bytes; `testFixtures` loads every one of them
 without a container, so the unit suite has an input it did not write itself.

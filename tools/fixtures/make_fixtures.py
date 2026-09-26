@@ -779,6 +779,26 @@ OUTLINE_CONTOURS = [
 MANY_POINTS = [[(index * 3, 100 if index % 2 else 0, True)
                 for index in range(200)]]
 
+# A bar whose horizontal edges are walked in two-unit steps, here for the
+# `REPEAT` flag and nothing else. A `glyf` flag stream may write one flag byte
+# and a count instead of writing the byte again, and a writer does that only
+# where consecutive points share a flag - the same on-curve bit, deltas of the
+# same shortness and the same sign. Every other glyph above alternates:
+# `many-points` is a zigzag, so its y delta changes sign at every point, and a
+# leaf changes direction at every corner. So no fixture carried a repeat record
+# at all, and the arm that expands one was reached only through the oracle's real
+# fonts - where every font has them - which left `make test` unable to see a
+# defect in it on a machine with no container.
+#
+# Each edge is 259 repeats of one flag, which is deliberately more than 255. The
+# count is a single byte, so one run has to be written as two records, and a
+# reader that expands the first and forgets to come back for the second reads the
+# rest of the stream as coordinates.
+REPEATED_FLAGS = [
+    [(x, 0, True) for x in range(0, 520, 2)]
+    + [(x, 100, True) for x in range(518, -2, -2)]
+]
+
 OUTLINE_GLYPHS = {
     ".notdef": raw_glyph(OUTLINE_CONTOURS),
     "space": raw_glyph([]),
@@ -798,6 +818,7 @@ OUTLINE_GLYPHS = {
     "with-instructions": raw_glyph(LEAF_EXPLICIT, program=b"\x00\x01"),
     "many-points": raw_glyph(MANY_POINTS),
     "arch": raw_glyph(ARCH),
+    "repeated-flags": raw_glyph(REPEATED_FLAGS),
 }
 
 OUTLINE_ORDER = list(OUTLINE_GLYPHS)
@@ -1122,7 +1143,8 @@ FIXTURES = {
         "glyf: an explicit quadratic, an implied midpoint, a contour starting "
         "off-curve, the same contour stored from another point of its cycle, "
         "an all-off-curve contour, a one-point contour, instructions, a "
-        "200-point contour, and an arch whose control box is not its curve"),
+        "200-point contour, an arch whose control box is not its curve, and a "
+        "bar whose two edges are each a 259-long run of one repeated flag"),
     "outline-composite.ttf": (build_outline_composite,
         "glyf composites: byte and word offsets, all three transform "
         "encodings, scaled and unscaled offsets, point matching below and "

@@ -140,7 +140,7 @@ a failure, which is what a CI with the images wants.
 
 ## The fixtures
 
-`tests/data/fonts/` holds eighteen synthetic fonts and a `MANIFEST` saying what
+`tests/data/fonts/` holds twenty-four synthetic fonts and a `MANIFEST` saying what
 each one exercises. They are **generated, not written**: `make fixtures` runs
 `tools/fixtures/make_fixtures.py` in the pinned `fonttools` image and installs
 what it produces, and `make check-fixtures` regenerates and fails on a byte
@@ -162,8 +162,8 @@ Four things to know before touching them:
    generator - see its docstring, which names the two that bit: `FontBuilder`
    writes the current time into `head` regardless of the defaults table, and a
    `TTFont` re-opened from a file has `recalcTimestamp` *on*, so the one fixture
-   that is read back before it is written was different on every run while the
-   other fifteen were stable.
+   that is read back before it is written was different on every run while every
+   other one was stable.
 3. **`head.created` must be at or above 0x7C259DC0.** fontTools treats anything
    below that as a misencoded unix timestamp and silently adds the constant, so
    a fixture dated 1904 reads back as 1970 and `ttx_diff` scores `created` as a
@@ -207,7 +207,7 @@ Three gates cover them, and knowing which finds what is the point:
 
 ## The golden renderings
 
-`tests/data/golden/coverage.txt` holds 2,275 renderings: every glyph of every
+`tests/data/golden/coverage.txt` holds 2,425 renderings: every glyph of every
 fixture that carries outlines of its own, at six pixel sizes and five origins,
 with the coverage's shape, its total and its hash. `make golden` rewrites it and
 needs no container.
@@ -218,7 +218,7 @@ The same three-gate split as the vectors, for the same reason:
 | --- | --- | --- |
 | `testGolden` | a change to the rasteriser nobody meant | nothing |
 | `check-golden` | a rendering that differs on a **big-endian** target | the workspace's `ghoti-xarch` container |
-| `check-oracle-glyf` | an **outline** wrong about reality, over 37,214 glyphs | the `fonttools` image |
+| `check-oracle-glyf` | an **outline** wrong about reality, over 37,218 glyphs | the `fonttools` image |
 
 `check-golden` is the only thing here that can see a violation of the determinism
 promise, and it was verified to: a `memcpy` of a `uint32_t`'s bytes planted in

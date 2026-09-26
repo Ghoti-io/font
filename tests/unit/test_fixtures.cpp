@@ -46,8 +46,8 @@ constexpr int32_t kAdvanceA = 640;
 constexpr int32_t kAdvanceB = 620;
 
 /** The outline fixtures have a repertoire of their own; see MANIFEST. */
-constexpr size_t kOutlineGlyphs = 12;
-constexpr size_t kCompositeGlyphs = 26;
+constexpr size_t kOutlineGlyphs = 13;
+constexpr size_t kCompositeGlyphs = 27;
 
 /** A fixture read from disk, with a blob and a face over it. */
 struct Fixture {

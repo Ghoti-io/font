@@ -16,12 +16,19 @@
  * needs a container; this needs only the repository, which is what makes the
  * outline reader covered by `make test` on a machine with no container engine.
  *
+ * There is one exception, at the end of the file and marked: a `REPEAT` count
+ * that runs past the last point is a font contradicting itself, and no writer
+ * will emit one - the same reason `outline-broken-loca.ttf` is a written font
+ * with its bytes patched afterwards. Those two cases build the glyph by hand
+ * and assert a refusal rather than a shape.
+ *
  * documentation/design.md sections 7.3, 14.5 and 14.7.
  *
  * Copyright 2026 by Corey Pennycuff
  */
 
 #include "test_helpers.h"
+#include "sfnt_builder.h"
 
 #include <map>
 #include <string>
@@ -113,6 +120,84 @@ std::string box_string(const GFNT_Box & box) {
       + std::to_string(box.y_max / 64);
 }
 
+/**
+ * One glyph's flag stream, read out of the file's own bytes.
+ *
+ * A second reading of `glyf`, deliberately: the point of it is to assert what
+ * the *input* is rather than what this library made of it. `REPEAT` is a
+ * writer's choice - a flag byte and a count stand for a run of points, and
+ * nothing obliges a writer to use it - so a test that only checked the decoded
+ * points would keep passing if fontTools stopped compressing, and the arm that
+ * expands a run would go back to being unreached with the suite still green.
+ * That is the shape this test exists to prevent, so it reads the records.
+ */
+struct FlagStream {
+  size_t points = 0;      ///< What `endPtsOfContours` says.
+  size_t flag_bytes = 0;  ///< Flag bytes written, repeat counts excluded.
+  std::vector<int> repeats;  ///< Each repeat record's count, in order.
+};
+
+FlagStream flag_stream_of(const Font & font, uint32_t glyph) {
+  FlagStream out;
+  const uint8_t * bytes = gfnt_blob_data(font.blob);
+  size_t glyf_at = 0;
+  size_t glyf_length = 0;
+  size_t loca_at = 0;
+  size_t loca_length = 0;
+  const GFNT_Head * head = nullptr;
+
+  EXPECT_EQ(gfnt_face_table_range(font, GFNT_TAG('g', 'l', 'y', 'f'), &glyf_at,
+      &glyf_length), GFNT_OK);
+  EXPECT_EQ(gfnt_face_table_range(font, GFNT_TAG('l', 'o', 'c', 'a'), &loca_at,
+      &loca_length), GFNT_OK);
+  EXPECT_EQ(gfnt_face_head(font, &head, nullptr), GFNT_OK);
+  if (!bytes || !head) {
+    return out;
+  }
+  auto u16 = [bytes](size_t at) {
+    return (size_t)bytes[at] << 8 | (size_t)bytes[at + 1];
+  };
+  auto u32 = [bytes](size_t at) {
+    return ((size_t)bytes[at] << 24) | ((size_t)bytes[at + 1] << 16)
+        | ((size_t)bytes[at + 2] << 8) | (size_t)bytes[at + 3];
+  };
+  size_t start = 0;
+  size_t end = 0;
+  if (head->index_to_loc_format == 0) {
+    start = u16(loca_at + (size_t)glyph * 2) * 2;
+    end = u16(loca_at + ((size_t)glyph + 1) * 2) * 2;
+  }
+  else {
+    start = u32(loca_at + (size_t)glyph * 4);
+    end = u32(loca_at + ((size_t)glyph + 1) * 4);
+  }
+  if (end <= start) {
+    return out;  // An empty glyph has no flag stream at all.
+  }
+  size_t at = glyf_at + start;
+  const int contours = (int)(int16_t)(uint16_t)u16(at);
+  if (contours <= 0) {
+    return out;  // A composite has components rather than points.
+  }
+  at += 10;
+  out.points = u16(at + ((size_t)contours - 1) * 2) + 1;
+  at += (size_t)contours * 2;
+  at += 2 + u16(at);  // instructionLength, then the instructions
+  for (size_t filled = 0; filled < out.points; ) {
+    const uint8_t flag = bytes[at];
+
+    at += 1;
+    out.flag_bytes += 1;
+    filled += 1;
+    if (flag & 0x08) {  // REPEAT
+      out.repeats.push_back(bytes[at]);
+      filled += bytes[at];
+      at += 1;
+    }
+  }
+  return out;
+}
+
 /** The glyph order of outline-simple.ttf and outline-composite.ttf. */
 enum Glyph {
   kNotdef = 0,
@@ -127,20 +212,21 @@ enum Glyph {
   kWithInstructions = 9,
   kManyPoints = 10,
   kArch = 11,
-  kCompOffset = 12,
-  kCompWordOffset = 13,
-  kCompScale = 14,
-  kCompScaledOffset = 15,
-  kCompUnscaledOffset = 16,
-  kCompXyScale = 17,
-  kCompTwoByTwo = 18,
-  kCompPointMatch = 19,
-  kCompPointMatchScaled = 20,
-  kCompNested = 21,
-  kCompUseMyMetrics = 22,
-  kCompRoundAndOverlap = 23,
-  kCompPointMatchHigh = 24,
-  kCompInstructions = 25,
+  kRepeatedFlags = 12,
+  kCompOffset = 13,
+  kCompWordOffset = 14,
+  kCompScale = 15,
+  kCompScaledOffset = 16,
+  kCompUnscaledOffset = 17,
+  kCompXyScale = 18,
+  kCompTwoByTwo = 19,
+  kCompPointMatch = 20,
+  kCompPointMatchScaled = 21,
+  kCompNested = 22,
+  kCompUseMyMetrics = 23,
+  kCompRoundAndOverlap = 24,
+  kCompPointMatchHigh = 25,
+  kCompInstructions = 26,
 };
 
 TEST(Glyf, TheSimpleFixtureHasTheGlyphsItsManifestSays) {
@@ -148,7 +234,7 @@ TEST(Glyf, TheSimpleFixtureHasTheGlyphsItsManifestSays) {
   size_t glyphs = 0;
 
   ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
-  EXPECT_EQ(glyphs, 12u);
+  EXPECT_EQ(glyphs, 13u);
   EXPECT_TRUE(gfnt_face_has_outlines(font));
 }
 
@@ -271,6 +357,51 @@ TEST(Glyf, AnArchsCurveIsStrictlyInsideItsControlPoints) {
   EXPECT_EQ(box_string(drawn), "0 0 100 50");
 }
 
+TEST(Glyf, TheRepeatedFlagGlyphIsWrittenWithRepeatRecords) {
+  // The input, not the output. Two runs of 259 identical flags, and no repeat
+  // count is wider than a byte, so no single record can express either run:
+  // whatever split the writer chooses, four records is the fewest it can use.
+  // If this ever reads zero, fontTools has stopped compressing and the test
+  // below has stopped exercising the expansion it is named for.
+  Font font("outline-simple.ttf");
+  const FlagStream stream = flag_stream_of(font, kRepeatedFlags);
+
+  EXPECT_EQ(stream.points, 520u);
+  EXPECT_GE(stream.repeats.size(), 4u);
+  EXPECT_LT(stream.flag_bytes, stream.points);
+}
+
+TEST(Glyf, ARepeatedFlagStandsForEveryPointOfItsRun) {
+  Font font("outline-simple.ttf");
+  Loaded loaded(font, kRepeatedFlags);
+  GFNT_Box stated{};
+
+  ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
+  EXPECT_EQ(gfnt_outline_point_count(loaded.outline), 520u);
+  EXPECT_EQ(gfnt_outline_contour_count(loaded.outline), 1u);
+  // Six flag bytes stand for 520 points, so every coordinate is checked: a
+  // reader that expanded a run by one too few or one too many would keep the
+  // count right - the coordinate stream says how many there are - and put every
+  // later point on the wrong side of the bar.
+  for (size_t index = 0; index < 520; ++index) {
+    GFNT_Point point{};
+    GFNT_PointTag tag = GFNT_POINT_QUAD;
+    const int32_t x = index < 260
+        ? (int32_t)index * 2
+        : 518 - ((int32_t)index - 260) * 2;
+    const int32_t y = index < 260 ? 0 : 100;
+
+    ASSERT_EQ(gfnt_outline_point_at(loaded.outline, index, &point, &tag),
+        GFNT_OK) << "point " << index;
+    EXPECT_EQ(point.x, x * 64) << "point " << index;
+    EXPECT_EQ(point.y, y * 64) << "point " << index;
+    EXPECT_EQ(tag, GFNT_POINT_ON) << "point " << index;
+  }
+  ASSERT_EQ(gfnt_face_glyph_stated_box(font, kRepeatedFlags, &stated, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(box_string(stated), "0 0 518 100");
+}
+
 TEST(Glyf, AGlyphWithNoDescriptionIsAnEmptyOutlineAndNotAFailure) {
   Font font("outline-simple.ttf");
   Loaded loaded(font, kSpace);
@@ -348,7 +479,7 @@ TEST(Glyf, TheFontSaysWhichGlyphsItAssembled) {
   size_t glyphs = 0;
 
   ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
-  EXPECT_EQ(glyphs, 26u);
+  EXPECT_EQ(glyphs, 27u);
   for (uint32_t glyph = 0; glyph < glyphs; ++glyph) {
     bool composite = false;
     ASSERT_EQ(gfnt_face_glyph_is_composite(font, glyph, &composite, nullptr),
@@ -817,6 +948,104 @@ TEST(Glyf, TheCompositeDepthCapIsAPromiseAndIsEnforced) {
   gfnt_outline_destroy(outline);
   gfnt_face_free(face);
   gfnt_blob_destroy(blob);
+}
+
+// ---------------------------------------------------------------------------
+// The one encoding fontTools will not write.
+
+/** A one-contour glyph whose flag stream is given literally, `REPEAT` and all. */
+std::vector<uint8_t> flag_stream_glyph(size_t points,
+    const std::vector<uint8_t> & flags) {
+  std::vector<uint8_t> out;
+
+  gfnttest::put_s16(out, 1);            // one contour
+  gfnttest::put_s16(out, 0);            // xMin
+  gfnttest::put_s16(out, 0);            // yMin
+  gfnttest::put_s16(out, 400);          // xMax
+  gfnttest::put_s16(out, 100);          // yMax
+  gfnttest::put_u16(out, (uint16_t)(points - 1));  // endPtsOfContours
+  gfnttest::put_u16(out, 0);            // instructionLength
+  out.insert(out.end(), flags.begin(), flags.end());
+  // No flag here sets X_SHORT or Y_SHORT, so every delta is a signed word.
+  for (size_t index = 0; index < points; ++index) {
+    gfnttest::put_s16(out, 100);
+  }
+  for (size_t index = 0; index < points; ++index) {
+    gfnttest::put_s16(out, index % 2 == 0 ? 100 : -100);
+  }
+  return out;
+}
+
+/** A font whose glyph 1 is that glyph, and whose glyph 0 is empty. */
+std::vector<uint8_t> font_with(const std::vector<uint8_t> & glyph) {
+  std::vector<uint8_t> glyf;
+  std::vector<uint8_t> loca;
+  bool long_loca = false;
+
+  gfnttest::build_glyf_and_loca({{}, glyph}, &glyf, &loca, &long_loca);
+  return gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, {
+      {GFNT_TAG('h', 'e', 'a', 'd'),
+          gfnttest::build_head(1000, long_loca ? 1 : 0)},
+      {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 100, 2)},
+      {GFNT_TAG('h', 'm', 't', 'x'),
+          gfnttest::build_hmtx({{500, 10}, {600, 20}}, {})},
+      {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(2)},
+      {GFNT_TAG('g', 'l', 'y', 'f'), glyf},
+      {GFNT_TAG('l', 'o', 'c', 'a'), loca},
+  });
+}
+
+/** Load glyph 1 of such a font, and say what happened. */
+struct HandBuilt {
+  std::vector<uint8_t> bytes;
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Outline * outline = nullptr;
+  GFNT_Error error{};
+  GFNT_Result result = GFNT_ERR_INTERNAL;
+
+  explicit HandBuilt(const std::vector<uint8_t> & glyph)
+      : bytes(font_with(glyph)) {
+    gfnt_error_clear(&error);
+    EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK)
+        << (error.message ? error.message : "");
+    result = gfnt_face_glyph_outline(face, 1, nullptr, nullptr, &outline,
+        &error);
+  }
+  ~HandBuilt() {
+    gfnt_outline_destroy(outline);
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+  HandBuilt(const HandBuilt &) = delete;
+  HandBuilt & operator=(const HandBuilt &) = delete;
+};
+
+TEST(Glyf, ARepeatCountInsideTheContourFillsExactlyItsRun) {
+  // The control, and it is the half that can fail for a reason that has nothing
+  // to do with the count: hand-built bytes this reader refuses for some other
+  // reason would make the refusal below prove nothing. Flag 0x09 is an on-curve
+  // point with REPEAT, and a count of 3 describes the contour's other three.
+  HandBuilt built(flag_stream_glyph(4, {0x09, 3}));
+
+  ASSERT_EQ(built.result, GFNT_OK) << built.error.message;
+  EXPECT_EQ(gfnt_outline_point_count(built.outline), 4u);
+  EXPECT_EQ(gfnt_outline_contour_count(built.outline), 1u);
+}
+
+TEST(Glyf, ARepeatCountPastTheLastPointIsRefusedRatherThanFilledAsFarAsItFits) {
+  // The same glyph, with the count alone changed: 250 more points in a contour
+  // that has four. Filling only as many as fit would be this library inventing
+  // an interpretation, and the rest of the stream is then read as coordinates
+  // of points the font never described.
+  HandBuilt built(flag_stream_glyph(4, {0x09, 250}));
+
+  EXPECT_EQ(built.result, GFNT_ERR_CORRUPT);
+  EXPECT_EQ(built.error.glyph, 1u);
+  EXPECT_EQ(built.error.table, GFNT_TAG('g', 'l', 'y', 'f'));
+  EXPECT_NE(built.error.message, nullptr);
 }
 
 }  // namespace

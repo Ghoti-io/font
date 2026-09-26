@@ -622,6 +622,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
+.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive
 # Fixture commands
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
@@ -869,11 +870,21 @@ check-oracle-ttx: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/ttx_diff.py --quiet
 
 check-oracle: ## Run every oracle differential there is
-check-oracle: check-oracle-ttx check-oracle-cmap
+check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/cmap_diff.py --quiet
+
+check-oracle-glyf: ## Diff every glyph's outline and path against fontTools
+check-oracle-glyf: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+		python3 $(ORACLE)/glyf_diff.py --quiet
+
+check-oracle-glyf-exhaustive: ## The same, over every glyph of every font
+check-oracle-glyf-exhaustive: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+		python3 $(ORACLE)/glyf_diff.py --stride 1 --quiet
 
 check-oracle-cmap-exhaustive: ## The same, over all 1,114,112 codepoints
 check-oracle-cmap-exhaustive: $(EXAMPLES)

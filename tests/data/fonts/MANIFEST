@@ -30,7 +30,7 @@ outline-composite.ttf	glyf composites: byte and word offsets, all three transfor
 outline-cubic-flag.ttf	glyf: flag bit 0x80 in a font declaring glyphDataFormat 0, so the per-glyph refusal is the only one that can fire
 outline-cubic.ttf	glyf: head.glyphDataFormat 1, the cubic extension this library refuses by name rather than mis-drawing
 outline-loca-long.ttf	loca: head.indexToLocFormat 1, so offsets are stored whole rather than halved
-outline-simple.ttf	glyf: an explicit quadratic, an implied midpoint, a contour starting off-curve, the same contour stored from another point of its cycle, an all-off-curve contour, a one-point contour, instructions, and a 200-point contour
+outline-simple.ttf	glyf: an explicit quadratic, an implied midpoint, a contour starting off-curve, the same contour stored from another point of its cycle, an all-off-curve contour, a one-point contour, instructions, a 200-point contour, and an arch whose control box is not its curve
 post-v1.ttf	post format 1.0: all 258 standard glyphs, no stored names
 post-v2.ttf	post format 2.0: standard indices including 257, and one extra name
 post-v3.ttf	post format 3.0: a header that states it has no names

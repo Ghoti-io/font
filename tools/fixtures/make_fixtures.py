@@ -753,6 +753,14 @@ LEAF_OFF_START_ROTATED = [[(200, 500, False), (400, 500, False),
 LEAF_ALL_OFF = [[(100, 0, False), (100, 400, False), (400, 400, False),
                  (400, 0, False)]]
 
+# An arch, which is here for one reason: its control point is outside the curve.
+# `glyf`'s xMin/yMax are the *coordinate* box by definition - the specification
+# says "minimum x for coordinate data" and fontTools writes exactly that - so a
+# glyph whose control box and whose curve differ is what tells the two apart. In
+# every other fixture they coincide, which made a test comparing the stated box
+# against the drawn curve pass while asserting the wrong thing.
+ARCH = [[(0, 0, True), (50, 100, False), (100, 0, True)]]
+
 OUTLINE_CONTOURS = [
     [(80, 0, True), (520, 0, True), (520, 700, True), (80, 700, True)],
     [(160, 80, True), (160, 620, True), (440, 620, True), (440, 80, True)],
@@ -789,6 +797,7 @@ OUTLINE_GLYPHS = {
     # forgets to skip lands inside the flag stream rather than on its end.
     "with-instructions": raw_glyph(LEAF_EXPLICIT, program=b"\x00\x01"),
     "many-points": raw_glyph(MANY_POINTS),
+    "arch": raw_glyph(ARCH),
 }
 
 OUTLINE_ORDER = list(OUTLINE_GLYPHS)
@@ -1112,8 +1121,8 @@ FIXTURES = {
     "outline-simple.ttf": (build_outline_simple,
         "glyf: an explicit quadratic, an implied midpoint, a contour starting "
         "off-curve, the same contour stored from another point of its cycle, "
-        "an all-off-curve contour, a one-point contour, instructions, and a "
-        "200-point contour"),
+        "an all-off-curve contour, a one-point contour, instructions, a "
+        "200-point contour, and an arch whose control box is not its curve"),
     "outline-composite.ttf": (build_outline_composite,
         "glyf composites: byte and word offsets, all three transform "
         "encodings, scaled and unscaled offsets, point matching below and "

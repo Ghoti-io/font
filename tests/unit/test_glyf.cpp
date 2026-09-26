@@ -126,20 +126,21 @@ enum Glyph {
   kSinglePoint = 8,
   kWithInstructions = 9,
   kManyPoints = 10,
-  kCompOffset = 11,
-  kCompWordOffset = 12,
-  kCompScale = 13,
-  kCompScaledOffset = 14,
-  kCompUnscaledOffset = 15,
-  kCompXyScale = 16,
-  kCompTwoByTwo = 17,
-  kCompPointMatch = 18,
-  kCompPointMatchScaled = 19,
-  kCompNested = 20,
-  kCompUseMyMetrics = 21,
-  kCompRoundAndOverlap = 22,
-  kCompPointMatchHigh = 23,
-  kCompInstructions = 24,
+  kArch = 11,
+  kCompOffset = 12,
+  kCompWordOffset = 13,
+  kCompScale = 14,
+  kCompScaledOffset = 15,
+  kCompUnscaledOffset = 16,
+  kCompXyScale = 17,
+  kCompTwoByTwo = 18,
+  kCompPointMatch = 19,
+  kCompPointMatchScaled = 20,
+  kCompNested = 21,
+  kCompUseMyMetrics = 22,
+  kCompRoundAndOverlap = 23,
+  kCompPointMatchHigh = 24,
+  kCompInstructions = 25,
 };
 
 TEST(Glyf, TheSimpleFixtureHasTheGlyphsItsManifestSays) {
@@ -147,7 +148,7 @@ TEST(Glyf, TheSimpleFixtureHasTheGlyphsItsManifestSays) {
   size_t glyphs = 0;
 
   ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
-  EXPECT_EQ(glyphs, 11u);
+  EXPECT_EQ(glyphs, 12u);
   EXPECT_TRUE(gfnt_face_has_outlines(font));
 }
 
@@ -210,14 +211,17 @@ TEST(Glyf, AnAllOffCurveContourIsReadAsTheReferenceDrawsIt) {
   }));
 }
 
-TEST(Glyf, TheStatedBoxIsWhatTheOutlineActuallyDrawsForEveryGlyph) {
-  // The strongest check in this file, and the cheapest. fontTools computed
-  // each glyph's xMin/yMax with its own curve arithmetic and wrote them into
-  // the file; gfnt_outline_bounds() computes them again from the points, by
-  // solving a quadratic's extremum rather than by sampling. So a font is
-  // carrying an independent answer to a question this library also answers,
-  // and that is true of every real font too - which is why glyf_diff.py
-  // compares the same pair over the whole corpus.
+TEST(Glyf, TheStatedBoxIsTheCoordinateBoxAndNotTheCurvesOwn) {
+  // `glyf`'s xMin/yMax are the **coordinate** box: the specification says
+  // "minimum x for coordinate data", and fontTools writes exactly that -
+  // `Glyph.recalcBounds()` takes the bounds of the points. So the stated box is
+  // what gfnt_outline_control_box() computes, and comparing it against
+  // gfnt_outline_bounds() is a category error: the tight box of a curve whose
+  // control point lies outside it is *smaller*.
+  //
+  // This test compared the tight box until `arch` existed, and passed - because
+  // in every other fixture the two coincide. A control point inside the curve's
+  // own extent is the common case and the case that cannot tell them apart.
   for (const char * name : {"outline-simple.ttf", "outline-composite.ttf",
       "outline-loca-long.ttf"}) {
     Font font(name);
@@ -228,14 +232,43 @@ TEST(Glyf, TheStatedBoxIsWhatTheOutlineActuallyDrawsForEveryGlyph) {
       ASSERT_EQ(loaded.result, GFNT_OK) << name << " glyph " << glyph << ": "
                                         << loaded.error.message;
       GFNT_Box stated{};
+      GFNT_Box control{};
       GFNT_Box drawn{};
       ASSERT_EQ(gfnt_face_glyph_stated_box(font, glyph, &stated, nullptr),
           GFNT_OK);
+      ASSERT_EQ(gfnt_outline_control_box(loaded.outline, &control), GFNT_OK);
       ASSERT_EQ(gfnt_outline_bounds(loaded.outline, &drawn), GFNT_OK);
-      EXPECT_EQ(box_string(stated), box_string(drawn))
+      EXPECT_EQ(box_string(stated), box_string(control))
           << name << " glyph " << glyph;
+      // And the curve is inside its control points, always.
+      if (!gfnt_box_is_empty(&drawn)) {
+        EXPECT_LE(control.x_min, drawn.x_min) << name << " glyph " << glyph;
+        EXPECT_LE(control.y_min, drawn.y_min) << name << " glyph " << glyph;
+        EXPECT_GE(control.x_max, drawn.x_max) << name << " glyph " << glyph;
+        EXPECT_GE(control.y_max, drawn.y_max) << name << " glyph " << glyph;
+      }
     }
   }
+}
+
+TEST(Glyf, AnArchsCurveIsStrictlyInsideItsControlPoints) {
+  // The glyph that makes the test above mean something: without one where the
+  // two boxes differ, "the stated box is the control box" and "the stated box
+  // is the curve" are the same assertion.
+  Font font("outline-simple.ttf");
+  Loaded loaded(font, kArch);
+  GFNT_Box stated{};
+  GFNT_Box control{};
+  GFNT_Box drawn{};
+
+  ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
+  ASSERT_EQ(gfnt_face_glyph_stated_box(font, kArch, &stated, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_control_box(loaded.outline, &control), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_bounds(loaded.outline, &drawn), GFNT_OK);
+  EXPECT_EQ(box_string(stated), "0 0 100 100");
+  EXPECT_EQ(box_string(control), "0 0 100 100");
+  // The arch peaks halfway to its control point.
+  EXPECT_EQ(box_string(drawn), "0 0 100 50");
 }
 
 TEST(Glyf, AGlyphWithNoDescriptionIsAnEmptyOutlineAndNotAFailure) {
@@ -315,7 +348,7 @@ TEST(Glyf, TheFontSaysWhichGlyphsItAssembled) {
   size_t glyphs = 0;
 
   ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
-  EXPECT_EQ(glyphs, 25u);
+  EXPECT_EQ(glyphs, 26u);
   for (uint32_t glyph = 0; glyph < glyphs; ++glyph) {
     bool composite = false;
     ASSERT_EQ(gfnt_face_glyph_is_composite(font, glyph, &composite, nullptr),

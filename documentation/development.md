@@ -83,7 +83,7 @@ make fuzz FUZZ_TIME=3600
 ```
 
 A minute each is a smoke test. A real campaign belongs in its own prefix with
-an `OWNER` file, per the workspace's `CLAUDE.md`: a soak that outlives a shared
+an `OWNER` file: a soak that outlives a shared
 rebuild must not be invalidated by one.
 
 ## The oracles
@@ -103,8 +103,7 @@ Three things to know before changing anything under `tools/oracle/`:
 
 1. **The image is built here, so the run-time version check is the only
    guarantee.** `oracle_env.check_pin()` therefore runs in both modes, unlike the
-   `unicode` copy this came from - see its docstring, and
-   `notes/suite/CONTAINERS.md` section 2.6.
+   `unicode` copy this came from. See its docstring.
 2. **The corpus lives in the image.** `corpus.py` copies it into
    `build/oracle/corpus` in one tar so both sides read the same bytes; no
    third-party font is ever committed here (design.md section 14.6).

@@ -672,8 +672,7 @@ here; the caller supplies a full tag or accepts the default.
 
 ## 10. Layout
 
-Text layout is in this library up to the paragraph and not past it.
-`notes/font/SCOPE.md` §5 has the argument in full; the short form: a
+Text layout is in this library up to the paragraph and not past it. A
 constraint-based layout system needs **min-content and max-content** widths
 from every piece of text, both of which require break analysis over shaped
 runs, so either this library exposes them or the GUI toolkit grows a second
@@ -921,12 +920,12 @@ memory.** Fonts have three excellent oracles and one of them can also
 | `cmap` maps every codepoint identically | fontTools `getBestCmap()` and every subtable, over all 1,114,112 codepoints per font | `tools/oracle/cmap_diff.py` | `fonttools` |
 | outlines are identical | **FreeType** `FT_Load_Glyph` with `FT_LOAD_NO_HINTING \| FT_LOAD_NO_SCALE`, every glyph of every corpus font, point by point | `tools/oracle/ft_outline.c` | `freetype`, built here: the driver links only FreeType and is compiled inside its image; apt version pinned in full |
 | coverage is close | FreeType `FT_Render_Glyph` at several ppem, compared with a per-pixel tolerance (the two rasterisers are the same algorithm family and differ by rounding) | `tools/oracle/ft_raster.c` | `freetype` |
-| coverage is **byte-identical across platforms** | this library on x86-64 versus this library in the cross container (big-endian, 32-bit) | golden hashes in `tests/data/golden/`, `make check-golden` | `ghoti-xarch`, `tools/xarch/Containerfile`, already in the workspace |
+| coverage is **byte-identical across platforms** | this library on x86-64 versus this library in the cross container (big-endian, 32-bit) | golden hashes in `tests/data/golden/`, `make check-golden` | the `ghoti-xarch` cross image |
 | shaping is identical | **HarfBuzz** `hb-shape --output-format=json`: glyph ids, advances, offsets and clusters for every string in a per-script corpus, per font | `tools/oracle/hb_diff.py`, `make check-oracle-hb` | `harfbuzz`, built here: `hb-shape` from the pinned apt package, driven by `--text-file` and `--output-format=json` (a batch protocol already) |
 | subsetting keeps what it should | fontTools `pyftsubset` with matching options; the closure sets compared | `tools/oracle/subset_diff.py` | `fonttools` |
 | written fonts are valid | read back by this library, fontTools and FreeType (§12.5) | `make check-writer` | `fonttools`, `freetype` |
 | line breaking and bidi | `unicode`'s conformance gates, already passed there | - | none: `unicode`'s committed conformance files |
-| paragraph layout | **Pango** `pango-view --output` positions for a paragraph corpus, with the line-breaking differences that come from Pango's ICU tailorings recorded as known | `tools/oracle/pango_diff.py` | `pango`, built here: `pango-view` from the pinned apt package, `C.UTF-8` pinned in the image (`CONTAINERS.md` §1.1 is why) |
+| paragraph layout | **Pango** `pango-view --output` positions for a paragraph corpus, with the line-breaking differences that come from Pango's ICU tailorings recorded as known | `tools/oracle/pango_diff.py` | `pango`, built here: `pango-view` from the pinned apt package, `C.UTF-8` pinned in the image |
 | bitmap formats | `bdftopcf` (BDF → PCF, then both read here and compared); `psftools` | `tools/oracle/bitmap_diff.sh` | `xfonts`, built here: `bdftopcf` and `psftools` |
 | Type 1 | FreeType again, over fixtures converted from OFL fonts | `ft_outline.c` | `freetype` |
 
@@ -1071,9 +1070,9 @@ that decision belongs; `cjelly` may well do so, and that is `cjelly`'s call.
 
 ### 14.7 The oracles run in containers
 
-`notes/suite/CONTAINERS.md` §2 and §4 record the pattern - prototyped on
-`regex`, measured, and shown to find defects the host had hidden - and this
-library adopts it unchanged: `tools/oracle/containers/IMAGES` pins every
+The pattern was prototyped on `regex`, measured, and shown to find defects
+the host had hidden, and this library adopts it unchanged:
+`tools/oracle/containers/IMAGES` pins every
 reference; `oracle_env.py` is the one place a reference is spelled;
 `oracle_run.py` resolves it, prints `oracle(container): <version>`, and fails
 closed on a pin mismatch; `ORACLE_MODE` is `container` or `host` with no
@@ -1109,8 +1108,8 @@ Four things are specific to font oracles:
   and needs no driver; the image pins `harfbuzz-utils` by full apt version, as
   the prototype pins pcre2, so that the archive moving past it fails the build
   rather than silently reporting a newer HarfBuzz's answers as a regression.
-- **Every built-here image pins `C.UTF-8`.** `CONTAINERS.md` §1.1 found fifty
-  false disagreements in the vim oracle from an unset `LANG`; `pango-view` and
+- **Every built-here image pins `C.UTF-8`.** An unset `LANG` produced fifty
+  false disagreements in the vim oracle; `pango-view` and
   the Python tools are exposed the same way, and the image is where the
   locale is written down.
 
@@ -1456,6 +1455,6 @@ because nothing reads its fields beyond `numGlyphs`.
 - SIL Open Font License 1.1, in particular the Reserved Font Name clause; the
   Bitstream Vera licence; Apache-2.0.
 - `CONVENTIONS.md` §4, §5, §7, §8, §11, §12; `libs/chron/documentation/design.md`
-  §8.5, §8.6, §12; `notes/font/SCOPE.md`; `libs/unicode/documentation/design.md`;
+  §8.5, §8.6, §12; `libs/unicode/documentation/design.md`;
   `libs/cjelly/docs/Overview.md` §8 and §18, `docs/semantics.md`, and
   `docs/CurrentTask.md` Task 3.2.

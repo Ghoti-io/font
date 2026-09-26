@@ -3,7 +3,7 @@
 #
 # documentation/design.md section 14.7. Everything the build reads is pinned,
 # because this image is **built here** and two builds of one Containerfile are
-# not two copies of one image (notes/suite/CONTAINERS.md section 2.6). So the
+# not two copies of one image. So the
 # base is pinned by digest, the Python packages by exact version, and Debian's
 # font packages by full apt version - and the run-time version check in
 # oracle_env.py is the real guarantee, which is why it runs in both modes here
@@ -19,8 +19,7 @@ FROM docker.io/library/python:3.14-slim@sha256:7bf6c3111fe094f8ee1a1cbcdc63c4cfb
 # The locale, written down rather than inherited. design.md section 14.7 says
 # every built-here image pins C.UTF-8, and this one did not: the base image
 # leaves LANG unset and the interpreter happened to choose UTF-8 on its own,
-# which is a default and not a pin. notes/suite/CONTAINERS.md section 1.1 is
-# the reason the distinction matters - an unset LANG produced fifty false
+# which is a default and not a pin. An unset LANG produced fifty false
 # disagreements in the vim oracle. Two paths here are exposed to it: the Mac
 # Roman name records the fixture generator encodes, and any byte a differential
 # prints. Neither should depend on what a future base image decides.

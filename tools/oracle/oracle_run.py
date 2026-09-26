@@ -12,7 +12,7 @@
 
     oracle_run.py <name>[,<name>...] -- <command> [args...]
 
-Two jobs, from the pattern in `notes/suite/CONTAINERS.md`.
+Two jobs.
 
 **Prove it, then print it.** The reference is resolved and asked its version
 *before* the gate runs, and the version is printed on the line above the gate's

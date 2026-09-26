@@ -11,7 +11,7 @@
 """How an oracle is spelled, so that no tool here spells one itself.
 
 **Copied from `libs/unicode/tools/oracle/oracle_env.py`**, which landed the
-pattern from the suite-wide exploration in `notes/suite/CONTAINERS.md`. What is
+pattern. What is
 changed: the PROBE table names fontTools instead of CPython and ICU, and
 `check_pin()` runs in **both** modes again rather than only in container mode.
 That reversal is the whole difference between the two libraries and it is not a
@@ -233,10 +233,9 @@ def check_pin(name):
     """Raise unless the reference's version matches containers/IMAGES.
 
     **In both modes**, which is where this file departs from the `unicode` copy
-    it came from and returns to the rule in `notes/suite/CONTAINERS.md` section
-    2.6. That rule says the run-time version check is the real guarantee for an
-    image **built here**, because two builds of one Containerfile are not two
-    copies of one image and there is no digest to trust. `unicode` could relax
+    it came from. The run-time version check is the real guarantee for an image
+    **built here**, because two builds of one Containerfile are not two copies
+    of one image and there is no digest to trust. `unicode` could relax
     it in host mode because every image it names is a stock one pinned by
     digest; this library names no stock image at all, so relaxing the check
     would leave nothing checking anything.

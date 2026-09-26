@@ -52,10 +52,9 @@ interpreter is pinned:
     `recalcTimestamp=False` on the font, so `save()` leaves them alone once set.
   * **No wall clock, no random, no host paths** reach a table. The only inputs
     are the literals below.
-  * **The locale is the image's**, pinned to `C.UTF-8` in the Containerfile, per
-    `notes/suite/CONTAINERS.md` section 1.1: an unset `LANG` produced fifty
-    false disagreements in another library's oracle, and a Mac Roman `name`
-    record is encoded through exactly that path.
+  * **The locale is the image's**, pinned to `C.UTF-8` in the Containerfile: an
+    unset `LANG` produced fifty false disagreements in another library's
+    oracle, and a Mac Roman `name` record is encoded through exactly that path.
 
 Fixtures are written only where `--out` says, so this tool never writes into a
 repository that a container has mounted read-only.

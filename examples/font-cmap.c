@@ -33,8 +33,7 @@
  * **This is also the driver `tools/oracle/cmap_diff.py` compares against
  * fontTools**, which is why it speaks a batch protocol rather than taking one
  * codepoint per invocation: a differential over a few hundred fonts and a few
- * thousand codepoints each cannot pay for a process per lookup
- * (`notes/suite/CONTAINERS.md` - every driver speaks a batch protocol). The
+ * thousand codepoints each cannot pay for a process per lookup. The
  * first line of output names the subtable that answered, so the differential can
  * ask its reference about the same one rather than about whichever fontTools
  * would have picked.

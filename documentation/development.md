@@ -248,6 +248,33 @@ Two things to know before changing `tools/vectors/`:
    if one of them stops disagreeing. Generating from one source would be
    circular, since fontTools decodes `name` records with the same CPython codec.
 
+## Line coverage
+
+```bash
+make coverage
+```
+
+Builds an instrumented tree of its own - never the release objects, for the
+reason the target's comment gives - runs the suite, and prints per-file line
+coverage plus, separately, every growth or reallocation line no test executed.
+That last list is the point of the report rather than the percentage: a
+reallocation path no test reaches is untested, not working.
+
+Two things to know before reading a number here.
+
+1. **The report is read for the lines nothing reaches, not for the total.** Most
+   of what is unexecuted today is error propagation from a short read and the
+   `fprintf` arms of the `_dump` functions, and no aggregate tells them apart from
+   a construction the suite cannot see. One of those was found this way: no
+   fixture carried a `REPEAT` flag, so ten lines of `glyf.c` were reached only
+   through the oracle's real fonts (design.md section 18).
+2. **`-fprofile-update=atomic` is deliberate.** One suite uses threads, and GCC's
+   default counter update is unsynchronised: it reported an unreachable
+   argument-validation line as executed - 12, then not at all, then 16 - and
+   reported a line the threaded test really does reach as unexecuted. The
+   aggregate moved by a tenth of a point, which is why nothing would have noticed
+   it. Do not build the instrumented tree by hand without the flag.
+
 ## Memory
 
 Every allocation goes through the `GFNT_Allocator` the caller supplied, which

@@ -1656,10 +1656,26 @@ coverage: ## Build instrumented, run the tests, and report line coverage
 # exports mangle_path. check-symbols is right to reject that in a shipping
 # build and wrong to reject it here, and it made this target fail before it
 # ever produced a report.
+# -fprofile-update=atomic because one suite uses threads. GCC's default
+# (`single`) increments the counters without synchronisation, and the report then
+# does not merely lose counts - it invents them. Measured: with the default,
+# `gfnt_table_cached()`'s argument-validation `return GFNT_ERR_INVALID` was
+# reported as executed 12 times by one run of the suite and not at all by the
+# next, and as 16 and then 14 by two runs of testMetrics on its own - while no
+# caller in the library can pass that function a null argument at all, every
+# accessor having guarded its own first. The same function's counts were
+# internally impossible, which is the tell: a line after an `if` counted higher
+# than the `if` itself, in a function with no loop. With atomic counters that
+# line reads as unexecuted, the condition lines agree, and two runs give the
+# same 241 unexecuted lines.
+#
+# So the point of the flag is not accuracy in the aggregate: it is that a line
+# nothing reaches must report zero, because "unexecuted" is the only thing this
+# report is read for.
 	@status=0; \
 	$(MAKE) --no-print-directory test TEST_GATES= \
 		BUILD_DIR=$(COV_BUILD_DIR) \
-		EXTRA_CFLAGS="--coverage -O0" \
+		EXTRA_CFLAGS="--coverage -O0 -fprofile-update=atomic" \
 		EXTRA_LDFLAGS="--coverage" > /dev/null || status=$$?; \
 	if [ $$status -eq 0 ]; then \
 		tools/coverage.sh $(COV_BUILD_DIR)/objects || status=$$?; \

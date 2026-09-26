@@ -141,7 +141,7 @@ enforces that, as `chron` does.
 | What | Holds | Needs | Who uses it | Implemented |
 | --- | --- | --- | --- | --- |
 | Reading | blob, the checked reader, every table parser, metrics, `cmap`, strikes, glyph access, the glyph union | `cutil`, `compress` | everyone | the sfnt container, metric tables, `cmap` and `name`. §18 is the list |
-| Outlines and raster | outlines as paths; rasterisation to coverage | the reader | `image`, `cjelly`, PDF | no |
+| Outlines and raster | outlines as paths; rasterisation to coverage | the reader | `image`, `cjelly`, PDF | `glyf`/`loca` and the scan converter. §18 is the list; charstrings are not |
 | Shaping | `GDEF`/`GSUB`/`GPOS`, the script shapers, the cluster map | the reader, `unicode` | `cjelly`, PDF (for text extraction) | no |
 | Layout | itemisation, bidi, breaking, paragraphs, boxes, hit testing | shaping, `unicode` | `cjelly`, `image` | no |
 | Discovery | directories, matching, the platform APIs | the reader, the OS | `cjelly` | no |
@@ -166,8 +166,8 @@ to keep open.
 | `glyph.h` | `GFNT_Glyph`, the tagged union; the strike-selection policy |
 | `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes. Not implemented |
 | `color.h` | `COLR`/`CPAL`, `CBDT`, `sbix`. Not implemented |
-| `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Not implemented |
-| `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. Not implemented |
+| `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. The `glyf` producer is implemented; the charstring one is phase 2 |
+| `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
 | `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Not implemented |
 | `shape.h` | `GFNT_ShapedRun`, features, the language registry, the script-shaper vtable. Not implemented |
 | `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
@@ -974,12 +974,42 @@ this suite learned on a segmented image format applies to a font directly.
 
 ### 14.4 The golden-bitmap gate
 
-For every corpus font, a fixed set of glyphs at 8, 12, 16, 24, 48 and 96 ppem
-and at sub-pixel offsets 0, 1/4, 1/2 and 3/4, rasterised and hashed;
-the hashes committed. `make check-golden` regenerates and compares, on the
-build host and in the cross container. A hash that differs between the two
-is a host-dependent read or a `float` that crept in, and this is the only
-gate that sees it.
+Every glyph of every **fixture** that carries outlines of its own, at 8, 12, 16,
+24, 48 and 96 ppem and at sub-pixel offsets 0, 1/4, 1/2 and 3/4 plus one
+vertical, rasterised and hashed; the hashes committed to
+`tests/data/golden/coverage.txt`. Two gates read that one file:
+
+- `testGolden` re-renders on the build host. It needs no container, so it runs in
+  `make test` on a fresh clone, and it catches an unintended change to the
+  rasteriser.
+- `make check-golden` cross-builds the library for s390x, powerpc64 and sparc64
+  in the workspace's `ghoti-xarch` container and requires the same renderings
+  byte for byte. A rendering that differs by platform is a host-dependent read,
+  and this is the only gate that sees one.
+
+Three things this says that an earlier draft of it did not.
+
+**Fixtures rather than corpus fonts.** The corpus lives in the oracle image
+(§14.5) and hashing it would tie the committed file to that pin and need a
+container to regenerate - which makes a golden file nobody regenerates. The
+fixtures are in the repository, so `make golden` needs nothing. Only the seven
+with outlines of their own are committed; the rest draw `basic.ttf`'s five
+shapes, and that exclusion is **probed** - each excluded fixture is rendered and
+must introduce no rendering `basic.ttf` does not already have.
+
+**What a platform difference implies, precisely.** Byte order, alignment and word
+size are what this catches. It does *not* catch every `float`: two IEEE-754
+targets rounding one expression agree. That no `float` is in the path at all is
+kept by there being no floating-point type in these headers and by
+`-Wfloat-conversion` on every translation unit.
+
+**It cross-builds `font` alone**, with cutil's six entry points supplied by
+`tools/golden/cross_shim.c`. Cross-building cutil would need cutil's generated
+headers produced for the target, and a generated header produced for the wrong
+target is exactly the class of defect this gate is looking for - it would make
+the gate's answer depend on the thing under test. The shim's list is checked
+against the library's undefined symbols, so a seventh dependency fails the gate
+rather than quietly linking the host's cutil.
 
 ### 14.5 Fixtures are ours; real fonts stay in the oracle image
 
@@ -1350,6 +1380,74 @@ the API; a `_dump` for the blob, the face, `head`, `hhea`, `OS/2`, `post`,
 `cmap` and `name`; `fuzz_sfnt` and `fuzz_cmap` with generated seeds; and the
 truncation sweep of §14.3 over every length of every table.
 
+**Phase 1 is built, as of 2026-09-26**: `outline.h` with `GFNT_Outline`, the
+`glyf`/`loca` reader behind it, and `raster.h` with the scan converter.
+
+- **`glyf` and `loca`** (§7.3): simple glyphs - the flag stream with `REPEAT`
+  and the same-or-positive bits - and composites with every flag, including
+  point matching, all three transform encodings, and the Apple/Microsoft
+  scaled-offset difference defaulting to unscaled. Instructions are skipped by
+  length and never run. A `loca` entry running backwards or past `glyf`
+  condemns *that glyph* (M11). `head.glyphDataFormat` other than 0, and flag bit
+  0x80, are the cubic `glyf` extension and are refused by name rather than drawn
+  as quadratics - the two are checked separately, because a font can state one
+  and contain the other.
+- **An outline holds the font's own points**, not a path derived from them.
+  `gfnt_outline_decompose()` is the one place `glyf`'s implicit on-curve
+  midpoint and its contour-beginning-off-curve rule are applied. That leaves two
+  different things to be right about instead of one: the points compare against
+  the table byte for byte, and the path compares against a reference pen.
+- **Bounds, twice.** `gfnt_outline_control_box()` is the box of the points and
+  `gfnt_outline_bounds()` solves each quadratic's extremum exactly (a cubic's by
+  subdivision). `glyf`'s stated `xMin`/`yMax` are the *coordinate* box by
+  definition - the specification says "minimum x for coordinate data" - so it is
+  the control box a reference can be compared against, and the curve's own box
+  has no counterpart in the file at all.
+- **The scan converter** (§8.1): cell-based exact area, `ftgrays`' arithmetic
+  with six sub-pixel bits rather than eight, non-zero and even-odd fill,
+  saturation, and adaptive subdivision of quadratics and cubics to a 26.6
+  tolerance. `GFNT_Coverage` is 8-bit linear alpha with a stride, an origin and
+  the sub-pixel offset it was rendered at, trimmed to the pixels that have any.
+- **`fuzz_glyf` and `fuzz_raster`**, each through the door its bugs come in:
+  `fuzz_glyf` takes a `loca` and a `glyf` together, because the interesting
+  inputs are in the relationship between them; `fuzz_raster` takes no font at
+  all, because the shapes that break a scan converter are degenerate rather than
+  malformed.
+- **The truncation sweep covers both tables**, and asking for an outline was not
+  enough: it asks for the pixels too, because a truncation that produced a
+  plausible outline rather than a refusal is caught only there.
+
+**What phase 1 cost, in findings.** Each of these is why something above is
+shaped the way it is:
+
+- **The composite 2x2 was applied transposed.** The file stores `xscale`,
+  `scale01`, `scale10`, `yscale` and applies them column-major; the struct is
+  row-major. `WE_HAVE_A_SCALE` and `WE_HAVE_AN_X_AND_Y_SCALE` are diagonal and
+  cannot tell the two readings apart, so only a sheared component can - and real
+  fonts almost never shear, so the corpus would not have found it either. One
+  fixture glyph does.
+- **A rasteriser cannot be tested against itself**, and fontTools does not
+  rasterise. `tests/unit/test_raster.cpp` carries a second implementation of the
+  *definition* of coverage - sample a 16x16 grid per pixel and count winding
+  numbers - and requires the two to agree within the sampler's own resolution.
+  It found the sub-pixel origin being applied to the bitmap's extent and not to
+  the geometry, which the trim then hid.
+- **`make test-quiet` returned 0 with a failing suite.** The failure count came
+  from parsing gtest's summary, and a suite that crashes before printing one
+  parses as zero tests. Found by a planted rasteriser defect that crashed a
+  suite: eight tests failed and the build was green. The verdict is the exit
+  status now.
+- **Paired defences shadow each other, three times.** The cubic refusal was
+  reachable through `head` *or* the flag bit and the first hid the second; the
+  point and contour caps were checked in `glyf.c` *and* in
+  `gfnt_outline_reserve()`; cells are merged as they are made *and* per row. In
+  each case removing one changed nothing, so each needed either a fixture that
+  reaches only the second or the removal of the duplicate.
+- **A glyph stride samples away the whole reason a fixture exists.** Three
+  planted defects were each caught by exactly one fixture glyph, and at
+  `glyf_diff`'s default stride of seven all three fell between samples. The
+  fixtures are compared at every glyph now, whatever `--stride` says.
+
 **The oracles are built, as of 2026-09-24.** `tools/oracle/` carries the
 `fonttools` image - pinned base digest, `fonttools==4.66.0`, `brotli==1.2.0`,
 and six Debian font packages by full apt version - with `oracle_env.py`,
@@ -1358,6 +1456,8 @@ and six Debian font packages by full apt version - with `oracle_env.py`,
 | gate | what it compares | result |
 | --- | --- | ---: |
 | `check-oracle-cmap` | every codepoint fontTools maps, both its neighbours, and a stride sample, per font | 327 fonts, 587,186 codepoints, **0** |
+| `check-oracle-glyf` | every glyph's points, flags, contours, both boxes and its decomposed path | 312 fonts, 37,214 glyphs, 1,999,069 fields, **0** |
+| `check-golden` | the committed renderings, rebuilt for s390x, powerpc64 and sparc64 | 2,275 renderings x 3 targets, **0** |
 | `check-oracle-cmap-exhaustive` | all 1,114,112 codepoints per font | 364,314,624 comparisons, **0** |
 | `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory, every `name` record and every `post` glyph name | 346 faces, 291,965 fields, **0** |
 | `check-fixtures` | every committed fixture against a fresh generation | 19 files, 36,076 bytes, **0** |
@@ -1426,9 +1526,20 @@ moved:
   unique. Verified in the raw bytes before the category was written, which is the
   only way to tell that apart from being wrong (decision 18).
 
-**Not built:** the multi-byte Macintosh and Microsoft `name` encodings
-(§7.2), `vhea`/`vmtx`, `gasp`, `kern` and WOFF 1. `maxp` has no `_dump`
-because nothing reads its fields beyond `numGlyphs`.
+**Not built:** charstrings and `CFF ` (phase 2, §7.4); the bitmap strikes
+(§7.5); colour (§7.6); variations (§7.7); shaping, layout, discovery and the
+writer; the multi-byte Macintosh and Microsoft `name` encodings (§7.2);
+`vhea`/`vmtx`, `gasp`, `kern` and WOFF 1. `maxp` has no `_dump` because nothing
+reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is
+still only its enum: the outline accessor is `gfnt_face_glyph_outline()`, and
+the union arrives with the second arm that gives it a reason rather than being
+invented around one.
+
+The `freetype` oracle `tools/oracle/containers/IMAGES` names - an outline and
+coverage differential against FreeType's own `ftgrays` - is not built. It is the
+next thing that would strengthen phase 1 rather than a gap in it: the outlines
+are checked against fontTools over two million fields, and the coverage against
+an independent sampler and three big-endian targets.
 
 ---
 

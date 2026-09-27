@@ -806,13 +806,28 @@ TEST(Glyf, AFaceWhoseOutlinesAreCharstringsSaysSoRatherThanSayingItHasNone) {
   Font font("cff.otf");
   Loaded loaded(font, 2);
 
-  // The distinction design.md section 5.6 is about: this face has outlines,
-  // in a table phase 2 reads. "No outlines" would be a false statement.
-  EXPECT_TRUE(gfnt_face_has_outlines(font));
+  // The distinction design.md section 5.6 is about, and it lives in the
+  // *message*: this face has outlines, in a table phase 2 reads, and "no
+  // outlines at all" would be a false statement about it. What the predicate
+  // answers is the narrower question of whether asking can succeed, which for a
+  // charstring face is no until that phase lands.
+  EXPECT_FALSE(gfnt_face_has_outlines(font));
+  EXPECT_TRUE(gfnt_face_has_table(font, GFNT_TAG('C', 'F', 'F', ' ')));
   EXPECT_EQ(loaded.result, GFNT_ERR_UNSUPPORTED);
   ASSERT_NE(loaded.error.message, nullptr);
   EXPECT_NE(std::string(loaded.error.message).find("charstring"),
       std::string::npos) << loaded.error.message;
+
+  // The other accessors reach the same face through gfnt_loca_range(), which
+  // answers for the pair of tables rather than for one glyph - a different
+  // sentence, and the one a caller asking "is this glyph a composite" gets.
+  bool composite = false;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_glyph_is_composite(font, 2, &composite, &error),
+      GFNT_ERR_UNSUPPORTED);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_NE(std::string(error.message).find("no glyf and loca"),
+      std::string::npos) << error.message;
 }
 
 TEST(Glyf, VariationCoordinatesAreRefusedRatherThanIgnored) {
@@ -852,20 +867,59 @@ TEST(Glyf, AnAllocationFailureIsReportedAndNothingLeaks) {
   Font font("outline-composite.ttf");
 
   // A composite allocates an outline per component and frees it again, so the
-  // sweep walks a nesting as well as a growth.
-  for (size_t fail_at = 0; fail_at < 12; ++fail_at) {
-    gfnttest::FailingAllocator allocator(fail_at, 0);
-    GFNT_Outline * outline = nullptr;
-    GFNT_Error error{};
-    GFNT_Result result = gfnt_face_glyph_outline(font, kCompNested, nullptr,
-        allocator.get(), &outline, &error);
+  // sweep walks a nesting as well as a growth. How many requests that is, is
+  // measured rather than guessed: a ceiling short of the last allocation is how
+  // a sweep stops covering whatever somebody adds next.
+  for (size_t glyph : {(size_t)kCompNested, (size_t)kManyPoints}) {
+    size_t requests = 0;
+    {
+      gfnttest::FailingAllocator counter(static_cast<size_t>(-1));
+      GFNT_Outline * outline = nullptr;
 
-    if (result != GFNT_OK) {
-      EXPECT_EQ(result, GFNT_ERR_OOM) << "at request " << fail_at;
-      EXPECT_EQ(outline, nullptr);
+      ASSERT_EQ(gfnt_face_glyph_outline(font, (uint32_t)glyph, nullptr,
+          counter.get(), &outline, nullptr), GFNT_OK);
+      requests = counter.requests();
+      gfnt_outline_destroy(outline);
+      EXPECT_GE(requests, 4u) << "glyph " << glyph;
     }
-    gfnt_outline_destroy(outline);
+
+    for (size_t fail_at = 0; fail_at <= requests; ++fail_at) {
+      gfnttest::FailingAllocator allocator(fail_at, 0);
+      GFNT_Outline * outline = nullptr;
+      GFNT_Error error{};
+      GFNT_Result result = gfnt_face_glyph_outline(font, (uint32_t)glyph,
+          nullptr, allocator.get(), &outline, &error);
+
+      if (result != GFNT_OK) {
+        EXPECT_EQ(result, GFNT_ERR_OOM) << "at request " << fail_at;
+        EXPECT_EQ(outline, nullptr);
+        EXPECT_NE(error.message, nullptr);
+      }
+      gfnt_outline_destroy(outline);
+      EXPECT_EQ(allocator.live(), 0u) << "at request " << fail_at;
+    }
   }
+}
+
+TEST(Glyf, TheStatedBoxOfACondemnedGlyphIsRefusedRatherThanZero) {
+  // The box comes from the glyph's own bytes, so a `loca` entry that condemns
+  // the glyph condemns its box too. Zeroes would be a claim the font did not
+  // make - which is the same reason an empty glyph reports an empty box rather
+  // than a zero one.
+  Font font("outline-broken-loca.ttf");
+  size_t glyphs = 0;
+  GFNT_Box box{};
+  GFNT_Error error{};
+
+  ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
+  EXPECT_EQ(gfnt_face_glyph_stated_box(font, (uint32_t)(glyphs - 1), &box,
+      &error), GFNT_ERR_CORRUPT);
+  ASSERT_NE(error.message, nullptr);
+
+  // And the glyph before it still answers, which is what makes the refusal about
+  // one glyph rather than about the font.
+  EXPECT_EQ(gfnt_face_glyph_stated_box(font, (uint32_t)(glyphs - 2), &box,
+      &error), GFNT_OK) << error.message;
 }
 
 TEST(Glyf, ThePointCapIsAPromiseAndIsEnforced) {
@@ -976,24 +1030,146 @@ std::vector<uint8_t> flag_stream_glyph(size_t points,
   return out;
 }
 
-/** A font whose glyph 1 is that glyph, and whose glyph 0 is empty. */
-std::vector<uint8_t> font_with(const std::vector<uint8_t> & glyph) {
+/** A font over the given glyph descriptions, with `loca` built to match. */
+std::vector<uint8_t> font_over(const std::vector<std::vector<uint8_t>> & glyphs) {
   std::vector<uint8_t> glyf;
   std::vector<uint8_t> loca;
   bool long_loca = false;
+  std::vector<std::pair<uint16_t, int16_t>> metrics;
 
-  gfnttest::build_glyf_and_loca({{}, glyph}, &glyf, &loca, &long_loca);
+  gfnttest::build_glyf_and_loca(glyphs, &glyf, &loca, &long_loca);
+  for (size_t i = 0; i < glyphs.size(); ++i) {
+    metrics.push_back({(uint16_t)(500 + 10 * i), (int16_t)i});
+  }
   return gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, {
       {GFNT_TAG('h', 'e', 'a', 'd'),
           gfnttest::build_head(1000, long_loca ? 1 : 0)},
-      {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 100, 2)},
-      {GFNT_TAG('h', 'm', 't', 'x'),
-          gfnttest::build_hmtx({{500, 10}, {600, 20}}, {})},
-      {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(2)},
+      {GFNT_TAG('h', 'h', 'e', 'a'),
+          gfnttest::build_hhea(800, -200, 100, (uint16_t)glyphs.size())},
+      {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics, {})},
+      {GFNT_TAG('m', 'a', 'x', 'p'),
+          gfnttest::build_maxp((uint16_t)glyphs.size())},
       {GFNT_TAG('g', 'l', 'y', 'f'), glyf},
       {GFNT_TAG('l', 'o', 'c', 'a'), loca},
   });
 }
+
+/** A font whose glyph 1 is that glyph, and whose glyph 0 is empty. */
+std::vector<uint8_t> font_with(const std::vector<uint8_t> & glyph) {
+  return font_over({{}, glyph});
+}
+
+/**
+ * The same, with `loca` describing each glyph's length **exactly**.
+ *
+ * ::gfnttest::build_glyf_and_loca() pads every glyph to an even length, which is
+ * what a writer does - and it makes a length sweep measure the wrong thing: a
+ * description cut to 53 bytes is stored as 54 with a zero at the end, so the
+ * reader is handed a complete glyph whose last coordinate differs, reports
+ * success, and the sweep records a misread that is really the builder's. So this
+ * writes a long `loca` with the offsets the caller asked for, odd ones included.
+ */
+std::vector<uint8_t> font_over_exact(
+    const std::vector<std::vector<uint8_t>> & glyphs) {
+  std::vector<uint8_t> glyf;
+  std::vector<uint8_t> loca;
+  std::vector<std::pair<uint16_t, int16_t>> metrics;
+
+  for (const std::vector<uint8_t> & glyph : glyphs) {
+    gfnttest::put_u32(loca, (uint32_t)glyf.size());
+    glyf.insert(glyf.end(), glyph.begin(), glyph.end());
+  }
+  gfnttest::put_u32(loca, (uint32_t)glyf.size());
+  for (size_t i = 0; i < glyphs.size(); ++i) {
+    metrics.push_back({(uint16_t)(500 + 10 * i), (int16_t)i});
+  }
+  return gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, {
+      {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, 1)},
+      {GFNT_TAG('h', 'h', 'e', 'a'),
+          gfnttest::build_hhea(800, -200, 100, (uint16_t)glyphs.size())},
+      {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics, {})},
+      {GFNT_TAG('m', 'a', 'x', 'p'),
+          gfnttest::build_maxp((uint16_t)glyphs.size())},
+      {GFNT_TAG('g', 'l', 'y', 'f'), glyf},
+      {GFNT_TAG('l', 'o', 'c', 'a'), loca},
+  });
+}
+
+/**
+ * A one-contour glyph whose coordinates are single bytes.
+ *
+ * ::gfnttest::build_glyf_glyph() writes every delta as a signed word, which is
+ * the encoding a reader must accept rather than the one a writer would choose.
+ * This is the other one: `X_SHORT` and `Y_SHORT` with the same-or-positive bits,
+ * so each coordinate is one unsigned byte, and a cut inside those bytes reaches
+ * the short read rather than the wide one.
+ */
+std::vector<uint8_t> short_coordinate_glyph() {
+  std::vector<uint8_t> out;
+  const uint8_t flag = 0x01u | 0x02u | 0x04u | 0x10u | 0x20u;
+
+  gfnttest::put_s16(out, 1);            // one contour
+  gfnttest::put_s16(out, 0);            // xMin
+  gfnttest::put_s16(out, 0);            // yMin
+  gfnttest::put_s16(out, 90);           // xMax
+  gfnttest::put_s16(out, 90);           // yMax
+  gfnttest::put_u16(out, 3);            // endPtsOfContours: four points
+  gfnttest::put_u16(out, 0);            // instructionLength
+  for (int i = 0; i < 4; ++i) {
+    out.push_back(flag);
+  }
+  for (int i = 0; i < 4; ++i) {
+    out.push_back(30);                  // x deltas, one byte each
+  }
+  for (int i = 0; i < 4; ++i) {
+    out.push_back(20);                  // y deltas
+  }
+  return out;
+}
+
+/** A simple glyph with two contours and instructions: something to cut. */
+std::vector<uint8_t> two_contour_glyph() {
+  return gfnttest::build_glyf_glyph({
+      {{0, 0, true}, {300, 0, true}, {300, 300, false}, {0, 300, true}},
+      {{80, 80, true}, {200, 80, true}, {200, 200, true}},
+  }, {0x00, 0x01, 0x02});
+}
+
+/**
+ * Load glyph @p glyph of a font built from @p glyphs, and say what happened.
+ *
+ * The result is what the sweeps below compare; nothing here asserts, because a
+ * refusal is the expected answer for most of the inputs they build.
+ */
+struct Outcome {
+  GFNT_Result result = GFNT_ERR_INTERNAL;
+  size_t points = 0;
+  size_t contours = 0;
+  const char * message = nullptr;
+
+  Outcome(const std::vector<uint8_t> & bytes, uint32_t glyph) {
+    GFNT_Blob * blob = nullptr;
+    GFNT_Face * face = nullptr;
+    GFNT_Outline * outline = nullptr;
+    GFNT_Error error{};
+
+    gfnt_error_clear(&error);
+    EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    if (gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error) == GFNT_OK) {
+      result = gfnt_face_glyph_outline(face, glyph, nullptr, nullptr, &outline,
+          &error);
+      if (result == GFNT_OK) {
+        points = gfnt_outline_point_count(outline);
+        contours = gfnt_outline_contour_count(outline);
+      }
+      message = error.message;
+    }
+    gfnt_outline_destroy(outline);
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+};
 
 /** Load glyph 1 of such a font, and say what happened. */
 struct HandBuilt {
@@ -1046,6 +1222,338 @@ TEST(Glyf, ARepeatCountPastTheLastPointIsRefusedRatherThanFilledAsFarAsItFits) {
   EXPECT_EQ(built.error.glyph, 1u);
   EXPECT_EQ(built.error.table, GFNT_TAG('g', 'l', 'y', 'f'));
   EXPECT_NE(built.error.message, nullptr);
+}
+
+TEST(Glyf, AGlyphDescriptionCutToEveryLengthIsRefusedRatherThanMisread) {
+  // The whole-font truncation sweep cannot reach any of this. It cuts a table's
+  // extent, and `loca` is then checked against the shortened `glyf` before a
+  // description is read at all - so every cut is refused by the range check and
+  // the reader inside a glyph never sees a short buffer. What does is a `loca`
+  // that agrees with `glyf` and a *description* too short for what its own
+  // header says, which is a font no writer produces and a fuzzer finds at once.
+  // Two glyphs, because a coordinate is read as a byte or as a word depending on
+  // its flag and the builder writes only words: the short encoding is most of
+  // what a real font uses, and a sweep over words alone leaves its read unwalked.
+  const std::vector<uint8_t> word_glyph = two_contour_glyph();
+  const std::vector<uint8_t> byte_glyph = short_coordinate_glyph();
+  size_t refusals = 0;
+
+  for (const std::vector<uint8_t> & whole : {word_glyph, byte_glyph}) {
+  for (size_t cut = 0; cut < whole.size(); ++cut) {
+    const std::vector<uint8_t> prefix(whole.begin(), whole.begin() + cut);
+    const Outcome outcome(font_over_exact({{}, prefix}), 1);
+
+    if (cut == 0) {
+      // Zero bytes is not a cut glyph, it is an empty one: `loca` saying a
+      // glyph has no description is how every space in every font is spelled.
+      EXPECT_EQ(outcome.result, GFNT_OK) << "cut to " << cut;
+      EXPECT_EQ(outcome.points, 0u);
+      continue;
+    }
+    EXPECT_NE(outcome.result, GFNT_OK) << "cut to " << cut;
+    EXPECT_EQ(outcome.result, GFNT_ERR_CORRUPT) << "cut to " << cut;
+    EXPECT_NE(outcome.message, nullptr) << "cut to " << cut;
+    refusals++;
+  }
+  // The control: uncut, the same font reads the glyph the builder described.
+  const Outcome full(font_over_exact({{}, whole}), 1);
+  EXPECT_EQ(full.result, GFNT_OK) << full.message;
+  EXPECT_GT(full.points, 0u);
+  }
+  EXPECT_EQ(refusals, word_glyph.size() + byte_glyph.size() - 2);
+}
+
+TEST(Glyf, ContourEndsThatDoNotIncreaseAreRefusedRatherThanReadAsEmpty) {
+  // endPtsOfContours is the *last* point of each contour, so it increases. A
+  // second entry at or below the first describes a contour with no points, which
+  // is not the same thing as a one-point contour and cannot be drawn: the later
+  // contour would own a negative number of points.
+  std::vector<uint8_t> glyph;
+
+  gfnttest::put_s16(glyph, 2);          // two contours
+  gfnttest::put_s16(glyph, 0);
+  gfnttest::put_s16(glyph, 0);
+  gfnttest::put_s16(glyph, 100);
+  gfnttest::put_s16(glyph, 100);
+  gfnttest::put_u16(glyph, 5);          // the first ends at point 5
+  gfnttest::put_u16(glyph, 2);          // and the second, at point 2
+  gfnttest::put_u16(glyph, 0);          // instructionLength
+  for (int i = 0; i < 6; ++i) {
+    glyph.push_back(0x01u);             // on-curve, wide coordinates
+  }
+  for (int i = 0; i < 12; ++i) {
+    gfnttest::put_s16(glyph, 10);
+  }
+  const Outcome outcome(font_over_exact({{}, glyph}), 1);
+
+  EXPECT_EQ(outcome.result, GFNT_ERR_CORRUPT);
+  ASSERT_NE(outcome.message, nullptr);
+  EXPECT_NE(std::string(outcome.message).find("does not increase"),
+      std::string::npos) << outcome.message;
+}
+
+TEST(Glyf, ACompositeCutToEveryLengthIsRefusedRatherThanMisread) {
+  // The same sweep one level up: a composite's bytes are a component record at a
+  // time, and a cut inside one lands in the middle of a flag word, a glyph
+  // index, an argument or a transform. Each of those is a separate read and a
+  // separate arm.
+  const std::vector<uint8_t> simple = gfnttest::build_glyf_glyph(
+      {{{0, 0, true}, {100, 0, true}, {100, 100, true}}});
+  const std::vector<uint8_t> whole = gfnttest::build_glyf_composite({
+      {1, 0x0003, 40, 60, {}},                        // words, xy values
+      {1, 0x0002 | 0x0008, 5, 7, {0x4000}},           // signed bytes, one scale
+      // Byte-sized *point indices*: a third argument encoding, and the one whose
+      // two bytes are unsigned. Without a component using it, the cuts that land
+      // in it could not exist.
+      {1, 0x0000, 1, 2, {}},
+      {1, 0x0003 | 0x0040, -20, 30, {0x4000, 0x4000}},          // x and y
+      {1, 0x0003 | 0x0080, 10, 10, {0x4000, 0, 0, 0x4000}},     // two-by-two
+  }, {0x00, 0x01});
+  size_t refusals = 0;
+
+  const Outcome full(font_over_exact({{}, simple, whole}), 2);
+  ASSERT_EQ(full.result, GFNT_OK) << full.message;
+  ASSERT_EQ(full.points, 15u) << "three points per component, five components";
+  ASSERT_EQ(full.contours, 5u);
+
+  for (size_t cut = 1; cut < whole.size(); ++cut) {
+    const std::vector<uint8_t> prefix(whole.begin(), whole.begin() + cut);
+    const Outcome outcome(font_over_exact({{}, simple, prefix}), 2);
+
+    if (outcome.result == GFNT_OK) {
+      // Property one rather than "everything refuses": the four bytes at the
+      // end are this composite's instructions, and nothing reads a composite's
+      // instructions - hinting is skipped by length, never run (design.md
+      // section 8.5). Cutting bytes no reader looks at changes no answer, which
+      // is the other half of the property and not an exception to it.
+      EXPECT_EQ(outcome.points, full.points) << "cut to " << cut;
+      EXPECT_EQ(outcome.contours, full.contours) << "cut to " << cut;
+      continue;
+    }
+    EXPECT_NE(outcome.message, nullptr) << "cut to " << cut;
+    refusals++;
+  }
+  // Every cut inside a component record, and none of the four inside the
+  // instructions the reader steps over.
+  EXPECT_EQ(refusals, whole.size() - 5);
+}
+
+TEST(Glyf, ACompositeThatIncludesItselfIsNamedRatherThanCallEdTooDeep) {
+  // Left to the depth cap this would report a limit, which is true and useless:
+  // the font is not deep, it is circular. No writer emits one, so the bytes are
+  // built here.
+  const std::vector<uint8_t> selfish = gfnttest::build_glyf_composite({
+      {1, 0x0003, 0, 0},
+  });
+  const Outcome outcome(font_with(selfish), 1);
+
+  EXPECT_EQ(outcome.result, GFNT_ERR_CORRUPT);
+  ASSERT_NE(outcome.message, nullptr);
+  EXPECT_NE(std::string(outcome.message).find("includes itself"),
+      std::string::npos) << outcome.message;
+}
+
+TEST(Glyf, AComponentMatchingAPointNeitherGlyphHasIsRefused) {
+  // Point matching without ARGS_ARE_XY_VALUES: arg1 indexes the composite so
+  // far and arg2 the component. Guessing zero for an index that is not there
+  // would stack the component on the origin and draw a glyph that looks almost
+  // right, which is the outcome worth refusing.
+  const std::vector<uint8_t> simple = gfnttest::build_glyf_glyph(
+      {{{0, 0, true}, {100, 0, true}, {100, 100, true}}});
+  const std::vector<uint8_t> matched = gfnttest::build_glyf_composite({
+      {1, 0x0000, 0, 0},      // the first component anchors the composite
+      {1, 0x0000, 90, 1},     // and this one matches a point that is not there
+  });
+  const Outcome outcome(font_over_exact({{}, simple, matched}), 2);
+
+  EXPECT_EQ(outcome.result, GFNT_ERR_CORRUPT);
+  ASSERT_NE(outcome.message, nullptr);
+  EXPECT_NE(std::string(outcome.message).find("point neither glyph has"),
+      std::string::npos) << outcome.message;
+}
+
+TEST(Glyf, AnIndexToLocFormatOtherThanZeroOrOneIsRefused) {
+  // `head` has two loca formats and a font that names a third is broken in a
+  // way that decides the width of every offset in the table. Read as either
+  // width it would give offsets that are not the font's.
+  std::vector<uint8_t> glyf;
+  std::vector<uint8_t> loca;
+  bool long_loca = false;
+  gfnttest::build_glyf_and_loca({{}, two_contour_glyph()}, &glyf, &loca,
+      &long_loca);
+  const std::vector<uint8_t> bytes = gfnttest::build_sfnt(
+      GFNT_FLAVOUR_TRUETYPE, {
+          {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, 2)},
+          {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 0, 2)},
+          {GFNT_TAG('h', 'm', 't', 'x'),
+              gfnttest::build_hmtx({{500, 0}, {500, 0}}, {})},
+          {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(2)},
+          {GFNT_TAG('g', 'l', 'y', 'f'), glyf},
+          {GFNT_TAG('l', 'o', 'c', 'a'), loca},
+      });
+  const Outcome outcome(bytes, 1);
+
+  EXPECT_EQ(outcome.result, GFNT_ERR_CORRUPT);
+  ASSERT_NE(outcome.message, nullptr);
+  EXPECT_NE(std::string(outcome.message).find("indexToLocFormat"),
+      std::string::npos) << outcome.message;
+}
+
+TEST(Glyf, ALocaWithFewerEntriesThanGlyphsRefusesThoseGlyphsAndNotTheFont) {
+  // `loca` holds numGlyphs+1 offsets and this one holds two, in the long form so
+  // that each is four bytes and the cut is unambiguous. Glyph 0 is still
+  // readable - its pair of offsets is there - and glyph 1's is not.
+  //
+  // `loca` does not join the numGlyphs minimum (M12 is about tables that *index*
+  // glyphs by position, and metrics.c says which those are), so this font says
+  // it has two glyphs and can only answer for one. That is M11's rule: the glyph
+  // is condemned, the font is not.
+  const std::vector<uint8_t> glyph = two_contour_glyph();
+  std::vector<uint8_t> glyf = glyph;
+  std::vector<uint8_t> loca;
+
+  gfnttest::put_u32(loca, 0);
+  gfnttest::put_u32(loca, (uint32_t)glyph.size());
+  const std::vector<uint8_t> bytes = gfnttest::build_sfnt(
+      GFNT_FLAVOUR_TRUETYPE, {
+          {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, 1)},
+          {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 0, 2)},
+          {GFNT_TAG('h', 'm', 't', 'x'),
+              gfnttest::build_hmtx({{500, 0}, {500, 0}}, {})},
+          {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(2)},
+          {GFNT_TAG('g', 'l', 'y', 'f'), glyf},
+          {GFNT_TAG('l', 'o', 'c', 'a'), loca},
+      });
+
+  const Outcome first(bytes, 0);
+  EXPECT_EQ(first.result, GFNT_OK) << first.message;
+  EXPECT_EQ(first.points, 7u);
+
+  const Outcome second(bytes, 1);
+  EXPECT_NE(second.result, GFNT_OK);
+  EXPECT_NE(second.message, nullptr);
+}
+
+TEST(Glyf, EveryGlyphAccessorReportsTheSameCorruptionRatherThanOneOfThem) {
+  // Three accessors read the same description - the outline, whether it is a
+  // composite, and the box the font states - and each has its own propagation to
+  // do. A caller that asked the cheap question first would otherwise be told the
+  // glyph is fine.
+  const std::vector<uint8_t> whole = two_contour_glyph();
+  // Glyph 1 keeps its ten-byte header and loses everything after it; glyph 2 does
+  // not even have that. The header is all these two accessors read, so the first
+  // still answers and the second cannot - which is the line between them, and it
+  // is not where the outline's is.
+  const std::vector<uint8_t> header(whole.begin(), whole.begin() + 12);
+  const std::vector<uint8_t> stub(whole.begin(), whole.begin() + 1);
+  const std::vector<uint8_t> bytes = font_over_exact({{}, header, stub});
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Error error{};
+  bool composite = true;
+  GFNT_Box box{};
+  GFNT_Outline * outline = nullptr;
+
+  ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+      GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
+
+  EXPECT_EQ(gfnt_face_glyph_is_composite(face, 1, &composite, &error), GFNT_OK);
+  EXPECT_FALSE(composite);
+  EXPECT_EQ(gfnt_face_glyph_stated_box(face, 1, &box, &error), GFNT_OK);
+  EXPECT_EQ(box_string(box), "0 0 300 300");
+  EXPECT_EQ(gfnt_face_glyph_outline(face, 1, nullptr, nullptr, &outline, &error),
+      GFNT_ERR_CORRUPT) << "the points are what is missing";
+  gfnt_outline_destroy(outline);
+  outline = nullptr;
+
+  EXPECT_EQ(gfnt_face_glyph_is_composite(face, 2, &composite, &error),
+      GFNT_ERR_CORRUPT);
+  EXPECT_EQ(gfnt_face_glyph_stated_box(face, 2, &box, &error), GFNT_ERR_CORRUPT);
+
+  // And the null arguments each accessor has to refuse before it reads anything.
+  EXPECT_EQ(gfnt_face_glyph_is_composite(nullptr, 0, &composite, &error),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_glyph_is_composite(face, 0, nullptr, &error),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_glyph_stated_box(nullptr, 0, &box, &error),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_glyph_stated_box(face, 0, nullptr, &error),
+      GFNT_ERR_INVALID);
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
+}
+
+TEST(Glyf, ADescriptionStatingZeroContoursIsAnEmptyGlyphAndNotAnError) {
+  // Two bytes that say "no contours". A glyph with no description at all is the
+  // ordinary empty glyph; this one has a description and it is empty, and fonts
+  // contain both. Reading the first as a refusal would lose a space; reading the
+  // second as one would lose a glyph that draws nothing on purpose.
+  const Outcome stated(font_over_exact({{}, {0x00, 0x00}}), 1);
+
+  EXPECT_EQ(stated.result, GFNT_OK) << stated.message;
+  EXPECT_EQ(stated.points, 0u);
+  EXPECT_EQ(stated.contours, 0u);
+}
+
+TEST(Glyf, TheFacesOwnAllocatorIsSweptToo) {
+  // The sweep above refuses the *caller's* allocator, which pays for the outline.
+  // The scratch a parse needs - the flag stream, and the outline a component is
+  // assembled into - comes from the allocator the face was loaded with, so a
+  // sweep that only varies the caller's never refuses any of it.
+  const std::string path = gfnttest::data("fonts/outline-composite.ttf");
+  GFNT_Blob * blob = nullptr;
+  size_t requests = 0;
+
+  ASSERT_EQ(gfnt_blob_create_file(path.c_str(), nullptr, nullptr, &blob,
+      nullptr), GFNT_OK);
+  {
+    gfnttest::FailingAllocator counter(static_cast<size_t>(-1));
+    GFNT_Face * face = nullptr;
+    GFNT_Outline * outline = nullptr;
+
+    ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, counter.get(), &face, nullptr),
+        GFNT_OK);
+    ASSERT_EQ(gfnt_face_glyph_outline(face, kCompNested, nullptr, nullptr,
+        &outline, nullptr), GFNT_OK);
+    gfnt_outline_destroy(outline);
+    outline = nullptr;
+    ASSERT_EQ(gfnt_face_glyph_outline(face, kManyPoints, nullptr, nullptr,
+        &outline, nullptr), GFNT_OK);
+    requests = counter.requests();
+    gfnt_outline_destroy(outline);
+    gfnt_face_free(face);
+    EXPECT_GT(requests, 6u);
+  }
+
+  for (size_t fail_at = 0; fail_at <= requests; ++fail_at) {
+    gfnttest::FailingAllocator allocator(fail_at, 0);
+    GFNT_Face * face = nullptr;
+    GFNT_Error error{};
+
+    if (gfnt_face_load(blob, 0, nullptr, allocator.get(), &face, &error)
+        != GFNT_OK) {
+      EXPECT_EQ(error.result, GFNT_ERR_OOM) << "at request " << fail_at;
+      EXPECT_EQ(allocator.live(), 0u) << "at request " << fail_at;
+      continue;
+    }
+    for (uint32_t glyph : {(uint32_t)kCompNested, (uint32_t)kManyPoints}) {
+      GFNT_Outline * outline = nullptr;
+      const GFNT_Result result = gfnt_face_glyph_outline(face, glyph, nullptr,
+          nullptr, &outline, &error);
+
+      if (result != GFNT_OK) {
+        EXPECT_EQ(result, GFNT_ERR_OOM) << "at request " << fail_at;
+        EXPECT_EQ(outline, nullptr) << "at request " << fail_at;
+        EXPECT_NE(error.message, nullptr) << "at request " << fail_at;
+      }
+      gfnt_outline_destroy(outline);
+    }
+    allocator.stop_failing();
+    gfnt_face_free(face);
+    EXPECT_EQ(allocator.live(), 0u) << "at request " << fail_at;
+  }
+  gfnt_blob_destroy(blob);
 }
 
 }  // namespace

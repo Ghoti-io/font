@@ -846,6 +846,181 @@ TEST(Raster, AnEmptyCoverageDrawsASentenceRatherThanNothing) {
   EXPECT_NE(out.finish().find("nothing to draw"), std::string::npos);
 }
 
+TEST(Raster, AnOddOverlapOverHalfAPixelFoldsRatherThanClipping) {
+  // The even-odd ramp folds: coverage of 1.5 is 0.5, because the half that is
+  // inside twice is outside. The existing overlap test cannot see it - its two
+  // squares meet on whole-pixel boundaries, so every pixel is covered once or
+  // exactly twice, and twice folds to nothing by a different arm. This one
+  // overlaps by half a pixel, which is the only way to land between them.
+  Shape shape;
+  shape.contour({{u(0), u(0)}, {u(4), u(0)}, {u(4), u(4)}, {u(0), u(4)}});
+  shape.contour({{u(2) + 32, u(0)}, {u(6), u(0)}, {u(6), u(4)},
+      {u(2) + 32, u(4)}});
+  shape.ready();
+  GFNT_RasterOptions evenodd{};
+  evenodd.fill = GFNT_FILL_EVEN_ODD;
+  Render folded(shape, &evenodd);
+  Sampler sampler(shape);
+  std::string where;
+
+  ASSERT_EQ(folded.result, GFNT_OK);
+  // Column 2 is covered once by the first square and half again by the second.
+  // 1.5 folds to 0.5, so the pixel is half covered - not full, which is what
+  // clamping would give, and not empty, which is what a fold by subtraction of
+  // the wrong sense would give.
+  EXPECT_NEAR(gfnt_coverage_at(&folded.coverage, 2, 1), 128, 1);
+  EXPECT_EQ(gfnt_coverage_at(&folded.coverage, 1, 1), 255);
+  EXPECT_EQ(gfnt_coverage_at(&folded.coverage, 3, 1), 0);
+  EXPECT_LE(worst_difference(folded.coverage, sampler, GFNT_FILL_EVEN_ODD,
+      &where), 1) << where;
+}
+
+TEST(Raster, AnOutlineTheWalkRefusesIsRefusedRatherThanRenderedEmpty) {
+  // The bounds come from the same walk the cells do, so an outline the walk
+  // refuses has no box - and an empty box renders as an empty coverage, which
+  // a caller cannot tell from a space.
+  Shape shape;
+  shape.contour({{u(0), u(0)}, {u(0), u(4), GFNT_POINT_CUBIC}, {u(4), u(0)}});
+  shape.ready();
+  Render render(shape, nullptr);
+
+  EXPECT_EQ(render.result, GFNT_ERR_INVALID);
+}
+
+TEST(Raster, TheDumpsReportEveryWriteFailure) {
+  Shape shape;
+  shape.contour({{u(0), u(0)}, {u(2), u(0)}, {u(2), u(2)}, {u(0), u(2)}});
+  shape.ready();
+  Render render(shape, nullptr);
+  ASSERT_EQ(render.result, GFNT_OK);
+
+  size_t failures = 0;
+  for (size_t allow = 0; allow < 4; allow++) {
+    gfnttest::FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    if (gfnt_coverage_dump(&render.coverage, sink.get()) == GFNT_ERR_IO) {
+      failures++;
+    }
+  }
+  EXPECT_EQ(failures, 1u) << "the summary is one line and one write";
+
+  GFNT_Coverage empty{};
+  gfnttest::FailingSink sink(0);
+  ASSERT_NE(sink.get(), nullptr);
+  EXPECT_EQ(gfnt_coverage_dump_art(&empty, sink.get()), GFNT_ERR_IO);
+
+#ifndef _WIN32
+  // The picture is written with fputc rather than fprintf, one call per pixel
+  // and one per row end. FailingSink serves those on POSIX because it is a
+  // stream with its own write callback; the Windows build serves failures by
+  // wrapping fprintf, which never sees a fputc, so this half is POSIX-only and
+  // says so rather than counting zero failures and passing.
+  failures = 0;
+  for (size_t allow = 0; allow < 10; allow++) {
+    gfnttest::FailingSink art(allow);
+    ASSERT_NE(art.get(), nullptr);
+    if (gfnt_coverage_dump_art(&render.coverage, art.get()) == GFNT_ERR_IO) {
+      failures++;
+    }
+  }
+  EXPECT_EQ(failures, 6u) << "four pixels and two row endings";
+#endif
+}
+
+TEST(Raster, RenderingRefusesAPixelSizeOfZeroAndOneOverTheCap) {
+  const std::string path = gfnttest::data("fonts/outline-simple.ttf");
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Coverage coverage{};
+  GFNT_Error error{};
+  GFNT_Limits limits;
+
+  gfnt_limits_default(&limits);
+  limits.max_ppem = 12;
+  ASSERT_EQ(gfnt_blob_create_file(path.c_str(), nullptr, nullptr, &blob,
+      &error), GFNT_OK);
+  ASSERT_EQ(gfnt_face_load(blob, 0, &limits, nullptr, &face, &error), GFNT_OK);
+
+  // Zero is a caller error rather than an empty bitmap: a zero-pixel rendering
+  // is not a small one, and the arithmetic that scales an em to it divides.
+  EXPECT_EQ(gfnt_face_render_glyph(face, 2, 0, nullptr, nullptr, &coverage,
+      &error), GFNT_ERR_INVALID);
+  EXPECT_NE(error.message, nullptr);
+  // And the cap is a limit, checked before anything is allocated for it.
+  EXPECT_EQ(gfnt_face_render_glyph(face, 2, 13, nullptr, nullptr, &coverage,
+      &error), GFNT_ERR_LIMIT);
+  EXPECT_NE(error.message, nullptr);
+  EXPECT_EQ(gfnt_face_render_glyph(face, 2, 12, nullptr, nullptr, &coverage,
+      &error), GFNT_OK);
+  gfnt_coverage_destroy(&coverage);
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
+}
+
+TEST(Raster, EveryAllocationTheSweepMakesIsReportedAndNothingLeaks) {
+  // The sweep above renders a triangle, which fits the cell array's first block
+  // and needs no growth. This one is 40 zigzag points over 40 pixels, so the
+  // cell array grows several times and the sort allocates twice more.
+  //
+  // How many requests that is, is measured rather than guessed: an allocator
+  // that refuses nothing counts them first, and the sweep then walks every one.
+  // A hard-coded ceiling is how a sweep quietly stops covering the last
+  // allocation somebody adds.
+  size_t requests = 0;
+  {
+    gfnttest::FailingAllocator counter(static_cast<size_t>(-1));
+    GFNT_Outline * outline = nullptr;
+    GFNT_Coverage coverage{};
+    GFNT_Error error{};
+
+    ASSERT_EQ(gfnt_outline_create(counter.get(), &outline, &error), GFNT_OK);
+    ASSERT_EQ(gfnt_outline_begin_contour(outline, &error), GFNT_OK);
+    for (int i = 0; i < 40; ++i) {
+      const GFNT_Point point{u(i), u(i % 2 ? 40 : 0)};
+      ASSERT_EQ(gfnt_outline_add_point(outline, point, GFNT_POINT_ON, &error),
+          GFNT_OK);
+    }
+    ASSERT_EQ(gfnt_outline_scale(outline, GFNT_F16DOT16_ONE, &error), GFNT_OK);
+    ASSERT_EQ(gfnt_raster_outline(outline, nullptr, nullptr, counter.get(),
+        &coverage, &error), GFNT_OK);
+    requests = counter.requests();
+    gfnt_coverage_destroy(&coverage);
+    gfnt_outline_destroy(outline);
+    EXPECT_GT(requests, 12u) << "this shape stopped growing anything";
+  }
+
+  for (size_t fail_at = 0; fail_at < requests; ++fail_at) {
+    gfnttest::FailingAllocator allocator(fail_at, 0);
+    GFNT_Outline * outline = nullptr;
+    GFNT_Coverage coverage{};
+    GFNT_Error error{};
+    GFNT_Result result = GFNT_OK;
+
+    if (gfnt_outline_create(allocator.get(), &outline, &error) != GFNT_OK) {
+      continue;
+    }
+    result = gfnt_outline_begin_contour(outline, &error);
+    for (int i = 0; result == GFNT_OK && i < 40; ++i) {
+      const GFNT_Point point{u(i), u(i % 2 ? 40 : 0)};
+      result = gfnt_outline_add_point(outline, point, GFNT_POINT_ON, &error);
+    }
+    if (result == GFNT_OK) {
+      result = gfnt_outline_scale(outline, GFNT_F16DOT16_ONE, &error);
+    }
+    if (result == GFNT_OK) {
+      result = gfnt_raster_outline(outline, nullptr, nullptr, allocator.get(),
+          &coverage, &error);
+      if (result != GFNT_OK) {
+        EXPECT_EQ(result, GFNT_ERR_OOM) << "at request " << fail_at;
+        EXPECT_EQ(coverage.data, nullptr) << "at request " << fail_at;
+      }
+    }
+    gfnt_coverage_destroy(&coverage);
+    gfnt_outline_destroy(outline);
+    EXPECT_EQ(allocator.live(), 0u) << "at request " << fail_at;
+  }
+}
+
 }  // namespace
 
 int main(int argc, char ** argv) {

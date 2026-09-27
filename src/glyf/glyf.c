@@ -739,7 +739,7 @@ GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
   if (!gfnt_sfnt_find(face, GFNT_TAG_GLYF)
       || !gfnt_sfnt_find(face, GFNT_TAG_LOCA)) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        gfnt_face_has_outlines(face)
+        gfnt_sfnt_find(face, GFNT_TAG('C', 'F', 'F', ' '))
             ? "this face's outlines are charstrings, which arrive in phase 2"
             : "this face has no outlines at all");
   }

@@ -265,10 +265,14 @@ static GFNT_Result gfnt_name_transcode(GFNT_Reader * storage,
         gfnt_name_mac_table(record->encoding_id, record->language_id);
 
     if (table == GFNT_MAC_TABLE_NONE) {
+      // Unreachable through ::gfnt_face_name_decode(), which asks
+      // gfnt_name_decodable() the same question first and reports it there.
+      // Kept because what follows indexes gfnt_mac_high[table], and a guard
+      // whose absence would be an out-of-bounds read is not a duplicate of a
+      // guard that only produces a message.
       return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
           GFNT_GLYPH_NONE,
-          "a Macintosh name encoding this library does not decode: the "
-          "multi-byte CJK encodings are a data set of their own");
+          "a Macintosh name encoding this library does not decode");
     }
     for (size_t i = 0; i < record->length; ++i) {
       uint8_t byte = 0;
@@ -347,8 +351,17 @@ GFNT_Result gfnt_face_name_decode(const GFNT_Face * face,
   }
   if (!gfnt_name_decodable(record->platform_id, record->encoding_id,
           record->language_id)) {
+    // Which encoding it is, because the two cases are different news: a
+    // Macintosh record in a multi-byte encoding is a table this library has not
+    // imported, and anything else is a platform nobody defines. The specific
+    // sentence used to live in gfnt_name_transcode() below, behind this very
+    // check, so nothing ever reached it and every caller got the general one.
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
-        GFNT_GLYPH_NONE, "a name encoding this library does not decode yet");
+        GFNT_GLYPH_NONE,
+        record->platform_id == GFNT_PLATFORM_MACINTOSH
+            ? "a Macintosh name encoding this library does not decode: the "
+              "multi-byte CJK encodings are a data set of their own"
+            : "a name encoding this library does not decode yet");
   }
 
   result = gfnt_name_open(face, &reader, NULL, &storage_at, error);

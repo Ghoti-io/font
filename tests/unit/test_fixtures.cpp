@@ -268,8 +268,10 @@ TEST(Fixtures, CffIsTheOttoFlavourWithNoGlyf) {
   EXPECT_EQ(gfnt_face_flavour(fixture.face), GFNT_FLAVOUR_CFF);
   EXPECT_TRUE(gfnt_face_has_table(fixture.face, GFNT_TAG('C', 'F', 'F', ' ')));
   EXPECT_FALSE(gfnt_face_has_table(fixture.face, GFNT_TAG('g', 'l', 'y', 'f')));
-  // Phase 0 does not read a charstring, but it does know an outline is there.
-  EXPECT_TRUE(gfnt_face_has_outlines(fixture.face));
+  // The table is there and this library cannot read it, so the predicate that
+  // answers "can asking for an outline succeed" says no; the table check above
+  // is how a caller finds out that charstrings are what it would need.
+  EXPECT_FALSE(gfnt_face_has_outlines(fixture.face));
 
   // Every metric table is the same question over a different container.
   uint32_t glyph = GFNT_GLYPH_NONE;

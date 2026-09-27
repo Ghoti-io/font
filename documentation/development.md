@@ -256,24 +256,62 @@ make coverage
 
 Builds an instrumented tree of its own - never the release objects, for the
 reason the target's comment gives - runs the suite, and prints per-file line
-coverage plus, separately, every growth or reallocation line no test executed.
-That last list is the point of the report rather than the percentage: a
-reallocation path no test reaches is untested, not working.
+coverage, the lines no test executed, and every growth or reallocation line that
+was never reached. **97.6% of 3,148 lines under `src/`**, from `make test` alone
+with no container.
 
-Two things to know before reading a number here.
+The report fails below a floor of 96%, and fails if it measured fewer than 3,000
+executable lines. The second is the control: every other figure here is a ratio,
+and a ratio is perfectly happy about a report that collapsed - a sweep that
+measured one file would print 100% and clear any floor. Both were armed and
+watched to fail before being committed green, and both can be moved for a one-off
+run (`GFNT_COVERAGE_FLOOR`, `GFNT_COVERAGE_LINES`).
 
-1. **The report is read for the lines nothing reaches, not for the total.** Most
-   of what is unexecuted today is error propagation from a short read and the
-   `fprintf` arms of the `_dump` functions, and no aggregate tells them apart from
-   a construction the suite cannot see. One of those was found this way: no
-   fixture carried a `REPEAT` flag, so ten lines of `glyf.c` were reached only
-   through the oracle's real fonts (design.md section 18).
+Three things to know before reading a number here.
+
+1. **The report is read for the lines nothing reaches, not for the percentage.**
+   The annotated source is left in `<object-dir>/coverage.txt`; `grep '#####'` is
+   the triage. One finding came out of exactly that: no fixture carried a `REPEAT`
+   flag, so ten lines of `glyf.c` were reached only through the oracle's real
+   fonts (design.md section 18).
 2. **`-fprofile-update=atomic` is deliberate.** One suite uses threads, and GCC's
    default counter update is unsynchronised: it reported an unreachable
-   argument-validation line as executed - 12, then not at all, then 16 - and
-   reported a line the threaded test really does reach as unexecuted. The
+   argument-validation line as executed - 12 times, then not at all, then 16 -
+   and reported a line the threaded test really does reach as unexecuted. The
    aggregate moved by a tenth of a point, which is why nothing would have noticed
    it. Do not build the instrumented tree by hand without the flag.
+3. **`gcov -t` is deliberate too.** gcov names its output after the source, so a
+   header compiled into many objects had its report overwritten by whichever
+   object was processed last, and `src/core/fixed.h`'s saturation lines flipped
+   between covered and uncovered depending on nothing but `find`'s order. The
+   annotated source now goes to one stream and the lines are merged.
+
+### What the last 2.4% is
+
+The 77 lines that remain are not a backlog. Each is one of five kinds, and none
+of them can be reached through the public API - so a test for one would have to
+call a static function or fake a state the library does not produce, which is a
+test of the test rather than of the library.
+
+| kind | lines | example |
+| --- | ---: | --- |
+| `gcu_safe_*` overflow guards | 11 | `outline.c` reserving past `SIZE_MAX`, with `max_outline_points` two orders of magnitude below it |
+| null-argument guards on internal functions | 8 | `gfnt_loca_range()`, whose three callers are in the same file |
+| per-read arms behind an up-front check | ~20 | every `OS/2` field read, after `reader.length < gfnt_os2_lengths[version]` has already refused a short table |
+| two passes disagreeing | 15 | `gfnt_face_glyph_name()` sizing a name and then writing it, from the same bytes |
+| invariant reporters in the rasteriser | 7 | a cell outside the bitmap, which the bounds make impossible - kept because a bounds bug must be a reported failure and not a missing span |
+
+Two more are a measurement rather than an argument: `gfnt_bound_cubic()`'s
+out-of-budget arm needs a cubic that is still not monotone after 16 subdivisions,
+and the worst case found over 400,000 random cubics at five coordinate scales,
+plus seven adversarial constructions, needed 13. Two are racy by nature - the
+"another thread parsed this table first" arm in `tables.c` - and one is a
+`switch`'s unreachable default.
+
+**The distinction that matters is between an arm nothing can reach and an arm
+nothing has tried to reach.** The list above is the first; everything in it has a
+reason written next to it in the source. When a line joins it, say which kind it
+is, and if it is none of them, it is the second and it wants a test.
 
 ## Memory
 

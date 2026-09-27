@@ -1204,6 +1204,15 @@ golden hashes; a lookup skipped fails `hb_diff` on the string that needed it;
 a glyph dropped from the closure fails `subset_diff`. §12.3 of `chron`'s design
 and this suite's history say why.
 
+`make coverage` is one of them now: it fails below a line-coverage floor, and
+fails again if it measured fewer executable lines than the library has. The
+second is the control, because every other number it prints is a ratio and a
+ratio is fine about a report that collapsed - a sweep that measured one file
+would print 100% and clear any floor. Both were watched failing before being
+committed green, which is the rule here and was worth applying to the instrument
+as well as to the gates: this one was found reporting an unreachable line as
+executed (documentation/development.md).
+
 ---
 
 ## 15. Code layout
@@ -1463,6 +1472,42 @@ shaped the way it is:
   fontTools stopped. The over-long count that has to be refused is hand-built
   with its own control, for the same reason the broken `loca` is patched bytes:
   no writer will produce it.
+
+**What a coverage sweep found afterwards, 2026-09-27.** Reading the report by
+line rather than by percentage took `make test` from 92.0% to 97.6% of the
+library's lines, and the tests written on the way found four things that were not
+about coverage at all:
+
+- **`gfnt_face_has_outlines()` contradicted its own contract**, and did it
+  differently for the two charstring tables. The header says the predicate
+  answers "can asking for an outline succeed", and `CFF2` reported false for
+  exactly that reason - while `CFF ` reported *true* for a face this library
+  cannot draw. Nothing caught it because no test asked a `CFF ` face, and
+  `gfnt_face_strike_at()` was telling the caller of an OTTO font that it had
+  outlines to scale. `CFF ` now reports false until the charstring interpreter
+  lands, which is one answer here that is expected to change (§7.4).
+- **A refusal's specific message was unreachable.** `gfnt_name_transcode()`
+  names the multi-byte Macintosh encodings it cannot decode; the decodability
+  check in front of it asks the same question, so no caller ever saw that
+  sentence and every one of them got "a name encoding this library does not
+  decode yet". The specific message moved out to the check that fires, and the
+  inner one stayed as a guard - what follows it indexes an array by the table
+  number.
+- **A composite's arguments have three encodings, not two**, and the third -
+  byte-sized *point indices*, the only unsigned pair - had no cut test behind it,
+  because the composite the sweep cut used the other two.
+- **The instrument was wrong twice**, in both directions, and neither showed up
+  in the aggregate. Threads plus GCC's default `-fprofile-update=single` made an
+  unreachable line read as executed 12 times, then not at all, then 16; and
+  `gcov`'s per-source output file meant a header compiled into many objects kept
+  only the last object's report. The report is what a triage acts on, so an
+  instrument that is right about the total and wrong about which lines is worse
+  than a coarse one.
+
+The 77 lines that remain are unreachable through the public API, in five named
+kinds, and development.md lists them with their counts: an arm nothing can reach
+is a different thing from an arm nothing has tried to reach, and only the second
+is work.
 
 **The oracles are built, as of 2026-09-24.** `tools/oracle/` carries the
 `fonttools` image - pinned base digest, `fonttools==4.66.0`, `brotli==1.2.0`,

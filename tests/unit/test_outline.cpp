@@ -662,6 +662,259 @@ TEST(Outline, TheDumpNamesEveryPointAndTheBounds) {
       << text;
 }
 
+TEST(Outline, ASinkWithoutALineToIsToldRatherThanLosingTheSegment) {
+  Outline outline;
+  GFNT_Error error{};
+  GFNT_OutlineSink sink{};
+  outline.contour({
+      {0, 0, GFNT_POINT_ON},
+      {100, 0, GFNT_POINT_ON},
+      {100, 100, GFNT_POINT_ON},
+  });
+  sink.move_to = [](void *, GFNT_Point) { return GFNT_OK; };
+  sink.quad_to = [](void *, GFNT_Point, GFNT_Point) { return GFNT_OK; };
+  sink.close = [](void *) { return GFNT_OK; };
+
+  // A sink is a set of callbacks the caller chooses, and a caller that wants
+  // only curves is a caller whose straight segments would vanish silently.
+  EXPECT_EQ(gfnt_outline_decompose(outline, &sink, nullptr, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(error.message, nullptr);
+}
+
+TEST(Outline, ASinkWithoutACubicToIsToldRatherThanLosingTheCurve) {
+  Outline outline;
+  GFNT_Error error{};
+  GFNT_OutlineSink sink{};
+  outline.contour({
+      {0, 0, GFNT_POINT_ON},
+      {0, 100, GFNT_POINT_CUBIC},
+      {100, 100, GFNT_POINT_CUBIC},
+      {100, 0, GFNT_POINT_ON},
+  });
+  sink.move_to = [](void *, GFNT_Point) { return GFNT_OK; };
+  sink.line_to = [](void *, GFNT_Point) { return GFNT_OK; };
+  sink.quad_to = [](void *, GFNT_Point, GFNT_Point) { return GFNT_OK; };
+  sink.close = [](void *) { return GFNT_OK; };
+
+  // The quadratic arm of this has a test of its own above; the two are separate
+  // because a sink can take one kind of curve and not the other, and `CFF `
+  // outlines are the cubic half.
+  EXPECT_EQ(gfnt_outline_decompose(outline, &sink, nullptr, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(error.message, nullptr);
+}
+
+TEST(Outline, AFailureDrawingAnImpliedMidpointStopsTheWalkThere) {
+  struct Counter {
+    int quads = 0;
+  };
+  Outline outline;
+  Counter counter;
+  GFNT_OutlineSink sink{};
+  // Two quadratic control points in a row, so the first segment ends at a point
+  // that is in no outline: the implied midpoint. That flush is a different call
+  // site from the ordinary one, and a sink that fails there must not be walked
+  // past - the second quadratic would otherwise be drawn from a point the
+  // caller rejected.
+  outline.contour({
+      {0, 0, GFNT_POINT_ON},
+      {0, 100, GFNT_POINT_QUAD},
+      {100, 100, GFNT_POINT_QUAD},
+      {100, 0, GFNT_POINT_ON},
+  });
+  sink.move_to = [](void *, GFNT_Point) { return GFNT_OK; };
+  sink.line_to = [](void *, GFNT_Point) { return GFNT_OK; };
+  sink.quad_to = [](void * user, GFNT_Point, GFNT_Point) -> GFNT_Result {
+    static_cast<Counter *>(user)->quads += 1;
+    return GFNT_ERR_OOM;
+  };
+  sink.close = [](void *) { return GFNT_OK; };
+
+  EXPECT_EQ(gfnt_outline_decompose(outline, &sink, &counter, nullptr),
+      GFNT_ERR_OOM);
+  EXPECT_EQ(counter.quads, 1) << "the walk carried on after the sink refused";
+}
+
+TEST(Outline, AFailureOnTheClosingCurveStopsTheWalkThere) {
+  struct Counter {
+    int quads = 0;
+    int closes = 0;
+  };
+  Outline outline;
+  Counter counter;
+  GFNT_OutlineSink sink{};
+  // kLeaf ends on a control point, so the segment that runs back to the start
+  // is drawn after the last point is stepped - a third call site again, and the
+  // one a contour only has when its last point is off-curve.
+  outline.contour(kLeaf);
+  sink.move_to = [](void *, GFNT_Point) { return GFNT_OK; };
+  sink.line_to = [](void *, GFNT_Point) { return GFNT_OK; };
+  sink.quad_to = [](void * user, GFNT_Point, GFNT_Point) -> GFNT_Result {
+    Counter * seen = static_cast<Counter *>(user);
+    seen->quads += 1;
+    return seen->quads > 1 ? GFNT_ERR_OOM : GFNT_OK;
+  };
+  sink.close = [](void * user) -> GFNT_Result {
+    static_cast<Counter *>(user)->closes += 1;
+    return GFNT_OK;
+  };
+
+  EXPECT_EQ(gfnt_outline_decompose(outline, &sink, &counter, nullptr),
+      GFNT_ERR_OOM);
+  EXPECT_EQ(counter.quads, 2);
+  EXPECT_EQ(counter.closes, 0) << "a contour that failed was closed anyway";
+}
+
+TEST(Outline, ASinkWhoseCloseFailsStopsBeforeTheNextContour) {
+  struct Counter {
+    int moves = 0;
+  };
+  Outline outline;
+  Counter counter;
+  GFNT_OutlineSink sink{};
+  outline.contour(kLeaf);
+  outline.contour(kLeaf);
+  sink.move_to = [](void * user, GFNT_Point) -> GFNT_Result {
+    static_cast<Counter *>(user)->moves += 1;
+    return GFNT_OK;
+  };
+  sink.line_to = [](void *, GFNT_Point) { return GFNT_OK; };
+  sink.quad_to = [](void *, GFNT_Point, GFNT_Point) { return GFNT_OK; };
+  sink.close = [](void *) { return GFNT_ERR_IO; };
+
+  EXPECT_EQ(gfnt_outline_decompose(outline, &sink, &counter, nullptr),
+      GFNT_ERR_IO);
+  EXPECT_EQ(counter.moves, 1) << "the second contour was begun anyway";
+}
+
+TEST(Outline, BoundsReportsTheWalksRefusalRatherThanAnEmptyBox) {
+  Outline outline;
+  GFNT_Box box{};
+  // The bounds are computed by walking the path, so an outline the walk refuses
+  // has no bounds to report - and reporting an empty box for it would be a
+  // glyph that silently occupies no space.
+  outline.contour({
+      {0, 0, GFNT_POINT_ON},
+      {0, 100, GFNT_POINT_CUBIC},
+      {100, 0, GFNT_POINT_ON},
+  });
+
+  EXPECT_EQ(gfnt_outline_bounds(outline, &box), GFNT_ERR_INVALID);
+}
+
+TEST(Outline, ThePathDumpWritesOneLinePerSegment) {
+  Outline outline;
+  gfnttest::CapturedOutput out;
+  outline.contour(kLeaf);
+  outline.contour({
+      {0, 0, GFNT_POINT_ON},
+      {0, 50, GFNT_POINT_CUBIC},
+      {50, 50, GFNT_POINT_CUBIC},
+      {50, 0, GFNT_POINT_ON},
+  });
+  // A straight segment too, because each verb is its own callback and a dump
+  // that lost one would still print the other three.
+  outline.contour({
+      {0, 0, GFNT_POINT_ON},
+      {70, 0, GFNT_POINT_ON},
+      {70, 70, GFNT_POINT_ON},
+  });
+
+  ASSERT_NE(out.get(), nullptr);
+  EXPECT_EQ(gfnt_outline_path_dump(outline, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+
+  // 26.6 rather than whole units, because this is what `glyf_diff` reads and it
+  // reads the library's own numbers: a dump that helpfully rounded would make
+  // the differential's agreement mean less than it says.
+  EXPECT_NE(text.find("path move 6400 0\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("path quad 6400 25600 25600 25600\n"), std::string::npos)
+      << text;
+  EXPECT_NE(text.find("path cubic 0 3200 3200 3200 3200 0\n"),
+      std::string::npos) << text;
+  EXPECT_NE(text.find("path line 4480 0\n"), std::string::npos) << text;
+  EXPECT_NE(text.find("path close\n"), std::string::npos) << text;
+}
+
+TEST(Outline, TheDumpsReportEveryWriteFailure) {
+  Outline outline;
+  outline.contour(kLeaf);
+
+  size_t failures = 0;
+  for (size_t allow = 0; allow < 12; allow++) {
+    gfnttest::FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    if (gfnt_outline_dump(outline, sink.get()) == GFNT_ERR_IO) {
+      failures++;
+    }
+  }
+  EXPECT_EQ(failures, 7u)
+      << "a header line, one line per contour, one per point, and the bounds";
+
+  failures = 0;
+  for (size_t allow = 0; allow < 16; allow++) {
+    gfnttest::FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    if (gfnt_outline_path_dump(outline, sink.get()) == GFNT_ERR_IO) {
+      failures++;
+    }
+  }
+  // The path dump writes a verb, then each point, then the newline, so the
+  // count is not the number of lines: move 3, two quadratics 4 each, close 2.
+  EXPECT_EQ(failures, 13u);
+
+  Outline empty;
+  gfnttest::FailingSink sink(0);
+  ASSERT_NE(sink.get(), nullptr);
+  EXPECT_EQ(gfnt_outline_dump(empty, sink.get()), GFNT_ERR_IO);
+  gfnttest::FailingSink other(0);
+  ASSERT_NE(other.get(), nullptr);
+  EXPECT_EQ(gfnt_outline_path_dump(empty, other.get()), GFNT_ERR_IO);
+}
+
+TEST(Outline, TranslateAndTransformSaturateRatherThanWrapping) {
+  Outline outline;
+  GFNT_Point point{};
+  // 26.6 coordinates are a signed 32-bit type, and a transform is the one place
+  // a caller's own number multiplies a font's. Wrapping would put a point at the
+  // far side of the plane from where it belongs, which draws a glyph across the
+  // whole bitmap rather than failing.
+  outline.contour({
+      {INT32_MAX / 128, 0, GFNT_POINT_ON},
+      {INT32_MIN / 128, 0, GFNT_POINT_ON},
+  });
+
+  ASSERT_EQ(gfnt_outline_transform(outline, 4 * GFNT_F16DOT16_ONE, 0, 0,
+      GFNT_F16DOT16_ONE, 0, 0), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_point_at(outline, 0, &point, nullptr), GFNT_OK);
+  EXPECT_EQ(point.x, INT32_MAX);
+  ASSERT_EQ(gfnt_outline_point_at(outline, 1, &point, nullptr), GFNT_OK);
+  EXPECT_EQ(point.x, INT32_MIN);
+
+  // A matrix big enough that the *product* overflows before the shift does: the
+  // 64-bit intermediate has its own clamp, three orders of magnitude before
+  // anything a font contains, and it is what keeps the shift's input in range.
+  Outline huge;
+  huge.contour({{INT32_MAX / GFNT_F26DOT6_ONE, 0, GFNT_POINT_ON}});
+  ASSERT_EQ(gfnt_outline_transform(huge, INT32_MAX, 0, 0, GFNT_F16DOT16_ONE, 0,
+      0), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_point_at(huge, 0, &point, nullptr), GFNT_OK);
+  EXPECT_EQ(point.x, INT32_MAX);
+  ASSERT_EQ(gfnt_outline_transform(huge, -INT32_MAX, 0, 0, GFNT_F16DOT16_ONE, 0,
+      0), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_point_at(huge, 0, &point, nullptr), GFNT_OK);
+  EXPECT_EQ(point.x, INT32_MIN);
+
+  // And once more through the translation, which saturates in its own right.
+  ASSERT_EQ(gfnt_outline_translate(outline, INT32_MAX, 0), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_point_at(outline, 0, &point, nullptr), GFNT_OK);
+  EXPECT_EQ(point.x, INT32_MAX);
+  ASSERT_EQ(gfnt_outline_translate(outline, INT32_MIN, 0), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_point_at(outline, 1, &point, nullptr), GFNT_OK);
+  EXPECT_EQ(point.x, INT32_MIN);
+}
+
 }  // namespace
 
 int main(int argc, char ** argv) {

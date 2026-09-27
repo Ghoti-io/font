@@ -551,6 +551,164 @@ TEST(Cmap, EveryEntryPointRefusesNullArguments) {
       GFNT_ERR_INVALID);
 }
 
+TEST(Cmap, ASubtableCutShortIsCorruptRatherThanAnswering) {
+  // Each format reads its own fields at its own offsets, so "the subtable is
+  // shorter than it claims" is a different arm in each. A reader that answered
+  // from what it could reach would map a codepoint to whatever byte followed the
+  // table.
+  std::vector<uint8_t> format0 = gfnttest::build_cmap_format0({{0x41, 7}});
+  std::vector<uint8_t> format6 = gfnttest::build_cmap_format6(0x41, {7, 8, 9});
+  format0.resize(format0.size() - 16);
+  Font cut0({cmap_table(gfnttest::build_cmap({{1, 0, format0}}))});
+  Font header6({cmap_table(gfnttest::build_cmap({{1, 0,
+      std::vector<uint8_t>(format6.begin(), format6.begin() + 7)}}))});
+  std::vector<uint8_t> short6 = format6;
+  short6.resize(short6.size() - 4);
+  Font entries6({cmap_table(gfnttest::build_cmap({{1, 0, short6}}))});
+  GFNT_CmapSubtable subtable{};
+  uint32_t glyph = 0;
+  GFNT_Error error{};
+
+  ASSERT_EQ(gfnt_face_cmap_at(cut0.face, 0, &subtable, &error), GFNT_OK);
+  EXPECT_EQ(gfnt_cmap_lookup(cut0.face, &subtable, 0x41, &glyph, &error),
+      GFNT_OK) << "the bytes that are there still answer";
+  EXPECT_EQ(glyph, 7u);
+  EXPECT_EQ(gfnt_cmap_lookup(cut0.face, &subtable, 0xFF, &glyph, &error),
+      GFNT_ERR_CORRUPT) << "and the ones that are not, do not";
+
+  ASSERT_EQ(gfnt_face_cmap_at(header6.face, 0, &subtable, &error), GFNT_OK);
+  EXPECT_EQ(gfnt_cmap_lookup(header6.face, &subtable, 0x41, &glyph,
+      &error), GFNT_ERR_CORRUPT) << "a format 6 with no firstCode";
+
+  ASSERT_EQ(gfnt_face_cmap_at(entries6.face, 0, &subtable, &error), GFNT_OK);
+  EXPECT_EQ(gfnt_cmap_lookup(entries6.face, &subtable, 0x41, &glyph,
+      &error), GFNT_OK);
+  EXPECT_EQ(gfnt_cmap_lookup(entries6.face, &subtable, 0x43, &glyph,
+      &error), GFNT_ERR_CORRUPT)
+      << "an entryCount that promises more glyphs than the table holds";
+}
+
+TEST(Cmap, AFormatFourWithNoFinalSegmentLeavesTheCodepointUnmapped) {
+  // Every conforming format 4 ends with a segment for 0xFFFF, so the search
+  // always finds a segment - and this one does not, which is how a codepoint
+  // walks off the end of the segment array. Zero is the answer, not a refusal:
+  // the table is searchable, it simply does not cover this codepoint.
+  Font font({windows_bmp(gfnttest::build_cmap_format4({
+      {0x41, 0x45, static_cast<int16_t>(-0x41 + 1), {}},
+  }))});
+
+  EXPECT_EQ(font.glyph(0x41), 1u);
+  EXPECT_EQ(font.glyph(0x46), 0u) << "just past the only segment";
+  EXPECT_EQ(font.glyph(0xFFFF), 0u) << "past every segment there is";
+}
+
+TEST(Cmap, ALookupThroughASubtableTheFaceCannotReachIsRefused) {
+  // The subtable is a struct the caller holds, so it can outlive the state it
+  // describes - or describe a face that cannot answer at all. Both are refusals
+  // rather than reads of whatever is at that offset.
+  Font stub({cmap_table(std::vector<uint8_t>(2, 0))});
+  GFNT_CmapSubtable made{};
+  uint32_t glyph = 0;
+  GFNT_Error error{};
+
+  made.format = 4;
+  made.offset = 4;
+  EXPECT_NE(gfnt_cmap_lookup(stub.face, &made, 0x41, &glyph, &error),
+      GFNT_OK) << "a cmap too short even for its own header";
+
+  // And asking that face for a subtable by index fails in the same place, which
+  // is the read the subtable list is walked with.
+  GFNT_CmapSubtable listed{};
+  EXPECT_NE(gfnt_face_cmap_at(stub.face, 0, &listed, &error), GFNT_OK);
+
+  Font font({windows_bmp(gfnttest::build_cmap_format4({
+      {0x41, 0x41, 0, {11}},
+      {0xFFFF, 0xFFFF, 1, {}},
+  }))});
+  GFNT_CmapSubtable far_away{};
+  far_away.format = 4;
+  far_away.offset = 100000;
+  EXPECT_NE(gfnt_cmap_lookup(font.face, &far_away, 0x41, &glyph, &error),
+      GFNT_OK) << "an offset past the end of the cmap";
+}
+
+TEST(CmapDump, SaysSoForASubtableItCannotReadAndForATableItCannotCount) {
+  // A record count that the table cannot hold: the count line is still written,
+  // then one line per record saying which ones could not be read - because a
+  // differential comparing this output needs a line per subtable either way.
+  //
+  // Written by hand rather than by patching a count onto a built table: raising
+  // the count of a real `cmap` makes the extra records read *inside* the subtable
+  // that follows, so they come back as nonsense rather than as unreadable, and
+  // the arm stays unreached. What reaches it is a record array that runs past the
+  // end of the table itself.
+  std::vector<uint8_t> cmap;
+  gfnttest::put_u16(cmap, 0);          // version
+  gfnttest::put_u16(cmap, 2);          // numTables: one record, then nothing
+  gfnttest::put_u16(cmap, 1);          // platformID
+  gfnttest::put_u16(cmap, 0);          // encodingID
+  gfnttest::put_u32(cmap, 12);         // offset, to a subtable that is not there
+  Font font({cmap_table(cmap)});
+  gfnttest::CapturedOutput out;
+
+  ASSERT_NE(out.get(), nullptr);
+  ASSERT_EQ(gfnt_face_cmap_dump(font.face, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+  EXPECT_NE(text.find("cmap: 2 subtables"), std::string::npos) << text;
+  EXPECT_NE(text.find("cmap subtable 1: unreadable"), std::string::npos)
+      << text;
+  EXPECT_NE(text.find("no subtable this library reads"), std::string::npos)
+      << text;
+
+  // A cmap too short to count at all: the dump has nothing to say and says the
+  // failure rather than printing a header it cannot back up.
+  Font stub({cmap_table(std::vector<uint8_t>(2, 0))});
+  gfnttest::CapturedOutput empty;
+  ASSERT_NE(empty.get(), nullptr);
+  EXPECT_NE(gfnt_face_cmap_dump(stub.face, empty.get()), GFNT_OK);
+
+  size_t failures = 0;
+  for (size_t allow = 0; allow < 8; allow++) {
+    gfnttest::FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    if (gfnt_face_cmap_dump(font.face, sink.get()) == GFNT_ERR_IO) {
+      failures++;
+    }
+  }
+  EXPECT_EQ(failures, 4u)
+      << "the header, a line for each record that cannot be read, and the line "
+         "saying no subtable is usable";
+
+  // And the same sweep over a font whose subtables this library does not read,
+  // where the last line is the other one.
+  Font unusable({cmap_table(gfnttest::build_cmap(
+      {{7, 7, gfnttest::build_cmap_format4({{0x41, 0x41, 0, {11}}})}}))});
+  size_t none = 0;
+  for (size_t allow = 0; allow < 4; allow++) {
+    gfnttest::FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    if (gfnt_face_cmap_dump(unusable.face, sink.get()) == GFNT_ERR_IO) {
+      none++;
+    }
+  }
+  EXPECT_EQ(none, 3u) << "the header, the record, and 'no subtable'";
+}
+
+TEST(Cmap, ASubtableIndexPastTheCountIsACallerError) {
+  Font font({windows_bmp(gfnttest::build_cmap_format4({
+      {0x41, 0x41, 0, {11}},
+      {0xFFFF, 0xFFFF, 1, {}},
+  }))});
+  GFNT_CmapSubtable subtable{};
+  GFNT_Error error{};
+
+  EXPECT_EQ(gfnt_face_cmap_at(font.face, 9, &subtable, &error),
+      GFNT_ERR_INVALID);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_NE(std::string(error.message).find("no subtable at that index"),
+      std::string::npos) << error.message;
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

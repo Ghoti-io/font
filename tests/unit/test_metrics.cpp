@@ -771,6 +771,102 @@ TEST(Metrics, OneFaceServesManyThreads) {
   EXPECT_EQ(failures.load(), 0);
 }
 
+TEST(Os2, ATableCutToEveryLengthIsRefusedRatherThanPartlyParsed) {
+  // Version 5 so that every version's own fields are in the table: the arms that
+  // read the code page ranges, the version 2 block and the optical sizes are
+  // each reached only by a table that claims to have them. The whole-font
+  // truncation sweep cuts `OS/2` too, but its fixture is one version, so the
+  // later blocks were never entered at all.
+  gfnttest::Os2Spec spec;
+  spec.version = 5;
+  const std::vector<uint8_t> whole = gfnttest::build_os2(spec);
+  size_t refusals = 0;
+
+  for (size_t cut = 0; cut < whole.size(); cut++) {
+    Font font({os2_table(std::vector<uint8_t>(whole.begin(),
+        whole.begin() + cut))});
+    const GFNT_Os2 * os2 = nullptr;
+    GFNT_Error error{};
+
+    // The face itself must load, or the refusal below would be "there is no
+    // face" rather than "this table is short" - which is how this test passed
+    // while reaching none of the arms it names.
+    ASSERT_NE(font.face, nullptr) << "OS/2 cut to " << cut;
+    if (gfnt_face_os2(font.face, &os2, &error) == GFNT_ERR_CORRUPT) {
+      refusals++;
+      continue;
+    }
+    ADD_FAILURE() << "OS/2 cut to " << cut << " of " << whole.size()
+                  << " parsed anyway";
+  }
+  EXPECT_EQ(refusals, whole.size()) << "every short table is refused";
+
+  // The control: uncut, it parses and the last field is the one only version 5
+  // has.
+  Font font({os2_table(whole)});
+  const GFNT_Os2 * os2 = nullptr;
+  ASSERT_EQ(gfnt_face_os2(font.face, &os2, nullptr), GFNT_OK);
+  EXPECT_EQ(os2->version, 5);
+  // The two fields only version 5 has, which is what makes this table the one
+  // whose every block is entered.
+  EXPECT_NE(os2->upper_optical_size, 0);
+}
+
+TEST(Metrics, AnHmtxShorterThanHheaPromisesRefusesThoseGlyphs) {
+  // `hhea` says three long entries and `hmtx` holds two. The advance and the
+  // side bearing are separate reads at separate offsets, so each has its own
+  // arm, and the numGlyphs minimum cannot hide this: it is computed from what
+  // `hmtx` can hold, and this table's own header is what disagrees with it.
+  std::vector<uint8_t> hmtx = gfnttest::build_hmtx({{500, 10}, {600, 20}}, {});
+  Font font({
+      {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 0, 3)},
+      {GFNT_TAG('h', 'm', 't', 'x'), hmtx},
+      {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(3)},
+  });
+  int32_t advance = 0;
+  int32_t bearing = 0;
+  GFNT_Error error{};
+
+  EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, nullptr, &advance, &error),
+      GFNT_OK) << "the entries that are there still answer";
+  EXPECT_EQ(advance, 500);
+
+  const GFNT_Result missing_advance = gfnt_face_glyph_advance(font.face, 2,
+      nullptr, &advance, &error);
+  const GFNT_Result missing_bearing = gfnt_face_glyph_side_bearing(font.face, 2,
+      nullptr, &bearing, &error);
+  EXPECT_NE(missing_advance, GFNT_OK);
+  EXPECT_NE(missing_bearing, GFNT_OK);
+
+  // And a glyph the face does not have at all, through the side bearing, which
+  // has its own propagation to do.
+  EXPECT_NE(gfnt_face_glyph_side_bearing(font.face, 99, nullptr, &bearing,
+      &error), GFNT_OK);
+}
+
+TEST(Metrics, EachLineMetricsPolicyReportsItsOwnTablesFailure) {
+  // Every policy reads a different table, so "the font cannot answer" has three
+  // sources - and a policy that fell back silently to a table the caller did not
+  // ask for is what M8 is about.
+  Font broken_os2({
+      os2_table(std::vector<uint8_t>(20, 0)),
+      {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 0, 1)},
+  });
+  Font broken_hhea({
+      os2_table(gfnttest::build_os2(gfnttest::Os2Spec{})),
+      {GFNT_TAG('h', 'h', 'e', 'a'), std::vector<uint8_t>(8, 0)},
+  });
+  GFNT_LineMetrics metrics{};
+  GFNT_Error error{};
+
+  EXPECT_NE(gfnt_face_line_metrics(broken_os2.face, GFNT_LINE_METRICS_TYPO,
+      nullptr, &metrics, &error), GFNT_OK);
+  EXPECT_NE(gfnt_face_line_metrics(broken_os2.face, GFNT_LINE_METRICS_WIN,
+      nullptr, &metrics, &error), GFNT_OK);
+  EXPECT_NE(gfnt_face_line_metrics(broken_hhea.face, GFNT_LINE_METRICS_HHEA,
+      nullptr, &metrics, &error), GFNT_OK);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

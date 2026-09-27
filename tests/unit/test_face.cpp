@@ -558,6 +558,95 @@ TEST(Face, EveryAllocationFailureIsReportedAndLeaksNothing) {
          "array";
 }
 
+TEST(Face, TheFirstFourBytesDecideWhetherItIsAFontAtAll) {
+  // Below the directory and below the collection header there is one question:
+  // is this an sfnt. It is answered from the flavour tag, and the answers have
+  // to be told apart - "not a font" is FORMAT and a caller should try another
+  // parser; "a collection whose header ends early" is CORRUPT and it should not.
+  const std::vector<uint8_t> tiny = {0x00, 0x01};
+  const std::vector<uint8_t> junk = {'j', 'u', 'n', 'k', 0, 0, 0, 0};
+  std::vector<uint8_t> collection = {'t', 't', 'c', 'f', 0x00, 0x01};
+  size_t count = 0;
+  GFNT_Error error{};
+
+  {
+    GFNT_Blob * blob = nullptr;
+    ASSERT_EQ(gfnt_blob_create_memory(tiny.data(), tiny.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_EQ(gfnt_face_count(blob, nullptr, &count, &error), GFNT_ERR_FORMAT);
+    ASSERT_NE(error.message, nullptr);
+    EXPECT_NE(std::string(error.message).find("too short to be a font"),
+        std::string::npos) << error.message;
+    gfnt_blob_destroy(blob);
+  }
+  {
+    GFNT_Blob * blob = nullptr;
+    ASSERT_EQ(gfnt_blob_create_memory(junk.data(), junk.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_EQ(gfnt_face_count(blob, nullptr, &count, &error), GFNT_ERR_FORMAT);
+    ASSERT_NE(error.message, nullptr);
+    EXPECT_NE(std::string(error.message).find("not an sfnt version"),
+        std::string::npos) << error.message;
+    gfnt_blob_destroy(blob);
+  }
+  {
+    GFNT_Blob * blob = nullptr;
+    ASSERT_EQ(gfnt_blob_create_memory(collection.data(), collection.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_EQ(gfnt_face_count(blob, nullptr, &count, &error), GFNT_ERR_CORRUPT);
+    ASSERT_NE(error.message, nullptr);
+    EXPECT_NE(std::string(error.message).find("collection header ends early"),
+        std::string::npos) << error.message;
+    gfnt_blob_destroy(blob);
+  }
+}
+
+TEST(Face, ACollectionWhoseOffsetArrayIsMissingOrWrongIsRefusedPerFace) {
+  // The header says how many faces there are and the array says where each one
+  // is. A header that promises faces the array does not describe, and an entry
+  // that points outside the file, are two different reads and neither may be
+  // answered with face 0.
+  std::vector<uint8_t> promised = {'t', 't', 'c', 'f'};
+  gfnttest::put_u16(promised, 1);
+  gfnttest::put_u16(promised, 0);
+  gfnttest::put_u32(promised, 3);       // three faces, and no offsets at all
+  std::vector<uint8_t> outside = promised;
+  gfnttest::put_u32(outside, 0);        // face 0, at the start of the file
+  gfnttest::put_u32(outside, 100000);   // face 1, past the end of it
+  gfnttest::put_u32(outside, 22);       // face 2, two bytes from the end
+  size_t count = 0;
+  GFNT_Face * face = nullptr;
+  GFNT_Error error{};
+
+  {
+    // The count itself is refused: the header's own check requires room for the
+    // offset array, so "three faces" and "no array" never becomes a face load
+    // that reads a missing offset.
+    GFNT_Blob * blob = nullptr;
+    ASSERT_EQ(gfnt_blob_create_memory(promised.data(), promised.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_EQ(gfnt_face_count(blob, nullptr, &count, &error), GFNT_ERR_CORRUPT);
+    EXPECT_NE(gfnt_face_load(blob, 2, nullptr, nullptr, &face, &error),
+        GFNT_OK);
+    gfnt_face_free(face);
+    face = nullptr;
+    gfnt_blob_destroy(blob);
+  }
+  {
+    GFNT_Blob * blob = nullptr;
+    ASSERT_EQ(gfnt_blob_create_memory(outside.data(), outside.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_NE(gfnt_face_load(blob, 1, nullptr, nullptr, &face, &error),
+        GFNT_OK) << "an offset past the end of the blob";
+    gfnt_face_free(face);
+    face = nullptr;
+    EXPECT_NE(gfnt_face_load(blob, 2, nullptr, nullptr, &face, &error),
+        GFNT_OK) << "an offset with no room for an offset table behind it";
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

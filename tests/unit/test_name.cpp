@@ -572,6 +572,251 @@ TEST(Name, EveryEntryPointRefusesNullArguments) {
   gfnt_name_free(nullptr, nullptr);
 }
 
+TEST(Name, ATableCutToEveryLengthIsRefusedRatherThanPartlyRead) {
+  // Two reads sit behind every record - the header that says how many there are,
+  // and the twelve bytes of the record itself - and a cut between them is the
+  // case where a count promises what the table cannot hold.
+  const std::vector<uint8_t> whole = gfnttest::build_name({
+      {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti Sans")},
+      {3, 1, 0x409, GFNT_NAME_SUBFAMILY, gfnttest::utf16be("Regular")},
+  });
+  size_t refusals = 0;
+
+  for (size_t cut = 0; cut < whole.size(); cut++) {
+    Font font({name_table(std::vector<uint8_t>(whole.begin(),
+        whole.begin() + cut))});
+    size_t count = 0;
+    GFNT_NameRecord record{};
+    GFNT_Error error{};
+    bool refused = gfnt_face_name_count(font.face, &count, &error) != GFNT_OK;
+
+    // Asked whatever the count said, because the record accessor opens the table
+    // itself: guarding these calls on the count having worked would leave that
+    // path unwalked for every cut short enough to lose the header.
+    for (size_t i = 0; i < 2; i++) {
+      refused = gfnt_face_name_at(font.face, i, &record, &error) != GFNT_OK
+          || refused;
+    }
+    // The strings live after the records, so a cut that takes the storage leaves
+    // the records readable and only the *text* missing. Asking for the text is
+    // what makes those cuts visible: without it, half of this sweep would report
+    // a font behaving perfectly while its names had gone.
+    GFNT_Result family_result = GFNT_OK;
+    GFNT_Result sub_result = GFNT_OK;
+    const std::string family = name_of(font.face, GFNT_NAME_FAMILY,
+        &family_result);
+    const std::string sub = name_of(font.face, GFNT_NAME_SUBFAMILY,
+        &sub_result);
+    // Both names, because each one's bytes are its own: the last record's string
+    // sits at the end of the table, so the cuts that take only it leave the first
+    // name intact - and a sweep that asked for one name would report those
+    // fourteen cuts as a table that lost nothing.
+    if (refused || family_result != GFNT_OK || sub_result != GFNT_OK) {
+      refusals++;
+      continue;
+    }
+    // Property one: if it still answers, it answers what the whole table did.
+    EXPECT_EQ(count, 2u) << "name cut to " << cut;
+    EXPECT_EQ(family, "Ghoti Sans") << "name cut to " << cut;
+    EXPECT_EQ(sub, "Regular") << "name cut to " << cut;
+  }
+  EXPECT_EQ(refusals, whole.size()) << "every short table loses something";
+}
+
+TEST(Name, ARecordOnAPlatformThisLibraryCannotDecodeIsPassedOver) {
+  // Platform 7 is not a platform: it is what a font written by a tool nobody
+  // maintains looks like. The scan must skip it rather than rank it, because the
+  // rank would put it somewhere and the decode would then fail.
+  Font mixed({name_table(gfnttest::build_name({
+      {7, 0, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("nonsense")},
+      {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti Sans")},
+  }))});
+  Font only({name_table(gfnttest::build_name({
+      {7, 0, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("nonsense")},
+  }))});
+  GFNT_Result result = GFNT_OK;
+
+  EXPECT_EQ(name_of(mixed.face, GFNT_NAME_FAMILY, &result), "Ghoti Sans");
+  EXPECT_EQ(result, GFNT_OK);
+  EXPECT_EQ(name_of(only.face, GFNT_NAME_FAMILY, &result), "");
+  EXPECT_EQ(result, GFNT_ERR_UNSUPPORTED)
+      << "a record nobody can decode is not a name this font has";
+}
+
+TEST(Name, DecodingOneRecordDirectlyReportsWhatTheScanWouldHaveSkipped) {
+  // The scan passes over an undecodable record; a caller that walks the records
+  // itself and decodes one is entitled to be told *why* it cannot be decoded,
+  // which is a different answer from "this font has no such name".
+  Font font({name_table(gfnttest::build_name({
+      {1, 1, 11, GFNT_NAME_FAMILY, gfnttest::raw_bytes("\x82\xa0")},
+      {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti")},
+  }))});
+  GFNT_NameRecord record{};
+  char * text = nullptr;
+  GFNT_Error error{};
+
+  ASSERT_EQ(gfnt_face_name_at(font.face, 0, &record, &error), GFNT_OK);
+  EXPECT_EQ(record.platform_id, 1);
+  EXPECT_EQ(gfnt_face_name_decode(font.face, &record, nullptr, &text, nullptr,
+      &error), GFNT_ERR_UNSUPPORTED);
+  ASSERT_NE(error.message, nullptr);
+  // And it names *which* encoding it cannot decode. The specific sentence used
+  // to live one function further in, where the decodability check in front of it
+  // meant nothing ever reached it, so every caller got the generic one.
+  EXPECT_NE(std::string(error.message).find("multi-byte"), std::string::npos)
+      << error.message;
+  EXPECT_EQ(text, nullptr);
+
+  // A platform nobody defines gets the general sentence, which is the other half
+  // of the same refusal and the reason it cannot simply be reworded.
+  GFNT_NameRecord unknown{};
+  unknown.platform_id = 7;
+  EXPECT_EQ(gfnt_face_name_decode(font.face, &unknown, nullptr, &text, nullptr,
+      &error), GFNT_ERR_UNSUPPORTED);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_EQ(std::string(error.message).find("multi-byte"), std::string::npos)
+      << error.message;
+}
+
+TEST(Name, ARecordWhoseBytesRunPastTheStorageIsCorrupt) {
+  // The record's length and offset are read from the table and the bytes they
+  // name are not there. A Macintosh record is decoded a byte at a time, so this
+  // is the bound inside that loop rather than the one on the record.
+  std::vector<uint8_t> name = gfnttest::build_name({
+      {1, 0, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("Ghoti")},
+  });
+  // The length field of record 0, made longer than the storage that follows it.
+  gfnttest::patch_u16(name, gfnttest::name_record_offset(0) + 8, 200);
+  Font font({name_table(name)});
+  GFNT_NameRecord record{};
+  char * text = nullptr;
+  GFNT_Error error{};
+
+  ASSERT_EQ(gfnt_face_name_at(font.face, 0, &record, &error), GFNT_OK);
+  EXPECT_EQ(gfnt_face_name_decode(font.face, &record, nullptr, &text, nullptr,
+      &error), GFNT_ERR_CORRUPT);
+  EXPECT_EQ(text, nullptr);
+}
+
+TEST(Name, DecodingCanRunOutOfMemoryAndSaysSoWithoutLeaking) {
+  Font font({name_table(gfnttest::build_name({
+      {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti Sans")},
+  }))});
+  GFNT_NameRecord record{};
+  ASSERT_EQ(gfnt_face_name_at(font.face, 0, &record, nullptr), GFNT_OK);
+
+  for (size_t n = 0; n < 3; n++) {
+    gfnttest::FailingAllocator allocator(n);
+    char * text = nullptr;
+    GFNT_Error error{};
+    const GFNT_Result result = gfnt_face_name_decode(font.face, &record,
+        allocator.get(), &text, nullptr, &error);
+
+    if (result == GFNT_OK) {
+      allocator.stop_failing();
+      gfnt_name_free(allocator.get(), text);
+    }
+    else {
+      EXPECT_EQ(result, GFNT_ERR_OOM) << "at refusal " << n;
+      EXPECT_EQ(text, nullptr) << "at refusal " << n;
+      EXPECT_NE(error.message, nullptr);
+    }
+    EXPECT_EQ(allocator.live(), 0u) << "at refusal " << n;
+  }
+}
+
+TEST(NameDump, EscapesTheControlBytesItSaysItDoesAndNothingElse) {
+  // The dump is read by people and by `ttx_diff`, so a byte that would end a
+  // line has to be spelled rather than written. Only C0 and DEL are escaped:
+  // everything else is UTF-8 the decoder produced, and mangling it here would
+  // make the dump a worse record than the font.
+  Font font({name_table(gfnttest::build_name({
+      // "\x01f" would be one hex escape of three digits rather than a byte and
+      // a letter, which is why the string is split here.
+      {3, 1, 0x409, GFNT_NAME_FAMILY,
+          gfnttest::utf16be("a\rb\nc\td\\e\x01" "f\x7f" "z")},
+      {3, 1, 0x409, GFNT_NAME_COPYRIGHT, gfnttest::utf16be("\xe9")},
+  }))});
+  gfnttest::CapturedOutput out;
+
+  ASSERT_NE(out.get(), nullptr);
+  ASSERT_EQ(gfnt_face_name_dump(font.face, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+
+  // The trailing 'z' is what makes the last run a run: without a plain byte
+  // after the final escape there is nothing left to write when the loop ends.
+  EXPECT_NE(text.find("a\\rb\\nc\\td\\\\e\\x01" "f\\x7F" "z"),
+      std::string::npos) << text;
+
+  // The escaped text is written in runs - the bytes before an escape, the escape
+  // itself, and whatever is left after the last one - so each is a write of its
+  // own and each can fail.
+  size_t failures = 0;
+  for (size_t allow = 0; allow < 32; allow++) {
+    gfnttest::FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    if (gfnt_face_name_dump(font.face, sink.get()) == GFNT_ERR_IO) {
+      failures++;
+    }
+  }
+  EXPECT_GT(failures, 6u) << "one write per run and per escape";
+  // U+00E9 is two UTF-8 bytes out of the decoder and neither is escaped.
+  EXPECT_NE(text.find("\xc3\xa9"), std::string::npos) << text;
+}
+
+TEST(NameDump, ReportsEveryWriteFailureAndEveryRecordItCannotRead) {
+  // Three kinds of line - a readable record, one whose bytes are unreadable, and
+  // one whose encoding this library does not decode - and every one of them is a
+  // write that can fail.
+  std::vector<uint8_t> name = gfnttest::build_name({
+      {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti")},
+      {1, 1, 11, GFNT_NAME_SUBFAMILY, gfnttest::raw_bytes("\x82\xa0")},
+      {1, 0, 0, GFNT_NAME_COPYRIGHT, gfnttest::raw_bytes("Mac")},
+  });
+  gfnttest::patch_u16(name, gfnttest::name_record_offset(2) + 8, 400);
+  Font font({name_table(name)});
+  gfnttest::CapturedOutput out;
+
+  ASSERT_NE(out.get(), nullptr);
+  ASSERT_EQ(gfnt_face_name_dump(font.face, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+  EXPECT_NE(text.find("name: 3 records"), std::string::npos) << text;
+  EXPECT_NE(text.find("name record 1: platform 1, encoding 1"),
+      std::string::npos) << text;
+  EXPECT_NE(text.find("not decodable"), std::string::npos) << text;
+
+  size_t failures = 0;
+  for (size_t allow = 0; allow < 12; allow++) {
+    gfnttest::FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    if (gfnt_face_name_dump(font.face, sink.get()) == GFNT_ERR_IO) {
+      failures++;
+    }
+  }
+  // The header, then for the readable record its prefix, its text and its
+  // closing quote; for the undecodable one a single line; and for the one whose
+  // bytes are missing, the same.
+  EXPECT_EQ(failures, 6u);
+
+  Font broken({name_table(std::vector<uint8_t>(4, 0))});
+  gfnttest::CapturedOutput other;
+  ASSERT_NE(other.get(), nullptr);
+  EXPECT_NE(gfnt_face_name_dump(broken.face, other.get()), GFNT_OK)
+      << "a table whose count cannot be read has no records to print";
+
+  // A count that promises records the table does not hold: the record itself is
+  // unreadable, which is its own line and its own write.
+  std::vector<uint8_t> promised = gfnttest::build_name({
+      {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti")},
+  });
+  gfnttest::patch_u16(promised, 2, 40);
+  Font ragged({name_table(promised)});
+  gfnttest::CapturedOutput third;
+  ASSERT_NE(third.get(), nullptr);
+  EXPECT_EQ(gfnt_face_name_dump(ragged.face, third.get()), GFNT_OK);
+  EXPECT_NE(third.finish().find("unreadable"), std::string::npos);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

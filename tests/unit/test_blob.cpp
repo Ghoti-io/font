@@ -320,6 +320,76 @@ TEST(Blob, EveryAllocationFailureIsReportedAndLeaksNothing) {
          "copy";
 }
 
+TEST(Blob, EveryAllocationFailureReadingOrMappingAFileIsReportedAndLeaksNothing) {
+  // The memory sweep above cannot reach either of these: reading a file goes
+  // through cutil, whose own refusal has to be translated into this library's
+  // vocabulary, and mapping one allocates the blob while the bytes are already
+  // mapped - so the failure arm has an unmap to do before it returns.
+  gfnttest::TempFile file(std::string(64, 'x'));
+  ASSERT_TRUE(file.valid());
+
+  size_t read_failures = 0;
+  for (size_t n = 0; n < 6; n++) {
+    gfnttest::FailingAllocator allocator(n);
+    GFNT_Blob * blob = nullptr;
+    GFNT_Error error{};
+    const GFNT_Result result = gfnt_blob_create_file(file.path(), nullptr,
+        allocator.get(), &blob, &error);
+
+    if (result == GFNT_OK) {
+      allocator.stop_failing();
+      gfnt_blob_destroy(blob);
+    }
+    else {
+      EXPECT_EQ(result, GFNT_ERR_OOM) << "at refusal " << n;
+      EXPECT_EQ(blob, nullptr) << "at refusal " << n;
+      EXPECT_NE(error.message, nullptr) << "at refusal " << n;
+      read_failures++;
+    }
+    EXPECT_EQ(allocator.live(), 0u) << "at refusal " << n;
+  }
+  EXPECT_GT(read_failures, 0u) << "reading a file allocates something";
+
+  size_t map_failures = 0;
+  for (size_t n = 0; n < 4; n++) {
+    gfnttest::FailingAllocator allocator(n);
+    GFNT_Blob * blob = nullptr;
+    GFNT_Error error{};
+    const GFNT_Result result = gfnt_blob_create_mmap(file.path(), nullptr,
+        allocator.get(), &blob, &error);
+
+    if (result == GFNT_OK) {
+      allocator.stop_failing();
+      gfnt_blob_destroy(blob);
+    }
+    else {
+      EXPECT_EQ(result, GFNT_ERR_OOM) << "at refusal " << n;
+      EXPECT_EQ(blob, nullptr) << "at refusal " << n;
+      map_failures++;
+    }
+    EXPECT_EQ(allocator.live(), 0u) << "at refusal " << n;
+  }
+  EXPECT_EQ(map_failures, 1u) << "mapping allocates the blob and nothing else";
+}
+
+TEST(Blob, TheDumpSaysWhereTheBytesCameFrom) {
+  // Three sources, three words, and the mapped one was the line no test read:
+  // every other blob in the suite is memory or a file.
+  gfnttest::TempFile file(std::string(48, 'y'));
+  ASSERT_TRUE(file.valid());
+  GFNT_Blob * mapped = nullptr;
+  ASSERT_EQ(gfnt_blob_create_mmap(file.path(), nullptr, nullptr, &mapped,
+      nullptr), GFNT_OK);
+  gfnttest::CapturedOutput out;
+  ASSERT_NE(out.get(), nullptr);
+
+  EXPECT_EQ(gfnt_blob_dump(mapped, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+  EXPECT_NE(text.find("mapped"), std::string::npos) << text;
+  EXPECT_NE(text.find("48"), std::string::npos) << text;
+  gfnt_blob_destroy(mapped);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

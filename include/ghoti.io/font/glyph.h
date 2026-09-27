@@ -110,9 +110,13 @@ typedef struct GFNT_Strike {
 /**
  * @brief Whether the face carries outline glyph data this library reads.
  *
- * `glyf` with `loca`, or `CFF `. A face whose outlines are in a format section
- * 16 defers - `CFF2` - reports false, because what a caller needs to know is
- * whether asking for an outline can succeed.
+ * `glyf` with `loca` - both, since neither indexes glyphs without the other.
+ *
+ * A face whose outlines are charstrings reports **false**, `CFF ` and `CFF2`
+ * alike, because what a caller needs to know is whether asking for an outline
+ * can succeed and today it cannot (documentation/design.md section 7.4). This
+ * becomes true for `CFF ` faces when the charstring interpreter lands, which is
+ * the one answer here that is expected to change.
  *
  * @param face The face, or NULL.
  * @return true if outlines are there to be read.

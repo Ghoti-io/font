@@ -346,6 +346,78 @@ inline std::vector<uint8_t> build_glyf_glyph(
 }
 
 /**
+ * One component of a composite glyph for ::build_glyf_composite().
+ *
+ * The flags are the caller's, spelled as the format spells them, because a
+ * builder that derived them would decide the thing under test: which encoding a
+ * reader meets is exactly what a composite test varies. `MORE_COMPONENTS` is the
+ * one exception - it says whether another component follows, which is a property
+ * of the list rather than of the component, so the builder sets it.
+ */
+struct GlyfComponent {
+  uint16_t glyph;
+  uint16_t flags;
+  int16_t arg1;
+  int16_t arg2;
+  /// The F2Dot14 values the transform flags call for, written verbatim: one for
+  /// `WE_HAVE_A_SCALE`, two for the x and y form, four for the two-by-two. The
+  /// caller supplies them for the same reason it supplies the flags.
+  std::vector<int16_t> transform{};
+};
+
+/**
+ * A composite `glyf` glyph from its components.
+ *
+ * The fixtures are where a composite fontTools wrote lives (every flag, all
+ * three transform encodings). This exists for the two kinds of composite no
+ * writer will produce: one whose bytes stop in the middle, and one that
+ * contradicts itself - a component that is its own glyph, or a point match
+ * naming a point that is not there.
+ */
+inline std::vector<uint8_t> build_glyf_composite(
+    const std::vector<GlyfComponent> & components,
+    const std::vector<uint8_t> & instructions = {}) {
+  std::vector<uint8_t> out;
+
+  put_s16(out, -1);                 // numberOfContours: a composite
+  put_s16(out, 0);                  // xMin
+  put_s16(out, 0);                  // yMin
+  put_s16(out, 500);                // xMax
+  put_s16(out, 500);                // yMax
+  for (size_t i = 0; i < components.size(); ++i) {
+    uint16_t flags = components[i].flags;
+
+    if (i + 1 < components.size()) {
+      flags |= 0x0020;              // MORE_COMPONENTS
+    }
+    else {
+      flags = static_cast<uint16_t>(flags & ~0x0020);
+      if (!instructions.empty()) {
+        flags |= 0x0100;            // WE_HAVE_INSTRUCTIONS, on the last one
+      }
+    }
+    put_u16(out, flags);
+    put_u16(out, components[i].glyph);
+    if (flags & 0x0001) {           // ARG_1_AND_2_ARE_WORDS
+      put_s16(out, components[i].arg1);
+      put_s16(out, components[i].arg2);
+    }
+    else {
+      out.push_back(static_cast<uint8_t>(components[i].arg1));
+      out.push_back(static_cast<uint8_t>(components[i].arg2));
+    }
+    for (int16_t value : components[i].transform) {
+      put_s16(out, value);
+    }
+  }
+  if (!instructions.empty()) {
+    put_u16(out, static_cast<uint16_t>(instructions.size()));
+    out.insert(out.end(), instructions.begin(), instructions.end());
+  }
+  return out;
+}
+
+/**
  * A `glyf` table from several glyphs, and the `loca` that indexes it.
  *
  * Both come back together because they are one fact spelled twice: a `loca`

@@ -2,7 +2,10 @@
 #
 # Summarize gcov data for a build that was compiled with --coverage.
 #
-# Run from the project root, with the object directory as the only argument.
+# Run from the project root, with the object directory as the only argument. The
+# annotated source it reads is left behind as <object-dir>/coverage.txt, because
+# the summary prints percentages and a triage needs the lines: grep it for
+# `#####` to get them.
 # Prints per-file line coverage, the project total, and - separately - the
 # growth and resize lines that never executed.
 #
@@ -14,6 +17,21 @@
 set -eu
 
 OBJ_DIR="${1:?usage: coverage.sh <object-dir>}"
+# The floor and the smallest report worth believing, both overridable so that a
+# one-off run over part of the suite can say so rather than fail.
+#
+# The floor is a tripwire, not a target. What the report is read for is the list
+# of lines nothing reaches; the percentage is here so that a change which stops
+# reaching a hundred of them cannot pass unnoticed, and it is deliberately a
+# little below what the suite achieves - close enough to notice a regression,
+# far enough not to fail on a line somebody adds before its test.
+#
+# GFNT_COVERAGE_LINES is the control. Every figure below is a ratio, and a ratio
+# is fine about a report that collapsed: a sweep that measured one file would
+# print 100% and pass a floor of any height. So the denominator has a floor of
+# its own.
+FLOOR="${GFNT_COVERAGE_FLOOR:-96}"
+LINES_FLOOR="${GFNT_COVERAGE_LINES:-3000}"
 
 if ! command -v gcov >/dev/null 2>&1; then
   echo "coverage: gcov not found (install gcc's gcov)" >&2
@@ -27,17 +45,28 @@ if [ -z "$GCDA" ]; then
   exit 1
 fi
 
-rm -f ./*.gcov
 # gcov resolves the Source: paths relative to the directory it runs in, so it
 # is invoked from the project root with the object directory passed per file.
+#
+# `-t` writes the annotated source to stdout instead of to a .gcov file, and
+# every object's output is concatenated into one stream. That is not a
+# convenience: a header with code in it - src/core/fixed.h - is compiled into
+# many objects, and gcov names its output after the *source*, so each object's
+# report overwrote the last one. Whichever object happened to be processed last
+# decided what the report said about that header, and a line executed by every
+# other translation unit read as never executed. Measured: fixed.h's two
+# saturation lines flipped between covered and uncovered depending on nothing
+# but find's order.
+REPORT="$OBJ_DIR/coverage.txt"
+rm -f "$REPORT"
 for g in $GCDA; do
-  gcov -p -r -o "$(dirname "$g")" "$g" >/dev/null 2>&1 || true
+  gcov -t -p -r -o "$(dirname "$g")" "$g" 2>/dev/null >> "$REPORT" || true
 done
 
-awk '
-  FNR == 1 { src = "" }
-  # The Source: header names the file this .gcov describes.
-  src == "" && /Source:/ {
+awk -v floor="$FLOOR" -v lines_floor="$LINES_FLOOR" '
+  # The Source: line starts each file section of the stream - one per object, so
+  # the same source can appear many times and its lines are merged below.
+  /^[ \t]*-:[ \t]*0:Source:/ {
     n = index($0, "Source:")
     src = substr($0, n + 7)
     sub(/^[ \t]+/, "", src)
@@ -109,6 +138,19 @@ awk '
     }
     printf "%-52s %8d %6.1f%%\n", "TOTAL", grand_total,
       (grand_total ? grand_covered * 100 / grand_total : 0)
+    if (grand_total < lines_floor) {
+      printf "\ncoverage: only %d executable lines were measured, under the %d " \
+          "this report is supposed to see. Something did not compile with " \
+          "--coverage, or did not run.\n", grand_total, lines_floor
+      failed = 1
+    }
+    else if (grand_covered * 100 < floor * grand_total) {
+      printf "\ncoverage: %.1f%% is below the floor of %d%%. The lines nobody " \
+          "reaches are listed above; documentation/development.md says which " \
+          "kinds are expected to stay there.\n",
+          grand_covered * 100 / grand_total, floor
+      failed = 1
+    }
 
     if (gap_count > 0) {
       printf "\n%d growth/capacity lines never executed:\n", gap_count
@@ -120,7 +162,8 @@ awk '
     } else {
       printf "\nEvery growth/capacity line was executed.\n"
     }
+    if (failed) {
+      exit 1
+    }
   }
-' ./*.gcov
-
-rm -f ./*.gcov
+' "$REPORT"

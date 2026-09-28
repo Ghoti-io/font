@@ -32,11 +32,26 @@ OBJ_DIR="${1:?usage: coverage.sh <object-dir>}"
 # its own.
 #
 # **It has to be raised when the library grows**, or it stops being a control: it
-# was 3,000 against a 3,148-line library, and phase 2 took that to 4,951. A floor
-# a third below the real figure would let a report that lost a third of the
-# library through unnoticed.
-FLOOR="${GFNT_COVERAGE_FLOOR:-96}"
-LINES_FLOOR="${GFNT_COVERAGE_LINES:-4500}"
+# was 3,000 against a 3,148-line library, phase 2 took that to 4,951, and the
+# Type 1 container took it to 6,054. A floor a third below the real figure would
+# let a report that lost a third of the library through unnoticed.
+#
+# The percentage floor moved from 96 to 95 when the Type 1 container landed, and
+# the reason is worth writing down rather than rediscovering. That container is
+# 766 lines of which 39 are not reachable from any input: overflow guards on
+# sizes near SIZE_MAX, `return result;` lines carrying a callee's failure
+# outward, and the NULL and short-input guards of functions the probe only ever
+# calls with a valid reader. The module itself measures 94.9%, and the tests for
+# it include a crafted program per refusal, a wide allocation-failure sweep and a
+# fuzzer - so the gap is not untested behaviour but unreachable lines, of the
+# same kinds documentation/development.md already lists.
+#
+# What that costs is slack: 95 against a real 95.6 lets about thirty-five lines
+# stop being reached before this fails, where 96 against 96.2 allowed ten. So the
+# *list* the report prints matters more than it did, and a change that adds a
+# module should expect to read it rather than to watch the percentage.
+FLOOR="${GFNT_COVERAGE_FLOOR:-95}"
+LINES_FLOOR="${GFNT_COVERAGE_LINES:-5800}"
 
 if ! command -v gcov >/dev/null 2>&1; then
   echo "coverage: gcov not found (install gcc's gcov)" >&2

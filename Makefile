@@ -623,6 +623,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive
+.PHONY: check-oracle-cff check-oracle-cff-exhaustive
 # Fixture commands
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
@@ -872,6 +873,7 @@ check-oracle-ttx: $(EXAMPLES)
 
 check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
+check-oracle: check-oracle-cff
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -881,6 +883,16 @@ check-oracle-glyf: ## Diff every glyph's outline and path against fontTools
 check-oracle-glyf: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools -- \
 		python3 $(ORACLE)/glyf_diff.py --quiet
+
+check-oracle-cff: ## Diff every CFF glyph's program, path and advance against fontTools
+check-oracle-cff: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+		python3 $(ORACLE)/cff_diff.py --quiet
+
+check-oracle-cff-exhaustive: ## The same, over every glyph of every font
+check-oracle-cff-exhaustive: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+		python3 $(ORACLE)/cff_diff.py --stride 1 --quiet
 
 check-oracle-glyf-exhaustive: ## The same, over every glyph of every font
 check-oracle-glyf-exhaustive: $(EXAMPLES)

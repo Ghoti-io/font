@@ -1057,7 +1057,20 @@ static GFNT_Result gfnt_cs_run_frame(GFNT_CsState * state,
       case GFNT_CS_VSTEM:
       case GFNT_CS_HSTEMHM:
       case GFNT_CS_VSTEMHM:
-        if (state->type == GFNT_CHARSTRING_TYPE2) {
+        if (state->type != GFNT_CHARSTRING_TYPE2) {
+          // Type 1 has hstem and vstem and reserves the other two bytes: the
+          // `hm` names a hint mask, which Type 1 does not have. Every other
+          // operator Type 2 added is refused here by name, and these two were
+          // reached through the case they share with the pair Type 1 does have
+          // - so a Type 1 charstring could declare stems with a byte that
+          // language never spells, and be drawn rather than refused.
+          if (op == GFNT_CS_HSTEMHM || op == GFNT_CS_VSTEMHM) {
+            return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor - 1,
+                "hstemhm or vstemhm, which Type 1 does not have - it has hstem "
+                "and vstem, and no hint masks for the hm to refer to");
+          }
+        }
+        else {
           // All four stem operators are stack-clearing, so all four can carry
           // the leading width. The specification's list names hstem and hstemhm
           // and not the vertical pair, which reads as an omission rather than a
@@ -1584,11 +1597,24 @@ const char * gfnt_charstring_type_string(GFNT_CharstringType type) {
   return "unknown";
 }
 
-/** One operator's name, for the dump and for diagnostics. */
+/** The operator a byte spells in this language, and not in the other one.
+ *
+ * The two languages divide one byte range differently, and a single table that
+ * named every byte in both would lie in both directions: 13 is `hsbw` in Type 1
+ * and reserved in Type 2, and 19 is `hintmask` in Type 2 and reserved in Type 1.
+ * The interpreter refuses each of those by name; a dump that named them anyway
+ * would report that a font contains an operator the language it is written in
+ * does not have. For `hintmask` it is worse than a wrong name, because the
+ * caller divides the bytes after it as a mask - so one reserved byte in a Type 1
+ * charstring would make every operator printed after it fiction.
+ */
 static const char * gfnt_cs_op_name(GFNT_CharstringType type, uint8_t op,
     uint8_t op2) {
+  const bool t1 = type == GFNT_CHARSTRING_TYPE1;
+
   if (op != GFNT_CS_ESCAPE) {
     switch (op) {
+      // Spelled the same in both languages.
       case GFNT_CS_HSTEM: return "hstem";
       case GFNT_CS_VSTEM: return "vstem";
       case GFNT_CS_VMOVETO: return "vmoveto";
@@ -1596,64 +1622,66 @@ static const char * gfnt_cs_op_name(GFNT_CharstringType type, uint8_t op,
       case GFNT_CS_HLINETO: return "hlineto";
       case GFNT_CS_VLINETO: return "vlineto";
       case GFNT_CS_RRCURVETO: return "rrcurveto";
-      case GFNT_CS_CLOSEPATH: return "closepath";
       case GFNT_CS_CALLSUBR: return "callsubr";
       case GFNT_CS_RETURN: return "return";
-      case GFNT_CS_HSBW: return "hsbw";
       case GFNT_CS_ENDCHAR: return "endchar";
-      case GFNT_CS_HSTEMHM: return "hstemhm";
-      case GFNT_CS_HINTMASK: return "hintmask";
-      case GFNT_CS_CNTRMASK: return "cntrmask";
       case GFNT_CS_RMOVETO: return "rmoveto";
       case GFNT_CS_HMOVETO: return "hmoveto";
-      case GFNT_CS_VSTEMHM: return "vstemhm";
-      case GFNT_CS_RCURVELINE: return "rcurveline";
-      case GFNT_CS_RLINECURVE: return "rlinecurve";
-      case GFNT_CS_VVCURVETO: return "vvcurveto";
-      case GFNT_CS_HHCURVETO: return "hhcurveto";
-      case GFNT_CS_CALLGSUBR: return "callgsubr";
       case GFNT_CS_VHCURVETO: return "vhcurveto";
       case GFNT_CS_HVCURVETO: return "hvcurveto";
+      // Type 1's, which Type 2 reserves.
+      case GFNT_CS_CLOSEPATH: return t1 ? "closepath" : "reserved";
+      case GFNT_CS_HSBW: return t1 ? "hsbw" : "reserved";
+      // Type 2's, which Type 1 reserves.
+      case GFNT_CS_HSTEMHM: return t1 ? "reserved" : "hstemhm";
+      case GFNT_CS_HINTMASK: return t1 ? "reserved" : "hintmask";
+      case GFNT_CS_CNTRMASK: return t1 ? "reserved" : "cntrmask";
+      case GFNT_CS_VSTEMHM: return t1 ? "reserved" : "vstemhm";
+      case GFNT_CS_RCURVELINE: return t1 ? "reserved" : "rcurveline";
+      case GFNT_CS_RLINECURVE: return t1 ? "reserved" : "rlinecurve";
+      case GFNT_CS_VVCURVETO: return t1 ? "reserved" : "vvcurveto";
+      case GFNT_CS_HHCURVETO: return t1 ? "reserved" : "hhcurveto";
+      case GFNT_CS_CALLGSUBR: return t1 ? "reserved" : "callgsubr";
       default: return "reserved";
     }
   }
   switch (op2) {
-    case GFNT_CS2_DOTSECTION: return "dotsection";
-    case GFNT_CS2_VSTEM3: return "vstem3";
-    case GFNT_CS2_HSTEM3: return "hstem3";
-    case GFNT_CS2_AND: return "and";
-    case GFNT_CS2_OR: return "or";
-    case GFNT_CS2_NOT: return "not";
-    case GFNT_CS2_SEAC: return "seac";
-    case GFNT_CS2_SBW: return "sbw";
-    case GFNT_CS2_ABS: return "abs";
-    case GFNT_CS2_ADD: return "add";
-    case GFNT_CS2_SUB: return "sub";
+    // The one two-byte operator both languages have.
     case GFNT_CS2_DIV: return "div";
-    case GFNT_CS2_NEG: return "neg";
-    case GFNT_CS2_EQ: return "eq";
-    case GFNT_CS2_CALLOTHERSUBR: return "callothersubr";
-    case GFNT_CS2_POP: return "pop";
-    case GFNT_CS2_DROP: return "drop";
-    case GFNT_CS2_PUT: return "put";
-    case GFNT_CS2_GET: return "get";
-    case GFNT_CS2_IFELSE: return "ifelse";
-    case GFNT_CS2_RANDOM: return "random";
-    case GFNT_CS2_MUL: return "mul";
-    case GFNT_CS2_SQRT: return "sqrt";
-    case GFNT_CS2_DUP: return "dup";
-    case GFNT_CS2_EXCH: return "exch";
-    case GFNT_CS2_INDEX: return "index";
-    case GFNT_CS2_ROLL: return "roll";
-    case GFNT_CS2_SETCURRENTPOINT: return "setcurrentpoint";
-    case GFNT_CS2_HFLEX: return type == GFNT_CHARSTRING_TYPE1
-        ? "reserved" : "hflex";
-    case GFNT_CS2_FLEX: return type == GFNT_CHARSTRING_TYPE1
-        ? "reserved" : "flex";
-    case GFNT_CS2_HFLEX1: return type == GFNT_CHARSTRING_TYPE1
-        ? "reserved" : "hflex1";
-    case GFNT_CS2_FLEX1: return type == GFNT_CHARSTRING_TYPE1
-        ? "reserved" : "flex1";
+    // Type 1's, which Type 2 reserves.
+    case GFNT_CS2_DOTSECTION: return t1 ? "dotsection" : "reserved";
+    case GFNT_CS2_VSTEM3: return t1 ? "vstem3" : "reserved";
+    case GFNT_CS2_HSTEM3: return t1 ? "hstem3" : "reserved";
+    case GFNT_CS2_SEAC: return t1 ? "seac" : "reserved";
+    case GFNT_CS2_SBW: return t1 ? "sbw" : "reserved";
+    case GFNT_CS2_CALLOTHERSUBR: return t1 ? "callothersubr" : "reserved";
+    case GFNT_CS2_POP: return t1 ? "pop" : "reserved";
+    case GFNT_CS2_SETCURRENTPOINT: return t1 ? "setcurrentpoint" : "reserved";
+    // Type 2's, which Type 1 reserves. The arithmetic is all Type 2's: Type 1
+    // has only div, which is above.
+    case GFNT_CS2_AND: return t1 ? "reserved" : "and";
+    case GFNT_CS2_OR: return t1 ? "reserved" : "or";
+    case GFNT_CS2_NOT: return t1 ? "reserved" : "not";
+    case GFNT_CS2_ABS: return t1 ? "reserved" : "abs";
+    case GFNT_CS2_ADD: return t1 ? "reserved" : "add";
+    case GFNT_CS2_SUB: return t1 ? "reserved" : "sub";
+    case GFNT_CS2_NEG: return t1 ? "reserved" : "neg";
+    case GFNT_CS2_EQ: return t1 ? "reserved" : "eq";
+    case GFNT_CS2_DROP: return t1 ? "reserved" : "drop";
+    case GFNT_CS2_PUT: return t1 ? "reserved" : "put";
+    case GFNT_CS2_GET: return t1 ? "reserved" : "get";
+    case GFNT_CS2_IFELSE: return t1 ? "reserved" : "ifelse";
+    case GFNT_CS2_RANDOM: return t1 ? "reserved" : "random";
+    case GFNT_CS2_MUL: return t1 ? "reserved" : "mul";
+    case GFNT_CS2_SQRT: return t1 ? "reserved" : "sqrt";
+    case GFNT_CS2_DUP: return t1 ? "reserved" : "dup";
+    case GFNT_CS2_EXCH: return t1 ? "reserved" : "exch";
+    case GFNT_CS2_INDEX: return t1 ? "reserved" : "index";
+    case GFNT_CS2_ROLL: return t1 ? "reserved" : "roll";
+    case GFNT_CS2_HFLEX: return t1 ? "reserved" : "hflex";
+    case GFNT_CS2_FLEX: return t1 ? "reserved" : "flex";
+    case GFNT_CS2_HFLEX1: return t1 ? "reserved" : "hflex1";
+    case GFNT_CS2_FLEX1: return t1 ? "reserved" : "flex1";
     default: return "reserved";
   }
 }
@@ -1753,14 +1781,18 @@ GFNT_Result gfnt_charstring_dump(GFNT_CharstringType type,
         return GFNT_ERR_IO;
       }
     }
-    if (op == GFNT_CS_HSTEM || op == GFNT_CS_VSTEM || op == GFNT_CS_HSTEMHM
-        || op == GFNT_CS_VSTEMHM) {
+    // Stems are counted only to divide a mask, and only Type 2 has masks -
+    // in Type 1 two of these four bytes are reserved and spell nothing.
+    if (type == GFNT_CHARSTRING_TYPE2
+        && (op == GFNT_CS_HSTEM || op == GFNT_CS_VSTEM
+            || op == GFNT_CS_HSTEMHM || op == GFNT_CS_VSTEMHM)) {
       stems += pending / 2;
     }
     if (op == GFNT_CS_CALLSUBR || op == GFNT_CS_CALLGSUBR) {
       called_subr = true;
     }
-    if (op == GFNT_CS_HINTMASK || op == GFNT_CS_CNTRMASK) {
+    if (type == GFNT_CHARSTRING_TYPE2
+        && (op == GFNT_CS_HINTMASK || op == GFNT_CS_CNTRMASK)) {
       size_t mask_bytes;
 
       stems += pending / 2;

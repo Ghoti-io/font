@@ -229,6 +229,17 @@ std::vector<std::string> path_of(const GFNT_Outline * outline) {
   return lines;
 }
 
+/** How many times a dump says `reserved`. */
+size_t reserved_count(const std::string & text) {
+  size_t at = 0;
+  size_t found = 0;
+  while ((at = text.find("reserved", at)) != std::string::npos) {
+    ++found;
+    at += 1;
+  }
+  return found;
+}
+
 /** Whether a message names something, for the refusal tests. */
 void names(const GFNT_Error & error, const char * fragment) {
   ASSERT_NE(error.message, nullptr);
@@ -1050,27 +1061,73 @@ TEST(Charstring, TypeOneSeacCorrectsTheAccentByASideBearing) {
   EXPECT_EQ(path[3], "move 250 700");
 }
 
+/** Every byte one language defines and the other reserves. */
+const std::vector<uint8_t> kTypeOneOnlySingle = {kClosepath, kHsbw};
+const std::vector<uint8_t> kTypeOneOnlyEscape = {kDotsection, kVstem3, kHstem3,
+    kSeac, kSbw, kCallothersubr, kPop, kSetcurrentpoint};
+const std::vector<uint8_t> kTypeTwoOnlySingle = {kHstemhm, kHintmask,
+    kCntrmask, kVstemhm, kRcurveline, kRlinecurve, kVvcurveto, kHhcurveto,
+    kCallgsubr};
+/** Type 2's two-byte operators less `div`, the one both languages have. */
+const std::vector<uint8_t> kTypeTwoOnlyEscape = {kAnd, kOr, kNot, kAbs, kAdd,
+    kSub, kNeg, kEq, kDrop, kPut, kGet, kIfelse, kRandom, kMul, kSqrt, kDup,
+    kExch, kIndex, kRoll, kHflex, kFlex, kHflex1, kFlex1};
+
 TEST(Charstring, EachLanguageRefusesTheOthersOperators) {
   // Not a dialect: a container that guessed wrong should get a refusal from the
   // first byte it cannot read, not a plausible wrong shape.
-  const std::vector<std::pair<Program, GFNT_CharstringType>> cases = {
-      {Program().num(0).num(0).op(kHsbw), GFNT_CHARSTRING_TYPE2},
-      {Program().num(0).num(0).op(kClosepath), GFNT_CHARSTRING_TYPE2},
-      {Program().num(0).num(0).op2(kSeac), GFNT_CHARSTRING_TYPE2},
-      {Program().num(0).num(0).op2(kCallothersubr), GFNT_CHARSTRING_TYPE2},
-      {Program().num(0).num(0).op(kHintmask), GFNT_CHARSTRING_TYPE1},
-      {Program().num(0).num(0).op(kCallgsubr), GFNT_CHARSTRING_TYPE1},
-      {Program().num(0).num(0).op(kRcurveline), GFNT_CHARSTRING_TYPE1},
-      {Program().num(0).num(0).op(kVvcurveto), GFNT_CHARSTRING_TYPE1},
-      {Program().num(0).num(0).op2(kFlex), GFNT_CHARSTRING_TYPE1},
-      {Program().num(0).num(0).op2(kPut), GFNT_CHARSTRING_TYPE1},
+  //
+  // Every such byte is here rather than a sample of them. The sample this
+  // replaced named ten and left out hstemhm and vstemhm, which reach the
+  // interpreter through the case they share with the hstem and vstem Type 1
+  // does have - so a Type 1 charstring could declare stems with a byte that
+  // language reserves, and was drawn instead of refused.
+  //
+  // The Type 1 programs open with a real hsbw, and the offset is asserted. A
+  // Type 1 run with no hsbw is refused at the end of the run for that, which
+  // would pass a test that only looked at the result code and would prove
+  // nothing at all about the operator in the middle.
+  struct Case {
+    Program program;
+    GFNT_CharstringType type;
+    size_t at;
+    uint8_t op;
   };
-  for (const auto & item : cases) {
+  std::vector<Case> cases;
+  for (uint8_t which : kTypeOneOnlySingle) {
+    cases.push_back({Program().num(0).num(0).op(which),
+        GFNT_CHARSTRING_TYPE2, 2, which});
+  }
+  for (uint8_t which : kTypeOneOnlyEscape) {
+    cases.push_back({Program().num(0).num(0).op2(which),
+        GFNT_CHARSTRING_TYPE2, 2, which});
+  }
+  for (uint8_t which : kTypeTwoOnlySingle) {
+    cases.push_back({Program().num(0).num(500).op(kHsbw).num(0).num(0)
+        .op(which), GFNT_CHARSTRING_TYPE1, 6, which});
+  }
+  for (uint8_t which : kTypeTwoOnlyEscape) {
+    cases.push_back({Program().num(0).num(500).op(kHsbw).num(0).num(0)
+        .op2(which), GFNT_CHARSTRING_TYPE1, 6, which});
+  }
+  ASSERT_EQ(cases.size(), kTypeOneOnlySingle.size() + kTypeOneOnlyEscape.size()
+      + kTypeTwoOnlySingle.size() + kTypeTwoOnlyEscape.size());
+
+  for (const Case & item : cases) {
     GFNT_CharstringContext context = bare();
     Drawn run;
-    EXPECT_EQ(run.go(item.first, &context, item.second), GFNT_ERR_CORRUPT)
-        << "language " << gfnt_charstring_type_string(item.second);
-    ASSERT_NE(run.error.message, nullptr);
+    EXPECT_EQ(run.go(item.program, &context, item.type), GFNT_ERR_CORRUPT)
+        << "operator " << static_cast<int>(item.op) << " was accepted by "
+        << gfnt_charstring_type_string(item.type);
+    // EXPECT and not ASSERT: an ASSERT here returns from the test, so the
+    // first operator that was wrongly accepted would be the only one reported
+    // and the list would stop being the exhaustive thing it is for.
+    if (run.error.message == nullptr) {
+      continue;
+    }
+    EXPECT_EQ(run.error.offset, item.at)
+        << "operator " << static_cast<int>(item.op) << " was refused somewhere "
+        << "other than at its own byte: " << run.error.message;
   }
 }
 
@@ -1625,13 +1682,7 @@ TEST(CharstringDump, AReservedOperatorIsNamedRatherThanGuessedAt) {
       program.bytes.size(), nullptr, out.get()), GFNT_OK);
   const std::string text = out.finish();
   // Three of them, so the dump is not stopping at the first.
-  size_t at = 0;
-  size_t found = 0;
-  while ((at = text.find("reserved", at)) != std::string::npos) {
-    ++found;
-    at += 1;
-  }
-  EXPECT_EQ(found, 3u) << text;
+  EXPECT_EQ(reserved_count(text), 3u) << text;
 }
 
 TEST(CharstringDump, ATruncatedOperandEndsTheDumpWithoutReadingPastIt) {
@@ -1650,6 +1701,93 @@ TEST(CharstringDump, ATruncatedOperandEndsTheDumpWithoutReadingPastIt) {
     const std::string text = out.finish();
     EXPECT_NE(text.find("charstring Type 2"), std::string::npos) << text;
   }
+}
+
+TEST(CharstringDump, AnUnassignedTwoByteOperatorIsNamedReservedInEitherLanguage) {
+  // Neither language assigns 8, 19, 32 or 38 after an escape, so neither dump
+  // can name them - and a dump that guessed would be inventing an operator.
+  const std::vector<uint8_t> unassigned = {8, 19, 32, 38};
+  for (GFNT_CharstringType type : {GFNT_CHARSTRING_TYPE1,
+      GFNT_CHARSTRING_TYPE2}) {
+    Program program;
+    for (uint8_t which : unassigned) {
+      program.num(1).op2(which);
+    }
+    gfnttest::CapturedOutput out;
+    ASSERT_EQ(gfnt_charstring_dump(type, program.bytes.data(),
+        program.bytes.size(), nullptr, out.get()), GFNT_OK);
+    const std::string text = out.finish();
+    EXPECT_EQ(reserved_count(text), unassigned.size())
+        << gfnt_charstring_type_string(type) << ": " << text;
+  }
+}
+
+TEST(CharstringDump, TheDumpNamesOnlyTheOperatorsTheLanguageItIsReadingHas) {
+  // The name table is a second copy of the split the interpreter enforces, and
+  // it used to be one table for both languages: a Type 2 dump called byte 13
+  // `hsbw` and a Type 1 dump called byte 19 `hintmask`, so a dump reported that
+  // a font contained an operator the language it is written in does not have.
+  // The interpreter refuses each of these by name; the dump has to agree.
+  struct Case {
+    GFNT_CharstringType type;
+    std::vector<uint8_t> single;
+    std::vector<uint8_t> escape;
+    std::vector<const char *> absent;
+  };
+  const std::vector<Case> cases = {
+      {GFNT_CHARSTRING_TYPE2, kTypeOneOnlySingle, kTypeOneOnlyEscape,
+          {"closepath", "hsbw", "dotsection", "vstem3", "hstem3", "seac", "sbw",
+              "callothersubr", "pop", "setcurrentpoint"}},
+      {GFNT_CHARSTRING_TYPE1, kTypeTwoOnlySingle, kTypeTwoOnlyEscape,
+          {"hstemhm", "hintmask", "cntrmask", "vstemhm", "rcurveline",
+              "rlinecurve", "vvcurveto", "hhcurveto", "callgsubr", "and", "or",
+              "abs", "add", "sub", "neg", "drop", "put", "get", "ifelse",
+              "random", "mul", "sqrt", "dup", "exch", "index", "roll", "hflex",
+              "flex", "hflex1", "flex1"}},
+  };
+  for (const Case & item : cases) {
+    Program program;
+    for (uint8_t which : item.single) {
+      program.num(1).op(which);
+    }
+    for (uint8_t which : item.escape) {
+      program.num(1).op2(which);
+    }
+    gfnttest::CapturedOutput out;
+    ASSERT_EQ(gfnt_charstring_dump(item.type, program.bytes.data(),
+        program.bytes.size(), nullptr, out.get()), GFNT_OK);
+    const std::string text = out.finish();
+
+    for (const char * name : item.absent) {
+      EXPECT_EQ(text.find(std::string(" ") + name), std::string::npos)
+          << gfnt_charstring_type_string(item.type) << " named " << name
+          << ", which it does not have: " << text;
+    }
+    EXPECT_EQ(reserved_count(text), item.single.size() + item.escape.size())
+        << gfnt_charstring_type_string(item.type) << ": " << text;
+  }
+}
+
+TEST(CharstringDump, ATypeOneDumpDoesNotReadAMaskAfterAByteItReserves) {
+  // Worse than a wrong name: the caller divides the bytes after a `hintmask`
+  // as a mask, so naming byte 19 in a Type 1 charstring made the dump swallow
+  // the operators after it and print fiction from there on. No stems have been
+  // declared, so the mask it used to read was one byte wide - and the byte
+  // behind it here is the endchar, which a dump that reads a mask never names.
+  Program program;
+  program.num(0).num(500).op(kHsbw).op(kHintmask).op(kEndchar);
+
+  gfnttest::CapturedOutput out;
+  ASSERT_EQ(gfnt_charstring_dump(GFNT_CHARSTRING_TYPE1, program.bytes.data(),
+      program.bytes.size(), nullptr, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+
+  EXPECT_NE(text.find(" hsbw"), std::string::npos) << text;
+  EXPECT_NE(text.find(" reserved"), std::string::npos) << text;
+  EXPECT_NE(text.find(" endchar"), std::string::npos)
+      << "the byte behind a reserved 19 was read as a mask: " << text;
+  EXPECT_EQ(text.find(" mask"), std::string::npos)
+      << "a Type 1 dump read a hint mask: " << text;
 }
 
 TEST(CharstringDump, NullArgumentsAreCallerErrors) {

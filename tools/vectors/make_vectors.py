@@ -89,6 +89,9 @@ import sys
 
 from fontTools.misc.encodingTools import getEncoding
 from fontTools.ttLib.tables._p_o_s_t import standardGlyphOrder
+from fontTools.cffLib import (cffExpertSubsetStrings, cffIExpertStrings,
+    cffISOAdobeStrings, cffStandardStrings)
+from fontTools.encodings.StandardEncoding import StandardEncoding
 
 # The single-byte Macintosh encodings, in the order they are emitted. Roman is
 # first so that index 0 is the common case and a zeroed selector is not silently
@@ -446,6 +449,199 @@ def emit_text(out_dir, names, tables, rules, agreed, differ):
     return directory
 
 
+def cff_tables():
+    """The CFF tables phase 2 owes, with the checks that prove they were read.
+
+    Four facts, and none of them is one this library may write down:
+
+      * the **391 standard strings**, which every `charset` names its glyphs by
+        SID into and which is therefore what a CFF glyph is *called*;
+      * the **Standard Encoding**, 256 codes to SIDs, which `seac` and
+        `endchar`'s four-argument form use to name an accent and a base
+        (there is no other way to read one);
+      * the two **predefined charsets**, Expert and Expert Subset, which a
+        `charset` offset of 1 or 2 *is* rather than points at.
+
+    fontTools keeps them in two different modules, which is what makes the
+    cross-check below a cross-check rather than a restatement: the Standard
+    Encoding comes from `fontTools.encodings` and the strings from
+    `fontTools.cffLib`, and the specification says codes 32-126 are SIDs 1-95.
+    A transcription error on either side breaks that relation.
+    """
+    standard = list(cffStandardStrings)
+    if len(standard) != 391:
+        raise SystemExit("fontTools' cffStandardStrings has %d entries, not "
+                         "391; the SID boundary between a standard string and "
+                         "one stored in the table is that number and this "
+                         "generator will not guess it" % len(standard))
+    if len(set(standard)) != len(standard):
+        raise SystemExit("cffStandardStrings holds a duplicate name, so a name "
+                         "does not determine a SID and this generator's "
+                         "reverse lookup would be a choice rather than a fact")
+    sid_of = {name: index for index, name in enumerate(standard)}
+
+    # cffLib's own ISOAdobe list is the first 229 standard strings - predefined
+    # charset 0 is "GID i is SID i" over exactly that range - so it is a second
+    # transcription of a prefix of the first, in the same module. It catches a
+    # truncation, which is the failure a 391-entry list is most likely to have.
+    if list(cffISOAdobeStrings) != standard[:len(cffISOAdobeStrings)]:
+        raise SystemExit("cffISOAdobeStrings is not a prefix of "
+                         "cffStandardStrings; one of the two is not what this "
+                         "generator takes it for")
+
+    if len(StandardEncoding) != 256:
+        raise SystemExit("StandardEncoding has %d entries, not 256"
+                         % len(StandardEncoding))
+    encoding = []
+    for code, name in enumerate(StandardEncoding):
+        if not name or name == ".notdef":
+            encoding.append(0)
+            continue
+        if name not in sid_of:
+            raise SystemExit("StandardEncoding gives code %d the name %r, "
+                             "which is not a standard string; a code this "
+                             "library cannot turn into a SID is a seac it "
+                             "cannot read" % (code, name))
+        encoding.append(sid_of[name])
+    # The cross-module relation, stated by the specification and checked here.
+    for code in range(32, 127):
+        if encoding[code] != code - 31:
+            raise SystemExit("StandardEncoding code %d is SID %d, and the "
+                             "specification's ASCII run makes it %d; the two "
+                             "modules disagree" % (code, encoding[code],
+                                                   code - 31))
+
+    charsets = {}
+    for label, names in (("expert", cffIExpertStrings),
+                         ("expertsubset", cffExpertSubsetStrings)):
+        sids = []
+        for gid, name in enumerate(names):
+            if name not in sid_of:
+                raise SystemExit("the %s charset's glyph %d is %r, which is "
+                                 "not a standard string" % (label, gid, name))
+            sids.append(sid_of[name])
+        charsets[label] = sids
+    return standard, encoding, charsets, len(cffISOAdobeStrings)
+
+
+def emit_cff_strings(out_dir, standard, encoding, charsets, iso_adobe):
+    path = os.path.join(out_dir, "src", "cff", "cff_strings.h")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(HEADER % {"what":
+            "The CFF standard strings, the Standard Encoding, and the two\n"
+            " * predefined charsets. From fontTools' `cffStandardStrings`,\n"
+            " * `StandardEncoding`, `cffIExpertStrings` and\n"
+            " * `cffExpertSubsetStrings`. design.md section 7.4."})
+        handle.write("""
+#ifndef GHOTI_IO_GFNT_CFF_STRINGS_H
+#define GHOTI_IO_GFNT_CFF_STRINGS_H
+
+// Before anything is declared, so that namespace.h's renames are already in
+// effect - CONVENTIONS.md section 4, enforced by check-symbols.
+#include <ghoti.io/font/macros.h>
+#include <stdint.h>
+
+/** @brief How many standard strings CFF predefines. */
+#define GFNT_CFF_STANDARD_STRING_COUNT %d
+
+/**
+ * @brief How many glyphs the ISOAdobe charset names.
+ *
+ * Predefined charset 0, which is also what a font with no `charset` entry at
+ * all uses: glyph *i* is SID *i*, and a font with more glyphs than this names
+ * the rest not at all.
+ */
+#define GFNT_CFF_ISO_ADOBE_COUNT %d
+
+/**
+ * @brief The standard strings, indexed by SID.
+ *
+ * A `charset` gives each glyph a SID. One below
+ * ::GFNT_CFF_STANDARD_STRING_COUNT names one of these; one at or above it
+ * indexes the `String` INDEX of the font itself, offset by this count.
+ */
+static const char * const gfnt_cff_standard_strings[
+    GFNT_CFF_STANDARD_STRING_COUNT] = {
+""" % (len(standard), iso_adobe))
+        for index, name in enumerate(standard):
+            handle.write('  "%s", // %d\n' % (name, index))
+        handle.write("""};
+
+/**
+ * @brief The Standard Encoding, as a SID per code, 0 where nothing is encoded.
+ *
+ * `seac` - and `endchar` with four or five arguments, which is the same
+ * construction - names its accent and its base by **Standard Encoding code**,
+ * whatever the font's own encoding is. This table is the only way to read one,
+ * and a reader that used the font's encoding instead would place the accent of
+ * a re-encoded font on the wrong letter while reporting success.
+ */
+static const uint16_t gfnt_cff_standard_encoding[256] = {
+""")
+        for code in range(0, 256, 8):
+            row = ", ".join("%3d" % sid for sid in encoding[code:code + 8])
+            handle.write("  %s, // %d-%d\n" % (row, code, code + 7))
+        handle.write("};\n")
+
+        for label, macro, what in (
+            ("expert", "EXPERT",
+             "Predefined charset 1: the Expert charset, as a SID per glyph."),
+            ("expertsubset", "EXPERT_SUBSET",
+             "Predefined charset 2: the Expert Subset charset.")):
+            sids = charsets[label]
+            handle.write("""
+/** @brief How many glyphs the %s charset names. */
+#define GFNT_CFF_%s_CHARSET_COUNT %d
+
+/**
+ * @brief %s
+ *
+ * A `charset` offset of %d **is** this table rather than pointing at one, so a
+ * font using it carries no charset bytes at all and a reader without the table
+ * cannot name its glyphs.
+ */
+static const uint16_t gfnt_cff_%s_charset[GFNT_CFF_%s_CHARSET_COUNT] = {
+""" % (label, macro, len(sids), what, 1 if label == "expert" else 2,
+        macro.lower(), macro))
+            for gid in range(0, len(sids), 8):
+                row = ", ".join("%3d" % sid for sid in sids[gid:gid + 8])
+                handle.write("  %s, // %d-%d\n"
+                    % (row, gid, min(gid + 7, len(sids) - 1)))
+            handle.write("};\n")
+        handle.write("\n#endif // GHOTI_IO_GFNT_CFF_STRINGS_H\n")
+    return path
+
+
+def emit_cff_text(out_dir, standard, encoding, charsets, iso_adobe):
+    """The same facts as text, so testCff checks the compiled tables with no
+    container - the reason `make test` covers a generated table at all."""
+    path = os.path.join(out_dir, "tests", "data", "vectors", "cff_strings.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("# The CFF vectors, as text, for testVectors.\n"
+                     "#\n"
+                     "# Generated by tools/vectors/make_vectors.py in the "
+                     "pinned fonttools image.\n"
+                     "# Tab-separated, one fact per line:\n"
+                     "#   count <standard|isoadobe> <n>\n"
+                     "#   sid <sid> <name>\n"
+                     "#   encoding <code> <sid> <name or -> \n"
+                     "#   charset <expert|expertsubset> <gid> <sid> <name>\n")
+        handle.write("count\tstandard\t%d\n" % len(standard))
+        handle.write("count\tisoadobe\t%d\n" % iso_adobe)
+        for sid, name in enumerate(standard):
+            handle.write("sid\t%d\t%s\n" % (sid, name))
+        for code, sid in enumerate(encoding):
+            handle.write("encoding\t%d\t%d\t%s\n"
+                % (code, sid, standard[sid] if sid else "-"))
+        for label in ("expert", "expertsubset"):
+            for gid, sid in enumerate(charsets[label]):
+                handle.write("charset\t%s\t%d\t%d\t%s\n"
+                    % (label, gid, sid, standard[sid]))
+    return path
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=None,
@@ -470,10 +666,21 @@ def main(argv=None):
     path, rules = emit_mac_encodings(root, tables, chosen)
     written.append(path)
     written.append(emit_text(root, names, tables, rules, agreed, differ))
+    standard, encoding, charsets, iso_adobe = cff_tables()
+    written.append(emit_cff_strings(root, standard, encoding, charsets,
+        iso_adobe))
+    written.append(emit_cff_text(root, standard, encoding, charsets,
+        iso_adobe))
 
     print("vectors: %d standard glyph names, %d single-byte Macintosh "
           "encodings, %d (encoding, language) rules"
           % (len(names), len(MAC_TABLES), len(rules)))
+    print("vectors: %d CFF standard strings, %d encoded Standard Encoding "
+          "codes, %d Expert and %d Expert Subset charset entries"
+          % (len(standard), sum(1 for sid in encoding if sid),
+             len(charsets["expert"]), len(charsets["expertsubset"])))
+    print("vectors: the Standard Encoding's ASCII run agrees with the standard "
+          "strings' SIDs 1-95 across fontTools' two modules")
     print("vectors: Mac Roman cross-checked against glibc's MACINTOSH charmap: "
           "%d of 128 bytes agree, %d accounted for (%s)"
           % (agreed, len(differ),

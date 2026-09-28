@@ -41,6 +41,16 @@
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/name.h>
 
+// The CFF tables are checked against the committed text directly, unlike the
+// two above. There is no public call that walks all 391 standard strings or all
+// 256 Standard Encoding codes - a fixture naming every one of them would be a
+// font with 391 glyphs built for this test alone - and what this gate exists to
+// catch is a **hand-edited row**, which is visible from here and from nowhere
+// else without a container. `tests/unit/test_cff.cpp` covers the other
+// direction: the tables in *use*, through the public API, on a font whose
+// glyph names and whose accented character both come out of them.
+#include "../../src/cff/cff_strings.h"
+
 namespace {
 
 /** A fixture read from disk, with a blob and a face over it. */
@@ -110,6 +120,9 @@ std::string from_hex(const std::string & hex) {
 }
 
 constexpr size_t kStandardNames = 258;
+constexpr size_t kCffStandardStrings = 391;
+constexpr size_t kCffIsoAdobe = 229;
+constexpr size_t kEncodingCodes = 256;
 constexpr size_t kMacTables = 8;
 constexpr size_t kHighBytes = 128;
 
@@ -324,6 +337,105 @@ TEST(Vectors, AMultiByteMacintoshEncodingIsRefusedAndNotGuessed) {
   EXPECT_EQ(refused, 4u)
       << "encodings 1, 2, 3 and 25 are the multi-byte ones; the selector "
          "should name no table for exactly those";
+}
+
+TEST(Vectors, TheCffStringsAreWhatTheGeneratorWrote) {
+  const auto expected = rows("cff_strings.txt");
+  ASSERT_FALSE(expected.empty())
+      << "tests/data/vectors/cff_strings.txt is missing; run `make gen-vectors`";
+
+  size_t sids = 0;
+  size_t codes = 0;
+  size_t expert = 0;
+  size_t expert_subset = 0;
+  size_t counts = 0;
+
+  for (const auto & row : expected) {
+    ASSERT_GE(row.size(), 3u);
+    if (row[0] == "count") {
+      ++counts;
+      const size_t value = std::stoul(row[2]);
+      if (row[1] == "standard") {
+        EXPECT_EQ(value, (size_t)GFNT_CFF_STANDARD_STRING_COUNT);
+        EXPECT_EQ(value, kCffStandardStrings);
+      }
+      else {
+        EXPECT_EQ(row[1], "isoadobe");
+        EXPECT_EQ(value, (size_t)GFNT_CFF_ISO_ADOBE_COUNT);
+        EXPECT_EQ(value, kCffIsoAdobe);
+      }
+      continue;
+    }
+    if (row[0] == "sid") {
+      const size_t index = std::stoul(row[1]);
+      ASSERT_LT(index, (size_t)GFNT_CFF_STANDARD_STRING_COUNT);
+      EXPECT_EQ(std::string(gfnt_cff_standard_strings[index]), row[2])
+          << "SID " << index;
+      ++sids;
+      continue;
+    }
+    if (row[0] == "encoding") {
+      ASSERT_EQ(row.size(), 4u);
+      const size_t code = std::stoul(row[1]);
+      const uint16_t stated = (uint16_t)std::stoul(row[2]);
+      ASSERT_LT(code, kEncodingCodes);
+      EXPECT_EQ(gfnt_cff_standard_encoding[code], stated) << "code " << code;
+      // And the name the text gives beside it, so that a row whose SID and
+      // whose name were edited apart fails rather than agreeing with itself.
+      if (stated != 0) {
+        EXPECT_EQ(std::string(gfnt_cff_standard_strings[stated]), row[3])
+            << "code " << code;
+      }
+      else {
+        EXPECT_EQ(row[3], "-") << "code " << code;
+      }
+      ++codes;
+      continue;
+    }
+    ASSERT_EQ(row[0], "charset");
+    ASSERT_EQ(row.size(), 5u);
+    const size_t gid = std::stoul(row[2]);
+    const uint16_t stated = (uint16_t)std::stoul(row[3]);
+    if (row[1] == "expert") {
+      ASSERT_LT(gid, (size_t)GFNT_CFF_EXPERT_CHARSET_COUNT);
+      EXPECT_EQ(gfnt_cff_expert_charset[gid], stated) << "expert " << gid;
+      ++expert;
+    }
+    else {
+      ASSERT_EQ(row[1], "expertsubset");
+      ASSERT_LT(gid, (size_t)GFNT_CFF_EXPERT_SUBSET_CHARSET_COUNT);
+      EXPECT_EQ(gfnt_cff_expert_subset_charset[gid], stated)
+          << "expert subset " << gid;
+      ++expert_subset;
+    }
+    EXPECT_EQ(std::string(gfnt_cff_standard_strings[stated]), row[4])
+        << row[1] << " " << gid;
+  }
+
+  // The denominators. Every one of these is a count the generator computes, so
+  // a file that lost a section - or a table that grew without its text - fails
+  // here rather than passing with less to compare.
+  EXPECT_EQ(counts, 2u);
+  EXPECT_EQ(sids, kCffStandardStrings);
+  EXPECT_EQ(codes, kEncodingCodes);
+  EXPECT_EQ(expert, (size_t)GFNT_CFF_EXPERT_CHARSET_COUNT);
+  EXPECT_EQ(expert_subset, (size_t)GFNT_CFF_EXPERT_SUBSET_CHARSET_COUNT);
+}
+
+TEST(Vectors, TheStandardEncodingsAsciiRunIsTheStandardStringsOwnOrder) {
+  // The relation the generator checks across fontTools' two modules, asserted
+  // here as well so that a clone with no container still holds both sides to
+  // it: codes 32 to 126 are SIDs 1 to 95, in order, and that is what makes a
+  // `seac` naming a printable character resolvable at all.
+  for (size_t code = 32; code <= 126; ++code) {
+    EXPECT_EQ(gfnt_cff_standard_encoding[code], (uint16_t)(code - 31))
+        << "code " << code;
+  }
+  // And the control range is unassigned, which is the half that makes a code
+  // outside it a refusal rather than glyph zero.
+  for (size_t code = 0; code < 32; ++code) {
+    EXPECT_EQ(gfnt_cff_standard_encoding[code], 0u) << "code " << code;
+  }
 }
 
 } // namespace

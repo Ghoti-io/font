@@ -10,8 +10,8 @@
 # published by the Free Software Foundation.
 """`make check-vectors`: the committed vectors are what the generator emits.
 
-The tables in `src/tables/post_names.h` and `src/name/mac_encodings.h` are
-generated from the pinned `fonttools` image (design.md section 14: a vector comes
+The tables in `src/tables/post_names.h`, `src/name/mac_encodings.h` and
+`src/cff/cff_strings.h` are generated from the pinned `fonttools` image (design.md section 14: a vector comes
 from an oracle and is never written from memory). This regenerates them into
 `build/vectors/generated` and compares byte for byte.
 
@@ -66,6 +66,8 @@ EXPECTED = [
     os.path.join("tests", "data", "vectors", "standard_glyph_order.txt"),
     os.path.join("tests", "data", "vectors", "mac_encodings.txt"),
     os.path.join("tests", "data", "vectors", "mac_selector.txt"),
+    os.path.join("src", "cff", "cff_strings.h"),
+    os.path.join("tests", "data", "vectors", "cff_strings.txt"),
 ]
 
 

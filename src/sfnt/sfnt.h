@@ -41,6 +41,7 @@
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/metrics.h>
+#include "../bitmap/bitmap.h"
 #include "../cff/cff.h"
 #include "../type1/type1.h"
 #include "../reader/reader.h"
@@ -152,6 +153,8 @@ struct GFNT_Face {
   GFNT_Cff cff;
   GFNT_Cached type1_state;          ///< The Type 1 program, parsed on first use.
   GFNT_Type1 type1;
+  GFNT_Cached bitmap_state;         ///< The strike of a standalone bitmap font.
+  GFNT_BitmapFont bitmap;
 };
 
 /**
@@ -206,6 +209,30 @@ GFNT_Producer gfnt_sfnt_producer(const GFNT_Face * face);
  */
 GFNT_Result gfnt_sfnt_single_table_directory(GFNT_Face * face,
     GFNT_Tag flavour, GFNT_Tag tag, GFNT_Error * error);
+
+/**
+ * Give a face a synthetic directory of several entries.
+ *
+ * What ::gfnt_sfnt_single_table_directory() is one case of, and what a container
+ * whose file is a list of typed extents wants: PCF's table of contents is exactly
+ * that, so each of its tables becomes an entry and therefore gets a reader
+ * bounded by itself rather than by the file.
+ *
+ * Each entry's extent is validated against the blob here. The tags are the
+ * container's business - PCF's types are integers and its tags are this library's
+ * invention, which `src/bitmap/bitmap.h` says out loud.
+ *
+ * @param face The face. Its `bytes` and allocator must already be set.
+ * @param flavour What ::gfnt_face_flavour() should report.
+ * @param entries The entries, copied.
+ * @param count How many; at least one, and at most
+ *   ::GFNT_Limits::max_tables.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_LIMIT, ::GFNT_ERR_CORRUPT
+ *   or ::GFNT_ERR_OOM.
+ */
+GFNT_Result gfnt_sfnt_table_directory(GFNT_Face * face, GFNT_Tag flavour,
+    const GFNT_SfntTable * entries, size_t count, GFNT_Error * error);
 
 /**
  * Read the offset table and directory of the face at @p directory_offset.

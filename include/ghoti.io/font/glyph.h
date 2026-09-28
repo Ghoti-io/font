@@ -105,6 +105,18 @@ typedef struct GFNT_Strike {
   uint32_t ppem_y;     ///< Vertical pixels per em.
   uint8_t bit_depth;   ///< 1, 2, 4, 8, or 32 for colour.
   GFNT_GlyphKind kind; ///< What glyphs from this strike come back as.
+  /**
+   * Pixels from the baseline to the top of the line, positive.
+   *
+   * The strike's own, not the face's: a bitmap font has no `hhea` and no em to
+   * scale one from, and these are the numbers it states (M18's sign convention
+   * holds here as everywhere - ascent up, descent down).
+   *
+   * A container that states neither reports the glyph box it does state, and
+   * says so in its documentation rather than inventing a baseline.
+   */
+  int32_t ascent;
+  int32_t descent;     ///< Pixels below the baseline, **negative**.
 } GFNT_Strike;
 
 /**

@@ -42,6 +42,7 @@
  */
 
 #include <ghoti.io/font/macros.h>
+#include "../bitmap/bitmap.h"
 #include "../core/fixed.h"
 #include "tables.h"
 
@@ -137,6 +138,17 @@ GFNT_Result gfnt_face_units_per_em(const GFNT_Face * face,
     const GFNT_Type1 * type1 = NULL;
     size_t upem = 0;
 
+    // A bitmap strike has no em, and this is the one accessor where saying so
+    // matters: 1000 would be a number every scaling caller would then use, and
+    // M9 - a strike scaled as though it were an outline - is exactly what comes
+    // of that. The strike's own ppem, ascent and descent are in pixels and are
+    // reached through ::gfnt_face_strike_at().
+    if (gfnt_face_is_bitmap(face)) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, face->flavour, 0,
+          GFNT_GLYPH_NONE,
+          "a bitmap font, which was drawn at a pixel size and has no em to "
+          "scale from; ask the strike for its ppem");
+    }
     if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_TYPE1) {
       if (gfnt_face_type1(face, &type1, NULL) == GFNT_OK
           && gfnt_type1_units_per_em(type1, &upem)) {
@@ -229,7 +241,8 @@ static GFNT_Result gfnt_glyph_count_parse(const GFNT_Face * face, void * out,
     // already been through it. A second check would be a line no input can
     // reach - and for a bare CFF, whose font program is parsed at load, the
     // refusal happens before there is a face to ask.
-    if (gfnt_type1_glyph_bound(face, &bound)
+    if (gfnt_bitmap_glyph_bound(face, &bound)
+        || gfnt_type1_glyph_bound(face, &bound)
         || gfnt_cff_glyph_bound(face, &bound)) {
       gfnt_error_clear(error);
       *count = (GFNT_GlyphCount) {
@@ -381,6 +394,15 @@ GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face, uint32_t glyph,
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, glyph,
         "no face, or nowhere to put the advance");
   }
+  // A bitmap strike's advance and side bearing are **pixels**, and this function's
+  // unit is font units. Returning the number anyway would be the kind of quiet
+  // unit error that shows up as text at four times the size it should be, so the
+  // refusal names where the pixels are instead.
+  if (gfnt_face_is_bitmap(face)) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, face->flavour, 0, glyph,
+        "a bitmap font, whose metrics are pixels rather than font units - "
+        "gfnt_face_glyph_bitmap() carries each glyph's own");
+  }
   // Phase 4 consults HVAR here; until then the only instance this library can
   // answer for is the default one, and the parameter is the API shape that
   // keeps adding it from being a break (design.md section 7.7).
@@ -420,6 +442,15 @@ GFNT_Result gfnt_face_glyph_side_bearing(const GFNT_Face * face, uint32_t glyph,
   if (!face || !out_bearing) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, glyph,
         "no face, or nowhere to put the side bearing");
+  }
+  // A bitmap strike's advance and side bearing are **pixels**, and this function's
+  // unit is font units. Returning the number anyway would be the kind of quiet
+  // unit error that shows up as text at four times the size it should be, so the
+  // refusal names where the pixels are instead.
+  if (gfnt_face_is_bitmap(face)) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, face->flavour, 0, glyph,
+        "a bitmap font, whose metrics are pixels rather than font units - "
+        "gfnt_face_glyph_bitmap() carries each glyph's own");
   }
   (void)variation;
 

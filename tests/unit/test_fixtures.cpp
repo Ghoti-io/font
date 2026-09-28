@@ -103,6 +103,22 @@ struct Entry {
    * generator, and a check that tolerated both answers would catch nothing.
    */
   bool states_em = true;
+  /**
+   * Whether this fixture can state its own name and licence.
+   *
+   * True for every font with a `name` table, a CFF's Top DICT, a Type 1
+   * `/FontInfo` or a BDF's properties. **False for four**, and this is the one
+   * place section 14.5's rule meets a format that cannot carry it: a `.hex` file
+   * is a codepoint, a colon and a row of bits, and a PSF is a header and cells.
+   * Neither has anywhere to put a string at all - no comment syntax, no free
+   * field - so for those four the statement is `tests/data/fonts/MANIFEST` and
+   * this repository's own licence, and nothing in the bytes.
+   *
+   * It is a field rather than a loosened assertion because the other thirty-seven
+   * fixtures do state it, and an assertion that tolerated both answers would stop
+   * catching a fixture whose generator dropped its `name` table.
+   */
+  bool states_own_name = true;
 };
 
 const std::vector<Entry> & every_fixture() {
@@ -112,6 +128,19 @@ const std::vector<Entry> & every_fixture() {
       // glyphs as cff-curves.otf, whose CFF table its bytes are; the other holds
       // the same thirteen behind a FontMatrix that states no em, so it counts
       // and names its glyphs and refuses to draw them.
+      // The eight standalone bitmap containers. None of them states an em - a
+      // strike was drawn at a pixel size and there is nothing to scale from (M9)
+      // - so every one of them is a `states_em` of false, and there are eight of
+      // them rather than one relaxed assertion because each container counts its
+      // glyphs a different way.
+      {"bitmap-ink.bdf", 5, false},
+      {"bitmap-lsb.pcf", 8, false},
+      {"bitmap-v1.psf", 512, false, false},
+      {"bitmap-wide.hex", 3, false, false},
+      {"bitmap.bdf", 8, false},
+      {"bitmap.hex", 8, false, false},
+      {"bitmap.pcf", 8, false},
+      {"bitmap.psf", 8, false, false},
       {"bare-matrix.cff", 13, false},
       // The two Type 1 font programs, which hold the same eight charstrings as
       // cff-type1.otf in a container that has no table directory, no `maxp` and
@@ -254,6 +283,15 @@ TEST(Fixtures, EveryFixtureNamesItselfAndItsLicence) {
     ASSERT_EQ(fixture.result, GFNT_OK) << name;
 
     char * family = nullptr;
+    if (!entry.states_own_name) {
+      // The format has nowhere to put one. Asserting the refusal rather than
+      // skipping the fixture, so that a container which grows a name field is
+      // noticed here.
+      EXPECT_EQ(gfnt_face_name(fixture.face, GFNT_NAME_FAMILY, GFNT_LANGUAGE_ANY,
+                    nullptr, &family, nullptr, nullptr),
+          GFNT_ERR_UNSUPPORTED) << name;
+      continue;
+    }
     ASSERT_EQ(gfnt_face_name(fixture.face, GFNT_NAME_FAMILY,
                   GFNT_LANGUAGE_ANY, nullptr, &family, nullptr, nullptr),
         GFNT_OK) << name;
@@ -626,19 +664,35 @@ TEST(Fixtures, TheMacRomanRecordsDecodeToTheSameTextAsTheirWindowsTwins) {
       << "0xAA in Mac Roman is U+2122, which is E2 84 A2 in UTF-8";
 }
 
-TEST(Fixtures, NoFixtureClaimsAStrikeOrAnUnreadableTable) {
-  // Bitmap strikes arrive in phase 1b. Until then every fixture is outlines,
-  // and the strike list must say so by refusing rather than by answering zero -
-  // the distinction M9 exists for.
+TEST(Fixtures, AFixtureHasOneStrikeOrNoneAndNeverAnUnreadableTable) {
+  // **This asserted zero for every fixture until phase 1b**, and it was right
+  // then: no container this library read carried a strike. It is kept and split
+  // rather than deleted, for the reason `CffIsTheOttoFlavourWithNoGlyf` gives
+  // about the same shape - an assertion that a feature is absent goes on passing
+  // after the feature lands and stops saying anything.
+  //
+  // What it says now: a standalone bitmap container has exactly one strike,
+  // because the file *is* a strike; every other fixture has none; and no fixture
+  // reports ::GFNT_ERR_UNSUPPORTED, which would mean it carried strikes in a
+  // table this library cannot enumerate. That last answer is the one M9 needs
+  // kept apart from zero, and there is still no fixture that produces it - the
+  // `EBLC` fixtures arrive with phase 6.
   for (const Entry & entry : every_fixture()) {
     const std::string name = entry.name;
     Fixture fixture(name);
     ASSERT_EQ(fixture.result, GFNT_OK) << name;
-    size_t strikes = 1;
+    size_t strikes = 99;
     const GFNT_Result result =
         gfnt_face_strike_count(fixture.face, &strikes, nullptr);
     EXPECT_EQ(result, GFNT_OK) << name;
-    EXPECT_EQ(strikes, 0u) << name;
+    // Which answer to expect comes from the flavour and not from a field: the
+    // fact "this container is a strike" is the flavour's, and a field here would
+    // be a second place to state it that could drift from the first.
+    const GFNT_Tag flavour = gfnt_face_flavour(fixture.face);
+    const bool is_strike = flavour == GFNT_FLAVOUR_PCF
+        || flavour == GFNT_FLAVOUR_BDF || flavour == GFNT_FLAVOUR_PSF
+        || flavour == GFNT_FLAVOUR_HEX;
+    EXPECT_EQ(strikes, is_strike ? 1u : 0u) << name;
   }
 }
 

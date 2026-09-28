@@ -48,6 +48,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include "../bitmap/bitmap.h"
 #include "../sfnt/sfnt.h"
 #include "../type1/type1.h"
 #include "mac_encodings.h"
@@ -530,6 +531,67 @@ static GFNT_Result gfnt_name_from_type1(const GFNT_Face * face,
  * is one string per name and it is the answer to every request - a font that
  * states one unlabelled name has not said it is English.
  */
+/**
+ * A name from a standalone bitmap container's own strings.
+ *
+ * BDF states these as properties (`FAMILY_NAME`, `COPYRIGHT`, `WEIGHT_NAME`, and
+ * the XLFD `FONT` line) and PCF as the same properties compiled into a table, so
+ * the two share this. **The bytes are Latin-1**, which is what XLFD says a
+ * property string is, so they go out through the same decoder a Macintosh name
+ * record does rather than being copied as though they were already UTF-8.
+ *
+ * The XLFD name answers ::GFNT_NAME_POSTSCRIPT as well as ::GFNT_NAME_FULL: it is
+ * the one string that names the whole font, and a caller asking for "the name of
+ * this font" should not be refused because the font is not PostScript.
+ */
+static GFNT_Result gfnt_name_from_bitmap(const GFNT_Face * face,
+    uint16_t name_id, const GFNT_Allocator * allocator, char ** out_text,
+    size_t * out_length, GFNT_Error * error) {
+  GFNT_BitmapString which;
+  const char * raw = NULL;
+  char * text;
+  size_t needed;
+  GFNT_Result result;
+
+  switch (name_id) {
+    case GFNT_NAME_COPYRIGHT: which = GFNT_BITMAP_STRING_COPYRIGHT; break;
+    case GFNT_NAME_FAMILY: which = GFNT_BITMAP_STRING_FAMILY; break;
+    case GFNT_NAME_SUBFAMILY: which = GFNT_BITMAP_STRING_WEIGHT; break;
+    case GFNT_NAME_FULL:
+    case GFNT_NAME_POSTSCRIPT: which = GFNT_BITMAP_STRING_FULL; break;
+    default:
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
+          GFNT_GLYPH_NONE, "a name a bitmap font does not state: a BDF or PCF "
+          "states its family, weight, copyright and XLFD name, and nothing else "
+          "a `name` table would have held");
+  }
+  result = gfnt_bitmap_string_for(face, which, &raw, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  needed = gfnt_name_latin1(raw, strlen(raw), NULL);
+  text = allocator->malloc_fn(allocator->ctx, needed + 1);
+  if (!text) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "allocating the bitmap font's name");
+  }
+  if (gfnt_name_latin1(raw, strlen(raw), text) != needed) {
+    allocator->free_fn(allocator->ctx, text);
+    return gfnt_error_set(error, GFNT_ERR_INTERNAL, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "the name's size pass and fill pass disagreed");
+  }
+  text[needed] = '\0';
+  gfnt_error_clear(error);
+  *out_text = text;
+  if (out_length) {
+    *out_length = needed;
+  }
+  return GFNT_OK;
+}
+
 static GFNT_Result gfnt_name_from_font_program(const GFNT_Face * face,
     uint16_t name_id, const GFNT_Allocator * allocator, char ** out_text,
     size_t * out_length, GFNT_Error * error) {
@@ -542,6 +604,10 @@ static GFNT_Result gfnt_name_from_font_program(const GFNT_Face * face,
   size_t needed = 0;
   GFNT_Result result;
 
+  if (gfnt_face_is_bitmap(face)) {
+    return gfnt_name_from_bitmap(face, name_id, allocator, out_text, out_length,
+        error);
+  }
   // A Type 1 program states its names in `/FontInfo` and `/FontName`, which are
   // PostScript strings rather than SIDs into an INDEX - so it answers here, and
   // the CFF path below is for a CFF.

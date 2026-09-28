@@ -454,3 +454,195 @@ GFNT_Result gfnt_reader_s16_at(const GFNT_Reader * reader, size_t offset,
   }
   return result;
 }
+
+/**
+ * Assemble @p count bytes at an absolute offset in @p order.
+ *
+ * The big-endian loop above walks forward and shifts left; this one shifts each
+ * byte into its own place, which is one expression for both orders and does not
+ * need the extent reversed or a second loop.
+ */
+static GFNT_Result gfnt_reader_raw_order_at(const GFNT_Reader * reader,
+    GFNT_ByteOrder order, size_t offset, size_t count, uint64_t * out_value) {
+  uint64_t value = 0;
+
+  if (order == GFNT_ORDER_MSB_FIRST) {
+    return gfnt_reader_raw_at(reader, offset, count, out_value);
+  }
+  if (!gfnt_reader_fits(reader, offset, count)) {
+    return gfnt_reader_fail(reader, offset, "read past the end of the table");
+  }
+  for (size_t i = 0; i < count; ++i) {
+    value |= (uint64_t)reader->base[offset + i] << (8 * i);
+  }
+  *out_value = value;
+  return GFNT_OK;
+}
+
+/**
+ * The same, from the cursor, advancing it on success.
+ */
+static GFNT_Result gfnt_reader_raw_order(GFNT_Reader * reader,
+    GFNT_ByteOrder order, size_t count, uint64_t * out_value) {
+  GFNT_Result result = gfnt_reader_raw_order_at(reader, order, reader->cursor,
+      count, out_value);
+
+  if (result == GFNT_OK) {
+    reader->cursor += count;
+  }
+  return result;
+}
+
+GFNT_Result gfnt_read_u16_order(GFNT_Reader * reader, GFNT_ByteOrder order,
+    uint16_t * out_value) {
+  uint64_t value;
+  GFNT_Result result;
+
+  if (!reader || !out_value) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_reader_raw_order(reader, order, 2, &value);
+  if (result == GFNT_OK) {
+    *out_value = (uint16_t)value;
+  }
+  return result;
+}
+
+GFNT_Result gfnt_read_u32_order(GFNT_Reader * reader, GFNT_ByteOrder order,
+    uint32_t * out_value) {
+  uint64_t value;
+  GFNT_Result result;
+
+  if (!reader || !out_value) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_reader_raw_order(reader, order, 4, &value);
+  if (result == GFNT_OK) {
+    *out_value = (uint32_t)value;
+  }
+  return result;
+}
+
+GFNT_Result gfnt_read_s16_order(GFNT_Reader * reader, GFNT_ByteOrder order,
+    int16_t * out_value) {
+  uint64_t value;
+  GFNT_Result result;
+
+  if (!reader || !out_value) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_reader_raw_order(reader, order, 2, &value);
+  if (result == GFNT_OK) {
+    *out_value = (int16_t)gfnt_reader_signed(value, 16);
+  }
+  return result;
+}
+
+GFNT_Result gfnt_read_s32_order(GFNT_Reader * reader, GFNT_ByteOrder order,
+    int32_t * out_value) {
+  uint64_t value;
+  GFNT_Result result;
+
+  if (!reader || !out_value) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_reader_raw_order(reader, order, 4, &value);
+  if (result == GFNT_OK) {
+    *out_value = (int32_t)gfnt_reader_signed(value, 32);
+  }
+  return result;
+}
+
+GFNT_Result gfnt_reader_u32_order_at(const GFNT_Reader * reader,
+    GFNT_ByteOrder order, size_t offset, uint32_t * out_value) {
+  uint64_t value;
+  GFNT_Result result;
+
+  if (!reader || !out_value) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_reader_raw_order_at(reader, order, offset, 4, &value);
+  if (result == GFNT_OK) {
+    *out_value = (uint32_t)value;
+  }
+  return result;
+}
+
+GFNT_Result gfnt_lines_init(GFNT_Lines * lines, const GFNT_Reader * reader,
+    size_t max_length) {
+  if (!lines || !reader || max_length == 0) {
+    return GFNT_ERR_INVALID;
+  }
+  lines->reader = *reader;
+  lines->max_length = max_length;
+  lines->number = 0;
+  lines->offset = 0;
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_lines_next(GFNT_Lines * lines, const uint8_t ** out_bytes,
+    size_t * out_length, bool * out_more, GFNT_Error * error) {
+  size_t length = 0;
+  size_t skip;
+  uint8_t byte = 0;
+
+  if (!lines || !out_bytes || !out_length || !out_more) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no line cursor, or nowhere to put the line");
+  }
+  if (!gfnt_reader_has(&lines->reader, 1)) {
+    *out_more = false;
+    return GFNT_OK;
+  }
+  lines->offset = gfnt_reader_tell(&lines->reader);
+  lines->number += 1;
+
+  // Measured before it is handed out, because the line's own length is what
+  // decides whether it is one this library will look at: a scan that read first
+  // and checked afterwards would already have walked past the cap.
+  while (gfnt_reader_u8_at(&lines->reader, lines->offset + length, &byte)
+      == GFNT_OK) {
+    if (byte == '\n' || byte == '\r') {
+      break;
+    }
+    ++length;
+    if (length > lines->max_length) {
+      return gfnt_error_set(error, GFNT_ERR_LIMIT, lines->reader.table,
+          lines->offset, GFNT_GLYPH_NONE,
+          "a line longer than GFNT_Limits::max_line_length");
+    }
+  }
+
+  // The terminator: one byte for LF or a lone CR, two for CRLF. Getting this
+  // wrong by a byte is how a reader ends up with an empty line between every
+  // pair of real ones on a file written under Windows.
+  skip = length;
+  if (gfnt_reader_u8_at(&lines->reader, lines->offset + length, &byte)
+      == GFNT_OK) {
+    skip += 1;
+    if (byte == '\r') {
+      uint8_t next = 0;
+
+      if (gfnt_reader_u8_at(&lines->reader, lines->offset + length + 1, &next)
+              == GFNT_OK
+          && next == '\n') {
+        skip += 1;
+      }
+    }
+  }
+
+  if (length > 0) {
+    GFNT_Result result = gfnt_read_bytes(&lines->reader, length, out_bytes);
+
+    if (result != GFNT_OK) {
+      return gfnt_error_set(error, result, lines->reader.table, lines->offset,
+          GFNT_GLYPH_NONE, "a line that ends past its extent");
+    }
+  }
+  else {
+    *out_bytes = NULL;
+  }
+  *out_length = length;
+  *out_more = true;
+  return gfnt_reader_seek(&lines->reader, lines->offset + skip);
+}

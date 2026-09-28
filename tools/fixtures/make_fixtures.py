@@ -2366,7 +2366,519 @@ def build_type1_pfa(out):
         handle.write((b"0" * 64 + b"\n") * 8 + b"cleartomark\n")
 
 
+# --------------------------------------------------------------------------
+# The standalone bitmap containers (design.md section 7.1)
+# --------------------------------------------------------------------------
+#
+# One design, written four ways. That is the point of these fixtures rather than
+# an accident of laziness: PCF, BDF, PSF 2 and `.hex` have no bytes in common, so
+# four faces that read to the *same pixels* is a check on each reader that none of
+# them could pass by agreeing with itself. It is the same argument the PFB, PFA and
+# CFF spellings of one Type 1 program make.
+#
+# Every glyph is 8 by 16, because that is the intersection of what the four can
+# say: PSF 2 gives every cell one size and `.hex` gives every glyph sixteen rows.
+# The per-glyph boxes, the negative bearings and the advance that is not the width
+# go in `bitmap-ink.bdf`, where the format can express them.
+
+BITMAP_ROWS = 16
+BITMAP_WIDTH = 8
+# The baseline the two formats that state one agree on: fourteen rows above it and
+# two below, which is what Unifont's own BDFs use for a 16-row cell.
+BITMAP_ASCENT = 14
+BITMAP_DESCENT = 2
+
+
+def bitmap_glyph(*rows):
+    """Sixteen rows of eight pixels, written as text so the glyph is legible.
+
+    `#` is a set pixel and anything else is clear. A row is padded on the right
+    and a short list is padded at the bottom, so that a design can be written
+    with only the rows that have something in them.
+    """
+    out = []
+    for row in rows:
+        value = 0
+        for column in range(BITMAP_WIDTH):
+            if column < len(row) and row[column] == "#":
+                value |= 0x80 >> column
+        out.append(value)
+    out.extend([0] * (BITMAP_ROWS - len(out)))
+    assert len(out) == BITMAP_ROWS
+    return out
+
+
+def bitmap_parts():
+    """The shared design: (codepoint, name, rows) in glyph order.
+
+    Sorted by codepoint, which is the order `.hex` files are written in and the
+    order every one of the four containers will therefore list them in - so glyph
+    3 is the same glyph in all four, which is what makes comparing them possible
+    at all. The glyph order is this library's invention (design.md section 7.1)
+    and this is where the invention is pinned.
+
+    Two of these glyphs exist only to catch a bit-order mistake: `L` is the
+    leftmost column alone and `R` is the rightmost. Under a reversed bit order each
+    reads as the other, and *every other glyph here would still look plausible*.
+    """
+    return [
+        (0x20, "space", bitmap_glyph()),
+        (0x2E, "period", bitmap_glyph(
+            "", "", "", "", "", "", "", "", "", "",
+            "", "###", "###", "###")),
+        (0x41, "A", bitmap_glyph(
+            "", "  ##", " #  #", " #  #", "#    #", "#    #", "######",
+            "#    #", "#    #", "#    #", "#    #")),
+        (0x42, "B", bitmap_glyph(
+            "", "#####", "#    #", "#    #", "#####", "#    #", "#    #",
+            "#    #", "#####")),
+        (0x4C, "L", bitmap_glyph(*(["#"] * BITMAP_ROWS))),
+        (0x52, "R", bitmap_glyph(*(["       #"] * BITMAP_ROWS))),
+        (0x7C, "bar", bitmap_glyph(*(["   ##"] * BITMAP_ROWS))),
+        # A checkerboard, whose two row patterns are each other's complement: a
+        # byte written to the wrong end of a scan unit swaps them, and nothing
+        # else here would show that.
+        (0xFE, "checker", bitmap_glyph(*(["# # # # ", " # # # #"] * 8))),
+    ]
+
+
+def hex_line(code, rows):
+    """One `.hex` record: the codepoint, a colon, and the rows in hexadecimal."""
+    return "%04X:%s" % (code, "".join("%02X" % row for row in rows))
+
+
+def build_bitmap_hex(out):
+    lines = [hex_line(code, rows) for code, _, rows in bitmap_parts()]
+    with open(out, "wb") as handle:
+        handle.write(("\n".join(lines) + "\n").encode("ascii"))
+
+
+def build_bitmap_wide_hex(out):
+    """The widths `.hex` allows beyond eight pixels.
+
+    A 16-pixel glyph and a 32-pixel one, which is what a CJK Unifont page holds.
+    The digit count is the only thing that says how wide a record is, so a reader
+    that assumed eight would read the second glyph as garbage and the third as a
+    line it could not parse.
+    """
+    rows16 = [0x8001 for _ in range(BITMAP_ROWS)]
+    rows32 = [0x80000001 for _ in range(BITMAP_ROWS)]
+    lines = [
+        hex_line(0x41, bitmap_parts()[2][2]),
+        "%04X:%s" % (0x4E00, "".join("%04X" % row for row in rows16)),
+        # Six digits of codepoint, which the format allows and which every
+        # astral-plane glyph uses.
+        "%06X:%s" % (0x20000, "".join("%08X" % row for row in rows32)),
+    ]
+    with open(out, "wb") as handle:
+        handle.write(("\n".join(lines) + "\n").encode("ascii"))
+
+
+def build_bitmap_psf(out):
+    """PSF 2: the shared design, with a Unicode table.
+
+    The table carries a second codepoint for one glyph and a *sequence* for
+    another - a base and a combining mark that one cell stands for. A sequence is
+    not a codepoint and cannot be in a codepoint-to-glyph map, so this is the
+    fixture that says a reader must walk past one rather than refuse the font.
+    """
+    parts = bitmap_parts()
+    header = struct.pack("<8I", 0x864AB572, 0, 32, 1, len(parts),
+        BITMAP_ROWS * ((BITMAP_WIDTH + 7) // 8), BITMAP_ROWS, BITMAP_WIDTH)
+    body = b"".join(bytes(rows) for _, _, rows in parts)
+    table = b""
+    for index, (code, _, _) in enumerate(parts):
+        entry = chr(code).encode("utf-8")
+        if index == 2:
+            # A second character for the same cell, and then A with an acute as a
+            # sequence of two codepoints.
+            entry += "Α".encode("utf-8")
+            entry += b"\xfe" + "Á".encode("utf-8")
+        table += entry + b"\xff"
+    with open(out, "wb") as handle:
+        handle.write(header + body + table)
+
+
+def build_bitmap_psf1(out):
+    """PSF 1: 512 glyphs, because one bit of the mode byte says so.
+
+    Nothing else in the file states the count, which is the trap. The Unicode
+    table is UCS-2 little-endian with `0xFFFF` terminators, a different spelling of
+    the same idea from version 2's UTF-8.
+    """
+    parts = bitmap_parts()
+    count = 512
+    # Mode: 512 glyphs, and a Unicode table with sequences in it.
+    header = bytes([0x36, 0x04, 0x01 | 0x02 | 0x04, BITMAP_ROWS])
+    cells = []
+    for index in range(count):
+        if index < len(parts):
+            cells.append(bytes(parts[index][2]))
+        else:
+            # A diagonal, so that the glyphs past the shared design are still
+            # distinguishable from each other and from a run of zeros.
+            cells.append(bytes((0x80 >> (index % 8)) for _ in range(BITMAP_ROWS)))
+    table = b""
+    for index in range(count):
+        if index < len(parts):
+            table += struct.pack("<H", parts[index][0])
+        else:
+            table += struct.pack("<H", 0xE000 + index)
+        if index == 2:
+            table += struct.pack("<HHHH", 0x0391, 0xFFFE, 0x0041, 0x0301)
+        table += struct.pack("<H", 0xFFFF)
+    with open(out, "wb") as handle:
+        handle.write(header + b"".join(cells) + table)
+
+
+BDF_PROPERTIES = [
+    ("FOUNDRY", '"Ghoti.io"'),
+    ("FAMILY_NAME", '"Ghoti Fixture Bitmap"'),
+    ("WEIGHT_NAME", '"Medium"'),
+    ("SLANT", '"R"'),
+    ("SETWIDTH_NAME", '"Normal"'),
+    ("PIXEL_SIZE", "16"),
+    ("POINT_SIZE", "160"),
+    ("RESOLUTION_X", "75"),
+    ("RESOLUTION_Y", "75"),
+    ("SPACING", '"C"'),
+    ("AVERAGE_WIDTH", "80"),
+    ("CHARSET_REGISTRY", '"ISO10646"'),
+    ("CHARSET_ENCODING", '"1"'),
+    ("FONT_ASCENT", str(BITMAP_ASCENT)),
+    ("FONT_DESCENT", str(BITMAP_DESCENT)),
+    ("DEFAULT_CHAR", "32"),
+    ("COPYRIGHT", '"Copyright 2026 Corey Pennycuff. LGPL-3.0-only."'),
+]
+
+BDF_XLFD = ("-Ghoti.io-Ghoti Fixture Bitmap-Medium-R-Normal--16-160-75-75-C-80"
+            "-ISO10646-1")
+
+
+def bdf_char(name, code, width, height, offset_x, offset_y, advance, rows):
+    """One STARTCHAR block. `rows` is one integer per row, MSB leftmost."""
+    stride = (width + 7) // 8
+    out = ["STARTCHAR %s" % name, "ENCODING %d" % code,
+           "SWIDTH %d 0" % (advance * 1000 // 16), "DWIDTH %d 0" % advance,
+           "BBX %d %d %d %d" % (width, height, offset_x, offset_y), "BITMAP"]
+    for row in rows[:height]:
+        out.append(("%%0%dX" % (stride * 2)) % row)
+    out.append("ENDCHAR")
+    return out
+
+
+def bdf_file(chars, *, box=(BITMAP_WIDTH, BITMAP_ROWS, 0, -BITMAP_DESCENT),
+            properties=BDF_PROPERTIES):
+    out = ["STARTFONT 2.1", "FONT %s" % BDF_XLFD,
+           "SIZE 16 75 75",
+           "FONTBOUNDINGBOX %d %d %d %d" % box,
+           "STARTPROPERTIES %d" % len(properties)]
+    out.extend("%s %s" % pair for pair in properties)
+    out.append("ENDPROPERTIES")
+    out.append("CHARS %d" % len(chars))
+    for char in chars:
+        out.extend(char)
+    out.append("ENDFONT")
+    return ("\n".join(out) + "\n").encode("ascii")
+
+
+def build_bitmap_bdf(out):
+    chars = [bdf_char(name, code, BITMAP_WIDTH, BITMAP_ROWS, 0, -BITMAP_DESCENT,
+                 BITMAP_WIDTH, rows)
+             for code, name, rows in bitmap_parts()]
+    with open(out, "wb") as handle:
+        handle.write(bdf_file(chars))
+
+
+def build_bitmap_ink_bdf(out):
+    """What only BDF and PCF can say: a box per glyph.
+
+    Five things here that the shared design cannot carry, each of which a reader
+    gets wrong in its own way:
+
+      * a **negative x offset**, a glyph that hangs left of the pen;
+      * a **descender**, whose box bottom is below the baseline, which is the test
+        that `BBX`'s y is read as the bottom and not the top;
+      * an **advance narrower than the box**, and one wider;
+      * `ENCODING -1`, a glyph with no character, which must still be a glyph;
+      * an **empty box**, `BBX 0 0 0 0` with no rows at all, which is what a space
+        looks like when a writer does not pad it.
+    """
+    chars = [
+        bdf_char("space", 0x20, 0, 0, 0, 0, 8, []),
+        # A 12-pixel box drawn from two bytes a row, hanging two pixels left.
+        #
+        # **Its first row sets the four bits past the glyph's width**, which the
+        # format leaves undefined and a writer is entitled to leave as rubbish.
+        # A reader that carries them through makes two faces of one design compare
+        # unequal - and without a row like this one here, the code that clears them
+        # can be deleted and every test still passes, which is how it was found.
+        bdf_char("Jhook", 0x4A, 12, 14, -2, -4, 10, [0xFFFF] + [0x0300] * 13),
+        # A descender: the box bottom is four rows below the baseline.
+        bdf_char("p", 0x70, 8, 12, 1, -4, 9, [0xFC] + [0x84] * 11),
+        # An advance wider than the glyph, which is what a spacing accent has.
+        bdf_char("wide", 0x57, 4, 4, 0, 10, 12, [0xF0, 0x90, 0x90, 0xF0]),
+        # No character at all.
+        bdf_char("unencoded", -1, 8, 8, 0, 0, 8, [0xAA, 0x55] * 4),
+    ]
+    with open(out, "wb") as handle:
+        handle.write(bdf_file(chars, box=(12, 18, -2, -4)))
+
+
+# PCF's table types, as its table of contents states them.
+PCF_PROPERTIES = 1
+PCF_ACCELERATORS = 2
+PCF_METRICS = 4
+PCF_BITMAPS = 8
+PCF_INK_METRICS = 16
+PCF_BDF_ENCODINGS = 32
+PCF_SWIDTHS = 64
+PCF_GLYPH_NAMES = 128
+PCF_BDF_ACCELERATORS = 256
+
+PCF_COMPRESSED_METRICS = 0x00000100
+
+
+def pcf_pack(order, fmt, *values):
+    """Pack in the byte order a table's format word declared."""
+    return struct.pack(("<" if order == "lsb" else ">") + fmt, *values)
+
+
+def pcf_format(*, pad=1, bit_msb=True, byte_msb=True, scan=1, base=0):
+    """The format word: a shape in the high bytes, a bit layout in the low one."""
+    pad_index = {1: 0, 2: 1, 4: 2, 8: 3}[pad]
+    scan_index = {1: 0, 2: 1, 4: 2}[scan]
+    return (base | pad_index | (0x04 if byte_msb else 0) |
+            (0x08 if bit_msb else 0) | (scan_index << 4))
+
+
+def pcf_rows(rows, width, *, pad, bit_msb, byte_msb, scan):
+    """One glyph's rows, laid out the way a format word says.
+
+    The inverse of what `src/bitmap/bitmap.c` does on the way in, and written as
+    the inverse deliberately: a fixture whose layout came from the same
+    understanding as the reader would agree with it whether or not either was
+    right. Both operations are their own inverse, so the two sides look alike -
+    what they must not share is the *decision* of when to apply them, and that is
+    spelled out in both places from the format's own rules.
+    """
+    canonical = (width + 7) // 8
+    row_bytes = ((canonical + pad - 1) // pad) * pad
+    out = bytearray()
+    for row in rows:
+        data = bytearray(row.to_bytes(canonical, "big") + b"\x00" * (row_bytes - canonical))
+        if not bit_msb:
+            data = bytearray(int("{:08b}".format(byte)[::-1], 2) for byte in data)
+        if (byte_msb != bit_msb) and scan > 1:
+            for at in range(0, row_bytes, scan):
+                data[at:at + scan] = data[at:at + scan][::-1]
+        out += data
+    return bytes(out)
+
+
+def pcf_metric(order, left, right, width, ascent, descent):
+    return pcf_pack(order, "hhhhhH", left, right, width, ascent, descent, 0)
+
+
+def pcf_table(kind, payload):
+    """A table plus the 4-byte alignment X pads every table to."""
+    padding = (-len(payload)) % 4
+    return (kind, payload + b"\x00" * padding)
+
+
+def build_pcf(out, *, pad=1, bit_msb=True, byte_msb=True, scan=1,
+              compressed=False, ink=False):
+    parts = bitmap_parts()
+    order = "msb" if byte_msb else "lsb"
+    fmt = pcf_format(pad=pad, bit_msb=bit_msb, byte_msb=byte_msb, scan=scan)
+    plain = pcf_format(pad=pad, bit_msb=bit_msb, byte_msb=byte_msb, scan=scan)
+    tables = []
+
+    # Properties. Nine bytes each, then padding computed from the *count*, then
+    # the string block's length and the strings themselves.
+    props = [("FAMILY_NAME", "Ghoti Fixture Bitmap"), ("WEIGHT_NAME", "Medium"),
+             ("FONT_NAME", BDF_XLFD),
+             ("COPYRIGHT", "Copyright 2026 Corey Pennycuff. LGPL-3.0-only."),
+             ("CHARSET_REGISTRY", "ISO10646"), ("CHARSET_ENCODING", "1"),
+             ("PIXEL_SIZE", 16), ("DEFAULT_CHAR", 0x20)]
+    strings = bytearray()
+    offsets = {}
+    for name, value in props:
+        for text in (name, value) if isinstance(value, str) else (name,):
+            if text not in offsets:
+                offsets[text] = len(strings)
+                strings += text.encode("ascii") + b"\x00"
+    payload = pcf_pack("lsb", "I", plain) + pcf_pack(order, "I", len(props))
+    for name, value in props:
+        if isinstance(value, str):
+            payload += pcf_pack(order, "I", offsets[name]) + b"\x01"
+            payload += pcf_pack(order, "I", offsets[value])
+        else:
+            payload += pcf_pack(order, "I", offsets[name]) + b"\x00"
+            payload += pcf_pack(order, "I", value)
+    payload += b"\x00" * ((-len(props)) % 4)
+    payload += pcf_pack(order, "I", len(strings)) + bytes(strings)
+    tables.append(pcf_table(PCF_PROPERTIES, payload))
+
+    # The accelerators, which state the baseline.
+    accel = pcf_pack("lsb", "I", plain)
+    accel += bytes([1, 1, 0, 1, 1, 0, 0, 0])
+    accel += pcf_pack(order, "iii", BITMAP_ASCENT, BITMAP_DESCENT, 0)
+    accel += pcf_metric(order, 0, BITMAP_WIDTH, BITMAP_WIDTH, BITMAP_ASCENT,
+        BITMAP_DESCENT)
+    accel += pcf_metric(order, 0, BITMAP_WIDTH, BITMAP_WIDTH, BITMAP_ASCENT,
+        BITMAP_DESCENT)
+    tables.append(pcf_table(PCF_BDF_ACCELERATORS, accel))
+
+    # Metrics, compressed or not. The two are different table shapes rather than
+    # two encodings of one: the count is sixteen bits in the compressed form.
+    metrics_format = plain | (PCF_COMPRESSED_METRICS if compressed else 0)
+    payload = pcf_pack("lsb", "I", metrics_format)
+    if compressed:
+        payload += pcf_pack(order, "H", len(parts))
+        for _ in parts:
+            payload += bytes([0x80, 0x80 + BITMAP_WIDTH, 0x80 + BITMAP_WIDTH,
+                0x80 + BITMAP_ASCENT, 0x80 + BITMAP_DESCENT])
+    else:
+        payload += pcf_pack(order, "I", len(parts))
+        for _ in parts:
+            payload += pcf_metric(order, 0, BITMAP_WIDTH, BITMAP_WIDTH,
+                BITMAP_ASCENT, BITMAP_DESCENT)
+    tables.append(pcf_table(PCF_METRICS, payload))
+
+    if ink:
+        # The ink metrics: the same glyphs' *drawn* extents rather than their
+        # boxes. Nothing here reads them, and a file that carries them is what
+        # proves the directory skips a table nobody asked for rather than
+        # stumbling over it.
+        payload = pcf_pack("lsb", "I", plain) + pcf_pack(order, "I", len(parts))
+        for _ in parts:
+            payload += pcf_metric(order, 0, BITMAP_WIDTH - 1, BITMAP_WIDTH,
+                BITMAP_ASCENT - 1, BITMAP_DESCENT)
+        tables.append(pcf_table(PCF_INK_METRICS, payload))
+
+    # Bitmaps: an offset per glyph, then the four block sizes - one per padding -
+    # of which only the one this format names is true of this file.
+    data = bytearray()
+    starts = []
+    for _, _, rows in parts:
+        starts.append(len(data))
+        data += pcf_rows(rows, BITMAP_WIDTH, pad=pad, bit_msb=bit_msb,
+            byte_msb=byte_msb, scan=scan)
+    payload = pcf_pack("lsb", "I", plain) + pcf_pack(order, "I", len(parts))
+    for start in starts:
+        payload += pcf_pack(order, "I", start)
+    row_bytes = {}
+    for candidate in (1, 2, 4, 8):
+        canonical = (BITMAP_WIDTH + 7) // 8
+        row_bytes[candidate] = ((canonical + candidate - 1) // candidate) * candidate
+    for candidate in (1, 2, 4, 8):
+        payload += pcf_pack(order, "I",
+            row_bytes[candidate] * BITMAP_ROWS * len(parts))
+    payload += bytes(data)
+    tables.append(pcf_table(PCF_BITMAPS, payload))
+
+    # The encodings, which map positions in the font's own charset. This one says
+    # ISO10646-1, so they are codepoints.
+    low = [code for code, _, _ in parts]
+    payload = pcf_pack("lsb", "I", plain)
+    payload += pcf_pack(order, "HHHHH", min(low), max(low), 0, 0, 0x20)
+    for code in range(min(low), max(low) + 1):
+        glyph = 0xFFFF
+        for index, (candidate, _, _) in enumerate(parts):
+            if candidate == code:
+                glyph = index
+        payload += pcf_pack(order, "H", glyph)
+    tables.append(pcf_table(PCF_BDF_ENCODINGS, payload))
+
+    # The scalable widths, in thousandths of an em: another table nothing here
+    # reads and every real PCF carries.
+    payload = pcf_pack("lsb", "I", plain) + pcf_pack(order, "I", len(parts))
+    for _ in parts:
+        payload += pcf_pack(order, "I", BITMAP_WIDTH * 1000 // BITMAP_ROWS)
+    tables.append(pcf_table(PCF_SWIDTHS, payload))
+
+    # The glyph names.
+    names_block = bytearray()
+    name_offsets = []
+    for _, name, _ in parts:
+        name_offsets.append(len(names_block))
+        names_block += name.encode("ascii") + b"\x00"
+    payload = pcf_pack("lsb", "I", plain) + pcf_pack(order, "I", len(parts))
+    for offset in name_offsets:
+        payload += pcf_pack(order, "I", offset)
+    payload += pcf_pack(order, "I", len(names_block)) + bytes(names_block)
+    tables.append(pcf_table(PCF_GLYPH_NAMES, payload))
+
+    # The header and the table of contents, whose integers are always
+    # least-significant-byte first whatever the tables say.
+    header = b"\x01fcp" + struct.pack("<i", len(tables))
+    at = len(header) + 16 * len(tables)
+    toc = b""
+    body = b""
+    for kind, payload in tables:
+        formats = {
+            PCF_METRICS: metrics_format,
+        }
+        toc += struct.pack("<iiii", kind, formats.get(kind, plain),
+            len(payload), at)
+        body += payload
+        at += len(payload)
+    with open(out, "wb") as handle:
+        handle.write(header + toc + body)
+
+
+def build_bitmap_pcf(out):
+    build_pcf(out)
+
+
+def build_bitmap_lsb_pcf(out):
+    """The same design, laid out the other way round in every dimension.
+
+    Bits least-significant-first, bytes least-significant-first, a two-byte scan
+    unit, rows padded to four bytes, and the metrics compressed. It must read to
+    exactly the same glyphs as `bitmap.pcf`, and that equality is the only check
+    there is on the four-way layout arithmetic that no font in the world would
+    otherwise exercise on a little-endian machine.
+    """
+    build_pcf(out, pad=4, bit_msb=False, byte_msb=False, scan=2,
+        compressed=True, ink=True)
+
 FIXTURES = {
+    "bitmap.hex": (build_bitmap_hex,
+        "GNU Unifont .hex: eight glyphs of 8x16 in hexadecimal, one per line, "
+        "with no header, no baseline and no names - the same design as "
+        "bitmap.psf, bitmap.bdf and bitmap.pcf, so all four must read to "
+        "identical pixels"),
+    "bitmap-wide.hex": (build_bitmap_wide_hex,
+        ".hex at the other two widths the format allows: a 16-pixel glyph and a "
+        "32-pixel one, and a six-digit codepoint past the BMP"),
+    "bitmap.psf": (build_bitmap_psf,
+        "PSF 2: the shared design with a Unicode table in UTF-8, where one cell "
+        "answers two codepoints and one carries a two-codepoint sequence that a "
+        "reader must walk past rather than map"),
+    "bitmap-v1.psf": (build_bitmap_psf1,
+        "PSF 1: 512 glyphs, which only one bit of the mode byte says, and a "
+        "Unicode table in UCS-2 little-endian with 0xFFFE sequence separators"),
+    "bitmap.bdf": (build_bitmap_bdf,
+        "BDF: the shared design, with the properties that state the baseline "
+        "(FONT_ASCENT, FONT_DESCENT), the pixel size, the family and the "
+        "copyright, and a name per character"),
+    "bitmap-ink.bdf": (build_bitmap_ink_bdf,
+        "BDF: what only a per-glyph box can say - a negative x offset, a "
+        "descender whose BBX y is below the baseline, advances narrower and "
+        "wider than the box, ENCODING -1 for a glyph with no character, an "
+        "empty BBX with no BITMAP rows at all, and a row whose bits past the "
+        "glyph's width are set, which a reader has to clear"),
+    "bitmap.pcf": (build_bitmap_pcf,
+        "PCF: the shared design, most-significant bit and byte first, rows "
+        "padded to one byte, uncompressed metrics, with properties, "
+        "BDF accelerators, encodings, scalable widths and glyph names"),
+    "bitmap-lsb.pcf": (build_bitmap_lsb_pcf,
+        "PCF laid out the other way in every dimension: bits and bytes "
+        "least-significant first, a two-byte scan unit, rows padded to four, "
+        "compressed metrics and an ink-metrics table nothing reads - and the "
+        "same glyphs as bitmap.pcf, which is the only check on that arithmetic"),
     "basic.ttf": (build_basic,
         "TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3"),
     "os2-v0.ttf": (lambda out: build_os2(out, 0),

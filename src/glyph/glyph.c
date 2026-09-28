@@ -37,6 +37,7 @@
 
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/macros.h>
+#include "../bitmap/bitmap.h"
 #include "../sfnt/sfnt.h"
 
 /** The tables a strike list can live in, none of which is parsed yet. */
@@ -104,6 +105,19 @@ GFNT_Result gfnt_face_strike_count(const GFNT_Face * face, size_t * out_count,
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
         "no face, or nowhere to put the count");
   }
+  // A standalone bitmap container is one strike, always: the file is a strike.
+  // The parse has already happened - it is what made the face - so this costs a
+  // memo lookup.
+  if (gfnt_face_is_bitmap(face)) {
+    const GFNT_BitmapFont * font = NULL;
+    GFNT_Result result = gfnt_face_bitmap(face, &font, error);
+
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_count = 1;
+    return GFNT_OK;
+  }
 
   table = gfnt_face_strike_table(face);
   if (table != 0) {
@@ -129,10 +143,19 @@ GFNT_Result gfnt_face_strike_at(const GFNT_Face * face, size_t index,
   if (result != GFNT_OK) {
     return result;
   }
-  // count is zero until the strike parsers land, so every index is out of
-  // range - which is the same answer this will give for a real index past the
-  // end of a real strike list.
-  (void)index;
+  if (index < count && gfnt_face_is_bitmap(face)) {
+    const GFNT_BitmapFont * font = NULL;
+
+    result = gfnt_face_bitmap(face, &font, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_strike = font->strike;
+    return GFNT_OK;
+  }
+  // For every other face the count is zero, so every index is out of range -
+  // which is the same answer a real index past the end of a real strike list
+  // gets.
   return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
       "the face has no strike at that index");
 }
@@ -171,9 +194,52 @@ GFNT_Result gfnt_face_select_strike(const GFNT_Face * face, uint32_t ppem,
     }
   }
 
+  // A face with one strike and no outlines: every policy but OUTLINES_ONLY is
+  // answered by that strike, and OUTLINES_ONLY has to fail - a caller who asked
+  // for outlines and would be handed pixels is M9 with the policy inverted.
+  if (count > 0) {
+    GFNT_Strike strike;
+
+    result = gfnt_face_strike_at(face, 0, &strike, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    if (out_strike) {
+      *out_strike = strike;
+    }
+    if (out_from_outlines) {
+      *out_from_outlines = false;
+    }
+    // EXACT is the one policy that can refuse a strike this face has: a font
+    // drawn at 16 pixels cannot answer for 13, and saying so is the whole point
+    // of the policy existing beside NEAREST.
+    if (policy == GFNT_STRIKE_EXACT && strike.ppem_y != ppem) {
+      if (gfnt_face_has_outlines(face)) {
+        if (out_from_outlines) {
+          *out_from_outlines = true;
+        }
+        return GFNT_OK;
+      }
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
+          "the face has no strike at exactly that pixel size, and no outlines "
+          "to scale instead");
+    }
+    return GFNT_OK;
+  }
+
   // With no strikes, every policy resolves the same way, and the only question
   // left is whether there are outlines to scale.
   if (!gfnt_face_has_outlines(face)) {
+    // A bitmap face reaches here only under OUTLINES_ONLY, which skipped the
+    // strike count above on purpose - an sfnt with an unparsed EBLC must still be
+    // able to answer that policy from its outlines. So the refusal has to
+    // distinguish the two: this face has a strike and was told to ignore it.
+    if (gfnt_face_is_bitmap(face)) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, face->flavour, 0,
+          GFNT_GLYPH_NONE,
+          "a bitmap font asked for outlines only, and it has none - its strike "
+          "answers under any other policy");
+    }
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
         "the face has neither strikes nor outlines this library reads");
   }

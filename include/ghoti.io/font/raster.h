@@ -56,6 +56,7 @@
 #define GHOTI_IO_GFNT_RASTER_H
 
 #include <ghoti.io/font/allocator.h>
+#include <ghoti.io/font/bitmap.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
@@ -185,6 +186,29 @@ GFNT_API GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
  */
 GFNT_API GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face,
     uint32_t glyph, uint32_t ppem, const GFNT_RasterOptions * options,
+    const GFNT_Allocator * allocator, GFNT_Coverage * out_coverage,
+    GFNT_Error * error);
+
+/**
+ * @brief A bitmap strike's glyph, as coverage.
+ *
+ * So that a caller compositing a run does not need two code paths: a 1-bit
+ * strike becomes the same ::GFNT_Coverage a rasterised outline does, 0 or 255 per
+ * pixel, with `left` and `top` carrying the strike's bearings and the fill rule
+ * reported as ::GFNT_FILL_NONZERO because no rule was applied.
+ *
+ * This is the whole of the bridge. **Nothing here scales**: a strike used at a
+ * size it was not drawn for is M9, and the decision of whether to do that at all
+ * belongs to ::gfnt_face_select_strike() and its policy, not to a converter.
+ *
+ * @param glyph The bitmap glyph.
+ * @param allocator Allocator for the pixels, or NULL for the default.
+ * @param out_coverage Receives it; the caller frees it with
+ *   ::gfnt_coverage_destroy(). Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_LIMIT or ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_coverage_from_bitmap(const GFNT_BitmapGlyph * glyph,
     const GFNT_Allocator * allocator, GFNT_Coverage * out_coverage,
     GFNT_Error * error);
 

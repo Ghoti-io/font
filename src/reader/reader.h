@@ -238,6 +238,91 @@ GFNT_Result gfnt_reader_u32_at(const GFNT_Reader * reader, size_t offset,
 GFNT_Result gfnt_reader_s16_at(const GFNT_Reader * reader, size_t offset,
     int16_t * out_value);
 
+/**
+ * Which end of a multi-byte number a file puts first.
+ *
+ * Every sfnt-family format is big-endian and says so in its specification, so
+ * the readers above have no order parameter and must not grow one. Two formats
+ * this library reads are not sfnt: PSF is a Linux console format and is
+ * little-endian throughout, and **PCF carries its byte order in the file** -
+ * each table's format word says which end its numbers start at, because the
+ * format was compiled on the machine that would serve it.
+ *
+ * So the order is a value, passed in, and never a compile-time decision.
+ * `check-reader` refuses `__BYTE_ORDER__` and every `htons` spelling for that
+ * reason: a parse whose result depends on the host is one the big-endian cross
+ * container cannot check, and both of these numbers are assembled with shifts
+ * either way.
+ */
+typedef enum {
+  GFNT_ORDER_MSB_FIRST = 0, ///< Most significant byte first, as sfnt has it.
+  GFNT_ORDER_LSB_FIRST      ///< Least significant first: PCF's choice, PSF's.
+} GFNT_ByteOrder;
+
+/** Read a `uint16` in @p order and advance. */
+GFNT_Result gfnt_read_u16_order(GFNT_Reader * reader, GFNT_ByteOrder order,
+    uint16_t * out_value);
+/** Read a `uint32` in @p order and advance. */
+GFNT_Result gfnt_read_u32_order(GFNT_Reader * reader, GFNT_ByteOrder order,
+    uint32_t * out_value);
+/** Read an `int16` in @p order and advance. */
+GFNT_Result gfnt_read_s16_order(GFNT_Reader * reader, GFNT_ByteOrder order,
+    int16_t * out_value);
+/** Read an `int32` in @p order and advance. */
+GFNT_Result gfnt_read_s32_order(GFNT_Reader * reader, GFNT_ByteOrder order,
+    int32_t * out_value);
+/** Read a `uint32` in @p order at an absolute offset, leaving the cursor. */
+GFNT_Result gfnt_reader_u32_order_at(const GFNT_Reader * reader,
+    GFNT_ByteOrder order, size_t offset, uint32_t * out_value);
+
+/**
+ * A cursor that hands out one line at a time.
+ *
+ * documentation/design.md section 5.1: there is no `GFNT_Stream` here, because a
+ * font is random-access by construction - but two of the formats are text, and
+ * BDF and `.hex` are read line by line. This is that, over an ordinary
+ * ::GFNT_Reader, so a line-oriented parse is bounded by its table's extent like
+ * every other and `check-reader` has nothing to say about it.
+ *
+ * A line is the bytes before the terminator, which is LF, CRLF, or a lone CR -
+ * all three, because a BDF written on a Mac in 1994 is still a BDF. The
+ * terminator is not included and the last line needs none.
+ */
+typedef struct GFNT_Lines {
+  GFNT_Reader reader;  ///< The extent; its cursor is the read position.
+  size_t max_length;   ///< ::GFNT_Limits::max_line_length, never zero.
+  size_t number;       ///< 1-based number of the line last handed out.
+  size_t offset;       ///< Where that line started, for diagnostics.
+} GFNT_Lines;
+
+/**
+ * Set up a line cursor over @p reader's remaining bytes.
+ *
+ * @param lines The cursor to initialise.
+ * @param reader The extent to read. Copied; the original is left alone.
+ * @param max_length The cap on one line, from the face's limits.
+ * @return ::GFNT_OK, or ::GFNT_ERR_INVALID.
+ */
+GFNT_Result gfnt_lines_init(GFNT_Lines * lines, const GFNT_Reader * reader,
+    size_t max_length);
+
+/**
+ * The next line, or the news that there are no more.
+ *
+ * @param lines The cursor.
+ * @param out_bytes Receives a pointer to the line's bytes, NULL for an empty
+ *   line. Borrowed from the extent.
+ * @param out_length Receives its length, excluding the terminator.
+ * @param out_more Receives false when the extent is exhausted, and then nothing
+ *   else is written.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_CORRUPT, or
+ *   ::GFNT_ERR_LIMIT for a line longer than @p max_length - which is a limit
+ *   and not corruption, because a 4,097-byte line is a legal BDF comment.
+ */
+GFNT_Result gfnt_lines_next(GFNT_Lines * lines, const uint8_t ** out_bytes,
+    size_t * out_length, bool * out_more, GFNT_Error * error);
+
 #ifdef __cplusplus
 }
 #endif

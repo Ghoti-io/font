@@ -36,6 +36,7 @@
 #include "../core/matrix.h"
 #include "../sfnt/sfnt.h"
 #include "../tables/tables.h"
+#include "../core/buffer.h"
 #include "type1.h"
 
 /** `eexec`'s key, and the four plaintext bytes it throws away. */
@@ -59,75 +60,6 @@
  * being refused.
  */
 #define GFNT_TYPE1_EEXEC_SEARCH 65536u
-
-/** A buffer being built, with its own capacity. */
-typedef struct GFNT_Type1Buffer {
-  uint8_t * data;
-  size_t length;
-  size_t capacity;
-  const GFNT_Allocator * allocator;
-} GFNT_Type1Buffer;
-
-static void gfnt_type1_buffer_free(GFNT_Type1Buffer * buffer) {
-  if (buffer->data) {
-    buffer->allocator->free_fn(buffer->allocator->ctx, buffer->data);
-  }
-  buffer->data = NULL;
-  buffer->length = 0;
-  buffer->capacity = 0;
-}
-
-/** Make room for @p extra more bytes. */
-static bool gfnt_type1_buffer_grow(GFNT_Type1Buffer * buffer, size_t extra) {
-  size_t needed;
-  size_t capacity;
-  uint8_t * grown;
-
-  if (!gcu_safe_add_size(buffer->length, extra, &needed)) {
-    return false;
-  }
-  if (needed <= buffer->capacity) {
-    return true;
-  }
-  capacity = buffer->capacity ? buffer->capacity : 4096;
-  while (capacity < needed) {
-    size_t doubled;
-
-    if (!gcu_safe_mul_size(capacity, 2, &doubled)) {
-      return false;
-    }
-    capacity = doubled;
-  }
-  grown = buffer->allocator->realloc_fn(buffer->allocator->ctx, buffer->data,
-      capacity);
-  if (!grown) {
-    return false;
-  }
-  buffer->data = grown;
-  buffer->capacity = capacity;
-  return true;
-}
-
-static bool gfnt_type1_buffer_add(GFNT_Type1Buffer * buffer,
-    const uint8_t * bytes, size_t length) {
-  if (length == 0) {
-    return true;
-  }
-  if (!gfnt_type1_buffer_grow(buffer, length)) {
-    return false;
-  }
-  memcpy(buffer->data + buffer->length, bytes, length);
-  buffer->length += length;
-  return true;
-}
-
-static bool gfnt_type1_buffer_byte(GFNT_Type1Buffer * buffer, uint8_t byte) {
-  if (!gfnt_type1_buffer_grow(buffer, 1)) {
-    return false;
-  }
-  buffer->data[buffer->length++] = byte;
-  return true;
-}
 
 /**
  * One pass of Adobe's cipher, which both `eexec` and the charstrings use.
@@ -219,13 +151,13 @@ bool gfnt_type1_looks_like(const GFNT_Reader * blob) {
  * it is simply text no key looks at.
  */
 static GFNT_Result gfnt_type1_split_pfb(const uint8_t * in, size_t length,
-    GFNT_Type1Buffer * clear, GFNT_Type1Buffer * cipher, GFNT_Error * error) {
+    GFNT_Buffer * clear, GFNT_Buffer * cipher, GFNT_Error * error) {
   size_t at = 0;
 
   while (at + 2 <= length) {
     uint8_t kind;
     size_t size = 0;
-    GFNT_Type1Buffer * into;
+    GFNT_Buffer * into;
 
     if (in[at] != GFNT_TYPE1_PFB_MARKER) {
       return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_TYPE1, at,
@@ -253,7 +185,7 @@ static GFNT_Result gfnt_type1_split_pfb(const uint8_t * in, size_t length,
           GFNT_GLYPH_NONE, "a PFB segment longer than the file");
     }
     into = kind == GFNT_TYPE1_PFB_BINARY ? cipher : clear;
-    if (!gfnt_type1_buffer_add(into, in + at, size)) {
+    if (!gfnt_buffer_add(into, in + at, size)) {
       return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_TYPE1, 0,
           GFNT_GLYPH_NONE, "joining a PFB segment");
     }
@@ -276,7 +208,7 @@ static GFNT_Result gfnt_type1_split_pfb(const uint8_t * in, size_t length,
  * binary emits PFB.
  */
 static GFNT_Result gfnt_type1_split_ps(const uint8_t * in, size_t length,
-    GFNT_Type1Buffer * clear, GFNT_Type1Buffer * cipher, GFNT_Error * error) {
+    GFNT_Buffer * clear, GFNT_Buffer * cipher, GFNT_Error * error) {
   static const char marker[] = "eexec";
   const size_t marker_length = sizeof marker - 1;
   size_t limit = length < GFNT_TYPE1_EEXEC_SEARCH
@@ -300,7 +232,7 @@ static GFNT_Result gfnt_type1_split_ps(const uint8_t * in, size_t length,
         "a PostScript program with no eexec in its first 64 KB, so not a Type 1 "
         "font program this library can read");
   }
-  if (!gfnt_type1_buffer_add(clear, in, start)) {
+  if (!gfnt_buffer_add(clear, in, start)) {
     return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_TYPE1, 0,
         GFNT_GLYPH_NONE, "copying a Type 1 program's cleartext");
   }
@@ -372,7 +304,7 @@ static GFNT_Result gfnt_type1_split_ps(const uint8_t * in, size_t length,
         high = value;
         continue;
       }
-      if (!gfnt_type1_buffer_byte(cipher, (uint8_t)((high << 4) | value))) {
+      if (!gfnt_buffer_byte(cipher, (uint8_t)((high << 4) | value))) {
         return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_TYPE1, 0,
             GFNT_GLYPH_NONE, "decoding a Type 1 program's hex");
       }
@@ -383,7 +315,7 @@ static GFNT_Result gfnt_type1_split_ps(const uint8_t * in, size_t length,
           GFNT_GLYPH_NONE, "an odd number of hex digits in the private portion");
     }
   }
-  else if (!gfnt_type1_buffer_add(cipher, in + start, length - start)) {
+  else if (!gfnt_buffer_add(cipher, in + start, length - start)) {
     return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_TYPE1, 0,
         GFNT_GLYPH_NONE, "copying a Type 1 program's private portion");
   }
@@ -398,8 +330,8 @@ GFNT_Result gfnt_type1_derive(GFNT_Face * face, GFNT_Error * error) {
   GFNT_Reader reader;
   const uint8_t * in = NULL;
   size_t length;
-  GFNT_Type1Buffer clear = {NULL, 0, 0, NULL};
-  GFNT_Type1Buffer cipher = {NULL, 0, 0, NULL};
+  GFNT_Buffer clear = {NULL, 0, 0, NULL};
+  GFNT_Buffer cipher = {NULL, 0, 0, NULL};
   GFNT_Blob * derived = NULL;
   GFNT_Result result;
 
@@ -420,8 +352,8 @@ GFNT_Result gfnt_type1_derive(GFNT_Face * face, GFNT_Error * error) {
       ? gfnt_type1_split_pfb(in, length, &clear, &cipher, error)
       : gfnt_type1_split_ps(in, length, &clear, &cipher, error);
   if (result != GFNT_OK) {
-    gfnt_type1_buffer_free(&clear);
-    gfnt_type1_buffer_free(&cipher);
+    gfnt_buffer_free(&clear);
+    gfnt_buffer_free(&cipher);
     return result;
   }
 
@@ -437,28 +369,28 @@ GFNT_Result gfnt_type1_derive(GFNT_Face * face, GFNT_Error * error) {
     cipher.length = 0;
   }
   if (cipher.length == 0) {
-    gfnt_type1_buffer_free(&clear);
-    gfnt_type1_buffer_free(&cipher);
+    gfnt_buffer_free(&clear);
+    gfnt_buffer_free(&cipher);
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_TYPE1, 0,
         GFNT_GLYPH_NONE, "a private portion with no plaintext in it");
   }
   // One program, cleartext then plaintext, which is what the font would have
   // been if nobody had encrypted half of it. Every offset this module records is
   // into these bytes.
-  if (!gfnt_type1_buffer_add(&clear, cipher.data, cipher.length)) {
-    gfnt_type1_buffer_free(&clear);
-    gfnt_type1_buffer_free(&cipher);
+  if (!gfnt_buffer_add(&clear, cipher.data, cipher.length)) {
+    gfnt_buffer_free(&clear);
+    gfnt_buffer_free(&cipher);
     return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_TYPE1, 0,
         GFNT_GLYPH_NONE, "joining a Type 1 program's two halves");
   }
-  gfnt_type1_buffer_free(&cipher);
+  gfnt_buffer_free(&cipher);
 
   // GFNT_BLOB_COPY, so the blob owns bytes of its own and this buffer can go.
   // The copy is one pass over a font-sized buffer, once per face, and the
   // alternative is a fourth ownership rule in the blob API for one caller.
   result = gfnt_blob_create_memory(clear.data, clear.length, GFNT_BLOB_COPY,
       &face->limits, face->allocator, &derived, error);
-  gfnt_type1_buffer_free(&clear);
+  gfnt_buffer_free(&clear);
   if (result != GFNT_OK) {
     return result;
   }

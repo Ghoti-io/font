@@ -13,6 +13,14 @@
 bare-matrix.cff	A bare CFF whose FontMatrix scales the two axes differently, so it states no em this library can report and is refused by name; its translation components carry a DICT real in exponent form and one with more mantissa digits than 16.16 holds, and it states its licence in Notice rather than Copyright
 bare.cff	A bare CFF font program with no sfnt around it: the same CFF table as cff-curves.otf, so the two faces must draw identically
 basic.ttf	TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3
+bitmap-ink.bdf	BDF: what only a per-glyph box can say - a negative x offset, a descender whose BBX y is below the baseline, advances narrower and wider than the box, ENCODING -1 for a glyph with no character, an empty BBX with no BITMAP rows at all, and a row whose bits past the glyph's width are set, which a reader has to clear
+bitmap-lsb.pcf	PCF laid out the other way in every dimension: bits and bytes least-significant first, a two-byte scan unit, rows padded to four, compressed metrics and an ink-metrics table nothing reads - and the same glyphs as bitmap.pcf, which is the only check on that arithmetic
+bitmap-v1.psf	PSF 1: 512 glyphs, which only one bit of the mode byte says, and a Unicode table in UCS-2 little-endian with 0xFFFE sequence separators
+bitmap-wide.hex	.hex at the other two widths the format allows: a 16-pixel glyph and a 32-pixel one, and a six-digit codepoint past the BMP
+bitmap.bdf	BDF: the shared design, with the properties that state the baseline (FONT_ASCENT, FONT_DESCENT), the pixel size, the family and the copyright, and a name per character
+bitmap.hex	GNU Unifont .hex: eight glyphs of 8x16 in hexadecimal, one per line, with no header, no baseline and no names - the same design as bitmap.psf, bitmap.bdf and bitmap.pcf, so all four must read to identical pixels
+bitmap.pcf	PCF: the shared design, most-significant bit and byte first, rows padded to one byte, uncompressed metrics, with properties, BDF accelerators, encodings, scalable widths and glyph names
+bitmap.psf	PSF 2: the shared design with a Unicode table in UTF-8, where one cell answers two codepoints and one carries a two-codepoint sequence that a reader must walk past rather than map
 cff-arith.otf	CFF: the arithmetic operators computing the coordinates they draw with - div, the 255 fixed-point operand, dup, exch, drop, index, put, get, eq, not, mul, add and ifelse; no random, which is refused
 cff-cid.otf	CFF: CID-keyed - ROS, an FDArray of two Font DICTs with different Private DICTs and different local subroutines, FDSelect format 3, and a charset holding CIDs rather than SIDs
 cff-curves.otf	CFF: every curve operator in the form a pen never writes - three-group hvcurveto and vhcurveto with the trailing operand, hhcurveto and vvcurveto with the leading one, rcurveline, rlinecurve, and all four of flex, hflex, hflex1 and flex1 (twice, once per axis)

@@ -1021,3 +1021,58 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
   gfnt_outline_destroy(outline);
   return result;
 }
+
+GFNT_Result gfnt_coverage_from_bitmap(const GFNT_BitmapGlyph * glyph,
+    const GFNT_Allocator * allocator, GFNT_Coverage * out_coverage,
+    GFNT_Error * error) {
+  GFNT_Coverage coverage = {0};
+  GFNT_Limits caps;
+  size_t bytes;
+
+  gfnt_error_clear(error);
+  if (!glyph || !out_coverage) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no glyph, or nowhere to put the coverage");
+  }
+  if (glyph->bit_depth != 1) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
+        "a strike deeper than one bit, which no container here produces yet");
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  gfnt_limits_default(&caps);
+
+  coverage.width = glyph->width;
+  coverage.height = glyph->height;
+  coverage.stride = glyph->width;
+  // The bearings *are* the coverage's origin, which is the whole reason this
+  // conversion is three lines rather than a decision: a strike's box is already
+  // positioned against the baseline in pixels, and GFNT_Coverage's left and top
+  // mean the same thing.
+  coverage.left = glyph->bearing_x;
+  coverage.top = glyph->bearing_y;
+  coverage.fill = GFNT_FILL_NONZERO;
+  coverage.allocator = allocator;
+  if (!gcu_safe_mul_size(coverage.stride, coverage.height, &bytes)) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+        "this glyph's coverage size overflowed");
+  }
+  if (bytes > caps.max_raster_bytes) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+        "this glyph's coverage is larger than max_raster_bytes allows");
+  }
+  coverage.data = allocator->calloc_fn(allocator->ctx, bytes ? bytes : 1u, 1u);
+  if (!coverage.data) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for a glyph's coverage");
+  }
+  for (uint32_t y = 0; y < glyph->height; ++y) {
+    for (uint32_t x = 0; x < glyph->width; ++x) {
+      coverage.data[(size_t)y * coverage.stride + x]
+          = gfnt_bitmap_pixel(glyph, x, y);
+    }
+  }
+  *out_coverage = coverage;
+  return GFNT_OK;
+}

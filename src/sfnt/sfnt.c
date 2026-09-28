@@ -62,37 +62,75 @@ static bool gfnt_sfnt_is_flavour(GFNT_Tag tag) {
       || tag == GFNT_FLAVOUR_APPLE_TRUE || tag == GFNT_FLAVOUR_APPLE_TYPE1;
 }
 
+GFNT_Result gfnt_sfnt_table_directory(GFNT_Face * face, GFNT_Tag flavour,
+    const GFNT_SfntTable * entries, size_t count, GFNT_Error * error) {
+  GFNT_Reader blob_reader;
+  GFNT_SfntTable * tables;
+  GFNT_Result result;
+
+  if (count == 0) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, flavour, 0, GFNT_GLYPH_NONE,
+        "a synthetic directory with no entries in it");
+  }
+  if (count > face->limits.max_tables) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, flavour, 0, GFNT_GLYPH_NONE,
+        "more tables than GFNT_Limits::max_tables");
+  }
+  result = gfnt_reader_init_blob(&blob_reader, face->bytes, 0, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  // Every entry is checked against the blob here rather than by the container
+  // that built it, so that a synthetic directory is validated by the same rule a
+  // file's own directory is: an entry that runs past the bytes is refused before
+  // anything derives a reader from it.
+  for (size_t i = 0; i < count; ++i) {
+    size_t end;
+
+    if (!gcu_safe_add_size(entries[i].offset, entries[i].length, &end)
+        || end > blob_reader.length) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, entries[i].tag,
+          entries[i].offset, GFNT_GLYPH_NONE,
+          "a table that ends past the end of the file");
+    }
+  }
+  tables = face->allocator->calloc_fn(face->allocator->ctx, count,
+      sizeof *tables);
+  if (!tables) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "allocating the synthetic table directory");
+  }
+  for (size_t i = 0; i < count; ++i) {
+    tables[i] = entries[i];
+  }
+  face->flavour = flavour;
+  face->tables = tables;
+  face->table_count = count;
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_sfnt_single_table_directory(GFNT_Face * face,
     GFNT_Tag flavour, GFNT_Tag tag, GFNT_Error * error) {
   GFNT_Reader blob_reader;
-  GFNT_SfntTable * tables;
+  GFNT_SfntTable entry;
   GFNT_Result result;
 
   result = gfnt_reader_init_blob(&blob_reader, face->bytes, 0, error);
   if (result != GFNT_OK) {
     return result;
   }
-  tables = face->allocator->calloc_fn(face->allocator->ctx, 1, sizeof *tables);
-  if (!tables) {
-    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-        "allocating the synthetic table directory");
-  }
   // The checksum a directory would have carried is left at zero, which is what
   // gfnt_face_table_checksum() reports as the claim. There is nothing to claim:
   // no directory said anything about these bytes, and computing the checksum
   // and storing it as the claim would manufacture an agreement that was never
   // made - a check that can only ever pass.
-  tables[0] = (GFNT_SfntTable) {
+  entry = (GFNT_SfntTable) {
     .tag = tag,
     .checksum = 0,
     .offset = 0,
     .length = blob_reader.length,
   };
-
-  face->flavour = flavour;
-  face->tables = tables;
-  face->table_count = 1;
-  return GFNT_OK;
+  return gfnt_sfnt_table_directory(face, flavour, &entry, 1, error);
 }
 
 GFNT_Result gfnt_sfnt_parse_directory(GFNT_Face * face, GFNT_Error * error) {

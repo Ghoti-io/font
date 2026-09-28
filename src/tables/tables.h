@@ -49,6 +49,18 @@ extern "C" {
 typedef GFNT_Result (*GFNT_TableParse)(const GFNT_Face * face, void * out,
     GFNT_Error * error);
 
+/*
+ * A parser must leave @p out in a state the face can destroy **on every path**,
+ * failures included, and the cheap way to guarantee that is to zero it before
+ * anything can return.
+ *
+ * ::gfnt_table_cached() copies its scratch into the memo whatever the result was,
+ * and the memo is then what ::gfnt_face_free() releases. So a parser that returns
+ * a refusal without writing publishes whatever was on the stack - which for a
+ * memo holding allocated arrays is a free() of a wild address, found exactly that
+ * way by the first test to ask an outline face for a bitmap.
+ */
+
 /**
  * Parse a table once and answer from the memo thereafter.
  *

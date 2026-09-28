@@ -89,6 +89,20 @@ typedef struct GFNT_Face GFNT_Face;
  * separating two spellings of one word in a four-byte tag.
  */
 #define GFNT_FLAVOUR_TYPE1 GFNT_TAG('T', 'Y', 'P', '1')
+/**
+ * @brief A PCF bitmap font, X11's compiled format: `PCF `.
+ *
+ * Not an sfnt version. The file's own magic is a byte `0x01` and then `fcp`,
+ * which is not a tag a caller can print, so the flavour is the format's name
+ * rather than its magic - the one place in this library where those differ.
+ */
+#define GFNT_FLAVOUR_PCF GFNT_TAG('P', 'C', 'F', ' ')
+/** @brief A BDF bitmap font, the X11 text format: `BDF `. */
+#define GFNT_FLAVOUR_BDF GFNT_TAG('B', 'D', 'F', ' ')
+/** @brief A PSF console font, version 1 or 2: `PSF `. */
+#define GFNT_FLAVOUR_PSF GFNT_TAG('P', 'S', 'F', ' ')
+/** @brief A GNU Unifont `.hex` file: `HEX `. */
+#define GFNT_FLAVOUR_HEX GFNT_TAG('H', 'E', 'X', ' ')
 
 /**
  * @brief A point in a variable font's design space.

@@ -34,6 +34,7 @@
 
 #include <ghoti.io/cutil/safemath.h>
 #include <ghoti.io/font/macros.h>
+#include "../bitmap/bitmap.h"
 #include "../type1/type1.h"
 #include "sfnt.h"
 
@@ -119,6 +120,15 @@ static bool gfnt_face_bare_container(const GFNT_Reader * blob,
     *out_tag = GFNT_TAG_TYPE1;
     return true;
   }
+  // The four bitmap containers, strongest magic first among themselves. Three of
+  // them identify themselves in their first bytes, and `.hex` - which has no
+  // magic at all - is tried last there. It is asked before a bare CFF and that is
+  // safe rather than lucky: a CFF header's first byte is its major version, 1,
+  // and a `.hex` line begins with a hexadecimal digit, so no file can satisfy
+  // both probes.
+  if (gfnt_bitmap_looks_like(blob, out_flavour, out_tag)) {
+    return true;
+  }
   if (gfnt_cff_header_plausible(blob)) {
     *out_flavour = GFNT_FLAVOUR_BARE_CFF;
     *out_tag = GFNT_TAG_CFF;
@@ -176,8 +186,8 @@ GFNT_Result gfnt_face_count(const GFNT_Blob * blob, const GFNT_Limits * limits,
       return GFNT_OK;
     }
     return gfnt_error_set(error, GFNT_ERR_FORMAT, 0, 0, GFNT_GLYPH_NONE,
-        "not an sfnt version this library recognises, a collection, or a bare "
-        "CFF");
+        "not an sfnt version this library recognises, a collection, a bare CFF, "
+        "a Type 1 program, or a standalone bitmap font");
   }
   *out_count = 1;
   return GFNT_OK;
@@ -221,6 +231,14 @@ static GFNT_Result gfnt_face_build_directory(GFNT_Face * face,
   if (!gfnt_face_bare_container(&blob_reader, &flavour, &entry)) {
     return gfnt_error_set(error, GFNT_ERR_FORMAT, 0, 0, GFNT_GLYPH_NONE,
         "not an sfnt, a collection, or any container this library recognises");
+  }
+  if (flavour == GFNT_FLAVOUR_PCF || flavour == GFNT_FLAVOUR_BDF
+      || flavour == GFNT_FLAVOUR_PSF || flavour == GFNT_FLAVOUR_HEX) {
+    // A bitmap container builds its own directory - one entry for three of them,
+    // one per table for PCF - and parses its strike at load, for the reason a
+    // bare CFF's font program is parsed at load: for a container with no
+    // directory the data is the identification.
+    return gfnt_bitmap_derive(face, flavour, entry, error);
   }
   if (flavour == GFNT_FLAVOUR_TYPE1) {
     // Type 1 is the one container whose bytes do not exist until they are made:
@@ -353,6 +371,9 @@ void gfnt_face_free(GFNT_Face * face) {
   // The Type 1 parse is the one that allocates: its glyph and subroutine arrays
   // are sized from the font rather than being offsets into it.
   gfnt_type1_release(allocator, &face->type1);
+  // A bitmap container's arenas are the same kind of thing: sized from the file
+  // rather than pointing into it, because the rows are normalised on the way in.
+  gfnt_bitmap_release(allocator, &face->bitmap);
   allocator->free_fn(allocator->ctx, face->tables);
   // The caller's blob is left alone - every other face of a collection is still
   // using it - and a blob this face derived for itself is destroyed, because

@@ -21,8 +21,8 @@
 /**
  * @file
  *
- * Umbrella header for **tier 0**: the reader, the metric tables, `cmap`, names
- * and glyph access.
+ * Umbrella header for **tier 0**: the reader, the metric tables, `cmap`, names,
+ * glyph access and the bitmap strikes.
  *
  * `outline.h` and `raster.h` are implemented and are deliberately **not** here.
  * They are tier 1 (design.md section 4), and the tier boundary is the dependency
@@ -37,6 +37,7 @@
 #define GHOTI_IO_GFNT_FONT_H
 
 #include <ghoti.io/font/allocator.h>
+#include <ghoti.io/font/bitmap.h>
 #include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/core.h>

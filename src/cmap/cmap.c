@@ -42,6 +42,7 @@
 
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/macros.h>
+#include "../bitmap/bitmap.h"
 #include "../tables/tables.h"
 
 /** Bytes in a `cmap` header: version and numTables. */
@@ -485,6 +486,34 @@ GFNT_Result gfnt_face_glyph_for_codepoint(const GFNT_Face * face,
   if (!face || !out_glyph) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_CMAP_TAG, 0,
         GFNT_GLYPH_NONE, "no face, or nowhere to put the glyph");
+  }
+  // A standalone bitmap font has no `cmap` and still maps characters: PCF in its
+  // BDF_ENCODINGS table, BDF in each character's ENCODING, PSF in its Unicode
+  // table. So the question is answered here rather than left to fail as "this
+  // font has no cmap", which would be true and useless.
+  if (gfnt_face_is_bitmap(face)) {
+    const GFNT_BitmapFont * font = NULL;
+
+    result = gfnt_face_bitmap(face, &font, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    result = gfnt_bitmap_glyph_for_codepoint(font, codepoint, out_glyph);
+    if (result == GFNT_ERR_UNSUPPORTED) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, font->container, 0,
+          GFNT_GLYPH_NONE,
+          "a bitmap font that states no mapping from characters to glyphs - a "
+          "PSF without its Unicode table indexes a console's cells, not "
+          "characters");
+    }
+    if (result != GFNT_OK) {
+      // Every cmap subtable answers an unmapped codepoint with glyph 0, and this
+      // has to answer the same way: a caller looping over a string cannot be
+      // asked to treat one container's misses as errors and another's as zero.
+      *out_glyph = 0;
+      gfnt_error_clear(error);
+    }
+    return GFNT_OK;
   }
   result = gfnt_face_cmap_best(face, &best, error);
   if (result != GFNT_OK) {

@@ -40,6 +40,7 @@
 #include <ghoti.io/font/macros.h>
 #include <stdio.h>
 #include <string.h>
+#include "../bitmap/bitmap.h"
 #include "../cff/cff.h"
 #include "../sfnt/sfnt.h"
 #include "../tables/tables.h"
@@ -57,6 +58,12 @@
  */
 static GFNT_Result gfnt_glyph_name_at(const GFNT_Face * face, uint32_t glyph,
     char * out, size_t capacity, size_t * out_length, GFNT_Error * error) {
+  // A bitmap container has no `post` either, and the two that state names state
+  // them per glyph: BDF's STARTCHAR and PCF's glyph-names table. Neither has a
+  // second source, so this returns whatever that one says, refusal included.
+  if (gfnt_face_is_bitmap(face)) {
+    return gfnt_bitmap_name_at(face, glyph, out, capacity, out_length, error);
+  }
   // A Type 1 face has no `post` to fall back to and needs none: its glyphs are
   // *named* rather than numbered, so `/CharStrings` is not one source of names
   // among several - it is the only thing that says which glyph is which.

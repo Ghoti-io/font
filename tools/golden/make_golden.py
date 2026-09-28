@@ -70,12 +70,29 @@ WITH_OUTLINES = (
     # refusal is committed beside the shapes, because a glyph that started
     # rendering would mean M11's check had stopped firing.
     "outline-broken-loca.ttf",
+    # Phase 2's charstrings, which reach the scan converter through a different
+    # producer and - `cff-curves` and `cff-type1` above all - through **cubic**
+    # segments, where `glyf` sends quadratics. The flattener's two arms are the
+    # reason these are committed rather than probed: a cubic subdivided to a
+    # different depth on a big-endian machine is exactly what this gate is for.
+    "cff-curves.otf",
+    "cff-type1.otf",
+    "cff-arith.otf",
+    "cff-cid.otf",
+    "cff-hints.otf",
+    "cff-seac.otf",
+    "cff-subrs.otf",
 )
 
-# The fixture that has no `glyf` at all, so every glyph of it is refused rather
-# than sharing basic.ttf's outlines. Named, so that the probe below can require
-# exactly that of it rather than skipping it.
-NO_OUTLINES = ("cff.otf",)
+# Fixtures that must render **nothing**, which is now none of them.
+#
+# `cff.otf` was here until phase 2, on the grounds that a font with no `glyf`
+# could not draw. It can, and what it draws is worth more than the refusals it
+# used to contribute: its charstrings are the same five outlines `basic.ttf`
+# holds as `glyf`, so the subset check below now asserts that **two containers
+# and one rasteriser produce identical pixels**. That is a cross-format
+# comparison this gate could not make before and gets for free.
+NO_OUTLINES = ()
 
 HEADER = """\
 # Every committed fixture's glyphs, rasterised.

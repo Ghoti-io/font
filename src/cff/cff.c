@@ -74,6 +74,17 @@
 #define GFNT_CFF_OP_FDARRAY 0x0c24
 #define GFNT_CFF_OP_FDSELECT 0x0c25
 
+/**
+ * 2^16, as a multiplier rather than a shift.
+ *
+ * **A left shift of a negative value is undefined behaviour in C**, and every
+ * one of these values can be negative: a charstring operand, a DICT operand, a
+ * quotient. `fuzz_charstring` reported nine of them on its first run - the
+ * number decoders here and their twin in the dump - and multiplying is both
+ * defined and exactly the same arithmetic on every machine this library runs on.
+ */
+#define GFNT_FIXED_ONE 65536
+
 /** The escape byte that introduces a two-byte DICT operator. */
 #define GFNT_CFF_DICT_ESCAPE 12
 
@@ -281,22 +292,34 @@ static GFNT_Result gfnt_cff_real(GFNT_Reader * reader, int64_t * out_value,
 
   scale = exponent_sign * exponent - fraction_digits;
   value = mantissa;
+  // Saturated into int32 before the scaling, because the result is a 16.16 and
+  // an int32 is what one holds: a mantissa of eighteen digits times 65,536 is
+  // not an int64, and a real that large is not a number this format's operands
+  // mean anything as.
   if (scale >= 0) {
     int step;
 
-    for (step = 0; step < scale && step < 19; step++) {
-      value = gfnt_clamp64(value * 10);
+    for (step = 0; step < scale && step < 18; step++) {
+      // Saturated *before* each multiply, not after: an eighteen-digit mantissa
+      // times ten leaves int64 before anything has a chance to clamp it, which
+      // is the overflow `fuzz_cff` reported on a real whose exponent said to
+      // scale it up.
+      value = gfnt_saturate32((int64_t)gfnt_saturate32(value) * 10);
     }
-    value = gfnt_clamp64(value << 16);
+    value = (int64_t)gfnt_saturate32(value) * GFNT_FIXED_ONE;
   }
   else {
     int64_t divisor = 1;
     int step;
 
-    for (step = 0; step < -scale && step < 19; step++) {
+    // Eighteen, not nineteen: ten to the nineteenth is not an int64 either, and
+    // ten to the eighteenth already divides any operand this can hold down to
+    // nothing - which is the right answer for a real whose exponent says to.
+    for (step = 0; step < -scale && step < 18; step++) {
       divisor *= 10;
     }
-    value = gfnt_round_div(gfnt_clamp64(value << 16), divisor);
+    value = gfnt_round_div((int64_t)gfnt_saturate32(value) * GFNT_FIXED_ONE,
+        divisor);
   }
   *out_value = negative ? -value : value;
   return GFNT_OK;
@@ -337,7 +360,7 @@ static GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict,
       if (result != GFNT_OK) {
         return result;
       }
-      value = (int64_t)narrow << 16;
+      value = (int64_t)narrow * GFNT_FIXED_ONE;
     }
     else if (b0 == 29) {
       int32_t wide = 0;
@@ -346,10 +369,10 @@ static GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict,
       if (result != GFNT_OK) {
         return result;
       }
-      value = (int64_t)wide << 16;
+      value = (int64_t)wide * GFNT_FIXED_ONE;
     }
     else if (b0 >= 32 && b0 <= 246) {
-      value = ((int64_t)b0 - 139) << 16;
+      value = ((int64_t)b0 - 139) * GFNT_FIXED_ONE;
     }
     else if (b0 >= 247 && b0 <= 250) {
       uint8_t b1 = 0;
@@ -358,7 +381,7 @@ static GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict,
       if (result != GFNT_OK) {
         return result;
       }
-      value = (((int64_t)b0 - 247) * 256 + b1 + 108) << 16;
+      value = (((int64_t)b0 - 247) * 256 + b1 + 108) * GFNT_FIXED_ONE;
     }
     else if (b0 >= 251 && b0 <= 254) {
       uint8_t b1 = 0;
@@ -367,7 +390,7 @@ static GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict,
       if (result != GFNT_OK) {
         return result;
       }
-      value = (-((int64_t)b0 - 251) * 256 - b1 - 108) << 16;
+      value = (-((int64_t)b0 - 251) * 256 - b1 - 108) * GFNT_FIXED_ONE;
     }
     else if (b0 == 31 || b0 == 255) {
       return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF,

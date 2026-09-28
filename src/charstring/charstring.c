@@ -63,6 +63,17 @@
  */
 #define GFNT_CS_STACK 48
 
+/**
+ * 2^16, as a multiplier rather than a shift.
+ *
+ * **A left shift of a negative value is undefined behaviour in C**, and every
+ * one of these values can be negative: a charstring operand, a DICT operand, a
+ * quotient. `fuzz_charstring` reported nine of them on its first run - the
+ * number decoders here and their twin in the dump - and multiplying is both
+ * defined and exactly the same arithmetic on every machine this library runs on.
+ */
+#define GFNT_FIXED_ONE 65536
+
 /** The transient array `put` and `get` share. The specification's size. */
 #define GFNT_CS_TRANSIENT 32
 
@@ -369,7 +380,8 @@ static GFNT_Result gfnt_cs_seac(GFNT_CsState * state, int64_t adx, int64_t ady,
         "this charstring builds an accented character, and the container "
         "supplied no way to find a glyph by Standard Encoding code");
   }
-  if (bchar < 0 || bchar > (255 << 16) || achar < 0 || achar > (255 << 16)) {
+  if (bchar < 0 || bchar > 255 * GFNT_FIXED_ONE || achar < 0
+      || achar > 255 * GFNT_FIXED_ONE) {
     return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, 0,
         "an accented character naming a code outside 0-255");
   }
@@ -481,8 +493,9 @@ static int64_t gfnt_cs_sqrt_fixed(int64_t value) {
   if (value <= 0) {
     return 0;
   }
-  // sqrt(v / 65536) * 65536 == sqrt(v * 65536), computed on integers.
-  target = gfnt_clamp64(value) << 16;
+  // sqrt(v / 65536) * 65536 == sqrt(v * 65536), computed on integers - and the
+  // operand is saturated into int32 first for the reason `div`'s is.
+  target = (int64_t)gfnt_saturate32(value) * GFNT_FIXED_ONE;
   guess = 1;
   for (step = 0; step < 64; step++) {
     int64_t next;
@@ -539,8 +552,12 @@ static GFNT_Result gfnt_cs_arithmetic(GFNT_CsState * state, uint8_t op,
         return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, offset,
             "a charstring divided by zero");
       }
-      state->stack[state->count - 1] =
-          gfnt_clamp64(gfnt_round_div(gfnt_clamp64(a) << 16, b));
+      // Saturated into int32 before scaling, not clamped: 2^61 times 65,536 is
+      // not an int64 either, and a 16.16 value *is* an int32 by definition - so
+      // an operand past that range has already lost its meaning and saturating
+      // is the answer that stays in the type.
+      state->stack[state->count - 1] = gfnt_clamp64(gfnt_round_div(
+          (int64_t)gfnt_saturate32(a) * GFNT_FIXED_ONE, b));
       return GFNT_OK;
     case GFNT_CS2_NEG:
       if (state->count < 1) { break; }
@@ -709,14 +726,14 @@ static GFNT_Result gfnt_cs_number(GFNT_CsState * state, uint8_t b0,
   int64_t value;
 
   if (b0 >= 32 && b0 <= 246) {
-    value = ((int64_t)b0 - 139) << 16;
+    value = ((int64_t)b0 - 139) * GFNT_FIXED_ONE;
   }
   else if (b0 >= 247 && b0 <= 250) {
     if (at >= length) {
       return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, at,
           "a two-byte operand that runs off the end of the charstring");
     }
-    value = (((int64_t)b0 - 247) * 256 + bytes[at] + 108) << 16;
+    value = (((int64_t)b0 - 247) * 256 + bytes[at] + 108) * GFNT_FIXED_ONE;
     at += 1;
   }
   else if (b0 >= 251 && b0 <= 254) {
@@ -724,7 +741,7 @@ static GFNT_Result gfnt_cs_number(GFNT_CsState * state, uint8_t b0,
       return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, at,
           "a two-byte operand that runs off the end of the charstring");
     }
-    value = (-((int64_t)b0 - 251) * 256 - bytes[at] - 108) << 16;
+    value = (-((int64_t)b0 - 251) * 256 - bytes[at] - 108) * GFNT_FIXED_ONE;
     at += 1;
   }
   else if (b0 == GFNT_CS_SHORTINT) {
@@ -733,7 +750,7 @@ static GFNT_Result gfnt_cs_number(GFNT_CsState * state, uint8_t b0,
           "a 16-bit operand that runs off the end of the charstring");
     }
     value = (int64_t)(int16_t)(((uint16_t)bytes[at] << 8) | bytes[at + 1]);
-    value <<= 16;
+    value *= GFNT_FIXED_ONE;
     at += 2;
   }
   else {
@@ -748,7 +765,7 @@ static GFNT_Result gfnt_cs_number(GFNT_CsState * state, uint8_t b0,
     value = (int64_t)(int32_t)raw;
     if (state->type == GFNT_CHARSTRING_TYPE1) {
       // Type 1's 255 is an integer; Type 2's is already 16.16.
-      value <<= 16;
+      value *= GFNT_FIXED_ONE;
     }
     at += 4;
   }
@@ -955,7 +972,7 @@ static GFNT_Result gfnt_cs_othersubr(GFNT_CsState * state, size_t offset) {
             state->stack[state->count - (size_t)argc];
       }
       else {
-        state->ps_stack[state->ps_count++] = 3 << 16;
+        state->ps_stack[state->ps_count++] = 3 * GFNT_FIXED_ONE;
       }
       state->count -= (size_t)argc;
       return GFNT_OK;
@@ -1670,21 +1687,23 @@ GFNT_Result gfnt_charstring_dump(GFNT_CharstringType type,
       int64_t value = 0;
 
       if (op >= 32 && op <= 246) {
-        value = ((int64_t)op - 139) << 16;
+        value = ((int64_t)op - 139) * GFNT_FIXED_ONE;
       }
       else if (op >= 247 && op <= 250) {
         if (cursor >= length) { break; }
-        value = (((int64_t)op - 247) * 256 + bytes[cursor++] + 108) << 16;
+        value = (((int64_t)op - 247) * 256 + bytes[cursor++] + 108)
+            * GFNT_FIXED_ONE;
       }
       else if (op >= 251 && op <= 254) {
         if (cursor >= length) { break; }
-        value = (-((int64_t)op - 251) * 256 - bytes[cursor++] - 108) << 16;
+        value = (-((int64_t)op - 251) * 256 - bytes[cursor++] - 108)
+            * GFNT_FIXED_ONE;
       }
       else if (op == GFNT_CS_SHORTINT) {
         if (cursor + 2 > length) { break; }
         value = (int64_t)(int16_t)(((uint16_t)bytes[cursor] << 8)
             | bytes[cursor + 1]);
-        value <<= 16;
+        value *= GFNT_FIXED_ONE;
         cursor += 2;
       }
       else {
@@ -1695,7 +1714,7 @@ GFNT_Result gfnt_charstring_dump(GFNT_CharstringType type,
             | ((uint32_t)bytes[cursor + 2] << 8) | bytes[cursor + 3];
         value = (int64_t)(int32_t)raw;
         if (type == GFNT_CHARSTRING_TYPE1) {
-          value <<= 16;
+          value *= GFNT_FIXED_ONE;
         }
         cursor += 4;
       }

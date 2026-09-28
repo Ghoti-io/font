@@ -618,7 +618,9 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 # Fuzz commands
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
+.PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
+.PHONY: fuzz-run-cff fuzz-run-charstring
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
@@ -1472,7 +1474,20 @@ FUZZ_TIME ?= 60
 
 $(FUZZ_OBJ_DIR)/%.o: src/%.c $(FUZZ_FLAGS_STAMP)
 	@mkdir -p $(@D)
-	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -o $@
+	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -o $@ \
+		-MMD -MP -MF $(@:.o=.d)
+
+# The fuzz tree needs these as much as the release and ASan trees do, and did not
+# have them. A **header** change therefore rebuilt only the objects whose own .c
+# file had changed, so one binary was linked from two layouts of the same struct:
+# adding two fields to GFNT_Limits and running `make fuzz-run-cff` reported
+# "AddressSanitizer: stack-buffer-overflow in gfnt_limits_default" on the fourth
+# unit, which reads as a defect in the library and was a function writing 18
+# fields into a local declared by an object compiled when there were 16. That is
+# worse than a stale result, because the report names a source line and accuses
+# working code - and a fuzzer's crash artifact makes it look reproducible.
+FUZZ_DEPFILES := $(FUZZ_OBJECTS:.o=.d)
+-include $(FUZZ_DEPFILES)
 
 # $1 = harness basename (fuzz_obj), $2 = target suffix (obj)
 define fuzz-rule
@@ -1515,8 +1530,20 @@ $(eval $(call fuzz-rule,fuzz_sfnt,sfnt))
 $(eval $(call fuzz-rule,fuzz_cmap,cmap))
 $(eval $(call fuzz-rule,fuzz_glyf,glyf))
 $(eval $(call fuzz-rule,fuzz_raster,raster))
+# fuzz_cff takes the whole `CFF ` table, because a CFF is a nest of offsets that
+# point at each other - the Top DICT at the charset and the CharStrings INDEX, the
+# Private DICT at its local subroutines *relative to itself* - and a fuzzer given
+# one structure cannot write the offset that reaches another.
+#
+# fuzz_charstring takes no font at all, for fuzz_raster's reason: a charstring is
+# a program, what breaks an interpreter is a program, and reaching it through a
+# container would mean every interesting program had to be a valid font first. It
+# runs both languages over every input, because 255 introduces a 16.16 in one and
+# an integer in the other - the same bytes are two programs.
+$(eval $(call fuzz-rule,fuzz_cff,cff))
+$(eval $(call fuzz-rule,fuzz_charstring,charstring))
 
-FUZZERS := sfnt cmap glyf raster
+FUZZERS := sfnt cmap glyf raster cff charstring
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

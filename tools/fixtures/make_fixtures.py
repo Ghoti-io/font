@@ -1611,36 +1611,48 @@ def build_cff_curves(out):
              "linecurve", "flex", "hflex", "hflex1", "flex1x", "flex1y"]
     advances = {name: 600 for name in order}
     advances["space"] = 300
+    # Each program ends with a leg back down and to the right before its
+    # implicit close, which is not decoration: a chain of curves that all run
+    # up-and-right encloses a **sliver** with its closing line, and a sliver's
+    # extreme row of pixels carries so little coverage that a quarter-pixel
+    # horizontal shift decides whether it rounds to nothing. The golden gate
+    # asserts that a horizontal offset does not change a glyph's vertical
+    # extent, and it is right to: the property is about the rasteriser, and a
+    # fixture too thin to state it is a fixture that weakens the gate.
+    leg = (250, -500, "rlineto")
     programs = {
         ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
             "vlineto", -500, "hlineto", "endchar"),
         "space": charstring(300, "endchar"),
-        "hv": charstring(600, 100, 100, "rmoveto",
+        "hv": charstring(600, 100, 200, "rmoveto",
             50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 25,
-            "hvcurveto", "endchar"),
-        "vh": charstring(600, 100, 100, "rmoveto",
+            "hvcurveto", *leg, "endchar"),
+        "vh": charstring(600, 100, 200, "rmoveto",
             50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 25,
-            "vhcurveto", "endchar"),
-        "hh": charstring(600, 100, 100, "rmoveto",
-            20, 30, 40, 50, 60, 30, 40, 50, 60, "hhcurveto", "endchar"),
-        "vv": charstring(600, 100, 100, "rmoveto",
-            20, 30, 40, 50, 60, 30, 40, 50, 60, "vvcurveto", "endchar"),
-        "curveline": charstring(600, 100, 100, "rmoveto",
+            "vhcurveto", *leg, "endchar"),
+        "hh": charstring(600, 100, 200, "rmoveto",
+            20, 30, 40, 50, 60, 30, 40, 50, 60, "hhcurveto", *leg, "endchar"),
+        "vv": charstring(600, 100, 200, "rmoveto",
+            20, 30, 40, 50, 60, 30, 40, 50, 60, "vvcurveto", *leg, "endchar"),
+        "curveline": charstring(600, 100, 200, "rmoveto",
             30, 40, 50, 60, 70, 80, 30, -40, 50, -60, 70, -80, 40, 50,
-            "rcurveline", "endchar"),
-        "linecurve": charstring(600, 100, 100, "rmoveto",
-            40, 50, 60, -30, 30, 40, 50, 60, 70, 80, "rlinecurve", "endchar"),
-        "flex": charstring(600, 100, 100, "rmoveto",
-            30, 20, 40, 30, 50, 0, 50, 0, 40, -30, 30, -20, 50, "flex",
+            "rcurveline", *leg, "endchar"),
+        "linecurve": charstring(600, 100, 200, "rmoveto",
+            40, 50, 60, -30, 30, 40, 50, 60, 70, 80, "rlinecurve", *leg,
             "endchar"),
-        "hflex": charstring(600, 100, 100, "rmoveto",
-            30, 40, 30, 50, 60, 40, 30, "hflex", "endchar"),
-        "hflex1": charstring(600, 100, 100, "rmoveto",
-            30, 20, 40, 30, 50, 60, 40, -30, 50, "hflex1", "endchar"),
-        "flex1x": charstring(600, 100, 100, "rmoveto",
-            40, 10, 50, 20, 60, 0, 70, -10, 80, -20, 90, "flex1", "endchar"),
-        "flex1y": charstring(600, 100, 100, "rmoveto",
-            10, 40, 20, 50, 0, 60, -10, 70, -20, 80, 90, "flex1", "endchar"),
+        "flex": charstring(600, 100, 200, "rmoveto",
+            30, 20, 40, 30, 50, 0, 50, 0, 40, -30, 30, -20, 50, "flex",
+            *leg, "endchar"),
+        "hflex": charstring(600, 100, 200, "rmoveto",
+            30, 40, 30, 50, 60, 40, 30, "hflex", *leg, "endchar"),
+        "hflex1": charstring(600, 100, 200, "rmoveto",
+            30, 20, 40, 30, 50, 60, 40, -30, 50, "hflex1", *leg, "endchar"),
+        "flex1x": charstring(600, 100, 200, "rmoveto",
+            40, 10, 50, 20, 60, 0, 70, -10, 80, -20, 90, "flex1", *leg,
+            "endchar"),
+        "flex1y": charstring(600, 100, 200, "rmoveto",
+            10, 40, 20, 50, 0, 60, -10, 70, -20, 80, 90, "flex1", *leg,
+            "endchar"),
     }
     charset, strings = cff_names(order)
     table = assemble_cff(names("CFF curves")["psName"],
@@ -1673,25 +1685,32 @@ def build_cff_arith(out):
         "space": charstring(300, "endchar"),
         # 600/5 is 120, and the quotient is what rlineto draws with.
         "divide": charstring(600, 100, 100, "rmoveto", 600, 5, "div", 0,
-            "rlineto", 0, 300, "rlineto", "endchar"),
+            "rlineto", 0, 300, "rlineto", -60, 0, "rlineto", "endchar"),
         # Half a unit, in the only form that can say it.
         "fixed": charstring(600, Fixed(100.5), 100, "rmoveto",
             Fixed(200.25), 0, "rlineto", 0, Fixed(300.75), "rlineto",
             "endchar"),
         # dup, exch, drop and index, each leaving exactly what the next
-        # drawing operator takes.
+        # drawing operator takes - and tracing a shape with area while they do
+        # it, because a fixture whose glyph is two pixels states nothing about
+        # the rasteriser that renders it.
         "stack": charstring(600, 100, "dup", "rmoveto",
-            50, 60, "exch", "rlineto", 1, 2, 3, "drop", "rlineto",
-            40, 50, 1, "index", "drop", "drop", "rlineto", "endchar"),
+            400, 0, "rlineto",
+            0, 300, "rlineto",
+            1, 2, 3, "drop", "rlineto",
+            0, -400, "exch", "rlineto",
+            40, 50, 1, "index", "drop", "rlineto",
+            "endchar"),
         # The transient array, which is the only storage a charstring has.
         "transient": charstring(600, 50, 50, "rmoveto",
             200, 5, "put", 5, "get", 0, "rlineto", 0, 400, "rlineto",
-            "endchar"),
+            -100, 0, "rlineto", "endchar"),
         # eq, not, or and ifelse, which a font would use to pick between two
         # shapes and which here pick between two coordinates.
         "logic": charstring(600, 100, 100, "rmoveto",
-            1, 1, "eq", 0, "not", "add", 100, "mul", 0, "rlineto",
-            300, 200, 1, 2, "ifelse", 0, "exch", "rlineto", "endchar"),
+            1, 1, "eq", 0, "not", "add", 200, "mul", 0, "rlineto",
+            300, 200, 1, 2, "ifelse", 0, "exch", "rlineto",
+            -200, 0, "rlineto", "endchar"),
     }
     charset, strings = cff_names(order)
     table = assemble_cff(names("CFF arith")["psName"],
@@ -2027,7 +2046,8 @@ def build_cff_type1(out):
         # and the one operator that sets an absolute position.
         "current": charstring(50, 0, 600, 0, "sbw", 100, 100, "rmoveto",
             600, 5, "div", 0, "rlineto", 300, 400, "setcurrentpoint",
-            100, "hlineto", "closepath", "endchar", type1=True),
+            200, "hlineto", 0, -300, "rlineto", -150, 0, "rlineto",
+            "closepath", "endchar", type1=True),
     }
     charset, strings = cff_names(order)
     table = assemble_cff(names("CFF type1")["psName"],

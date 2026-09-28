@@ -42,6 +42,7 @@
  */
 
 #include <ghoti.io/font/macros.h>
+#include "../core/fixed.h"
 #include "tables.h"
 
 GFNT_Result gfnt_face_head(const GFNT_Face * face, const GFNT_Head ** out_head,
@@ -133,8 +134,18 @@ GFNT_Result gfnt_face_units_per_em(const GFNT_Face * face,
     // this is here rather than in the CFF module - every caller that scales a
     // glyph asks this one function.
     const GFNT_Cff * cff = NULL;
+    const GFNT_Type1 * type1 = NULL;
     size_t upem = 0;
 
+    if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_TYPE1) {
+      if (gfnt_face_type1(face, &type1, NULL) == GFNT_OK
+          && gfnt_type1_units_per_em(type1, &upem)) {
+        gfnt_error_clear(error);
+        *out_units = (uint16_t)upem;
+        return GFNT_OK;
+      }
+      return result;
+    }
     if (gfnt_face_cff(face, &cff, NULL) == GFNT_OK
         && gfnt_cff_units_per_em(cff, &upem)) {
       gfnt_error_clear(error);
@@ -218,7 +229,8 @@ static GFNT_Result gfnt_glyph_count_parse(const GFNT_Face * face, void * out,
     // already been through it. A second check would be a line no input can
     // reach - and for a bare CFF, whose font program is parsed at load, the
     // refusal happens before there is a face to ask.
-    if (gfnt_cff_glyph_bound(face, &bound)) {
+    if (gfnt_type1_glyph_bound(face, &bound)
+        || gfnt_cff_glyph_bound(face, &bound)) {
       gfnt_error_clear(error);
       *count = (GFNT_GlyphCount) {
         .count = bound,
@@ -375,6 +387,23 @@ GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face, uint32_t glyph,
   (void)variation;
 
   result = gfnt_hmtx_metrics(face, glyph, &advance, NULL, error);
+  if (result == GFNT_ERR_UNSUPPORTED
+      && gfnt_sfnt_producer(face) == GFNT_PRODUCER_TYPE1) {
+    // No `hmtx`, and there never is one: a Type 1 font states each glyph's
+    // advance in that glyph's own `hsbw`, which is the first thing its charstring
+    // does. So the charstring is the metric table here, and running it is the
+    // only way to read it.
+    GFNT_CharstringMetrics metrics;
+
+    result = gfnt_type1_metrics(face, glyph, &metrics, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    gfnt_error_clear(error);
+    // 16.16 to whole font units, rounded the one way this library rounds.
+    *out_advance = (int32_t)gfnt_round_shift(metrics.width, 16);
+    return GFNT_OK;
+  }
   if (result != GFNT_OK) {
     return result;
   }

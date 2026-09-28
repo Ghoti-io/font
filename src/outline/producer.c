@@ -39,7 +39,9 @@
 #include <stdbool.h>
 #include "../cff/cff_glyph.h"
 #include "../glyf/glyf.h"
+#include <string.h>
 #include "../sfnt/sfnt.h"
+#include "../type1/type1.h"
 #include "outline.h"
 
 /** The tag of the table holding TrueType glyph descriptions. */
@@ -88,11 +90,23 @@ GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
     return result;
   }
   gfnt_outline_set_limits(outline, &face->limits);
-  if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_GLYF) {
-    result = gfnt_glyf_load(face, glyph, 0, outline, error);
-  }
-  else {
-    result = gfnt_cff_load(face, glyph, outline, NULL, error);
+  switch (gfnt_sfnt_producer(face)) {
+    case GFNT_PRODUCER_GLYF:
+      result = gfnt_glyf_load(face, glyph, 0, outline, error);
+      break;
+    case GFNT_PRODUCER_CFF:
+      result = gfnt_cff_load(face, glyph, outline, NULL, error);
+      break;
+    case GFNT_PRODUCER_TYPE1:
+      result = gfnt_type1_load(face, glyph, outline, NULL, error);
+      break;
+    default:
+      // Unreachable: GFNT_PRODUCER_NONE was refused above. A switch that
+      // enumerates the producers is what made adding one a compile error rather
+      // than a silent fall-through to the CFF arm, which is what the `if`/`else`
+      // this replaced would have done.
+      result = gfnt_producer_refuse(face, glyph, error);
+      break;
   }
   if (result != GFNT_OK) {
     gfnt_outline_destroy(outline);
@@ -111,6 +125,11 @@ GFNT_Result gfnt_face_glyph_is_composite(const GFNT_Face * face, uint32_t glyph,
   switch (gfnt_sfnt_producer(face)) {
     case GFNT_PRODUCER_GLYF:
       return gfnt_glyf_is_composite(face, glyph, out_composite, error);
+    case GFNT_PRODUCER_TYPE1:
+      // Type 1 spells the same construction `seac` rather than as an `endchar`
+      // with four operands, and it is the same fact either way: this glyph is
+      // drawn out of two others.
+      return gfnt_type1_is_composite(face, glyph, out_composite, error);
     case GFNT_PRODUCER_CFF:
       // A CFF glyph is "composite" when its charstring assembles an accented
       // character out of two others. That is the same *fact* a `glyf` composite
@@ -132,6 +151,11 @@ GFNT_Result gfnt_face_glyph_stated_box(const GFNT_Face * face, uint32_t glyph,
   switch (gfnt_sfnt_producer(face)) {
     case GFNT_PRODUCER_GLYF:
       return gfnt_glyf_stated_box(face, glyph, out_box, error);
+    case GFNT_PRODUCER_TYPE1:
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_TYPE1, 0,
+          glyph, "a Type 1 glyph states no bounding box of its own; the font's "
+          "own /FontBBox is the whole font's, and this glyph's bounds come from "
+          "gfnt_outline_bounds()");
     case GFNT_PRODUCER_CFF:
       // There is no per-glyph box in a CFF at all: the Top DICT's `FontBBox`
       // covers the whole font, and a per-glyph one would have to be computed
@@ -146,4 +170,64 @@ GFNT_Result gfnt_face_glyph_stated_box(const GFNT_Face * face, uint32_t glyph,
       break;
   }
   return gfnt_producer_refuse(face, glyph, error);
+}
+
+GFNT_Result gfnt_face_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
+    GFNT_CharstringType * out_type, const uint8_t ** out_bytes,
+    size_t * out_length, GFNT_Error * error) {
+  gfnt_error_clear(error);
+  if (!face || !out_bytes || !out_length) {
+    return GFNT_ERR_INVALID;
+  }
+  switch (gfnt_sfnt_producer(face)) {
+    case GFNT_PRODUCER_CFF:
+      return gfnt_cff_glyph_charstring(face, glyph, out_type, out_bytes,
+          out_length, error);
+    case GFNT_PRODUCER_TYPE1: {
+      const GFNT_Type1 * type1 = NULL;
+      GFNT_Result result = gfnt_face_type1(face, &type1, error);
+
+      if (result != GFNT_OK) {
+        return result;
+      }
+      if (out_type) {
+        *out_type = GFNT_CHARSTRING_TYPE1;
+      }
+      // Already decrypted, and borrowed from the face's own arena: a Type 1
+      // charstring's bytes as the file holds them are ciphertext, and handing
+      // those back would give a caller something no interpreter can read.
+      result = gfnt_type1_program(type1, glyph, out_bytes, out_length);
+      if (result != GFNT_OK) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_TAG_TYPE1, 0, glyph,
+            "this glyph index is past the face's glyph count");
+      }
+      return GFNT_OK;
+    }
+    case GFNT_PRODUCER_GLYF:
+    case GFNT_PRODUCER_NONE:
+      break;
+  }
+  return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
+      "this face's glyphs are not charstrings");
+}
+
+GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
+    uint32_t glyph, GFNT_CharstringMetrics * out_metrics, GFNT_Error * error) {
+  gfnt_error_clear(error);
+  if (!face || !out_metrics) {
+    return GFNT_ERR_INVALID;
+  }
+  memset(out_metrics, 0, sizeof *out_metrics);
+  switch (gfnt_sfnt_producer(face)) {
+    case GFNT_PRODUCER_CFF:
+      return gfnt_cff_glyph_metrics(face, glyph, out_metrics, error);
+    case GFNT_PRODUCER_TYPE1:
+      return gfnt_type1_metrics(face, glyph, out_metrics, error);
+    case GFNT_PRODUCER_GLYF:
+    case GFNT_PRODUCER_NONE:
+      break;
+  }
+  return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
+      "this face's glyphs are not charstrings, so nothing about them states an "
+      "advance; gfnt_face_glyph_advance() reads the metric table");
 }

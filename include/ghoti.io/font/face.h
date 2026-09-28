@@ -79,6 +79,16 @@ typedef struct GFNT_Face GFNT_Face;
  * not have, and a tool that printed it would be printing something untrue.
  */
 #define GFNT_FLAVOUR_BARE_CFF GFNT_TAG('C', 'F', 'F', ' ')
+/**
+ * @brief A Type 1 font program - PFB, PFA or raw - which is not an sfnt: `TYP1`.
+ *
+ * Not an sfnt version, and deliberately not ::GFNT_FLAVOUR_APPLE_TYPE1, which is
+ * the `typ1` version of an *sfnt* whose tables hold Type 1 data. This is the
+ * font program on its own, as a `.pfb` or `.pfa` file holds it and as a PDF
+ * `FontFile` embeds it. The two differ by case, which is the only thing
+ * separating two spellings of one word in a four-byte tag.
+ */
+#define GFNT_FLAVOUR_TYPE1 GFNT_TAG('T', 'Y', 'P', '1')
 
 /**
  * @brief A point in a variable font's design space.
@@ -153,8 +163,9 @@ GFNT_API size_t gfnt_face_index(const GFNT_Face * face);
  * @brief The sfnt version this face carries.
  *
  * ::GFNT_FLAVOUR_TRUETYPE, ::GFNT_FLAVOUR_CFF, ::GFNT_FLAVOUR_APPLE_TRUE or
- * ::GFNT_FLAVOUR_APPLE_TYPE1 - or ::GFNT_FLAVOUR_BARE_CFF for a font that is
- * not an sfnt and has no directory of its own. It says which outline format to
+ * ::GFNT_FLAVOUR_APPLE_TYPE1 - or ::GFNT_FLAVOUR_BARE_CFF or
+ * ::GFNT_FLAVOUR_TYPE1 for a font that is not an sfnt and has no directory of
+ * its own. It says which outline format to
  * expect and nothing more: what a face can actually do is decided by which
  * tables it has, and a container with no directory has the ones this library
  * synthesised for it.

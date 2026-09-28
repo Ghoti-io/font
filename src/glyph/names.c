@@ -43,6 +43,7 @@
 #include "../cff/cff.h"
 #include "../sfnt/sfnt.h"
 #include "../tables/tables.h"
+#include "../type1/type1.h"
 
 /**
  * One glyph's name, counted when @p out is NULL and written when it is not.
@@ -56,6 +57,12 @@
  */
 static GFNT_Result gfnt_glyph_name_at(const GFNT_Face * face, uint32_t glyph,
     char * out, size_t capacity, size_t * out_length, GFNT_Error * error) {
+  // A Type 1 face has no `post` to fall back to and needs none: its glyphs are
+  // *named* rather than numbered, so `/CharStrings` is not one source of names
+  // among several - it is the only thing that says which glyph is which.
+  if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_TYPE1) {
+    return gfnt_type1_name_at(face, glyph, out, capacity, out_length, error);
+  }
   if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF) {
     GFNT_Result result = gfnt_cff_name_at(face, glyph, out, capacity,
         out_length, error);

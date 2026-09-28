@@ -180,6 +180,18 @@ typedef struct GFNT_Cff {
 bool gfnt_cff_header_plausible(const GFNT_Reader * blob);
 
 /**
+ * The glyph name a Standard Encoding code names, or NULL for an unused code.
+ *
+ * The Standard Encoding is PostScript's and not CFF's: a `seac` in either format
+ * names its two components by a code in this table whatever the font's own
+ * encoding says, so both readers need it and there is one copy.
+ *
+ * @param code The code.
+ * @return A static string, or NULL if the Standard Encoding leaves it unused.
+ */
+const char * gfnt_cff_standard_encoding_name(uint8_t code);
+
+/**
  * Parse the face's `CFF ` table, for ::gfnt_table_cached().
  *
  * @param face The face.

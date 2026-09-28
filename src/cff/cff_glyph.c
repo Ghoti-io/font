@@ -36,6 +36,7 @@
 #include <string.h>
 #include "../charstring/charstring.h"
 #include "../core/fixed.h"
+#include "../core/matrix.h"
 #include "../outline/outline.h"
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
@@ -113,84 +114,20 @@ static GFNT_Result gfnt_cff_standard_code(void * user, uint8_t code,
       out_bytes, out_length);
 }
 
-/**
- * Whether the `FontMatrix` and `head.unitsPerEm` describe the same em.
- *
- * A charstring's coordinates are in the font's own charstring space, and the
- * `FontMatrix` is what maps that space to the em. For every font anybody ships
- * the two agree - a 1000-unit CFF says 0.001 - and this library reports the
- * charstring's own coordinates, which is also what every reference pen reports.
- *
- * A font where they disagree would need the matrix applied, and applying it
- * would put this library and the reference in different spaces while agreeing
- * about nothing. So it is refused by name. The comparison is deliberately loose
- * in the last bits: `0.001` becomes 65 or 66 in 16.16 depending on how it was
- * written, and neither is 1/1000 exactly, so an exact test would refuse every
- * font in the world.
- */
+/** Whether this CFF's `FontMatrix` and an em stated elsewhere agree. */
 static bool gfnt_cff_matrix_agrees(const GFNT_Cff * cff, size_t upem) {
-  int64_t scale = cff->font_matrix[0];
-  int64_t implied;
-
-  if (!cff->font_matrix_stated) {
-    return true;
-  }
-  if (cff->font_matrix[1] != 0 || cff->font_matrix[2] != 0
-      || cff->font_matrix[4] != 0 || cff->font_matrix[5] != 0) {
-    return false;
-  }
-  if (scale != cff->font_matrix[3] || scale <= 0 || upem == 0) {
-    return false;
-  }
-  implied = scale * (int64_t)upem;
-  // One 16.16 unit per em unit of slack, which is what the decimal-to-binary
-  // conversion of 1/upem can cost and no more.
-  return implied >= GFNT_F16DOT16_ONE - (int64_t)upem
-      && implied <= GFNT_F16DOT16_ONE + (int64_t)upem;
+  return gfnt_matrix_agrees_with_em(cff->font_matrix, cff->font_matrix_stated,
+      upem);
 }
 
 bool gfnt_cff_units_per_em(const GFNT_Cff * cff, size_t * out_upem) {
-  int64_t scale;
-  size_t candidate;
-
-  if (!cff || !out_upem) {
+  if (!cff) {
     return false;
   }
-  // The format's own default, and exact: a Top DICT with no FontMatrix is a
-  // 1000-unit font by definition, which is what most CFFs are and what every
-  // one of them is authored in.
-  if (!cff->font_matrix_stated) {
-    *out_upem = 1000;
-    return true;
-  }
-  if (gfnt_cff_matrix_agrees(cff, 1000)) {
-    *out_upem = 1000;
-    return true;
-  }
-  // What is left has to be inverted, and 1/upem is a 16.16 approximation - so
-  // inverting recovers the em only where the division is exact. It is for every
-  // power of two (1/2048 is 32 exactly) and it is not for 1000: 0.001 is 65.536,
-  // which a font writes as 65 or 66, and those inverse to 1008 and 993. The
-  // check above is what covers that, and it has to come first for that reason.
-  scale = cff->font_matrix[0];
-  if (scale <= 0 || GFNT_F16DOT16_ONE % scale != 0) {
-    return false;
-  }
-  candidate = (size_t)(GFNT_F16DOT16_ONE / scale);
-  // The same bound `head` puts on an em, because this is the same quantity and a
-  // caller cannot tell which table it came from.
-  if (candidate < 16 || candidate > 16384) {
-    return false;
-  }
-  // And the matrix has to agree with the em just derived from it, which is not
-  // circular: the test also requires the two diagonals to match and the
-  // off-diagonals to be zero, so a matrix that skews or scales the axes
-  // differently is refused rather than reduced to one number.
-  if (!gfnt_cff_matrix_agrees(cff, candidate)) {
-    return false;
-  }
-  *out_upem = candidate;
-  return true;
+  // The rule itself is in core/matrix.c, because a Type 1 font program states
+  // the same matrix and means the same thing by it.
+  return gfnt_matrix_units_per_em(cff->font_matrix, cff->font_matrix_stated,
+      out_upem);
 }
 
 /** Set up everything one glyph's run needs. */
@@ -335,7 +272,7 @@ GFNT_Result gfnt_cff_is_composite(const GFNT_Face * face, uint32_t glyph,
   return GFNT_OK;
 }
 
-GFNT_Result gfnt_face_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
+GFNT_Result gfnt_cff_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
     GFNT_CharstringType * out_type, const uint8_t ** out_bytes,
     size_t * out_length, GFNT_Error * error) {
   const GFNT_Cff * cff = NULL;
@@ -343,14 +280,6 @@ GFNT_Result gfnt_face_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
   size_t glyphs = 0;
   GFNT_Result result;
 
-  gfnt_error_clear(error);
-  if (!face || !out_bytes || !out_length) {
-    return GFNT_ERR_INVALID;
-  }
-  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_CFF) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        "this face's glyphs are not charstrings");
-  }
   result = gfnt_face_cff(face, &cff, error);
   if (result != GFNT_OK) {
     return result;
@@ -380,26 +309,17 @@ GFNT_Result gfnt_face_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
   return GFNT_OK;
 }
 
-GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
-    uint32_t glyph, GFNT_CharstringMetrics * out_metrics, GFNT_Error * error) {
+
+GFNT_Result gfnt_cff_glyph_metrics(const GFNT_Face * face, uint32_t glyph,
+    GFNT_CharstringMetrics * out_metrics, GFNT_Error * error) {
   GFNT_Outline * outline = NULL;
   GFNT_Result result;
 
-  gfnt_error_clear(error);
-  if (!face || !out_metrics) {
-    return GFNT_ERR_INVALID;
-  }
-  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_CFF) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        "this face's glyphs are not charstrings, so nothing about them states "
-        "an advance; gfnt_face_glyph_advance() reads the metric table");
-  }
   result = gfnt_outline_create(face->allocator, &outline, error);
   if (result != GFNT_OK) {
     return result;
   }
   gfnt_outline_set_limits(outline, &face->limits);
-  memset(out_metrics, 0, sizeof *out_metrics);
   result = gfnt_cff_load(face, glyph, outline, out_metrics, error);
   gfnt_outline_destroy(outline);
   return result;

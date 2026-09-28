@@ -42,6 +42,7 @@
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/metrics.h>
 #include "../cff/cff.h"
+#include "../type1/type1.h"
 #include "../reader/reader.h"
 
 #ifdef __cplusplus
@@ -98,6 +99,24 @@ typedef struct GFNT_GlyphCount {
  */
 struct GFNT_Face {
   const GFNT_Blob * blob;           ///< Borrowed; must outlive the face.
+  /**
+   * The blob the directory's offsets are in, which is usually `blob` itself.
+   *
+   * A container whose font program has to be *derived* before it can be read -
+   * Type 1, whose private portion is `eexec`-encrypted, and WOFF when it arrives
+   * - builds those bytes into a blob of its own, and then the directory
+   * describes that one. Every parser reads through here, so nothing above this
+   * struct has to know which kind of face it has.
+   */
+  const GFNT_Blob * bytes;
+  /**
+   * The derived blob, when this face made one, for freeing. NULL otherwise.
+   *
+   * Separate from `bytes` because `bytes` answers "where do I read" and this
+   * answers "what do I own", and conflating them is how a borrowed blob gets
+   * freed.
+   */
+  GFNT_Blob * owned;
   const GFNT_Allocator * allocator; ///< Where this face came from.
   GFNT_Limits limits;               ///< A copy of the caller's caps.
   size_t index;                     ///< Which face of the collection.
@@ -131,6 +150,8 @@ struct GFNT_Face {
   GFNT_CmapSubtable cmap_best;
   GFNT_Cached cff_state;            ///< The `CFF ` container, parsed on first use.
   GFNT_Cff cff;
+  GFNT_Cached type1_state;          ///< The Type 1 program, parsed on first use.
+  GFNT_Type1 type1;
 };
 
 /**
@@ -144,7 +165,8 @@ struct GFNT_Face {
 typedef enum {
   GFNT_PRODUCER_NONE = 0, ///< Neither, or a format this library cannot read.
   GFNT_PRODUCER_GLYF,     ///< `glyf` with `loca`.
-  GFNT_PRODUCER_CFF       ///< `CFF ` charstrings.
+  GFNT_PRODUCER_CFF,      ///< `CFF ` charstrings.
+  GFNT_PRODUCER_TYPE1     ///< A Type 1 font program's charstrings.
 } GFNT_Producer;
 
 /**

@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../sfnt/sfnt.h"
+#include "../type1/type1.h"
 #include "mac_encodings.h"
 
 /** The `name` tag, spelled once. */
@@ -446,6 +447,74 @@ static size_t gfnt_name_latin1(const char * in, size_t length, char * out) {
 }
 
 /**
+ * The names a Type 1 font program states about itself.
+ *
+ * `/FontName` is the PostScript name - what a PDF identifies a `FontFile` by -
+ * and `/FontInfo` holds the rest as PostScript strings. There is no `name` table
+ * in this container and never will be, so these are not a fallback: they are
+ * where a Type 1 font's names live.
+ */
+static GFNT_Result gfnt_name_from_type1(const GFNT_Face * face,
+    uint16_t name_id, const GFNT_Allocator * allocator, char ** out_text,
+    size_t * out_length, GFNT_Error * error) {
+  const GFNT_Type1 * type1 = NULL;
+  GFNT_Reader table;
+  const uint8_t * base = NULL;
+  const GFNT_Type1Element * element = NULL;
+  size_t needed;
+  char * text;
+  GFNT_Result result = gfnt_face_type1(face, &type1, error);
+
+  if (result != GFNT_OK) {
+    return result;
+  }
+  switch (name_id) {
+    case GFNT_NAME_COPYRIGHT: element = &type1->notice; break;
+    case GFNT_NAME_FAMILY: element = &type1->family_name; break;
+    case GFNT_NAME_SUBFAMILY: element = &type1->weight; break;
+    case GFNT_NAME_FULL: element = &type1->full_name; break;
+    case GFNT_NAME_VERSION: element = &type1->version; break;
+    case GFNT_NAME_POSTSCRIPT: element = &type1->font_name; break;
+    default: break;
+  }
+  if (!element || element->length == 0) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "a name this font program does not state: a Type 1 "
+        "program states its /FontName and /FontInfo's version, family, full "
+        "name, weight and notice, and nothing else a `name` table would hold");
+  }
+  result = gfnt_face_table_reader(face, GFNT_TAG_TYPE1, &table, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (gfnt_read_bytes(&table, table.length, &base) != GFNT_OK) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_TYPE1, 0,
+        GFNT_GLYPH_NONE, "a Type 1 program whose bytes went away");
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  // Latin-1 for the same reason a CFF string is: PostScript says its strings are
+  // bytes, and Latin-1 is what every reference makes of the ones above 0x7F.
+  needed = gfnt_name_latin1((const char *)(base + element->offset),
+      element->length, NULL);
+  text = allocator->malloc_fn(allocator->ctx, needed + 1);
+  if (!text) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "allocating the decoded name");
+  }
+  gfnt_name_latin1((const char *)(base + element->offset), element->length,
+      text);
+  text[needed] = '\0';
+  gfnt_error_clear(error);
+  *out_text = text;
+  if (out_length) {
+    *out_length = needed;
+  }
+  return GFNT_OK;
+}
+
+/**
  * The name a font program states about itself, for a container with no `name`.
  *
  * A bare CFF has no table directory and so no `name` table, and it still has to
@@ -473,6 +542,13 @@ static GFNT_Result gfnt_name_from_font_program(const GFNT_Face * face,
   size_t needed = 0;
   GFNT_Result result;
 
+  // A Type 1 program states its names in `/FontInfo` and `/FontName`, which are
+  // PostScript strings rather than SIDs into an INDEX - so it answers here, and
+  // the CFF path below is for a CFF.
+  if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_TYPE1) {
+    return gfnt_name_from_type1(face, name_id, allocator, out_text, out_length,
+        error);
+  }
   result = gfnt_face_cff(face, &cff, NULL);
   if (result != GFNT_OK) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,

@@ -68,7 +68,7 @@ GFNT_Result gfnt_sfnt_single_table_directory(GFNT_Face * face,
   GFNT_SfntTable * tables;
   GFNT_Result result;
 
-  result = gfnt_reader_init_blob(&blob_reader, face->blob, 0, error);
+  result = gfnt_reader_init_blob(&blob_reader, face->bytes, 0, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -210,6 +210,11 @@ GFNT_Producer gfnt_sfnt_producer(const GFNT_Face * face) {
   if (!face) {
     return GFNT_PRODUCER_NONE;
   }
+  // A Type 1 face is the whole file, so its one synthetic table settles this
+  // before any directory question is asked.
+  if (face->flavour == GFNT_FLAVOUR_TYPE1) {
+    return GFNT_PRODUCER_TYPE1;
+  }
   if (gfnt_sfnt_find(face, GFNT_TAG('g', 'l', 'y', 'f'))
       && gfnt_sfnt_find(face, GFNT_TAG('l', 'o', 'c', 'a'))) {
     return GFNT_PRODUCER_GLYF;
@@ -236,7 +241,10 @@ GFNT_Result gfnt_face_table_reader(const GFNT_Face * face, GFNT_Tag tag,
         "the font has no such table");
   }
 
-  result = gfnt_reader_init_blob(&blob_reader, face->blob, tag, error);
+  // `bytes` rather than `blob`: for a container whose font program had to be
+  // decrypted or decompressed before anything could read it, the directory
+  // describes the derived bytes and not the file's.
+  result = gfnt_reader_init_blob(&blob_reader, face->bytes, tag, error);
   if (result != GFNT_OK) {
     return result;
   }

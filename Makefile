@@ -620,7 +620,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
-.PHONY: fuzz-run-cff fuzz-run-charstring
+.PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
@@ -1542,8 +1542,15 @@ $(eval $(call fuzz-rule,fuzz_raster,raster))
 # an integer in the other - the same bytes are two programs.
 $(eval $(call fuzz-rule,fuzz_cff,cff))
 $(eval $(call fuzz-rule,fuzz_charstring,charstring))
+# fuzz_type1 takes the whole file, unaltered, which no other harness here does.
+# It has to: a Type 1 font's bytes are *computed* before any parser sees them -
+# PFB segment framing or a hex decode, then an eexec decryption - so the input
+# steers a decryptor and a tokeniser, and the PostScript the scanner walks is not
+# a subrange of the file at all. A harness handed the decrypted program would test
+# the half of this container that is not the interesting half.
+$(eval $(call fuzz-rule,fuzz_type1,type1))
 
-FUZZERS := sfnt cmap glyf raster cff charstring
+FUZZERS := sfnt cmap glyf raster cff charstring type1
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

@@ -75,6 +75,32 @@ GFNT_Result gfnt_cff_load(const GFNT_Face * face, uint32_t glyph,
  * @param error Receives a diagnostic on failure, or NULL.
  * @return As ::gfnt_cff_load().
  */
+/**
+ * One glyph's charstring bytes and which language they are in, borrowed.
+ *
+ * The CFF half of ::gfnt_face_glyph_charstring(), whose producer dispatch lives
+ * in `outline/producer.c` with the other two.
+ *
+ * @param face The face.
+ * @param glyph Which glyph.
+ * @param out_type Receives the language, or NULL.
+ * @param out_bytes Receives the bytes.
+ * @param out_length Receives the length.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID or ::GFNT_ERR_CORRUPT.
+ */
+GFNT_Result gfnt_cff_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
+    GFNT_CharstringType * out_type, const uint8_t ** out_bytes,
+    size_t * out_length, GFNT_Error * error);
+
+/**
+ * What one glyph's charstring says about its advance, by running it.
+ *
+ * The CFF half of ::gfnt_face_glyph_charstring_metrics().
+ */
+GFNT_Result gfnt_cff_glyph_metrics(const GFNT_Face * face, uint32_t glyph,
+    GFNT_CharstringMetrics * out_metrics, GFNT_Error * error);
+
 GFNT_Result gfnt_cff_is_composite(const GFNT_Face * face, uint32_t glyph,
     bool * out_composite, GFNT_Error * error);
 

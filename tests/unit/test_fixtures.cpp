@@ -113,6 +113,13 @@ const std::vector<Entry> & every_fixture() {
       // the same thirteen behind a FontMatrix that states no em, so it counts
       // and names its glyphs and refuses to draw them.
       {"bare-matrix.cff", 13, false},
+      // The two Type 1 font programs, which hold the same eight charstrings as
+      // cff-type1.otf in a container that has no table directory, no `maxp` and
+      // no `hmtx` - the glyph count comes from `/CharStrings` and each advance
+      // from that glyph's own `hsbw`.
+      {"type1-big.pfb", 80},
+      {"type1.pfa", 8},
+      {"type1.pfb", 8},
       {"bare.cff", 13},
       {"basic.ttf", kNumGlyphs},
       {"cff.otf", kNumGlyphs},

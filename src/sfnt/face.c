@@ -34,6 +34,7 @@
 
 #include <ghoti.io/cutil/safemath.h>
 #include <ghoti.io/font/macros.h>
+#include "../type1/type1.h"
 #include "sfnt.h"
 
 /** Bytes in a TTC header before the offset array: tag, version, numFonts. */
@@ -111,6 +112,13 @@ static GFNT_Result gfnt_ttc_header(GFNT_Reader * reader, size_t * out_count,
  */
 static bool gfnt_face_bare_container(const GFNT_Reader * blob,
     GFNT_Tag * out_flavour, GFNT_Tag * out_tag) {
+  // Type 1 first: `0x80 0x01` and `%!` are two bytes that identify a file,
+  // where a CFF header is four bytes of which two are a version number.
+  if (gfnt_type1_looks_like(blob)) {
+    *out_flavour = GFNT_FLAVOUR_TYPE1;
+    *out_tag = GFNT_TAG_TYPE1;
+    return true;
+  }
   if (gfnt_cff_header_plausible(blob)) {
     *out_flavour = GFNT_FLAVOUR_BARE_CFF;
     *out_tag = GFNT_TAG_CFF;
@@ -191,6 +199,7 @@ static GFNT_Result gfnt_face_build_directory(GFNT_Face * face,
   GFNT_Tag flavour = 0;
   GFNT_Tag entry = 0;
   const GFNT_Cff * cff = NULL;
+  const GFNT_Type1 * type1 = NULL;
   GFNT_Result result = gfnt_sfnt_parse_directory(face, error);
 
   // ERR_FORMAT is the directory parse saying "this is not an sfnt", which is
@@ -212,6 +221,18 @@ static GFNT_Result gfnt_face_build_directory(GFNT_Face * face,
   if (!gfnt_face_bare_container(&blob_reader, &flavour, &entry)) {
     return gfnt_error_set(error, GFNT_ERR_FORMAT, 0, 0, GFNT_GLYPH_NONE,
         "not an sfnt, a collection, or any container this library recognises");
+  }
+  if (flavour == GFNT_FLAVOUR_TYPE1) {
+    // Type 1 is the one container whose bytes do not exist until they are made:
+    // its private half is encrypted, so there is nothing for a reader to point
+    // at. gfnt_type1_derive() builds the whole program, gives the face a blob of
+    // its own and the directory that describes it, and from there everything
+    // above reads it like any other table.
+    result = gfnt_type1_derive(face, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    return gfnt_face_type1(face, &type1, error);
   }
   result = gfnt_sfnt_single_table_directory(face, flavour, entry, error);
   if (result != GFNT_OK) {
@@ -294,6 +315,9 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
         "allocating the face");
   }
   face->blob = blob;
+  // Until a container replaces it, the bytes the directory describes are the
+  // caller's own.
+  face->bytes = blob;
   face->allocator = allocator;
   face->limits = effective;
   face->index = index;
@@ -326,9 +350,14 @@ void gfnt_face_free(GFNT_Face * face) {
   if (face->lock_ready) {
     GCU_MUTEX_DESTROY(face->lock);
   }
+  // The Type 1 parse is the one that allocates: its glyph and subroutine arrays
+  // are sized from the font rather than being offsets into it.
+  gfnt_type1_release(allocator, &face->type1);
   allocator->free_fn(allocator->ctx, face->tables);
-  // The blob is the caller's, and every other face of a collection is still
-  // using it.
+  // The caller's blob is left alone - every other face of a collection is still
+  // using it - and a blob this face derived for itself is destroyed, because
+  // nobody else has ever seen it.
+  gfnt_blob_destroy(face->owned);
   allocator->free_fn(allocator->ctx, face);
 }
 

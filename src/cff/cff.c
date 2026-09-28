@@ -1127,6 +1127,22 @@ GFNT_Result gfnt_cff_font_name(const GFNT_Face * face, const GFNT_Cff * cff,
   return GFNT_OK;
 }
 
+const char * gfnt_cff_standard_encoding_name(uint8_t code) {
+  const uint16_t sid = gfnt_cff_standard_encoding[code];
+
+  // Not CFF's table, despite living in this module: the Standard Encoding is
+  // PostScript's, and a CFF carries the same one a Type 1 font does. The
+  // accessor is here because the generated table is, and it is an accessor
+  // rather than a shared header so that one copy of 256 entries exists.
+  if (sid == 0) {
+    return NULL;
+  }
+  if (sid >= GFNT_CFF_STANDARD_STRING_COUNT) {
+    return NULL;
+  }
+  return gfnt_cff_standard_strings[sid];
+}
+
 GFNT_Result gfnt_cff_string(const GFNT_Face * face, const GFNT_Cff * cff,
     uint32_t sid, char * buffer, size_t size, size_t * out_length,
     GFNT_Error * error) {

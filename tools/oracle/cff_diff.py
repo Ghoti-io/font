@@ -79,7 +79,35 @@ PARTIAL = "(partial)"
 
 
 class Skip(Exception):
-    """This font cannot be compared, with a reason worth printing."""
+    """This font cannot be compared, with a reason worth printing.
+
+    `expected` separates two events that wear one word. A font with no CFF
+    table, or one this library refuses whole and by name, was never going to be
+    compared and is counted. Anything else is a font this differential *meant*
+    to compare and could not, which is the one event a clean run cannot be told
+    apart from agreement - so those are named on screen even under --quiet.
+    """
+
+    def __init__(self, why, expected=False):
+        super().__init__(why)
+        self.expected = expected
+
+
+# Fonts this library refuses as a whole, by name, and which therefore have no
+# glyphs for a second engine to disagree about.
+#
+# `bare-matrix.cff` states a `FontMatrix` that reduces to no em, in a container
+# with no `head` to state one instead. Every reference pen - fontTools' included
+# - ignores the matrix and reports charstring coordinates, so there is no second
+# opinion here to compare against: there is a refusal this library documents
+# (design.md section 7.4) and a reference that never asked the question. Listing
+# it is the honest form of that, and the per-glyph "this library refused" count
+# stays a disagreement for every other font, because for those a refusal really
+# is a difference in behaviour.
+REFUSED_WHOLE = {
+    "bare-matrix.cff":
+        "this library refuses it whole: its FontMatrix states no em",
+}
 
 
 def fixtures():
@@ -310,11 +338,13 @@ def programs_agree(want, got, partial):
 
 def compare(path, face, stride, report, allowance, partial, categories):
     """One font. Returns (compared, disagreements, glyphs, inexact, declined)."""
+    if os.path.basename(path) in REFUSED_WHOLE:
+        raise Skip(REFUSED_WHOLE[os.path.basename(path)], expected=True)
     mine = ours(path, face, stride, 0)
     theirs = reference(path, face, stride, 0)
 
     if theirs.get("charstrings") == "none":
-        raise Skip("no CFF table")
+        raise Skip("no CFF table", expected=True)
     if mine.get("charstrings") == "none":
         raise Skip("this library reports no charstrings")
 
@@ -454,7 +484,7 @@ def main(argv):
                 1 if path in synthetic_paths else stride, report, allowance,
                 partial, categories)
         except Skip as why:
-            skipped.append((path, str(why)))
+            skipped.append((path, str(why), why.expected))
             continue
         charstring_fonts += 1
         compared += fields
@@ -484,7 +514,26 @@ def main(argv):
               "not run" % partial[0])
     if declined:
         print("cff_diff: %d glyph(s) this library refused" % declined)
-    for path, why in skipped:
+    # Two different events wear one word here. A font with no CFF table is not a
+    # CFF font: the corpus is mostly TrueType and that is the expected case,
+    # counted and not dwelt on. Anything else is a font this differential *meant*
+    # to compare and could not, which is the one event a clean run cannot be
+    # distinguished from agreement - `bare.cff` was dropped from four runs of
+    # this gate by a reference that could not open it, with nothing on screen to
+    # say so. So that count is printed even under --quiet, which the gate passes,
+    # and lumping the 314 TrueType fonts in with it would have trained whoever
+    # reads the line to skip it.
+    absent = [item for item in skipped if item[2]]
+    unexplained = [item for item in skipped if not item[2]]
+    if absent:
+        print("cff_diff: %d font(s) not compared for a stated reason "
+              "(no CFF table, or refused whole by name)" % len(absent))
+    if unexplained:
+        print("cff_diff: %d font(s) could not be compared" % len(unexplained))
+    for path, why, _ in unexplained:
+        print("cff_diff: could not compare %s: %s"
+              % (os.path.basename(path), why))
+    for path, why, _ in absent:
         if not quiet:
             print("cff_diff: skipped %s: %s" % (os.path.basename(path), why))
 

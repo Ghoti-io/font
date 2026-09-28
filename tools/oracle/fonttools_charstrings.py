@@ -179,6 +179,54 @@ def as_type1(charstring, subrs):
     return T1CharString(bytecode=charstring.bytecode, subrs=subrs)
 
 
+# Streams cffLib still holds lazy references into.
+_STREAMS = []
+
+
+def load(path, face):
+    """`(order, charstrings, glyph_set, top)` for an sfnt or a bare CFF.
+
+    A bare CFF is a font program with no sfnt around it - what a PDF
+    `FontFile3` carries - and `TTFont` cannot open one at all. `cffLib` reads
+    one directly, and everything this reference does afterwards needs only the
+    charstrings, the glyph order, and something a pen can resolve an accented
+    character's components against.
+
+    The sniff is the same rule the library uses: major version 1 and a header at
+    least the four bytes every CFF header has. It cannot collide with an sfnt,
+    whose first byte is 0x00, `O`, `t` or `w`.
+
+    Returns None when there are no charstrings to compare.
+    """
+    with open(path, "rb") as handle:
+        head = handle.read(4)
+    if len(head) == 4 and head[0] == 1 and head[2] >= 4:
+        from fontTools.cffLib import CFFFontSet
+        from io import BytesIO
+
+        with open(path, "rb") as handle:
+            stream = BytesIO(handle.read())
+        # cffLib reads charstrings *lazily* out of the stream it is handed, so
+        # the stream has to outlive this function - a `with` around the decompile
+        # closes it and every later read raises "seek of closed file". Keeping it
+        # here says so where it can be seen.
+        _STREAMS.append(stream)
+        cff = CFFFontSet()
+        cff.decompile(stream, None)
+        top = cff[cff.fontNames[0]]
+        charstrings = top.CharStrings
+        # A CFF's own glyph order is its charset, which is also the only place a
+        # bare one states its glyph names - there is no `post` to hold them.
+        return list(top.charset), charstrings, charstrings, top
+
+    font = TTFont(path, fontNumber=face, lazy=True)
+    if "CFF " not in font:
+        return None
+    cff = font["CFF "].cff
+    top = cff[cff.fontNames[0]]
+    return font.getGlyphOrder(), top.CharStrings, font.getGlyphSet(), top
+
+
 def main(argv):
     if len(argv) < 5:
         sys.stderr.write("usage: %s <font> <face> <stride> <first>\n" % argv[0])
@@ -188,17 +236,13 @@ def main(argv):
     stride = max(1, int(argv[3]))
     first = int(argv[4])
 
-    font = TTFont(path, fontNumber=face, lazy=True)
-    if "CFF " not in font:
+    loaded = load(path, face)
+    if loaded is None:
         # Said rather than left silent: a differential reads no output as
         # agreement, and "this font has no CFF" is a fact both sides can hold.
         print("charstrings: none")
         return 0
-    cff = font["CFF "].cff
-    top = cff[cff.fontNames[0]]
-    charstrings = top.CharStrings
-    order = font.getGlyphOrder()
-    glyph_set = font.getGlyphSet()
+    order, charstrings, glyph_set, top = loaded
     # **fontTools' CFF reader ignores `CharstringType`**: `cffLib.CharStrings`
     # builds a `T2CharString` whatever the Top DICT says, so a font carrying
     # Type 1 programs - which the format allows - decompiles as Type 2 and comes

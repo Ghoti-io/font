@@ -60,6 +60,12 @@ GOLDEN = os.path.join(ROOT, "tests", "data", "golden", "coverage.txt")
 # their own. `basic.ttf` is the five outlines every phase 0 fixture shares; the
 # five `outline-*.ttf` are phase 1's shapes.
 WITH_OUTLINES = (
+    # `bare.cff` is deliberately not here. Its font program is byte-for-byte
+    # cff-curves.otf's, so its renderings are the same 175 images under another
+    # name, and committing them would say nothing about big-endian reproduction
+    # that the wrapped fixture does not already say. That the two rasterise
+    # identically is asserted by testCff instead, which is where the claim
+    # belongs - it is about the container, not about the scan converter.
     "basic.ttf",
     "outline-simple.ttf",
     "outline-composite.ttf",

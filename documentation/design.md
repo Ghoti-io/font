@@ -506,11 +506,36 @@ font program rather than defaulted:
   own licence (§14.5) with no `name` table to state it in. A face carrying both
   sources reads its `name` table.
 
-**Still not built: Type 1 as a container**, which needs the same synthetic
-directory with several entries plus `eexec` decryption and the PostScript token
-scanner §7.1 describes; and the four bitmap containers of §7.1, where each
-"produces a `GFNT_Face` with one strike and no outlines". The face that was
-blocking all three is no longer the obstacle.
+**Type 1 is built too, as of 2026-09-28**, and it needed one thing the bare CFF
+did not: **its bytes do not exist in the file.** The private half of a font
+program is `eexec`-encrypted and a PFA's is ASCII-hex on top of that, so there is
+nothing for a reader to point at. A face therefore has two blob fields - `bytes`
+is where the directory's offsets are and `owned` is what it must free - and the
+loader decrypts the whole program into a blob of its own before the directory is
+synthesised. WOFF will want exactly that when it arrives, for the same reason at
+one remove: its tables are compressed.
+
+- **Not a PostScript interpreter.** The scanner knows what a font program
+  contains - names, numbers, arrays, procedures it skips, strings, and the
+  `RD`/`ND`/`NP` idiom that introduces binary - in both spellings of each,
+  because which one a font uses is its writer's habit and a reader that knew one
+  would refuse half the fonts in the world.
+- **Every charstring is deciphered once**, at parse time, into one arena. The
+  interpreter's subroutine accessor promises a pointer that outlives the run, and
+  a charstring deciphered into scratch has none to give.
+- **Type 1 is name-keyed**, so the glyph *index* is this library's invention.
+  `gfnt_type1_order()` is the only place that decides it: `.notdef` first because
+  glyph 0 means "no glyph" everywhere else here, then the order `/CharStrings`
+  gave them. A codepoint lookup is refused rather than guessed at - a Type 1
+  `/Encoding` maps codes of the font's own choosing, and reaching Unicode from
+  them needs the Adobe Glyph List, which is not here.
+- **The advance is in the charstring.** There is no `hmtx` and never will be:
+  each glyph states its own advance in `hsbw`, so reading a metric means running
+  a program.
+
+**Still not built: the four bitmap containers of §7.1**, where each "produces a
+`GFNT_Face` with one strike and no outlines". Neither the face nor the derived
+bytes are in their way any more.
 
 Three decisions the interpreters make, each of which could have gone the other
 way and each of which is refused rather than guessed:
@@ -1776,10 +1801,13 @@ synthetic, whose em comes from the `FontMatrix`, whose glyph count comes from
 `CharStrings`, and which names itself out of the Top DICT because it has no
 `name` table to name itself in (§7.4).
 
-**Not built:** the Type 1 *font format*, which is a container rather than a
-language - the language is built and differentiated - and which needs `eexec`
-decryption and a PostScript token scanner beside the synthetic directory a bare
-CFF already uses (§7.4); `CFF2` (§16); the bitmap strikes (§7.5); colour (§7.6);
+**The Type 1 font format is built, as of 2026-09-28**: PFB and PFA framing,
+`eexec`, the per-charstring cipher, and a scanner for the PostScript a font
+program is written in - with its em, its glyph count, its names and each glyph's
+advance all answered out of the program because there is no table to read any of
+them from (§7.1).
+
+**Not built:** `CFF2` (§16); the bitmap strikes (§7.5); colour (§7.6);
 variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`
 and WOFF 1. `maxp` has no `_dump` because nothing

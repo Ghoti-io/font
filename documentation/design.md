@@ -474,15 +474,43 @@ an sfnt is read - every structure above, CID-keyed fonts included - and
 puts Type 1 programs in a CFF, is honoured, so the Type 1 language has a container
 and a differential even though the Type 1 *font format* does not.
 
-**Not built: bare CFF and Type 1 as containers**, and the reason is the same for
-both and is not the interpreter. A ::GFNT_Face is an sfnt: it holds a table
-directory, and every parser reaches its bytes through a reader derived from a
-directory entry. A Type 1 font program and a bare CFF stream have no directory at
-all, so both need a face whose tables come from somewhere else - which is the
-same shape §7.1 needs for PCF, BDF, PSF and `.hex`, where each "produces a
-`GFNT_Face` with one strike and no outlines". That is one piece of work serving
-five containers, and it belongs with whichever of them is built first rather than
-being invented twice.
+**Bare CFF is built, as of 2026-09-28.** A ::GFNT_Face used to be an sfnt: it
+holds a table directory, and every parser reaches its bytes through a reader
+derived from a directory entry, so a container with no directory could not be a
+face. What that needed turned out not to be a new abstraction but a **synthetic
+directory**: one entry spanning the blob, carrying the format's real tag, after
+which every table parse, memo, limit and producer dispatch above it works
+unchanged and unaware. `gfnt_sfnt_single_table_directory()` is that, and it is
+what the remaining directory-less containers will use - a container with several
+regions (Type 1's cleartext and `eexec` portions, PCF's typed table of contents)
+wants several entries and a variant of it.
+
+Three things follow from there being no tables, and each is answered from the
+font program rather than defaulted:
+
+- **The em** comes from the `FontMatrix`, and a CFF that states none is a
+  1000-unit font by the format's own default - exactly. A stated matrix is
+  inverted only where 16.16 holds its reciprocal exactly, which it does for every
+  power of two and does not for 1000: 0.001 is 65.536, a font writes 65 or 66,
+  and those invert to 1008 and 993. Recognising 1000 *before* inverting is what
+  makes both of those right. A matrix that skews, that scales the two axes
+  differently, or whose reciprocal is not exact is refused by name, for the same
+  reason a matrix disagreeing with `head.unitsPerEm` is: applying it would put
+  these coordinates in a space no reference pen reports.
+- **The glyph count** comes from `CharStrings`. With no `maxp` it is not a
+  minimum to be reconciled (M12) - it is the count.
+- **The name and the licence** come from the Top DICT's six strings and the Name
+  INDEX, decoded as Latin-1 (which is what fontTools decodes them as, and
+  fontTools is what every string here is compared against). A PDF identifies a
+  `FontFile3` by that PostScript name, and a committed fixture has to state its
+  own licence (§14.5) with no `name` table to state it in. A face carrying both
+  sources reads its `name` table.
+
+**Still not built: Type 1 as a container**, which needs the same synthetic
+directory with several entries plus `eexec` decryption and the PostScript token
+scanner §7.1 describes; and the four bitmap containers of §7.1, where each
+"produces a `GFNT_Face` with one strike and no outlines". The face that was
+blocking all three is no longer the obstacle.
 
 Three decisions the interpreters make, each of which could have gone the other
 way and each of which is refused rather than guessed:
@@ -1743,9 +1771,15 @@ moved:
   unique. Verified in the raw bytes before the category was written, which is the
   only way to tell that apart from being wrong (decision 18).
 
-**Not built:** bare CFF and the Type 1 font format, which are containers rather
-than languages and which wait on a face whose tables do not come from an sfnt
-directory (§7.4); `CFF2` (§16); the bitmap strikes (§7.5); colour (§7.6);
+**Bare CFF is built too, as of 2026-09-28**: a face whose one table is
+synthetic, whose em comes from the `FontMatrix`, whose glyph count comes from
+`CharStrings`, and which names itself out of the Top DICT because it has no
+`name` table to name itself in (§7.4).
+
+**Not built:** the Type 1 *font format*, which is a container rather than a
+language - the language is built and differentiated - and which needs `eexec`
+decryption and a PostScript token scanner beside the synthetic directory a bare
+CFF already uses (§7.4); `CFF2` (§16); the bitmap strikes (§7.5); colour (§7.6);
 variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`
 and WOFF 1. `maxp` has no `_dump` because nothing

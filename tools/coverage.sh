@@ -117,7 +117,12 @@ awk -v floor="$FLOOR" -v lines_floor="$LINES_FLOOR" '
         grand_covered++
       } else {
         t = body[key]
-        if (t ~ /realloc|capacity|[Gg]row|GROW|rehash|resize|reserve/) {
+        # `reserve` needs the paren of a call or a definition. Bare, it also
+        # matches the English word, and `return "reserved"` in a charstring
+        # operator table was reported for six commits as a reallocation path no
+        # test reaches - a gate saying something false about the library, which
+        # teaches whoever reads it to skip the line.
+        if (t ~ /realloc|capacity|[Gg]row|GROW|rehash|resize|reserve\(/) {
           split(key, parts, ":")
           gaps[f] = gaps[f] " " parts[2]
           gap_count++

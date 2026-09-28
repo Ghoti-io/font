@@ -24,7 +24,10 @@
 #include "test_helpers.h"
 #include "failing_allocator.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -37,6 +40,8 @@
 #include <ghoti.io/font/raster.h>
 
 #include <gtest/gtest.h>
+
+#include "sfnt_builder.h"
 
 #include "../../src/bitmap/bitmap.h"
 
@@ -129,6 +134,7 @@ std::string pixels(const GFNT_Face * face, uint32_t glyph) {
 const std::vector<std::string> & shared_design() {
   static const std::vector<std::string> names = {
       "bitmap.hex", "bitmap.psf", "bitmap.bdf", "bitmap.pcf", "bitmap-lsb.pcf",
+      "bitmap-swap.pcf",
   };
   return names;
 }
@@ -209,7 +215,7 @@ TEST(Bitmap, ABaselineIsStatedOrItIsNot) {
   };
   const std::vector<Case> cases = {
       {"bitmap.bdf", true}, {"bitmap.pcf", true}, {"bitmap-lsb.pcf", true},
-      {"bitmap.hex", false}, {"bitmap.psf", false},
+      {"bitmap-swap.pcf", true}, {"bitmap.hex", false}, {"bitmap.psf", false},
   };
   for (const Case & entry : cases) {
     Fixture fixture(entry.name);
@@ -260,6 +266,7 @@ TEST(Bitmap, EveryContainerIsItsOwnFlavourAndHasNoOutlines) {
       {"bitmap-ink.bdf", GFNT_FLAVOUR_BDF},
       {"bitmap.pcf", GFNT_FLAVOUR_PCF},
       {"bitmap-lsb.pcf", GFNT_FLAVOUR_PCF},
+      {"bitmap-swap.pcf", GFNT_FLAVOUR_PCF},
   };
   for (const Case & entry : cases) {
     Fixture fixture(entry.name);
@@ -495,7 +502,8 @@ TEST(Bitmap, TheEncodingIsEnumerableAndSortedByCodepoint) {
 TEST(Bitmap, NamesComeFromTheContainersThatStateThem) {
   // BDF names every character and PCF compiles those names into a table; PSF and
   // `.hex` state none at all, and the refusal says which of the two it is.
-  for (const char * name : {"bitmap.bdf", "bitmap.pcf", "bitmap-lsb.pcf"}) {
+  for (const char * name : {"bitmap.bdf", "bitmap.pcf", "bitmap-lsb.pcf",
+      "bitmap-swap.pcf"}) {
     Fixture fixture(name);
     ASSERT_EQ(fixture.result, GFNT_OK) << name;
 
@@ -557,6 +565,13 @@ TEST(Bitmap, TheFontsOwnNamesComeFromItsProperties) {
       EXPECT_EQ(std::string(full).rfind("-Ghoti.io-", 0), 0u) << full;
       gfnt_name_free(nullptr, full);
     }
+
+    char * weight = nullptr;
+    ASSERT_EQ(gfnt_face_name(fixture.face, GFNT_NAME_SUBFAMILY,
+        GFNT_LANGUAGE_ANY, nullptr, &weight, nullptr, nullptr), GFNT_OK)
+        << name;
+    EXPECT_STREQ(weight, "Medium") << name;
+    gfnt_name_free(nullptr, weight);
 
     // A name id neither format has a property for.
     char * version = nullptr;
@@ -718,7 +733,7 @@ TEST(Bitmap, AStrikeBecomesCoverageWithoutBeingScaled) {
     bool states_baseline;
   };
   const std::vector<Group> groups = {
-      {{"bitmap.bdf", "bitmap.pcf", "bitmap-lsb.pcf"}, true},
+      {{"bitmap.bdf", "bitmap.pcf", "bitmap-lsb.pcf", "bitmap-swap.pcf"}, true},
       {{"bitmap.hex", "bitmap.psf"}, false},
   };
   std::vector<uint64_t> per_group;
@@ -800,11 +815,22 @@ struct PcfBuilder {
   uint16_t encoding_glyph = 0;
   uint16_t encoding_min = 0x41;
   uint16_t encoding_max = 0x41;
+  uint16_t encoding_min_high = 0;
+  uint16_t encoding_max_high = 0;
   int16_t left = 0;
   int16_t right = 8;
   int16_t ascent = 8;
   int16_t descent = 0;
   uint32_t toc_count_override = 0;
+  /** Bytes to add to the last table's *stated* size without writing them. */
+  uint32_t overstate_last = 0;
+  /** A properties table to include verbatim, for the malformed ones. */
+  std::string properties;
+  /** Whether to include a table of a type this library does not read. */
+  bool with_unknown_table = false;
+  /** Cut this table's payload to this many bytes, keeping the rest of the file. */
+  uint32_t cut_type = 0;
+  uint32_t cut_to = 0;
 
   std::string build() const {
     std::vector<std::pair<uint32_t, std::string>> tables;
@@ -844,13 +870,27 @@ struct PcfBuilder {
       put32(payload, format);
       put16(payload, encoding_min);
       put16(payload, encoding_max);
-      put16(payload, 0);
-      put16(payload, 0);
+      put16(payload, encoding_min_high);
+      put16(payload, encoding_max_high);
       put16(payload, 0xFFFF);
-      for (uint32_t code = encoding_min; code <= encoding_max; ++code) {
-        put16(payload, encoding_glyph);
+      for (uint32_t high = encoding_min_high; high <= encoding_max_high;
+          ++high) {
+        for (uint32_t code = encoding_min; code <= encoding_max; ++code) {
+          put16(payload, encoding_glyph);
+        }
       }
       tables.push_back({32, payload});
+    }
+    if (!properties.empty()) {
+      tables.push_back({1, properties});
+    }
+    if (with_unknown_table) {
+      // A type PCF does not define and this library does not read. X may add one,
+      // and a reader that stumbled over it would refuse a font it can draw.
+      std::string payload;
+      put32(payload, format);
+      put32(payload, 0);
+      tables.push_back({1 << 20, payload});
     }
     if (with_names) {
       std::string payload;
@@ -864,6 +904,13 @@ struct PcfBuilder {
       tables.push_back({128, payload});
     }
 
+    if (cut_type) {
+      for (auto & table : tables) {
+        if (table.first == cut_type && table.second.size() > cut_to) {
+          table.second.resize(cut_to);
+        }
+      }
+    }
     std::string out = "\x01" "fcp";
     put32(out, toc_count_override ? toc_count_override
         : static_cast<uint32_t>(tables.size()));
@@ -872,10 +919,13 @@ struct PcfBuilder {
     for (const auto & table : tables) {
       std::string payload = table.second;
       payload.append((4 - payload.size() % 4) % 4, '\0');
+      const bool last = &table == &tables.back();
+
       put32(out, table.first);
       put32(out, toc_format_override ? toc_format_override
           : (table.first == 4 ? metrics_format : format));
-      put32(out, static_cast<uint32_t>(payload.size()));
+      put32(out, static_cast<uint32_t>(payload.size())
+          + (last ? overstate_last : 0u));
       put32(out, at);
       at += static_cast<uint32_t>(payload.size());
       body += payload;
@@ -1379,18 +1429,537 @@ TEST(Bitmap, PcfRefusesATableThatDisagreesWithItsDirectory) {
     EXPECT_EQ(gfnt_face_glyph_name(crafted.face, 0, nullptr, &name, nullptr,
         nullptr), GFNT_ERR_UNSUPPORTED);
   }
-  // Truncated at every length: a file that ends anywhere must be refused rather
-  // than read past. This is section 14.3's idea applied to a container whose
-  // tables are its own.
+  // Truncated at every length. Section 14.3's idea applied to a container whose
+  // tables are its own - and what it asserts is **not** that every truncation is
+  // refused, which was the first version of this loop and was wrong: a PCF's table
+  // entries are clamped to the file (see
+  // PcfStatedTableSizesAreNotBelievedPastTheFile), so a file missing only the
+  // padding after its last table is readable, and so is one missing a table the
+  // parse never needed.
+  //
+  // What must hold for every length is that the face either refuses or reads
+  // consistently: every glyph it claims can be fetched, and every fetch stays
+  // inside the file. The second half of that is what `make test-asan` and
+  // valgrind check over this same loop; here it is the absence of a crash and the
+  // agreement between the count and what can be read.
   {
     const std::string whole = PcfBuilder().build();
+    size_t readable = 0;
     for (size_t length = 1; length < whole.size(); ++length) {
       Crafted crafted(whole.substr(0, length));
 
-      EXPECT_NE(crafted.result, GFNT_OK) << "accepted a PCF cut to " << length
-                                        << " bytes";
+      if (crafted.result != GFNT_OK) {
+        continue;
+      }
+      ++readable;
+      size_t glyphs = 0;
+      ASSERT_EQ(gfnt_face_num_glyphs(crafted.face, &glyphs, nullptr), GFNT_OK)
+          << length;
+      for (uint32_t glyph = 0; glyph < glyphs; ++glyph) {
+        GFNT_BitmapGlyph bitmap{};
+
+        EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, glyph, 0, &bitmap,
+            nullptr), GFNT_OK) << length << " glyph " << glyph;
+      }
+    }
+    // A handful rather than none and rather than most: the file is 164 bytes and
+    // only the last few cuts remove nothing the parse reads. Asserting the count
+    // rather than "some" is what would catch a clamp that started swallowing real
+    // truncations.
+    EXPECT_LE(readable, 4u) << "the clamp accepted " << readable
+                            << " truncations, which is more than its padding";
+    EXPECT_GE(readable, 1u);
+  }
+}
+
+TEST(Bitmap, PcfStatedTableSizesAreNotBelievedPastTheFile) {
+  // **Every PCF in the world overstates one table's size.** `bdftopcf` writes the
+  // last entry's size as that of an accelerator table with ink bounds whether it
+  // wrote those or not, so the final table of every Terminus font overruns the
+  // file by twenty-eight bytes. libXfont and FreeType both read such a file
+  // because neither compares a stated size against the file's length.
+  //
+  // This library refused all 234 of them until the differential met one. So a
+  // length past the end is clamped, and the two halves of that decision are both
+  // asserted here: the file loads, and a table whose *own contents* are cut short
+  // still fails - which is what the clamp must not cost.
+  {
+    PcfBuilder builder;
+    builder.overstate_last = 28;
+    Crafted crafted(builder.build());
+    EXPECT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+  }
+  {
+    // The same overstatement on a table the parse has to read all of. The entry is
+    // clamped to what is there, the read then runs off the end of it, and the
+    // refusal names the table rather than the directory.
+    PcfBuilder builder;
+    const std::string whole = builder.build();
+    Crafted crafted(whole.substr(0, whole.size() - 40));
+    EXPECT_NE(crafted.result, GFNT_OK);
+  }
+  {
+    // An offset past the end is refused rather than clamped: it names no bytes at
+    // all, and clamping it would produce an empty table the parse would then
+    // report as corrupt with a less useful message.
+    PcfBuilder builder;
+    std::string bytes = builder.build();
+    // The fourth field of the first table-of-contents entry is its offset.
+    const size_t at = 8 + 12;
+    bytes[at] = static_cast<char>(0xFF);
+    bytes[at + 1] = static_cast<char>(0xFF);
+    Crafted crafted(bytes);
+    EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT);
+    EXPECT_NE(std::string(crafted.error.message).find("past the end of the file"),
+        std::string::npos) << crafted.error.message;
+  }
+}
+
+TEST(Bitmap, PcfTwoByteEncodingsArePairs) {
+  // A PCF whose `min_byte1` is not zero maps pairs: the code is the two bytes
+  // together, and every font here whose codes are above 0xFF is one. No fixture is
+  // - the shared design is Latin-1 so that all four containers can hold it - so
+  // this is the only thing that walks the outer loop of the range, and a mutation
+  // that read the pair wrongly was not caught until it existed.
+  PcfBuilder builder;
+  builder.encoding_min_high = 0x4E;
+  builder.encoding_max_high = 0x4F;
+  builder.encoding_min = 0x00;
+  builder.encoding_max = 0x02;
+  Crafted crafted(builder.build());
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 0;
+  ASSERT_EQ(gfnt_face_bitmap_encoding_count(crafted.face, &count, nullptr),
+      GFNT_OK);
+  // Two high bytes times three low ones, all pointing at the font's one glyph.
+  EXPECT_EQ(count, 6u);
+
+  const std::vector<uint32_t> expected = {0x4E00, 0x4E01, 0x4E02, 0x4F00,
+      0x4F01, 0x4F02};
+  for (size_t i = 0; i < expected.size() && i < count; ++i) {
+    uint32_t codepoint = 0;
+    uint32_t glyph = 99;
+
+    ASSERT_EQ(gfnt_face_bitmap_encoding_at(crafted.face, i, &codepoint, &glyph,
+        nullptr), GFNT_OK) << i;
+    EXPECT_EQ(codepoint, expected[i]) << i;
+    EXPECT_EQ(glyph, 0u) << i;
+  }
+  uint32_t glyph = 99;
+  ASSERT_EQ(gfnt_face_glyph_for_codepoint(crafted.face, 0x4E01, &glyph,
+      nullptr), GFNT_OK);
+  EXPECT_EQ(glyph, 0u);
+  // And the low byte on its own is not a code this font has, which is what a
+  // reader that dropped the high byte would answer.
+  ASSERT_EQ(gfnt_face_glyph_for_codepoint(crafted.face, 0x01, &glyph, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(glyph, 0u);
+  ASSERT_EQ(gfnt_face_bitmap_encoding_at(crafted.face, 0, &glyph, nullptr,
+      nullptr), GFNT_OK);
+  EXPECT_NE(glyph, 0x01u);
+}
+
+TEST(Bitmap, TheDumpIsTheShapeTheDifferentialParses) {
+  // `gfnt_bitmap_dump()` was reached by nothing in this suite: the tests read
+  // pixels through the accessor, and the dump is only exercised by
+  // `examples/font-bitmap` and the differential that parses its output. So a
+  // change to the line it writes would have broken `bitmap_diff.py` with every
+  // test still passing, which the coverage report is what noticed.
+  Fixture fixture("bitmap.bdf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  GFNT_BitmapGlyph bitmap{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 1, 0, &bitmap, nullptr),
+      GFNT_OK);
+
+  char * text = nullptr;
+  size_t size = 0;
+  FILE * stream = open_memstream(&text, &size);
+  ASSERT_NE(stream, nullptr);
+  ASSERT_EQ(gfnt_bitmap_dump(&bitmap, stream), GFNT_OK);
+  ASSERT_EQ(fclose(stream), 0);
+  const std::string dumped(text, size);
+  free(text);
+
+  // The header, in the shape the driver's parser splits on.
+  EXPECT_EQ(dumped.rfind("bitmap: 8x16, bearing 0,14, advance 8, 1 bpp, "
+                         "strike 16x16\n", 0), 0u) << dumped;
+  // One line per row, `#` set and `.` clear, and the same pixels the accessor
+  // gives - which is what makes the dump a second reading rather than a second
+  // format.
+  std::vector<std::string> rows;
+  std::istringstream reader(dumped.substr(dumped.find('\n') + 1));
+  std::string row;
+  while (std::getline(reader, row)) {
+    rows.push_back(row);
+  }
+  ASSERT_EQ(rows.size(), bitmap.height);
+  for (uint32_t y = 0; y < bitmap.height; ++y) {
+    ASSERT_EQ(rows[y].size(), bitmap.width) << y;
+    for (uint32_t x = 0; x < bitmap.width; ++x) {
+      EXPECT_EQ(rows[y][x] == '#', gfnt_bitmap_pixel(&bitmap, x, y) != 0)
+          << y << "," << x;
     }
   }
+
+  // A glyph with no pixels writes its header and no rows, which is what a space
+  // looks like to the differential.
+  GFNT_BitmapGlyph empty{};
+  Fixture ink("bitmap-ink.bdf");
+  ASSERT_EQ(ink.result, GFNT_OK);
+  ASSERT_EQ(gfnt_face_glyph_bitmap(ink.face, 0, 0, &empty, nullptr), GFNT_OK);
+  stream = open_memstream(&text, &size);
+  ASSERT_NE(stream, nullptr);
+  ASSERT_EQ(gfnt_bitmap_dump(&empty, stream), GFNT_OK);
+  ASSERT_EQ(fclose(stream), 0);
+  EXPECT_EQ(std::string(text, size),
+      "bitmap: 0x0, bearing 0,0, advance 8, 1 bpp, strike 16x16\n");
+  free(text);
+}
+
+TEST(Bitmap, HexadecimalIsReadInEitherCase) {
+  // Both text formats read rows as hexadecimal, and both are written in upper case
+  // by every tool that writes them - so the lower-case arm of the digit reader was
+  // reached by nothing. A file written by hand is not obliged to shout.
+  {
+    BdfBuilder builder;
+    builder.rows = {"81", "42", "24", "18", "18", "24", "42", "81"};
+    std::vector<std::string> lower;
+    for (const std::string & row : builder.rows) {
+      lower.push_back(row);
+    }
+    BdfBuilder other;
+    other.rows = {"8a", "bc", "de", "f1", "18", "24", "42", "81"};
+    Crafted crafted(other.build());
+    ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+    GFNT_BitmapGlyph bitmap{};
+    ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 0, 0, &bitmap, nullptr),
+        GFNT_OK);
+    // 0x8a is 1000 1010.
+    EXPECT_EQ(gfnt_bitmap_pixel(&bitmap, 0, 0), 255u);
+    EXPECT_EQ(gfnt_bitmap_pixel(&bitmap, 4, 0), 255u);
+    EXPECT_EQ(gfnt_bitmap_pixel(&bitmap, 6, 0), 255u);
+    EXPECT_EQ(gfnt_bitmap_pixel(&bitmap, 1, 0), 0u);
+  }
+  {
+    Crafted crafted("0041:8abcdef101020304050607080900a0b0\n");
+    ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+    GFNT_BitmapGlyph bitmap{};
+    ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 0, 0, &bitmap, nullptr),
+        GFNT_OK);
+    EXPECT_EQ(gfnt_bitmap_pixel(&bitmap, 0, 0), 255u);
+    EXPECT_EQ(gfnt_bitmap_pixel(&bitmap, 1, 0), 0u);
+    EXPECT_EQ(gfnt_bitmap_pixel(&bitmap, 4, 0), 255u);
+  }
+}
+
+TEST(Bitmap, PsfUnicodeTableReachesPastTheBasicPlane) {
+  // A four-byte UTF-8 sequence, which is what a console font holding an emoji or a
+  // CJK extension character states. The fixture's table is Latin-1 and Greek, so
+  // the four-byte arm of the decoder was reached by nothing.
+  const std::string astral = "\xf0\x9f\x92\xa9";  // U+1F4A9
+  Crafted crafted(psf2(1, 0, 32, 1, 8, 8, 8, astral + std::string("\xff", 1)));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  uint32_t glyph = GFNT_GLYPH_NONE;
+  ASSERT_EQ(gfnt_face_glyph_for_codepoint(crafted.face, 0x1F4A9, &glyph,
+      nullptr), GFNT_OK);
+  EXPECT_EQ(glyph, 0u);
+
+  size_t count = 0;
+  ASSERT_EQ(gfnt_face_bitmap_encoding_count(crafted.face, &count, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(count, 1u);
+  uint32_t codepoint = 0;
+  ASSERT_EQ(gfnt_face_bitmap_encoding_at(crafted.face, 0, &codepoint, nullptr,
+      nullptr), GFNT_OK);
+  EXPECT_EQ(codepoint, 0x1F4A9u);
+}
+
+TEST(Bitmap, PcfWithoutAcceleratorsTakesItsBaselineFromItsGlyphs) {
+  // A PCF may ship without either accelerator table - X computes those from the
+  // glyphs in the first place - and then the tallest ascent and deepest descent any
+  // glyph states is the line the font was drawn on. Nothing reached that arm,
+  // because both fixtures carry BDF accelerators as bdftopcf writes them.
+  PcfBuilder builder;
+  Crafted control(builder.build());
+  ASSERT_EQ(control.result, GFNT_OK) << control.error.message;
+  GFNT_Strike strike{};
+  ASSERT_EQ(gfnt_face_strike_at(control.face, 0, &strike, nullptr), GFNT_OK);
+  // The builder writes no accelerators at all, so this *is* the glyph-derived
+  // answer: one glyph, ascent 8, descent 0.
+  EXPECT_EQ(strike.ascent, 8);
+  EXPECT_EQ(strike.descent, 0);
+  EXPECT_EQ(strike.ppem_y, 8u);
+
+  // And with a descent, which is the half of the loop a glyph sitting on the line
+  // cannot reach.
+  PcfBuilder lower;
+  lower.ascent = 6;
+  lower.descent = 3;
+  Crafted deep(lower.build());
+  ASSERT_EQ(deep.result, GFNT_OK) << deep.error.message;
+  ASSERT_EQ(gfnt_face_strike_at(deep.face, 0, &strike, nullptr), GFNT_OK);
+  EXPECT_EQ(strike.ascent, 6);
+  EXPECT_EQ(strike.descent, -3);
+  // No PIXEL_SIZE property either, so the ppem is the height the baseline implies.
+  EXPECT_EQ(strike.ppem_y, 9u);
+}
+
+TEST(Bitmap, TwoCharactersOfOneCodeResolveToTheLowerGlyph) {
+  // A file can spell what no format permits: two characters with the same
+  // ENCODING. The map is sorted by glyph within a codepoint so that the answer is
+  // *stable* - a lookup that depended on the order two equal keys happened to land
+  // in would be a different font on a different qsort.
+  BdfBuilder builder;
+  builder.chars = "2";
+  builder.extra = "";
+  std::string text = builder.build();
+  const std::string second =
+      "STARTCHAR Aalt\nENCODING 65\nDWIDTH 8 0\nBBX 8 8 0 0\nBITMAP\n"
+      "FF\nFF\nFF\nFF\nFF\nFF\nFF\nFF\nENDCHAR\n";
+  text.insert(text.find("ENDFONT"), second);
+  Crafted crafted(text);
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(crafted.face, &glyphs, nullptr), GFNT_OK);
+  EXPECT_EQ(glyphs, 2u);
+  uint32_t glyph = GFNT_GLYPH_NONE;
+  ASSERT_EQ(gfnt_face_glyph_for_codepoint(crafted.face, 'A', &glyph, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(glyph, 0u) << "the lower glyph must win, and stably";
+  size_t count = 0;
+  ASSERT_EQ(gfnt_face_bitmap_encoding_count(crafted.face, &count, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(count, 2u) << "both mappings are stated and both are enumerable";
+}
+
+TEST(Bitmap, PcfPropertiesThatPointOutsideTheirStringsAreRefused) {
+  // A property's name and its value are both offsets into the table's own string
+  // block, which is a bound the file states about itself. Neither arm was reached:
+  // the fixtures' properties are all well formed, because a generator wrote them.
+  //
+  // The rest of the font is the builder's, so what is under test is the properties
+  // parse and not a hand-built PCF's ability to load at all.
+  struct Case {
+    uint32_t name_offset;
+    uint8_t is_string;
+    uint32_t value;
+    const char * because;
+  };
+  const std::vector<Case> cases = {
+      {99, 0, 0, "whose name is outside the table's strings"},
+      // A string-valued property whose *value* is outside them. The name has to be
+      // one this library reads, or the value is never looked at - which is itself
+      // the reason the two arms are separate.
+      {0, 1, 99, "whose value is outside the table's strings"},
+  };
+  for (const Case & entry : cases) {
+    std::string properties;
+    const std::string strings = std::string("FAMILY_NAME", 11)
+        + std::string(1, '\0') + std::string("Ghoti", 5) + std::string(1, '\0');
+
+    put32(properties, 0x08);
+    put32(properties, 1);
+    put32(properties, entry.name_offset);
+    properties += static_cast<char>(entry.is_string);
+    put32(properties, entry.value);
+    properties.append(3, '\0');   // the padding one property gets
+    put32(properties, static_cast<uint32_t>(strings.size()));
+    properties += strings;
+
+    PcfBuilder builder;
+    builder.properties = properties;
+    Crafted crafted(builder.build());
+
+    EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT) << entry.because;
+    EXPECT_NE(std::string(crafted.error.message).find(entry.because),
+        std::string::npos) << crafted.error.message;
+  }
+
+  // And a well-formed one through the same path, so that the refusals above are
+  // not simply "this library cannot read a properties table".
+  {
+    std::string properties;
+    const std::string strings = std::string("FAMILY_NAME", 11)
+        + std::string(1, '\0') + std::string("Ghoti", 5) + std::string(1, '\0');
+
+    put32(properties, 0x08);
+    put32(properties, 1);
+    put32(properties, 0);
+    properties += '\x01';
+    put32(properties, 12);
+    properties.append(3, '\0');
+    put32(properties, static_cast<uint32_t>(strings.size()));
+    properties += strings;
+
+    PcfBuilder builder;
+    builder.properties = properties;
+    Crafted crafted(builder.build());
+    ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+    char * family = nullptr;
+    ASSERT_EQ(gfnt_face_name(crafted.face, GFNT_NAME_FAMILY, GFNT_LANGUAGE_ANY,
+        nullptr, &family, nullptr, nullptr), GFNT_OK);
+    EXPECT_STREQ(family, "Ghoti");
+    gfnt_name_free(nullptr, family);
+  }
+}
+
+TEST(Bitmap, PcfSkipsATableTypeItDoesNotRead) {
+  // PCF's types are a set X may add to, so an unknown one is a table nothing here
+  // asks for. It gets no directory entry rather than an invented tag - which keeps
+  // gfnt_face_table_count() the number of tables that can be *read* - and it must
+  // not stop the font from loading.
+  PcfBuilder builder;
+  builder.with_unknown_table = true;
+  Crafted crafted(builder.build());
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(crafted.face, &glyphs, nullptr), GFNT_OK);
+  EXPECT_EQ(glyphs, 1u);
+
+  PcfBuilder plain_font;
+  Crafted without(plain_font.build());
+  ASSERT_EQ(without.result, GFNT_OK);
+  // The same tables either way: the extra one is absent from the directory, which
+  // is the whole of what "skipped" means here.
+  EXPECT_EQ(gfnt_face_table_count(crafted.face),
+      gfnt_face_table_count(without.face));
+}
+
+TEST(Bitmap, ASfntWithStrikesThisLibraryCannotReadSaysSoSeparately) {
+  // The distinction `glyph.h` exists to keep, and the only input in the repository
+  // that can produce it: a face carrying `EBLC` has strikes this library does not
+  // parse, and answering "zero strikes" would tell a caller a bitmap font has no
+  // bitmaps (M9). A font with no bitmap table at all answers zero.
+  //
+  // Hand-built rather than generated, because what it needs is a table whose
+  // *presence* is the fact - fontTools would want to write a real one.
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'),
+      std::vector<uint8_t>{0, 2, 0, 0, 0, 0, 0, 0}});
+  const std::vector<uint8_t> bytes =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  Crafted crafted(std::string(reinterpret_cast<const char *>(bytes.data()),
+      bytes.size()));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 99;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_strike_count(crafted.face, &count, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(count, 99u) << "a refusal must not also write a count";
+  EXPECT_NE(std::string(error.message).find("does not parse"),
+      std::string::npos) << error.message;
+
+  // And the bitmap accessor carries that refusal outward rather than reporting
+  // "no strikes at all", which is the arm no other input reaches.
+  GFNT_BitmapGlyph bitmap{};
+  gfnt_error_clear(&error);
+  EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 0, 0, &bitmap, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::string(error.message).find("does not parse"),
+      std::string::npos) << error.message;
+}
+
+TEST(Bitmap, BdfToleratesIndentationAndTrailingSpace) {
+  // Real BDFs are written by tools and by hand, and a hand-written one has
+  // indented keywords, trailing spaces and blank lines before STARTFONT. None of
+  // that changes what the font is, and each of the three reached no code until
+  // here.
+  BdfBuilder builder;
+  std::string text = builder.build();
+  std::string spaced;
+  for (const std::string & line : std::vector<std::string>{}) {
+    (void)line;
+  }
+  std::istringstream reader(text);
+  std::string line;
+  while (std::getline(reader, line)) {
+    spaced += "  " + line + "  \n";
+  }
+  Crafted crafted("\n \n\t\n" + spaced);
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  GFNT_BitmapGlyph bitmap{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 0, 0, &bitmap, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(bitmap.width, 8u);
+  EXPECT_EQ(gfnt_bitmap_pixel(&bitmap, 0, 0), 255u);
+  char * name = nullptr;
+  ASSERT_EQ(gfnt_face_glyph_name(crafted.face, 0, nullptr, &name, nullptr,
+      nullptr), GFNT_OK);
+  EXPECT_STREQ(name, "A") << "a trailing space became part of the name";
+  gfnt_glyph_name_free(nullptr, name);
+}
+
+TEST(Bitmap, OneCodepointStatedTwiceForOneGlyphIsNotTwoMappings) {
+  // A PSF Unicode table may list a character twice for one cell - a hand-edited
+  // table does - and the two entries are then identical in both fields, which is
+  // the case the map's ordering has to have an answer for.
+  Crafted crafted(psf2(1, 0, 32, 1, 8, 8, 8, std::string("AA\xff", 3)));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 0;
+  ASSERT_EQ(gfnt_face_bitmap_encoding_count(crafted.face, &count, nullptr),
+      GFNT_OK);
+  // Both are kept - the file states both - and both name the same glyph, so a
+  // lookup is unambiguous however they were ordered.
+  EXPECT_EQ(count, 2u);
+  uint32_t glyph = GFNT_GLYPH_NONE;
+  ASSERT_EQ(gfnt_face_glyph_for_codepoint(crafted.face, 'A', &glyph, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(glyph, 0u);
+}
+
+TEST(Bitmap, EveryPcfTableCutShortIsRefusedByName) {
+  // design.md section 14.3: truncate each *table*, not the file. A file cut at the
+  // end tests the last parser; a table cut short tests the one that reads it, and
+  // for PCF there are six of them - each of which states a count and then the
+  // records the count promised.
+  //
+  // Every table is cut to just its format word and then to a few bytes past it, so
+  // that the count's own read fails and then a record's does. What must hold is
+  // that the refusal names the table: a font refused as "corrupt" with no table tag
+  // is a diagnostic nobody can act on (section 5.6).
+  struct Table {
+    uint32_t type;
+    const char * name;
+  };
+  const std::vector<Table> tables = {
+      {4, "metrics"}, {8, "bitmaps"}, {32, "encodings"}, {128, "glyph names"},
+      {256, "accelerators"},
+  };
+  size_t refusals = 0;
+  for (const Table & table : tables) {
+    for (uint32_t keep : {4u, 6u, 10u, 16u}) {
+      PcfBuilder builder;
+      builder.cut_type = table.type;
+      builder.cut_to = keep;
+      Crafted crafted(builder.build());
+
+      if (crafted.result == GFNT_OK) {
+        // Legal: a table this font did not need, cut to nothing. The glyph names
+        // and the accelerators are both optional, so a short one means the parse
+        // read what was there and asked for no more.
+        continue;
+      }
+      refusals += 1;
+      EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT)
+          << table.name << " cut to " << keep;
+      EXPECT_NE(crafted.error.table, 0u)
+          << table.name << " cut to " << keep
+          << " was refused without naming a table";
+    }
+  }
+  // Rather than "some": twenty variants over five tables, and a run where most had
+  // become readable would mean a bound had stopped being checked.
+  EXPECT_GE(refusals, 8u) << "only " << refusals
+                          << " of twenty truncations were refused";
 }
 
 TEST(Bitmap, LimitsAreEnforcedPerContainer) {
@@ -1450,6 +2019,29 @@ TEST(Bitmap, LimitsAreEnforcedPerContainer) {
   }
 }
 
+TEST(Bitmap, ALineLengthLimitOfZeroIsACallerError) {
+  // The two text formats read through a line cursor, and a cap of zero is a limit
+  // no line can satisfy - so it is refused where the cursor is created rather than
+  // reported as a corrupt font. A caller who zeroed a field of GFNT_Limits by
+  // memset gets that answer instead of "your BDF is broken".
+  GFNT_Limits limits;
+
+  gfnt_limits_default(&limits);
+  limits.max_line_length = 0;
+  {
+    Crafted crafted(BdfBuilder().build(), &limits);
+    EXPECT_NE(crafted.result, GFNT_OK);
+    EXPECT_NE(std::string(crafted.error.message).find("read the file's lines"),
+        std::string::npos) << crafted.error.message;
+  }
+  {
+    Crafted crafted("0041:00000000000000000000000000000000\n", &limits);
+    EXPECT_NE(crafted.result, GFNT_OK);
+    EXPECT_NE(std::string(crafted.error.message).find("read the file's lines"),
+        std::string::npos) << crafted.error.message;
+  }
+}
+
 TEST(Bitmap, EveryAllocationCanFail) {
   // design.md section 15.1: an allocation failure is a code path, and the only
   // way to walk it is to refuse each request in turn. The four parsers allocate
@@ -1457,7 +2049,8 @@ TEST(Bitmap, EveryAllocationCanFail) {
   // its name offsets and three arenas - so the sweep is per container and the
   // requirement is the same: no crash, no leak, and a refusal that says OOM.
   for (const char * name : {"bitmap.hex", "bitmap.psf", "bitmap.bdf",
-      "bitmap.pcf", "bitmap-lsb.pcf", "bitmap-ink.bdf", "bitmap-v1.psf"}) {
+      "bitmap.pcf", "bitmap-lsb.pcf", "bitmap-swap.pcf", "bitmap-ink.bdf",
+      "bitmap-v1.psf"}) {
     const std::string path = gfnttest::data(std::string("fonts/") + name);
     GFNT_Blob * blob = nullptr;
     GFNT_Error error{};

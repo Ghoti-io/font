@@ -30,9 +30,17 @@ ENV LANG=C.UTF-8 \
 # fontTools answers for every table, and brotli is what it needs to read or
 # write WOFF 2 - which this library defers (section 16), but the oracle should
 # be able to read one when the question comes up.
+#
+# Pillow is here for a format fontTools does not read at all: it carries PCF and
+# BDF readers of its own, descended from PIL's X font support, and they are the
+# only second reading of a bitmap container available without building `bdftopcf`
+# and `psftools` into an image of their own. `bitmap_diff.py` says exactly which
+# half of each format it can serve as a reference for - its BDF reader is sound,
+# and its PCF *encoding* is not.
 RUN pip install --no-cache-dir --no-compile \
       fonttools==4.66.0 \
-      brotli==1.2.0
+      brotli==1.2.0 \
+      pillow==12.3.0
 
 # The fonts a differential names. They live **only here**: no third-party font
 # is committed to this repository (section 14.6), and the two jobs a corpus does

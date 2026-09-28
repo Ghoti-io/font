@@ -161,13 +161,11 @@ size_t gfnt_bitmap_build_count(const GFNT_BitmapBuild * build) {
 GFNT_Result gfnt_bitmap_build_string(GFNT_BitmapBuild * build,
     const char * text, size_t length, size_t * out_offset,
     GFNT_Error * error) {
-  size_t at;
+  // No NULL arm: every caller decides for itself whether it has a string, because
+  // "no name" is a different fact from "the empty name" and the callers are the
+  // ones that can tell. The arm was here and no input reached it.
+  size_t at = build->text.length;
 
-  if (!text) {
-    *out_offset = GFNT_BITMAP_NO_STRING;
-    return GFNT_OK;
-  }
-  at = build->text.length;
   if (!gfnt_buffer_add(&build->text, (const uint8_t *)text, length)
       || !gfnt_buffer_byte(&build->text, 0)) {
     return gfnt_error_set(error, GFNT_ERR_OOM, build->font.container, 0,

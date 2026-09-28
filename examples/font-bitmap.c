@@ -24,6 +24,7 @@
  * Print every glyph of a bitmap strike, pixel by pixel.
  *
  * Usage: font-bitmap <font> [stride] [first]
+ *        font-bitmap --golden <label> <font>
  *
  * The driver `tools/oracle/bitmap_diff.py` compares against Pillow's own PCF and
  * BDF readers, and the one that makes the four-container identity check possible:
@@ -34,12 +35,95 @@
  * A strike's ppem, baseline and per-glyph metrics are printed because a container
  * either states them or does not, and which is which is the other half of what a
  * reader has to get right.
+ *
+ * `--golden` prints one line per glyph in `font-render`'s shape - the coverage's
+ * box, its total and its hash - so that the golden-bitmap gate (section 14.4)
+ * covers a strike as well as a rasterised outline. Every operation between a
+ * file's bytes and a strike's pixels is an explicit shift, so the pixels *should*
+ * be the same on a big-endian machine; that sentence is a claim, and this is what
+ * makes it a measurement.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <ghoti.io/font/font.h>
+#include <ghoti.io/font/raster.h>
+
+/**
+ * One glyph as a golden line: the coverage the strike becomes, hashed.
+ */
+static int golden_glyph(const GFNT_Face * face, const char * label,
+    uint32_t glyph) {
+  GFNT_BitmapGlyph bitmap;
+  GFNT_Coverage coverage;
+  GFNT_Error error;
+  GFNT_Result result;
+
+  gfnt_error_clear(&error);
+  result = gfnt_face_glyph_bitmap(face, glyph, 0, &bitmap, &error);
+  if (result != GFNT_OK) {
+    printf("%s %u 0 0 0 refused %s\n", label, (unsigned)glyph,
+        gfnt_result_string(result));
+    return 0;
+  }
+  result = gfnt_coverage_from_bitmap(&bitmap, NULL, &coverage, &error);
+  if (result != GFNT_OK) {
+    printf("%s %u 0 0 0 refused %s\n", label, (unsigned)glyph,
+        gfnt_result_string(result));
+    return 0;
+  }
+  // The strike's own ppem in the size column, because a strike has exactly one
+  // and it is the only size at which these pixels mean anything.
+  printf("%s %u %u 0 0 %ux%u+%d+%d %llu %016llX\n", label, (unsigned)glyph,
+      (unsigned)bitmap.strike.ppem_y, (unsigned)coverage.width,
+      (unsigned)coverage.height, (int)coverage.left, (int)coverage.top,
+      (unsigned long long)gfnt_coverage_total(&coverage),
+      (unsigned long long)gfnt_coverage_hash(&coverage));
+  gfnt_coverage_destroy(&coverage);
+  return 0;
+}
+
+/**
+ * Every glyph of a strike as golden lines.
+ */
+static int golden(const char * label, const char * path) {
+  GFNT_Blob * blob = NULL;
+  GFNT_Face * face = NULL;
+  GFNT_Error error;
+  size_t glyphs = 0;
+  GFNT_Result result;
+
+  gfnt_error_clear(&error);
+  result = gfnt_blob_create_file(path, NULL, NULL, &blob, &error);
+  if (result != GFNT_OK) {
+    gfnt_error_dump(&error, stderr);
+    return 1;
+  }
+  result = gfnt_face_load(blob, 0, NULL, NULL, &face, &error);
+  if (result != GFNT_OK) {
+    gfnt_error_dump(&error, stderr);
+    gfnt_blob_destroy(blob);
+    return 1;
+  }
+  if (gfnt_face_num_glyphs(face, &glyphs, &error) != GFNT_OK) {
+    gfnt_error_dump(&error, stderr);
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+    return 1;
+  }
+  for (size_t glyph = 0; glyph < glyphs; ++glyph) {
+    if (golden_glyph(face, label, (uint32_t)glyph) != 0) {
+      gfnt_face_free(face);
+      gfnt_blob_destroy(blob);
+      return 1;
+    }
+  }
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
+  return 0;
+}
 
 int main(int argc, char ** argv) {
   const char * path;
@@ -56,8 +140,16 @@ int main(int argc, char ** argv) {
   char tag[5];
 
   if (argc < 2) {
-    fprintf(stderr, "usage: %s <font> [stride] [first]\n", argv[0]);
+    fprintf(stderr, "usage: %s <font> [stride] [first]\n"
+                    "       %s --golden <label> <font>\n", argv[0], argv[0]);
     return 2;
+  }
+  if (strcmp(argv[1], "--golden") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "usage: %s --golden <label> <font>\n", argv[0]);
+      return 2;
+    }
+    return golden(argv[2], argv[3]);
   }
   path = argv[1];
   if (argc > 2) {

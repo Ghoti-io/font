@@ -2833,16 +2833,38 @@ def build_bitmap_pcf(out):
 
 
 def build_bitmap_lsb_pcf(out):
-    """The same design, laid out the other way round in every dimension.
+    """The same design with every number and every bit the other way round.
 
-    Bits least-significant-first, bytes least-significant-first, a two-byte scan
-    unit, rows padded to four bytes, and the metrics compressed. It must read to
-    exactly the same glyphs as `bitmap.pcf`, and that equality is the only check
-    there is on the four-way layout arithmetic that no font in the world would
-    otherwise exercise on a little-endian machine.
+    Bits least-significant-first, bytes least-significant-first - so every table's
+    integers are little-endian too - a two-byte scan unit, rows padded to four
+    bytes, and the metrics compressed. It must read to exactly the same glyphs as
+    `bitmap.pcf`.
+
+    **Its scan unit is inert and that is the point of `bitmap-swap.pcf`.** The
+    bytes of a scan unit are reversed only when the bit order and the byte order
+    *differ*; here they agree, so a reader that never implemented the reversal
+    reads this file correctly. Discovering that took measuring the bytes: the
+    fixture was written to cover the swap and covered everything except it.
     """
     build_pcf(out, pad=4, bit_msb=False, byte_msb=False, scan=2,
         compressed=True, ink=True)
+
+
+def build_bitmap_swap_pcf(out):
+    """The layout where a scan unit's bytes have to be reversed.
+
+    Bits least-significant-first and bytes **most**, with a four-byte scan unit:
+    the one combination of PCF's four independent layout choices where a reader
+    has to undo two transformations rather than one, and the only file here that
+    can tell a reader which way round it does them.
+
+    Pillow cannot read this one - `PcfFontFile._load_bitmaps` leaves the byte-order
+    bit commented out in its own source - so `bitmap_diff.py` counts it as a layout
+    the reference declines rather than as a disagreement. What says this library is
+    right is the other three containers of the same design: libXfont and FreeType
+    both reverse here, and a reading that did not would not reproduce the design.
+    """
+    build_pcf(out, pad=4, bit_msb=False, byte_msb=True, scan=4)
 
 FIXTURES = {
     "bitmap.hex": (build_bitmap_hex,
@@ -2874,6 +2896,11 @@ FIXTURES = {
         "PCF: the shared design, most-significant bit and byte first, rows "
         "padded to one byte, uncompressed metrics, with properties, "
         "BDF accelerators, encodings, scalable widths and glyph names"),
+    "bitmap-swap.pcf": (build_bitmap_swap_pcf,
+        "PCF whose bits run least-significant-first and whose bytes run most, "
+        "with a four-byte scan unit: the one combination where a scan unit's "
+        "bytes have to be reversed as well as its bits, which no other fixture "
+        "reaches and which Pillow cannot read"),
     "bitmap-lsb.pcf": (build_bitmap_lsb_pcf,
         "PCF laid out the other way in every dimension: bits and bytes "
         "least-significant first, a two-byte scan unit, rows padded to four, "

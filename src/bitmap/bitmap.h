@@ -304,7 +304,13 @@ GFNT_Result gfnt_bitmap_build_glyph(GFNT_BitmapBuild * build,
 GFNT_Result gfnt_bitmap_build_map(GFNT_BitmapBuild * build, uint32_t codepoint,
     uint32_t glyph, GFNT_Error * error);
 
-/** Add a string to the arena and return its offset, for a font's own names. */
+/**
+ * Add a string to the arena and return its offset, for a font's own names.
+ *
+ * @p text must not be NULL: a caller with no string writes
+ * ::GFNT_BITMAP_NO_STRING itself, because "states no name" and "states the empty
+ * name" are different facts and only the caller knows which it has.
+ */
 GFNT_Result gfnt_bitmap_build_string(GFNT_BitmapBuild * build,
     const char * text, size_t length, size_t * out_offset, GFNT_Error * error);
 

@@ -875,7 +875,7 @@ check-oracle-ttx: $(EXAMPLES)
 
 check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
-check-oracle: check-oracle-cff
+check-oracle: check-oracle-cff check-oracle-bitmap
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -890,6 +890,16 @@ check-oracle-cff: ## Diff every CFF glyph's program, path and advance against fo
 check-oracle-cff: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools -- \
 		python3 $(ORACLE)/cff_diff.py --quiet
+
+check-oracle-bitmap: ## Diff every PCF and BDF glyph's pixels against Pillow
+check-oracle-bitmap: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+		python3 $(ORACLE)/bitmap_diff.py --quiet
+
+check-oracle-bitmap-exhaustive: ## The same, over every glyph of every font
+check-oracle-bitmap-exhaustive: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+		python3 $(ORACLE)/bitmap_diff.py --stride 1 --quiet
 
 check-oracle-cff-exhaustive: ## The same, over every glyph of every font
 check-oracle-cff-exhaustive: $(EXAMPLES)
@@ -1549,8 +1559,17 @@ $(eval $(call fuzz-rule,fuzz_charstring,charstring))
 # a subrange of the file at all. A harness handed the decrypted program would test
 # the half of this container that is not the interesting half.
 $(eval $(call fuzz-rule,fuzz_type1,type1))
+# fuzz_bitmap takes the whole file too, and covers all four containers in one
+# harness rather than four. The probe order is part of what is under test: which
+# container claims an input is a decision a malformed file can steer, and four
+# harnesses would each test a parser and none of them that. Every number that
+# sizes an allocation in these formats comes out of the file with no directory to
+# check it against, and the rows are then rewritten - bits reversed, bytes swapped
+# within a scan unit - so the bytes the normaliser walks are not a subrange of the
+# input either.
+$(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
 
-FUZZERS := sfnt cmap glyf raster cff charstring type1
+FUZZERS := sfnt cmap glyf raster cff charstring type1 bitmap
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

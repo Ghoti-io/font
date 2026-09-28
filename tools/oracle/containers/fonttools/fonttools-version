@@ -1,4 +1,9 @@
 #!/bin/sh
 # What oracle_env.py's probe runs: the version of the reference that will
 # answer, from the package itself rather than from the image's tag.
-exec python3 -c 'import fontTools; print("fontTools", fontTools.version)'
+#
+# Two packages now, because two answer: fontTools for every sfnt table and Pillow
+# for the two bitmap containers it can read. Both are printed on one line, and
+# containers/IMAGES names both - a pin that covered only the first would leave the
+# second free to change under a differential that trusts it.
+exec python3 -c 'import fontTools, PIL; print("fontTools", fontTools.version, "Pillow", PIL.__version__)'

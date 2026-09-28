@@ -121,8 +121,8 @@ which of them this library takes, and which of those it reads today.
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
 | | WOFF 2 | not here; it waits on Brotli in `compress` |
 | | `CFF2`, AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
-| **standalone bitmap** | PCF (`.pcf.gz`), BDF, PSF 1/2 | **wanted**, not implemented. 1,885 of them on a stock Linux box |
-| | GNU Unifont `.hex` | wanted as fallback data, not implemented |
+| **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented.** 1,885 of them on a stock Linux box. The `.gz` a PCF usually arrives in is not: that needs `compress` as a dependency |
+| | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
 | **standalone outline** | Type 1 (`.pfb`/`.pfa` + `.afm`/`.pfm`), bare `CFF` | **wanted**, not implemented |
 | | Type 3, Type 42, Multiple Master, standalone SVG fonts, Metafont | absent; Type 3 is a PDF library's (§13.3) |
@@ -164,7 +164,7 @@ to keep open.
 | `cmap.h` | codepoint → glyph, all subtable formats; variation selectors; reverse lookup |
 | `name.h` | `name` records decoded to UTF-8 |
 | `glyph.h` | `GFNT_Glyph`, the tagged union; the strike-selection policy |
-| `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes. Not implemented |
+| `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes. The four standalone containers are implemented; `EBDT`/`EBLC` are not |
 | `color.h` | `COLR`/`CPAL`, `CBDT`, `sbix`. Not implemented |
 | `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Both producers are implemented |
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
@@ -371,9 +371,37 @@ as an eighth method, and it transforms `glyf`/`loca` and `hmtx` in ways that
 are a second reader. It is not implemented.
 
 **PCF, BDF, PSF, `.hex`** are their own containers and their own glyph sources,
-read through the same reader (PCF, PSF) or the line reader (BDF, `.hex`),
-gzipped forms through `compress`. Each produces a `GFNT_Face` with one strike
-and no outlines.
+read through the same reader (PCF, PSF) or the line reader (BDF, `.hex`). Each
+produces a `GFNT_Face` with one strike and no outlines. PCF's table of contents
+becomes a multi-entry synthetic directory, so each of its tables gets a reader
+spanning itself; the other three take one entry over the file.
+
+Two things are normalised on the way out and both are in `bitmap.h`'s
+documentation, because they are API rather than implementation. **Rows run top to
+bottom with bits most-significant-first**, one row starting on a byte: PCF alone
+stores bits either way round, in scan units of one, two or four bytes, with rows
+padded to one, two, four or eight, and the four choices are independent. And
+**every measurement is pixels, with no em**: `gfnt_face_units_per_em()` refuses on
+such a face rather than answering 1000, and so do the font-unit metric accessors,
+because a strike's advance handed to a caller expecting font units is M9 with no
+symptom until the text is the wrong size.
+
+**Where the four formats differ they are made to say so.** BDF states a baseline
+and PCF compiles one; PSF is a console cell and `.hex` is sixteen rows, and
+neither says where the line is - so those two report the box where it is and a flag
+records that this is the format's silence rather than a measurement. A PSF without
+its Unicode table states no characters at all, and a codepoint lookup on one is
+refused by name rather than pretending a cell index is a character.
+
+**The gzip a PCF usually arrives in is not read.** That needs `compress` as a
+dependency, which this library does not have yet; the differential decompresses
+the corpus itself, so the container is covered and its wrapper is not.
+
+**A PCF's encodings are positions in the font's own charset**, which its XLFD
+`CHARSET_REGISTRY` and `CHARSET_ENCODING` properties name. For an `ISO10646-1`
+font those are codepoints; for an `ISO8859-5` font they are not, and converting
+them needs a charset table this library does not carry - the same gap Type 1's
+`/Encoding` has without the Adobe Glyph List.
 
 **Type 1.** PFB segment headers (`0x80 0x01/0x02/0x03`) and PFA cleartext;
 `eexec` decryption (`r = 55665`), charstring decryption (`r = 4330`, `lenIV`);
@@ -533,9 +561,9 @@ one remove: its tables are compressed.
   each glyph states its own advance in `hsbw`, so reading a metric means running
   a program.
 
-**Still not built: the four bitmap containers of §7.1**, where each "produces a
-`GFNT_Face` with one strike and no outlines". Neither the face nor the derived
-bytes are in their way any more.
+**The four bitmap containers of §7.1 are built too**, each producing a
+`GFNT_Face` with one strike and no outlines, and neither the face nor the derived
+bytes needed changing for them.
 
 Three decisions the interpreters make, each of which could have gone the other
 way and each of which is refused rather than guessed:
@@ -1807,14 +1835,105 @@ program is written in - with its em, its glyph count, its names and each glyph's
 advance all answered out of the program because there is no table to read any of
 them from (§7.1).
 
-**Not built:** `CFF2` (§16); the bitmap strikes (§7.5); colour (§7.6);
+**The four bitmap containers are built, as of 2026-09-28**: PCF, BDF, PSF 1 and
+2, and GNU Unifont's `.hex`, each a face with one strike and no outlines, with
+`bitmap.h` as the `GFNT_GLYPH_BITMAP_MONO` arm's data and `GFNT_Strike` finally
+answering from something (§7.1, §7.5).
+
+- **One internal representation, four parsers.** The formats share no bytes and
+  every font underneath them is the same thing: a pixel size, glyphs with boxes
+  and advances, a mapping from characters to glyphs. So the accessors above them -
+  the strike list, the glyph name, the codepoint lookup, the font's own names - are
+  written once.
+- **The bit and byte orders are undone in one function**, because PCF's four
+  layout choices are independent and a caller handed the raw rows would have to
+  implement the cross-product to draw anything. `bitmap-lsb.pcf` and
+  `bitmap-swap.pcf` are the same design in the other layouts, and that the three
+  read identically is the only check on that arithmetic a little-endian machine can
+  make.
+- **`gfnt_sfnt_table_directory()`**, the multi-entry synthetic directory the bare
+  CFF work left a note about, and a line reader on `GFNT_Reader` bounded by
+  `max_line_length` for the two text formats - which §5.1 promised and nothing had
+  needed.
+- **`gfnt_coverage_from_bitmap()`** makes a strike's glyph the same
+  `GFNT_Coverage` a rasterised outline produces, so a caller compositing a run has
+  one code path. Nothing in it scales: whether to use a strike at a size it was not
+  drawn for is `gfnt_face_select_strike()`'s decision and its policy's.
+- **`fuzz_bitmap`** takes whole unaltered files and covers all four containers in
+  one harness, because which one claims an input is itself a decision a malformed
+  file steers.
+- **The golden gate covers the strikes**, through the second driver: 9 fixtures,
+  every glyph, reproduced on s390x, powerpc64 and sparc64. Every step from a file's
+  bytes to a strike's pixels is an explicit shift, so they *should* be identical
+  there - and that sentence was a claim until this measured it.
+
+**What the bitmap containers cost, in findings.** Each is why something above is
+shaped the way it is:
+
+- **`bdftopcf` overstates one table's size in every file it writes.** The last
+  entry's size is that of an accelerator table *with* ink bounds whether it wrote
+  those or not, so the final table of every Terminus font overruns the file by
+  twenty-eight bytes. libXfont and FreeType both read such a file because neither
+  compares a stated size against the file's length. This library refused all 234 of
+  them until the differential met one; a PCF entry is clamped to the file now, and
+  an offset past the end is still refused.
+- **`gfnt_table_cached()` copies its scratch into the memo whatever the parse
+  returned**, so a parser that refuses without writing publishes stack garbage -
+  and for a memo holding arrays the face frees, closing the face then freed a wild
+  pointer. Found by the first test to ask an outline face for a bitmap. The
+  requirement is now written in `tables.h`, because Type 1 and CFF meet it only by
+  convention.
+- **A mutation harness scored a stale binary.** Two of four planted defects were
+  reported as caught by the *previous* mutation's build: an `if (false)` edit left a
+  parameter unused, `-Werror` failed the build, and the test binary from the run
+  before was what ran. The harness checks the build's exit status now, and the
+  mutations invert conditions rather than deleting them.
+- **A fixture covered everything about the scan unit except the swap.** A scan
+  unit's bytes are reversed only when the bit order and the byte order *differ*, and
+  `bitmap-lsb.pcf` has them agreeing - so a reader that never implemented the
+  reversal read it correctly. `bitmap-swap.pcf` exists because measuring the bytes
+  is what found that.
+- **A test asserted an outcome that was already true.** Clearing a row's bits past
+  the glyph's width can be deleted with every test passing, because every row of
+  every fixture already had zeros there. `bitmap-ink.bdf` now has a row that sets
+  them.
+- **A branch no input could distinguish.** A PCF encoding's code was computed as
+  `low` for a single-byte font and `(high << 8) | low` otherwise - and for a
+  single-byte font `high` is zero, so the two arms are the same expression. A
+  mutation swapping them changed nothing. Removed, and a two-byte encoding is a
+  test now, because no fixture has one.
+- **`make golden` had been failing for two fixtures and nobody ran it.**
+  `check-golden` reads the committed file and `testGolden` re-renders in C++, so
+  the generator could rot unnoticed - and had, on a fixture that refuses every
+  glyph and on one whose renderings duplicate another's. `check-golden`
+  regenerates first now, the way `check-fixtures` and `check-vectors` do.
+- **Pillow is a reference for half of each format.** Its BDF reader is sound. Its
+  PCF `_load_encoding` indexes the offsets array by character code rather than by
+  `code - firstCol`, so for a font whose codes start at 0x20 - most of them - every
+  glyph is reported 32 positions from where it is; and `_load_bitmaps` leaves the
+  byte-order bit commented out in its own source. So the differential compares PCF
+  glyphs by *index*, counts a layout Pillow cannot lay out as declined, and prints
+  what it could not check rather than a clean number that hides it.
+- **Two formats cannot state their own licence.** §14.5 requires every committed
+  fixture to name itself and its licence, and a `.hex` file is a codepoint, a colon
+  and a row of bits while a PSF is a header and cells - neither has anywhere to put
+  a string. For those four fixtures the statement is `MANIFEST` and this
+  repository's licence, and `testFixtures` asserts the refusal rather than skipping
+  them.
+
+**Not built:** `CFF2` (§16); the sfnt bitmap strikes - `EBDT`/`EBLC`, `CBDT` and
+`sbix` (§7.5); the gzip a PCF usually ships in, which needs `compress`; colour
+(§7.6);
 variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`
 and WOFF 1. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is
-still only its enum: the outline accessor is `gfnt_face_glyph_outline()`, and
-the union arrives with the second arm that gives it a reason rather than being
-invented around one.
+**still only its enum, and now deliberately rather than for want of a second
+arm**: there are two kinds of glyph data, and each has an accessor of its own -
+`gfnt_face_glyph_outline()` and `gfnt_face_glyph_bitmap()`. A caller that knows
+which it wants asks for it; the union is for the caller that does not, which is a
+layout engine, and one arrives with the shaper. Building it now would be inventing
+the shape of a question nothing asks yet.
 
 The `freetype` oracle `tools/oracle/containers/IMAGES` names - an outline and
 coverage differential against FreeType's own `ftgrays` - is not built. It is the
@@ -1829,12 +1948,14 @@ an independent sampler and three big-endian targets.
 - OpenType Specification 1.9 (Microsoft), and the Apple TrueType Reference
   Manual, for every sfnt table named above; the OpenType Layout Common Table
   Formats; the OpenType Font Variations Overview.
+- X11 *Bitmap Distribution Format 2.1* and Adobe Technical Note #5005 (the BDF
+  specification); the PCF format as documented in `libXfont`'s `pcfread.c`,
+  `pcf.h` and `bdfToPcf`; `psf(5)` from `kbd` and `psf2.h` in its sources; GNU
+  Unifont's `unifont-hex(5)` and its manual's "The .hex Format".
 - Adobe Technical Note #5176 (The Compact Font Format), #5177 (The Type 2
   Charstring Format), #5015 (Type 1 Font Format supplement), the *Adobe Type 1
   Font Format* book; #5004 (AFM); the Adobe Glyph List and its specification.
 - WOFF File Format 1.0 (W3C Recommendation); WOFF 2.0 for what is deferred.
-- X11 *Bitmap Distribution Format 2.1*; the PCF format as documented in
-  `libXfont`; the Linux `psf` format as documented with `kbd`.
 - CSS Fonts Module Level 4 (matching); CSS Text Module Level 3 (`line-break`,
   min/max-content); CSS Inline Layout Module Level 3 (line metrics).
 - UAX #9, #14, #24, #29 and the OpenType script development specifications

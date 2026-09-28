@@ -108,15 +108,3 @@ bool gfnt_buffer_byte(GFNT_Buffer * buffer, uint8_t byte) {
   buffer->data[buffer->length++] = byte;
   return true;
 }
-
-bool gfnt_buffer_zeros(GFNT_Buffer * buffer, size_t count) {
-  if (count == 0) {
-    return true;
-  }
-  if (!gfnt_buffer_grow(buffer, count)) {
-    return false;
-  }
-  memset(buffer->data + buffer->length, 0, count);
-  buffer->length += count;
-  return true;
-}

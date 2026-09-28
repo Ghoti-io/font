@@ -15,6 +15,7 @@ bare.cff	A bare CFF font program with no sfnt around it: the same CFF table as c
 basic.ttf	TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3
 bitmap-ink.bdf	BDF: what only a per-glyph box can say - a negative x offset, a descender whose BBX y is below the baseline, advances narrower and wider than the box, ENCODING -1 for a glyph with no character, an empty BBX with no BITMAP rows at all, and a row whose bits past the glyph's width are set, which a reader has to clear
 bitmap-lsb.pcf	PCF laid out the other way in every dimension: bits and bytes least-significant first, a two-byte scan unit, rows padded to four, compressed metrics and an ink-metrics table nothing reads - and the same glyphs as bitmap.pcf, which is the only check on that arithmetic
+bitmap-swap.pcf	PCF whose bits run least-significant-first and whose bytes run most, with a four-byte scan unit: the one combination where a scan unit's bytes have to be reversed as well as its bits, which no other fixture reaches and which Pillow cannot read
 bitmap-v1.psf	PSF 1: 512 glyphs, which only one bit of the mode byte says, and a Unicode table in UCS-2 little-endian with 0xFFFE sequence separators
 bitmap-wide.hex	.hex at the other two widths the format allows: a 16-pixel glyph and a 32-pixel one, and a six-digit codepoint past the BMP
 bitmap.bdf	BDF: the shared design, with the properties that state the baseline (FONT_ASCENT, FONT_DESCENT), the pixel size, the family and the copyright, and a name per character

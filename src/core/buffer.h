@@ -95,15 +95,6 @@ bool gfnt_buffer_add(GFNT_Buffer * buffer, const uint8_t * bytes,
 /** Append one byte. */
 bool gfnt_buffer_byte(GFNT_Buffer * buffer, uint8_t byte);
 
-/**
- * Append @p count zero bytes.
- *
- * What a blank row of a bitmap is, and what pads a short one. Written as its own
- * function because the alternative - appending a byte at a time - is where a
- * 16-pixel row of a 4,000-glyph font stops being free.
- */
-bool gfnt_buffer_zeros(GFNT_Buffer * buffer, size_t count);
-
 #ifdef __cplusplus
 }
 #endif

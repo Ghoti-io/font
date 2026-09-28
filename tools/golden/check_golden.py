@@ -128,6 +128,12 @@ def cutil_dependencies():
 def script(label, compiler, qemu, triple):
     """The shell the container runs for one target: build, then render."""
     out = "/tmp/golden-%s" % label
+    outlines = [name for name in golden_fixtures() if not is_strike(name)]
+    strikes = [name for name in golden_fixtures() if is_strike(name)]
+    # Two drivers, because two kinds of glyph reach a coverage by different paths:
+    # an outline through the scan converter and a strike through
+    # gfnt_coverage_from_bitmap(). Both are compiled for the target rather than one
+    # of them being trusted, which is the whole point of the gate.
     return r"""
 set -e
 mkdir -p %(out)s
@@ -137,8 +143,17 @@ cd %(root)s
     -I %(cutil)s \
     -o %(out)s/font-render \
     $(find src -name '*.c') examples/font-render.c %(shim)s
-for name in %(fixtures)s; do
+%(cc)s -std=c17 -O2 -w -fno-strict-aliasing \
+    -I include -I build/linux/release/generated \
+    -I %(cutil)s \
+    -o %(out)s/font-bitmap \
+    $(find src -name '*.c') examples/font-bitmap.c %(shim)s
+for name in %(outlines)s; do
     %(qemu)s -L /usr/%(triple)s %(out)s/font-render "$name" \
+        tests/data/fonts/"$name"
+done
+for name in %(strikes)s; do
+    %(qemu)s -L /usr/%(triple)s %(out)s/font-bitmap --golden "$name" \
         tests/data/fonts/"$name"
 done
 """ % {
@@ -150,8 +165,20 @@ done
         "shim": SHIM,
         "qemu": qemu,
         "triple": triple,
-        "fixtures": " ".join(golden_fixtures()),
+        "outlines": " ".join(outlines),
+        "strikes": " ".join(strikes),
     }
+
+
+def is_strike(name):
+    """Whether this fixture's glyphs are pixels rather than paths.
+
+    By extension, which for these four containers *is* the format: a `.pcf` is a
+    PCF. The alternative was to import the generator's list, and the two files
+    deliberately do not import each other - this one reads the committed file,
+    which is the contract.
+    """
+    return name.endswith((".pcf", ".bdf", ".psf", ".hex"))
 
 
 def golden_fixtures():
@@ -243,6 +270,27 @@ def main(argv):
             wanted = argv[index + 1].split(",")
 
     expected = committed()
+
+    # **The committed file is what the generator emits**, checked first and on this
+    # machine, the way `check-fixtures` and `check-vectors` check theirs. Without
+    # it nothing ran `make_golden.py` at all: the gate below reads the committed
+    # file, `testGolden` re-renders in C++, and the generator could therefore rot
+    # unnoticed - which it had, failing on a fixture that refuses every glyph for
+    # however long that fixture had been committed.
+    regenerated = subprocess.run(
+        [sys.executable, os.path.join(HERE, "make_golden.py"), "--stdout"],
+        capture_output=True, text=True)
+    if regenerated.returncode != 0:
+        sys.stderr.write("check-golden: the generator refuses to run:\n%s\n"
+                         % regenerated.stderr.strip())
+        return 1
+    if regenerated.stdout != expected:
+        sys.stderr.write(
+            "check-golden: %s is not what tools/golden/make_golden.py emits. "
+            "Either a rendering changed on this machine - which is what "
+            "testGolden reports in more detail - or the file was edited. Run "
+            "`make golden` to rewrite it deliberately.\n" % GOLDEN)
+        return 1
 
     # The shim's list against what the library needs, before anything is built:
     # a seventh cutil dependency would otherwise be a confusing link error.

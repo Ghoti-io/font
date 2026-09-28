@@ -15,11 +15,12 @@ This is what the library implements.
 - A glyph's outline, from `glyf` and `loca`, with composites resolved: every flag, point matching, and all three transform encodings.
 - A glyph's outline from a **charstring**: `CFF ` inside an sfnt, CID-keyed fonts included, with the Type 2 and Type 1 interpreters behind it.
 - That outline rasterised to 8-bit coverage, at any pixel size and any sub-pixel offset.
+- A **bare `CFF `** font program and a **Type 1** one — `.pfb`, `.pfa` or raw — each a face with no sfnt directory at all, stating its em, its glyph count, its names and its advances out of the program itself.
+- The four **standalone bitmap** containers: PCF, BDF, PSF 1 and 2, and GNU Unifont's `.hex`. Each is a face with one strike and no outlines, and a glyph comes back as pixels with its own box and advance.
 
-Bare CFF and the Type 1 font format are not built: the *languages* are, and what
-they wait on is a face whose tables do not come from an sfnt directory. `CFF2`,
-bitmap strikes, colour, variations, shaping, layout, discovery and writing are not
-built either.
+`CFF2`, the bitmap strikes *inside* an sfnt (`EBDT`/`EBLC`, `CBDT`, `sbix`), the
+gzip a PCF usually ships in, colour, variations, shaping, layout, discovery and
+writing are not built.
 
 ## Before you call it
 
@@ -28,6 +29,7 @@ built either.
 - Mapping a file is a separate call from copying it, and its documentation says `SIGBUS`.
 - Macintosh encoding 0 is not Roman for every language, and the language is what picks the right one.
 - An outline comes back in font units and has to be scaled before it can be rasterised. The refusal is deliberate: an unscaled outline would render a thousand pixels tall.
+- A bitmap font's measurements are **pixels**, and it has no em. `gfnt_face_units_per_em()` and the font-unit metric calls refuse on such a face and say where the pixels are, rather than answering 1000 and letting the caller scale a strike as though it were an outline.
 - Coverage is **linear** alpha. What colour space to blend it in is the caller's, and `gfnt_coverage_apply_table()` applies the caller's table.
 - A coverage bitmap's row 0 is its top, and it reports the position of that row relative to the glyph origin, where y is up.
 - `NULL` for an allocator is cutil's default.
@@ -140,7 +142,8 @@ asks which glyph a code point maps to does not link a rasteriser.
 - **`metrics.h`** — `head`, `hhea`, `OS/2`, `post`, `unitsPerEm`, and per-glyph advances from `hmtx`.
 - **`cmap.h`** — code point to glyph, formats 0, 4, 6 and 12, and which subtable answered.
 - **`name.h`** — name records decoded to UTF-8 by platform, encoding and language.
-- **`glyph.h`** — glyph names, from `post` formats 1.0 and 2.0 or from a CFF charset, whichever the font actually holds them in. Bitmap strikes are not implemented.
+- **`glyph.h`** — glyph names, from `post` formats 1.0 and 2.0, a CFF charset, a Type 1 `/CharStrings` or a BDF's `STARTCHAR`, whichever the font actually holds them in; and the strike list, with the policy that decides what answers a pixel size.
+- **`bitmap.h`** — a glyph that is pixels: PCF, BDF, PSF and `.hex`, with the rows normalised to one layout and every measurement in pixels, because a strike has no em to scale from. The strikes inside an sfnt are not implemented and say so rather than reporting none.
 - **`charstring.h`** — the Type 2 and Type 1 interpreters, which know nothing about any container: a program, its subroutines, and the outline it draws. What a PDF library needs for a `FontFile3` stream.
 - **`outline.h`** — `GFNT_Outline`: a glyph as a path, from either producer. It holds the font's own points rather than a path derived from them, so `gfnt_outline_decompose()` is where `glyf`'s implicit on-curve points appear. Bounds come two ways, because the box `glyf` states is the box of the coordinates and the curve's own box is smaller; a CFF glyph states no box at all, and the refusal says so.
 - **`raster.h`** — the scan converter and `GFNT_Coverage`: exact-area coverage, non-zero or even-odd, and no `float` between a font's bytes and a pixel.
@@ -164,15 +167,18 @@ model (the file is the attacker), what is implemented, and what is not.
 ## Status
 
 The tables named above are parsed, glyphs from `glyf` and from `CFF `
-charstrings are turned into outlines, and those outlines are rasterised. Bare CFF
-and Type 1 as containers, `CFF2`, bitmap strikes, colour, variations, shaping,
-layout, font discovery and writing are not implemented.
+charstrings are turned into outlines, and those outlines are rasterised. Six
+containers are read: an sfnt, a collection, a bare `CFF `, a Type 1 program, and
+the four standalone bitmap formats. `CFF2`, the sfnt bitmap strikes, colour,
+variations, shaping, layout, font discovery and writing are not implemented.
 
 Every glyph of 312 real fonts is compared against fontTools — 1,999,069 fields
 over 37,218 glyphs — and every charstring of another 43 is compared three ways:
 its program operator by operator, the path it draws, and the advance it states.
-The committed renderings are reproduced byte for byte on s390x, powerpc64 and
-sparc64, which is what the fixed-point arithmetic is for.
+Every pixel of 234 real bitmap fonts is compared against Pillow: 1,589,314 fields
+over 73,361 glyphs. The committed renderings — outlines and strikes both — are
+reproduced byte for byte on s390x, powerpc64 and sparc64, which is what the
+fixed-point arithmetic is for.
 
 ## License
 

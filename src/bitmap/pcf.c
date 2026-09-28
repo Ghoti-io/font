@@ -154,12 +154,14 @@ GFNT_Result gfnt_pcf_directory(GFNT_Face * face, GFNT_Error * error) {
   uint32_t claimed = 0;
   size_t count = 1;
   size_t toc_bytes;
+  size_t blob_length;
   GFNT_Result result;
 
   result = gfnt_reader_init_blob(&reader, face->bytes, GFNT_FLAVOUR_PCF, error);
   if (result != GFNT_OK) {
     return result;
   }
+  blob_length = reader.length;
   if (gfnt_reader_seek(&reader, 4) != GFNT_OK
       || gfnt_read_u32_order(&reader, GFNT_ORDER_LSB_FIRST, &claimed)
           != GFNT_OK) {
@@ -221,10 +223,29 @@ GFNT_Result gfnt_pcf_directory(GFNT_Face * face, GFNT_Error * error) {
       // so that gfnt_face_table_count() is the number of tables that can be read.
       continue;
     }
+    // **A PCF's stated table sizes are not all true, and every file in the wild
+    // proves it.** `bdftopcf` writes the last table's size as the size of an
+    // accelerator table *with* ink bounds whether it wrote those or not, so the
+    // final entry of every Terminus font overruns the file by twenty-eight bytes.
+    // libXfont and FreeType both read such a file, because neither ever compares
+    // the stated size against the file's length: they bound each read by the bytes
+    // that are there.
+    //
+    // So a length past the end is clamped rather than refused. An *offset* past
+    // the end still is refused, because that names no bytes at all - and nothing
+    // is lost by the clamp: every parse below reads through a reader bounded by
+    // this entry, so a table whose own contents are cut short still fails, and
+    // fails naming the table. Enforcing the stated size instead would have this
+    // library read no PCF that exists.
+    if (offset > blob_length) {
+      face->allocator->free_fn(face->allocator->ctx, entries);
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, tag, offset,
+          GFNT_GLYPH_NONE, "a PCF table beginning past the end of the file");
+    }
     entries[count] = (GFNT_SfntTable) {
       .tag = tag,
       .offset = offset,
-      .length = size,
+      .length = size <= blob_length - offset ? size : blob_length - offset,
     };
     ++count;
   }
@@ -676,11 +697,12 @@ static GFNT_Result gfnt_pcf_encodings(const GFNT_Face * face,
             gfnt_reader_tell(&reader), glyph,
             "a PCF encoding naming a glyph the font does not have");
       }
-      // A single-byte font states no high byte at all, and then the code is the
-      // low byte: a font whose range is 0x20..0xFF maps 0x41 and not 0x0041 in a
-      // two-byte sense, and the two happen to agree only because the high byte is
-      // zero. A two-byte font's code is the pair.
-      code = (min_high == 0 && max_high == 0) ? low : ((high << 8) | low);
+      // A single-byte font states `min_byte1 == max_byte1 == 0`, so this loop runs
+      // `high` once at zero and the expression is the low byte on its own. It was
+      // written with a special case for that, and the special case was a branch no
+      // input could tell from the other arm - a mutation swapping them changed
+      // nothing, which is how it was found.
+      code = (high << 8) | low;
       result = gfnt_bitmap_build_map(build, code, glyph, error);
       if (result != GFNT_OK) {
         return result;

@@ -141,6 +141,7 @@ const std::vector<Entry> & every_fixture() {
       {"bitmap.hex", 8, false, false},
       {"bitmap.pcf", 8, false},
       {"bitmap.psf", 8, false, false},
+      {"bitmap-swap.pcf", 8, false},
       {"bare-matrix.cff", 13, false},
       // The two Type 1 font programs, which hold the same eight charstrings as
       // cff-type1.otf in a container that has no table directory, no `maxp` and

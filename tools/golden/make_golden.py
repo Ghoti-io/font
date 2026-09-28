@@ -53,6 +53,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
                       "font-render")
+# The second driver: a bitmap container has no outlines to rasterise, and its
+# strike's pixels reach a GFNT_Coverage through gfnt_coverage_from_bitmap(). Every
+# step from a file's bytes to those pixels is an explicit shift, so they *should*
+# be identical on a big-endian machine - and that is a claim until this gate
+# measures it, which is the same reason the scan converter is here.
+BITMAP_DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps",
+                             "examples", "font-bitmap")
 FIXTURES = os.path.join(ROOT, "tests", "data", "fonts")
 GOLDEN = os.path.join(ROOT, "tests", "data", "golden", "coverage.txt")
 
@@ -65,7 +72,9 @@ WITH_OUTLINES = (
     # name, and committing them would say nothing about big-endian reproduction
     # that the wrapped fixture does not already say. That the two rasterise
     # identically is asserted by testCff instead, which is where the claim
-    # belongs - it is about the container, not about the scan converter.
+    # belongs - it is about the container, not about the scan converter. The probe
+    # below is what keeps the exclusion honest, and it compares against the whole
+    # committed set for exactly this fixture's sake.
     "basic.ttf",
     "outline-simple.ttf",
     "outline-composite.ttf",
@@ -88,9 +97,16 @@ WITH_OUTLINES = (
     "cff-hints.otf",
     "cff-seac.otf",
     "cff-subrs.otf",
+    # Phase 3's Type 1 container. `type1.pfb` and `type1.pfa` are deliberately
+    # absent - they hold cff-type1.otf's eight charstrings, so the probe below
+    # covers them - but `type1-big.pfb` has eighty glyphs of its own, and by this
+    # list's own rule a fixture with outlines of its own belongs here. It costs
+    # two thousand lines, which is the price of the rule: an exclusion the probe
+    # cannot justify is an exclusion nobody is checking.
+    "type1-big.pfb",
 )
 
-# Fixtures that must render **nothing**, which is now none of them.
+# Fixtures that must render **nothing** through the rasteriser.
 #
 # `cff.otf` was here until phase 2, on the grounds that a font with no `glyf`
 # could not draw. It can, and what it draws is worth more than the refusals it
@@ -98,7 +114,43 @@ WITH_OUTLINES = (
 # holds as `glyf`, so the subset check below now asserts that **two containers
 # and one rasteriser produce identical pixels**. That is a cross-format
 # comparison this gate could not make before and gets for free.
-NO_OUTLINES = ()
+#
+# The nine bitmap containers are here because they have no outlines at all, and
+# that is the assertion: `gfnt_face_render_glyph()` must refuse every glyph of
+# them. They would pass the subset probe below without it - a fixture that draws
+# nothing draws no shape `basic.ttf` lacks - which is the shape of an absence
+# assertion that goes on passing after it stops meaning anything. Their *pixels*
+# are committed below, through the other driver.
+# The strikes whose pixels are committed: all nine, because unlike the table
+# fixtures no two of these draw the same thing through the same code. The three
+# PCFs hold one design in three layouts, and that they agree is a unit test; that
+# each *reproduces* on a big-endian machine is this file.
+WITH_STRIKES = (
+    "bitmap.hex",
+    "bitmap-wide.hex",
+    "bitmap.psf",
+    "bitmap-v1.psf",
+    "bitmap.bdf",
+    "bitmap-ink.bdf",
+    "bitmap.pcf",
+    "bitmap-lsb.pcf",
+    "bitmap-swap.pcf",
+)
+
+# Fixtures that must render **nothing through the rasteriser**.
+#
+# The nine strikes above are all of them and one more: they have no outlines at
+# all, and that is the assertion. They would pass the subset probe below without
+# it - a fixture that draws nothing draws no rendering the committed set lacks -
+# which is the shape of an absence assertion that goes on passing after it stops
+# meaning anything.
+#
+# `bare-matrix.cff` states a FontMatrix that reduces to no em, so every glyph of it
+# is refused at every size. **It was in neither list and the generator had been
+# failing on it since it landed** - and nothing noticed, because `check-golden`
+# reads the committed file and no gate ran this script. That hole is closed in
+# check_golden.py, which now regenerates first.
+NO_OUTLINES = ("bare-matrix.cff",) + WITH_STRIKES
 
 HEADER = """\
 # Every committed fixture's glyphs, rasterised.
@@ -128,6 +180,17 @@ HEADER = """\
 """
 
 
+STRIKE_HEADER = """\
+#
+# And the bitmap containers, whose glyphs are pixels rather than paths. One line
+# per glyph, in the same shape: the size column is the strike's own ppem, because
+# a strike has exactly one, and the offsets are zero because a strike is not
+# positioned sub-pixel. The coverage is what gfnt_coverage_from_bitmap() makes of
+# the glyph, so these lines cover the bit and byte order arithmetic as well as the
+# tables - which is the half of these formats a big-endian machine could break.
+"""
+
+
 def fixtures():
     """Every fixture MANIFEST lists, in its order."""
     manifest = os.path.join(FIXTURES, "MANIFEST")
@@ -147,6 +210,19 @@ def render(name, label=None):
         capture_output=True, text=True)
     if finished.returncode != 0:
         raise SystemExit("font-render refused %s:\n%s"
+                         % (name, finished.stderr))
+    return finished.stdout
+
+
+def render_strike(name):
+    """The bitmap driver's lines for one strike fixture."""
+    if not os.path.exists(BITMAP_DRIVER):
+        raise SystemExit("%s is not built; run `make examples`" % BITMAP_DRIVER)
+    path = os.path.join(FIXTURES, name)
+    finished = subprocess.run([BITMAP_DRIVER, "--golden", name, path],
+        capture_output=True, text=True)
+    if finished.returncode != 0:
+        raise SystemExit("font-bitmap refused %s:\n%s"
                          % (name, finished.stderr))
     return finished.stdout
 
@@ -173,10 +249,24 @@ def shapes(text):
 
 
 def probe_shared(committed):
-    """No excluded fixture draws a shape basic.ttf does not, or this fails."""
-    reference = shapes(committed["basic.ttf"])
+    """No excluded fixture draws a rendering the committed set does not.
+
+    The baseline is the **union** of every committed fixture's renderings, and was
+    `basic.ttf`'s alone until two fixtures made that wrong: `bare.cff`'s font
+    program is byte-for-byte `cff-curves.otf`'s, so it draws exactly the committed
+    set's shapes under another name and is excluded for that reason - and against a
+    baseline of `basic.ttf` alone it read as three hundred new ones. The generator
+    had been failing on it, unnoticed, because nothing ran the generator.
+
+    The union is also the honest statement of what the exclusion claims: not "this
+    fixture draws basic.ttf's five outlines" but "this fixture introduces no
+    rendering the committed file already covers".
+    """
+    reference = set()
+    for text in committed.values():
+        reference |= shapes(text)
     if not reference:
-        raise SystemExit("basic.ttf rendered nothing; the probe has no baseline")
+        raise SystemExit("nothing rendered at all; the probe has no baseline")
     probed = 0
     for name in fixtures():
         if name in WITH_OUTLINES:
@@ -210,17 +300,22 @@ def build():
     if not os.path.exists(DRIVER):
         raise SystemExit("%s is not built; run `make examples`" % DRIVER)
     listed = fixtures()
-    for name in WITH_OUTLINES + NO_OUTLINES:
+    for name in WITH_OUTLINES + NO_OUTLINES + WITH_STRIKES:
         if name not in listed:
             raise SystemExit(
                 "%s is named here but is not in MANIFEST; the fixture list and "
                 "this one have drifted" % name)
     rendered = {name: render(name) for name in WITH_OUTLINES}
     probed = probe_shared(rendered)
+    strikes = {name: render_strike(name) for name in WITH_STRIKES}
     out = [HEADER]
     for name in listed:
         if name in WITH_OUTLINES:
             out.append(rendered[name])
+    out.append(STRIKE_HEADER)
+    for name in listed:
+        if name in WITH_STRIKES:
+            out.append(strikes[name])
     return "".join(out), probed
 
 
@@ -233,9 +328,10 @@ def main(argv):
     with open(GOLDEN, "w", encoding="utf-8") as handle:
         handle.write(text)
     lines = sum(1 for line in text.splitlines() if not line.startswith("#"))
-    print("golden: %d rendering(s) over %d fixture(s) with outlines of their "
-          "own, %d bytes; %d other fixture(s) checked to still draw "
-          "basic.ttf's" % (lines, len(WITH_OUTLINES), len(text), probed))
+    print("golden: %d rendering(s) over %d fixture(s) with outlines of their own "
+          "and %d strike(s), %d bytes; %d other fixture(s) checked to draw "
+          "nothing new" % (lines, len(WITH_OUTLINES), len(WITH_STRIKES),
+              len(text), probed))
     return 0
 
 

@@ -241,10 +241,25 @@ the public API in `test_cff.cpp` instead.
 
 ## The golden renderings
 
-`tests/data/golden/coverage.txt` holds 3,825 renderings: every glyph of every
-fixture that carries outlines of its own, at six pixel sizes and five origins,
-with the coverage's shape, its total and its hash. `make golden` rewrites it and
-needs no container.
+`tests/data/golden/coverage.txt` holds 6,393 renderings: every glyph of every
+fixture that carries outlines of its own, at six pixel sizes and five origins, and
+every glyph of every **bitmap strike**, with the coverage's shape, its total and
+its hash. `make golden` rewrites it and needs no container.
+
+The strikes are there through a second driver, `examples/font-bitmap --golden`,
+because a strike's pixels reach a `GFNT_Coverage` through
+`gfnt_coverage_from_bitmap()` rather than through the scan converter. Every step
+from a PCF's bytes to those pixels is an explicit shift - three bit and byte order
+choices and a row padding - so they *should* be identical on a big-endian machine,
+and that sentence was a claim until this gate measured it.
+
+**`make golden` had been failing and nothing ran it.** `check-golden` reads the
+committed file and `testGolden` re-renders in C++, so the generator could rot
+unnoticed - and had, on two fixtures: one that refuses every glyph and one whose
+renderings duplicate another's under a different name. `check-golden` regenerates
+first now and requires the committed file to be what the generator emits, the way
+`check-fixtures` and `check-vectors` do for theirs. A gate with three readers and
+no writer is a gate whose writer nobody is checking.
 
 Phase 2 put the charstrings in it, which is where the rasteriser meets a **cubic**
 producer: `glyf` sends quadratics, a charstring sends cubics, and the flattener's
@@ -365,6 +380,21 @@ Phase 2 added two kinds of its own:
 | --- | ---: | --- |
 | a refusal behind a bounds-checked read | ~90 | every `return result;` in `cff.c` after a reader call the table's own extent has already made safe |
 | an operand-count refusal a writer cannot emit | ~25 | `rcurveline` with two operands, `sbw` with three - each has a test, and the ones left are the arms *inside* an operator whose earlier check already refused |
+
+The bitmap containers added two more, and both are worth naming because they are
+what a line-based metric counts rather than what a test does not reach:
+
+| kind | lines | example |
+| --- | ---: | --- |
+| the second and third line of one `gfnt_error_set()` call | ~40 | one statement, wrapped at 80 columns, counted once per line - nothing is untested here at all |
+| a `break;` or `goto done;` carrying an inner refusal outward | ~58 | the first line of each of these arms *is* covered; reaching the second means triggering a refusal that another check reaches first |
+
+Chasing those two would mean writing tests for lines. What the search for them did
+find was worth having, and each is now a test: a dump function nothing called, the
+lower-case arm of two hexadecimal readers, a four-byte UTF-8 sequence in a PSF
+table, a PCF with no accelerators, a PCF table type this library does not read,
+and the `EBLC` case where "this library cannot enumerate these strikes" has to be a
+different answer from "this font has none".
 
 Two more are a measurement rather than an argument: `gfnt_bound_cubic()`'s
 out-of-budget arm needs a cubic that is still not monotone after 16 subdivisions,

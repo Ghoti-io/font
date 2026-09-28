@@ -4,8 +4,10 @@
  * The committed renderings, re-rendered here.
  *
  * `tests/data/golden/coverage.txt` holds every rendering of every fixture that
- * carries outlines of its own, at six sizes and five origins. This suite renders
- * them again and compares. It needs no container, so it runs in `make test` on a
+ * carries outlines of its own, at six sizes and five origins, **and every glyph
+ * of every bitmap strike** - which reach a coverage through
+ * ::gfnt_coverage_from_bitmap() rather than through the scan converter. This suite
+ * renders them again and compares. It needs no container, so it runs in `make test` on a
  * fresh clone, and what it catches is a change in the rasteriser that nobody
  * meant to make.
  *
@@ -35,6 +37,7 @@
 #include <string>
 #include <vector>
 
+#include <ghoti.io/font/bitmap.h>
 #include <ghoti.io/font/outline.h>
 #include <ghoti.io/font/raster.h>
 
@@ -155,6 +158,19 @@ TEST(Golden, TheCommittedFileIsThereAndHasRenderingsInIt) {
   EXPECT_LT(refusals, expected.size() / 2u);
 }
 
+/** Whether a fixture's glyphs are pixels rather than paths, by its format. */
+bool is_strike(const std::string & name) {
+  for (const char * extension : {".pcf", ".bdf", ".psf", ".hex"}) {
+    const size_t length = strlen(extension);
+
+    if (name.size() >= length
+        && name.compare(name.size() - length, length, extension) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 TEST(Golden, EveryCommittedRenderingIsReproduced) {
   const std::vector<Expected> expected = golden();
   ASSERT_FALSE(expected.empty());
@@ -174,8 +190,25 @@ TEST(Golden, EveryCommittedRenderingIsReproduced) {
     GFNT_Error error{};
     options.origin_x = entry.origin_x;
     options.origin_y = entry.origin_y;
-    const GFNT_Result result = gfnt_face_render_glyph(font->face, entry.glyph,
-        entry.ppem, &options, nullptr, &coverage, &error);
+    // A strike's glyph is pixels, not a path, and reaches a coverage by the other
+    // route. Which route a line came from is decided by the fixture's format, as
+    // it is in tools/golden/check_golden.py, and for the same reason: the
+    // committed file is the contract and the extension is the format.
+    const bool strike = is_strike(entry.fixture);
+    GFNT_Result result;
+    if (strike) {
+      GFNT_BitmapGlyph bitmap{};
+
+      result = gfnt_face_glyph_bitmap(font->face, entry.glyph, 0, &bitmap,
+          &error);
+      if (result == GFNT_OK) {
+        result = gfnt_coverage_from_bitmap(&bitmap, nullptr, &coverage, &error);
+      }
+    }
+    else {
+      result = gfnt_face_render_glyph(font->face, entry.glyph, entry.ppem,
+          &options, nullptr, &coverage, &error);
+    }
 
     if (!entry.refused.empty()) {
       EXPECT_NE(result, GFNT_OK) << entry.where()

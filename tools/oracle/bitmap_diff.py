@@ -22,8 +22,9 @@ a font whose rows are all shifted by one still has the right box.
 
 The population is the real one. `xfonts-terminus` in the oracle image ships
 several hundred PCF files - one per encoding, several hundred glyphs each - and
-they are **compressed**, which this library does not read (that needs `compress`
-as a dependency and is not built yet, design.md section 7.1). So this driver
+they are **compressed**, which this library does not read - not for want of a
+decoder, since `compress` implements RFC 1952, but because `font` has not taken that
+dependency (design.md section 7.1). So this driver
 decompresses each into `build/oracle` and feeds both readers the plain bytes; the
 gzip container itself is therefore not under test here, and the report says so.
 

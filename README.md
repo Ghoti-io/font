@@ -20,7 +20,9 @@ This is what the library implements.
 
 `CFF2`, the bitmap strikes *inside* an sfnt (`EBDT`/`EBLC`, `CBDT`, `sbix`), the
 gzip a PCF usually ships in, colour, variations, shaping, layout, discovery and
-writing are not built.
+writing are not built. A `.pcf.gz` has to be decompressed before this library will
+read it: `ghoti.io-compress` has gzip, and this library has not taken the
+dependency yet.
 
 ## Before you call it
 

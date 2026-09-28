@@ -121,7 +121,7 @@ which of them this library takes, and which of those it reads today.
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
 | | WOFF 2 | not here; it waits on Brotli in `compress` |
 | | `CFF2`, AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
-| **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented.** 1,885 of them on a stock Linux box. The `.gz` a PCF usually arrives in is not: that needs `compress` as a dependency |
+| **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented.** 1,885 of them on a stock Linux box. The `.gz` a PCF usually arrives in is not: `compress` has gzip and this library does not yet declare the dependency |
 | | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
 | **standalone outline** | Type 1 (`.pfb`/`.pfa` + `.afm`/`.pfm`), bare `CFF` | **wanted**, not implemented |
@@ -393,9 +393,13 @@ records that this is the format's silence rather than a measurement. A PSF witho
 its Unicode table states no characters at all, and a codepoint lookup on one is
 refused by name rather than pretending a cell index is a character.
 
-**The gzip a PCF usually arrives in is not read.** That needs `compress` as a
-dependency, which this library does not have yet; the differential decompresses
-the corpus itself, so the container is covered and its wrapper is not.
+**The gzip a PCF usually arrives in is not read.** Not for want of a decoder:
+`compress` implements RFC 1952 with concatenated members and an output ceiling, and
+`gcomp_decode_alloc()` is one call. What is missing is that this library declares
+only `cutil` as a dependency, so taking gzip is an edit to `suite/libraries.txt`,
+the `.pc`'s `Requires`, and one call in `blob.h`'s file path. Until then the
+differential decompresses the corpus itself, so the container is covered over 234
+real fonts and its wrapper by nothing.
 
 **A PCF's encodings are positions in the font's own charset**, which its XLFD
 `CHARSET_REGISTRY` and `CHARSET_ENCODING` properties name. For an `ISO10646-1`
@@ -1922,7 +1926,8 @@ shaped the way it is:
   them.
 
 **Not built:** `CFF2` (§16); the sfnt bitmap strikes - `EBDT`/`EBLC`, `CBDT` and
-`sbix` (§7.5); the gzip a PCF usually ships in, which needs `compress`; colour
+`sbix` (§7.5); the gzip a PCF usually ships in, which is a `compress` dependency
+this library has not taken rather than a decoder that does not exist; colour
 (§7.6);
 variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`

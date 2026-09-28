@@ -13,10 +13,13 @@ This is what the library implements.
 - `head`, `maxp`, `hhea`, `hmtx`, `OS/2`, `post`, `cmap` (formats 0, 4, 6 and 12) and `name`, each parsed on first use.
 - Which glyph a code point maps to, and how wide that glyph is.
 - A glyph's outline, from `glyf` and `loca`, with composites resolved: every flag, point matching, and all three transform encodings.
+- A glyph's outline from a **charstring**: `CFF ` inside an sfnt, CID-keyed fonts included, with the Type 2 and Type 1 interpreters behind it.
 - That outline rasterised to 8-bit coverage, at any pixel size and any sub-pixel offset.
 
-Charstrings and `CFF `, bitmap strikes, colour, variations, shaping, layout,
-discovery and writing are not built.
+Bare CFF and the Type 1 font format are not built: the *languages* are, and what
+they wait on is a face whose tables do not come from an sfnt directory. `CFF2`,
+bitmap strikes, colour, variations, shaping, layout, discovery and writing are not
+built either.
 
 ## Before you call it
 
@@ -117,10 +120,10 @@ vector generators.
 
 | Target | What it does |
 | --- | --- |
-| `make examples` | The five programs under `examples/` |
+| `make examples` | The six programs under `examples/` |
 | `make check-oracle` | Differentials against fontTools, in a pinned container |
 | `make check-golden` | The same pixels, rebuilt for three big-endian targets |
-| `make fuzz` | The sfnt, cmap, glyf and raster fuzzers |
+| `make fuzz` | The sfnt, cmap, glyf, raster, CFF and charstring fuzzers |
 | `make docs` | The Doxygen manual, into `./docs` |
 
 ## The API
@@ -137,8 +140,9 @@ asks which glyph a code point maps to does not link a rasteriser.
 - **`metrics.h`** — `head`, `hhea`, `OS/2`, `post`, `unitsPerEm`, and per-glyph advances from `hmtx`.
 - **`cmap.h`** — code point to glyph, formats 0, 4, 6 and 12, and which subtable answered.
 - **`name.h`** — name records decoded to UTF-8 by platform, encoding and language.
-- **`glyph.h`** — glyph names from `post` formats 1.0 and 2.0. Bitmap strikes are not implemented.
-- **`outline.h`** — `GFNT_Outline`: a glyph as a path. It holds the font's own points rather than a path derived from them, so `gfnt_outline_decompose()` is where `glyf`'s implicit on-curve points appear. Bounds come two ways, because the box `glyf` states is the box of the coordinates and the curve's own box is smaller.
+- **`glyph.h`** — glyph names, from `post` formats 1.0 and 2.0 or from a CFF charset, whichever the font actually holds them in. Bitmap strikes are not implemented.
+- **`charstring.h`** — the Type 2 and Type 1 interpreters, which know nothing about any container: a program, its subroutines, and the outline it draws. What a PDF library needs for a `FontFile3` stream.
+- **`outline.h`** — `GFNT_Outline`: a glyph as a path, from either producer. It holds the font's own points rather than a path derived from them, so `gfnt_outline_decompose()` is where `glyf`'s implicit on-curve points appear. Bounds come two ways, because the box `glyf` states is the box of the coordinates and the curve's own box is smaller; a CFF glyph states no box at all, and the refusal says so.
 - **`raster.h`** — the scan converter and `GFNT_Coverage`: exact-area coverage, non-zero or even-odd, and no `float` between a font's bytes and a pixel.
 
 [What is implemented](#what-is-implemented) is the inventory.
@@ -159,13 +163,16 @@ model (the file is the attacker), what is implemented, and what is not.
 
 ## Status
 
-The tables named above are parsed, glyphs from `glyf` are turned into outlines,
-and those outlines are rasterised. Charstrings, bitmap strikes, colour,
-variations, shaping, layout, font discovery and writing are not implemented.
+The tables named above are parsed, glyphs from `glyf` and from `CFF `
+charstrings are turned into outlines, and those outlines are rasterised. Bare CFF
+and Type 1 as containers, `CFF2`, bitmap strikes, colour, variations, shaping,
+layout, font discovery and writing are not implemented.
 
 Every glyph of 312 real fonts is compared against fontTools — 1,999,069 fields
-over 37,218 glyphs — and the committed renderings are reproduced byte for byte on
-s390x, powerpc64 and sparc64, which is what the fixed-point arithmetic is for.
+over 37,218 glyphs — and every charstring of another 43 is compared three ways:
+its program operator by operator, the path it draws, and the advance it states.
+The committed renderings are reproduced byte for byte on s390x, powerpc64 and
+sparc64, which is what the fixed-point arithmetic is for.
 
 ## License
 

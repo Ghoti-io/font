@@ -141,7 +141,7 @@ enforces that, as `chron` does.
 | What | Holds | Needs | Who uses it | Implemented |
 | --- | --- | --- | --- | --- |
 | Reading | blob, the checked reader, every table parser, metrics, `cmap`, strikes, glyph access, the glyph union | `cutil`, `compress` | everyone | the sfnt container, metric tables, `cmap` and `name`. §18 is the list |
-| Outlines and raster | outlines as paths; rasterisation to coverage | the reader | `image`, `cjelly`, PDF | `glyf`/`loca` and the scan converter. §18 is the list; charstrings are not |
+| Outlines and raster | outlines as paths; rasterisation to coverage | the reader | `image`, `cjelly`, PDF | `glyf`/`loca`, `CFF ` charstrings and the scan converter. §18 is the list |
 | Shaping | `GDEF`/`GSUB`/`GPOS`, the script shapers, the cluster map | the reader, `unicode` | `cjelly`, PDF (for text extraction) | no |
 | Layout | itemisation, bidi, breaking, paragraphs, boxes, hit testing | shaping, `unicode` | `cjelly`, `image` | no |
 | Discovery | directories, matching, the platform APIs | the reader, the OS | `cjelly` | no |
@@ -166,9 +166,9 @@ to keep open.
 | `glyph.h` | `GFNT_Glyph`, the tagged union; the strike-selection policy |
 | `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes. Not implemented |
 | `color.h` | `COLR`/`CPAL`, `CBDT`, `sbix`. Not implemented |
-| `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. The `glyf` producer is implemented; the charstring one is phase 2 |
+| `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Both producers are implemented |
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
-| `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Not implemented |
+| `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Implemented; of the four containers that feed them, `CFF ` inside an sfnt is read |
 | `shape.h` | `GFNT_ShapedRun`, features, the language registry, the script-shaper vtable. Not implemented |
 | `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
 | `discover.h` | `GFNT_FontSet`, directory scanning, matching, the default fallback provider. Not implemented |
@@ -467,6 +467,39 @@ for CID-keyed fonts), **bare CFF** (the same without the sfnt, as PDF embeds it
 as `FontFile3`/`Type1C` and `CIDFontType0C`), Type 1 (§7.1), and - absent, §16 -
 `CFF2`. This is decision §17.7 and it is what makes Type 1 cheap after CFF,
 and what a PDF library would need (§13.3).
+
+**Built: both interpreters, and the first of the four containers.** `CFF ` inside
+an sfnt is read - every structure above, CID-keyed fonts included - and
+`gfnt_face_glyph_outline()` answers for an OTTO face. `CharstringType 1`, which
+puts Type 1 programs in a CFF, is honoured, so the Type 1 language has a container
+and a differential even though the Type 1 *font format* does not.
+
+**Not built: bare CFF and Type 1 as containers**, and the reason is the same for
+both and is not the interpreter. A ::GFNT_Face is an sfnt: it holds a table
+directory, and every parser reaches its bytes through a reader derived from a
+directory entry. A Type 1 font program and a bare CFF stream have no directory at
+all, so both need a face whose tables come from somewhere else - which is the
+same shape §7.1 needs for PCF, BDF, PSF and `.hex`, where each "produces a
+`GFNT_Face` with one strike and no outlines". That is one piece of work serving
+five containers, and it belongs with whichever of them is built first rather than
+being invented twice.
+
+Three decisions the interpreters make, each of which could have gone the other
+way and each of which is refused rather than guessed:
+
+- **`random` is refused by name.** Section 1 promises one font at one size gives
+  one bitmap on every platform for ever, and an operator whose value is by
+  definition unpredictable cannot be part of that. Nothing in the corpus uses it.
+- **A `FontMatrix` that is not `head.unitsPerEm`'s own scale is refused.** A
+  charstring's coordinates are in the font's own charstring space, and for every
+  font anybody ships that space is the em. One where they disagree would need the
+  matrix applied - and applying it would put this library and every reference pen
+  in different spaces, while ignoring it draws at the wrong size and reports
+  success.
+- **A CFF glyph states no bounding box**, so
+  `gfnt_face_glyph_stated_box()` refuses and names `FontBBox`: that box is the
+  whole font's, and answering with it would answer a question nobody asked with a
+  number that looks like the one they did.
 
 ### 7.5 Bitmap strikes
 
@@ -1150,12 +1183,22 @@ question arises in the repository (§14.5).
 
 ### 14.8 Generated vectors, and which gate covers what
 
-Two vectors are generated from the pinned image and committed:
-`src/tables/post_names.h` (the 258-entry standard Macintosh glyph order) and
+Three vectors are generated from the pinned image and committed:
+`src/tables/post_names.h` (the 258-entry standard Macintosh glyph order),
 `src/name/mac_encodings.h` (the eight single-byte Macintosh encodings and the
-`(platEncID, langID)` rules that choose between them). The generator is
+`(platEncID, langID)` rules that choose between them), and
+`src/cff/cff_strings.h` (the 391 CFF standard strings, the Standard Encoding, and
+the two predefined charsets - §7.4). The generator is
 `tools/vectors/make_vectors.py`; `make gen-vectors` installs, `make check-vectors`
 verifies.
+
+The CFF tables are cross-checked the way Mac Roman is, and across a boundary
+that makes it mean something: fontTools keeps the strings in `cffLib` and the
+Standard Encoding in `fontTools.encodings`, and the specification says codes 32 to
+126 are SIDs 1 to 95. The generator requires that relation, requires every encoded
+name to be one of the 391, and requires `cffISOAdobeStrings` - a second
+transcription of the first 229 - to be a prefix of them. A transcription error on
+either side breaks one of the three.
 
 **Three gates, and the split is the design** - the same split `unicode` uses for
 its UCD tables, and for the same reason:
@@ -1165,6 +1208,7 @@ its UCD tables, and for the same reason:
 | `check-vectors` | a table edited by hand, or a generator changed without regenerating | the image |
 | `testVectors` | the same, on a fresh clone | nothing; runs in `make test` |
 | `check-oracle-ttx` | a table **wrong about reality**, over 346 faces | the image |
+| `check-oracle-cff` | the CFF tables wrong about reality: every glyph's name comes from the charset through the standard strings, and every accented character through the Standard Encoding | the image |
 
 Only the third can find the generator wrong; only the first two can find a
 table edited. `testVectors` is what makes the container gates' honesty free: they
@@ -1173,6 +1217,14 @@ covers the tables without it. It reaches every entry through the public API
 rather than by including the generated header - `post-v1.ttf` *is* the standard
 order, so naming its 258 glyphs walks the whole vector, and
 `name-mac-encodings.ttf` carries all 128 high bytes of each encoding.
+
+The CFF tables are the exception, and the reason is worth stating rather than
+working around: there is no public call that walks 391 strings or 256 encoding
+codes, and a fixture naming every one of them would be a font built for one test.
+So `testVectors` checks those two against the header directly and `test_cff.cpp`
+covers their *use* through the public API - a font whose glyph names come out of
+the standard strings and whose accented character is resolved through the Standard
+Encoding.
 
 **One source is not enough for a transcription, so Mac Roman is cross-checked.**
 The table is generated from CPython's codecs, because that is what fontTools'
@@ -1251,12 +1303,20 @@ queries - a glyph's advance, a name record - allocate nothing.
 
 `GFNT_Limits` caps: `max_blob_bytes` (default 256 MiB), `max_tables` (512),
 `max_glyphs` (65,535, the format's own), `max_composite_depth` (16),
-`max_outline_points` (65,536 per glyph), `max_contours` (4,096), `max_ppem`
-(4,096), `max_raster_bytes` (64 MiB per glyph), `max_strikes` (256),
-`max_name_records` (4,096), `max_axes` (64), `max_lookup_depth` (6),
-`max_ops_per_glyph` (64), `max_paint_depth` (64), `max_run_bytes` (16 MiB),
-`max_line_length` for BDF and `.hex` (4,096). Every parser takes one; `NULL`
-means default. This is what makes the fuzzers meaningful: a limit is a stated
+`max_charstring_depth` (10, the Type 2 format's own), `max_charstring_ops`
+(65,536 per glyph), `max_outline_points` (65,536 per glyph), `max_contours`
+(4,096), `max_ppem` (4,096), `max_raster_bytes` (64 MiB per glyph),
+`max_strikes` (256), `max_name_records` (4,096), `max_axes` (64),
+`max_lookup_depth` (6), `max_ops_per_glyph` (64), `max_paint_depth` (64),
+`max_run_bytes` (16 MiB), `max_line_length` for BDF and `.hex` (4,096). Every
+parser takes one; `NULL` means default.
+
+The two charstring caps are separate from `max_composite_depth` because they are
+different recursions in different formats, and the second is separate from the
+first because **depth alone does not bound the work**: Type 2 has no jump and no
+loop, so a program's length bounds its own straight-line work - but a subroutine
+may call two subroutines, each of which may call two more, and ten levels of that
+is a thousandfold expansion from a few hundred bytes. This is what makes the fuzzers meaningful: a limit is a stated
 promise and the options byte drives every one of them.
 
 ### 15.3 Threads and state
@@ -1509,6 +1569,95 @@ kinds, and development.md lists them with their counts: an arm nothing can reach
 is a different thing from an arm nothing has tried to reach, and only the second
 is work.
 
+**Phase 2's first container is built, as of 2026-09-28**: `charstring.h` with the
+Type 2 and Type 1 interpreters, the `CFF ` container behind them, and an OTTO face
+whose glyphs draw. §7.4 has what that includes and what it leaves - bare CFF and
+Type 1 as *containers*, which both need a face whose tables do not come from an
+sfnt directory, and that is one piece of work shared with the bitmap formats of
+§7.1.
+
+- **The interpreters know nothing about any container** (decision 17.7), which is
+  what makes them testable at all: `gfnt_charstring_run()` takes bytes and two
+  subroutine accessors, so the arms an interpreter mostly consists of - a stack
+  that underflows, a subroutine that is not there, an operand that ends past the
+  charstring - are reachable from a test and from no font. It is also what a PDF
+  library needs, where a `FontFile3` is a bare CFF that never arrives wrapped in
+  an sfnt.
+- **Type 1 is not a dialect of Type 2**, and the code refuses each language the
+  other's operators rather than drawing a plausible wrong shape. The advance and
+  side bearing come from `hsbw`; `255` introduces a plain integer rather than a
+  16.16 - the same five bytes differing by a factor of 65,536; subroutine numbers
+  are unbiased; contours close with `closepath`; the accented character is `seac`
+  with a side-bearing correction; and flex and hint replacement come through
+  `callothersubr` and `pop`.
+- **Glyph names have two sources now**, and the charset wins for a CFF face: the
+  specification says such a font carries `post` version 3 and every reference
+  takes its glyph order from the charset. The three public name calls moved out of
+  `post.c` into `glyph/names.c` for it, and `gfnt_face_glyph_outline()` moved out
+  of `glyf.c` into `outline/producer.c` for the same shape of reason - one
+  question, two implementations, and the choice belongs in neither.
+- **`CharStrings`'s count joins the numGlyphs minimum (M12)** and `loca`'s
+  deliberately does not. A glyph past the end of `CharStrings` has no charstring
+  at all, where a `loca` entry running backwards condemns *that glyph* and leaves
+  the rest of the font answering (M11). The comment promising otherwise had been
+  stale since phase 1.
+
+**What phase 2 cost, in findings.** Each is why something above is shaped the way
+it is:
+
+- **A corpus survey before writing a fixture, for once in the right order.** The
+  image's 35 CFF fonts use every curve operator, `hintmask`, `cntrmask` and both
+  subroutine flavours - and between them not one flex, not one accented character,
+  no CID font, no custom encoding, no charset in a format other than 0, and none
+  of the arithmetic operators. A `T2CharStringPen` writes none of those either, so
+  seven fixtures carry CFF tables assembled byte by byte inside the pinned image
+  and wrapped in an sfnt fontTools builds: everything a pen can write comes from
+  the reference and the rest is hand-built and named in the MANIFEST.
+- **The thinned run was the hole again.** Applying `hhcurveto`'s leading operand
+  to every group rather than to the first produced three disagreements in 24,957
+  fields of real fonts and **none at all** at `--fonts 6`. With the fixtures in
+  every run it is four at `--fonts 2`. That is the third time a defect has been
+  invisible to a sample and visible to a fixture, after the `post` 2.0 boundary
+  and `OS/2` version 2's fields.
+- **Two defects the unit tests found that no font could have.** A charstring that
+  draws before it moves opened its contour at the point the segment *ends*, which
+  is a side bearing's worth of error in the one place Type 1 allows it. And the
+  caps a caller states in a `GFNT_CharstringContext` were applied to the run and
+  not to the outline it appends to, so a lowered `max_outline_points` was silently
+  ignored - two places for one fact.
+- **Three pieces of undefined behaviour the fuzzers found, none reachable from a
+  font.** A left shift of a negative value, which C leaves undefined, in nine
+  places - both number decoders, the dump's copy of one, `div` and `sqrt`, whose
+  operands are negative by design. Signed overflow in `div` and `sqrt`, where an
+  operand clamped to 2^61 was then multiplied by 65,536. And signed overflow
+  building a DICT real's decimal scale, where nineteen multiplications by ten
+  leave the type.
+- **The fuzz object tree had no depfiles**, so a header change rebuilt only the
+  objects whose own `.c` had changed. Adding two fields to `GFNT_Limits` and
+  running a new harness reported "stack-buffer-overflow in gfnt_limits_default" on
+  the fourth unit: one binary linked from two layouts of one struct, with a crash
+  artifact to make it look reproducible. Worse than a stale result, because the
+  report names a source line and accuses working code.
+- **The golden gate's own property caught eleven thin fixtures.** A chain of
+  curves that all run up-and-right encloses a sliver with its closing line, and a
+  sliver's extreme row carries so little coverage that a quarter-pixel
+  *horizontal* shift decides whether it rounds to nothing - so the vertical extent
+  moved. The property is about the rasteriser and is right; a fixture too thin to
+  state it weakens the gate, so each one now ends with a leg that gives its
+  contour area.
+- **`cff.otf` left the golden generator's "renders nothing" list**, and what
+  replaced it is worth more than the refusals it used to contribute: its
+  charstrings are the same five outlines `basic.ttf` holds as `glyf`, so the
+  subset check now asserts that two containers and one rasteriser produce
+  identical pixels.
+- **The reference has two gaps of its own here**, both marked in its own source.
+  `cffLib` ignores `CharstringType`, so a font carrying Type 1 programs
+  decompiles as Type 2 and comes out as two leftover operands; and its Type 1
+  `sbw` drops the operands, setting neither advance nor side bearing. The first is
+  worked around by re-wrapping the bytes, which is what makes the Type 1 language
+  comparable at all; the second is reported as a glyph the reference refused,
+  because a zero this library disagrees with reads as a disagreement.
+
 **The oracles are built, as of 2026-09-24.** `tools/oracle/` carries the
 `fonttools` image - pinned base digest, `fonttools==4.66.0`, `brotli==1.2.0`,
 and six Debian font packages by full apt version - with `oracle_env.py`,
@@ -1518,6 +1667,7 @@ and six Debian font packages by full apt version - with `oracle_env.py`,
 | --- | --- | ---: |
 | `check-oracle-cmap` | every codepoint fontTools maps, both its neighbours, and a stride sample, per font | 327 fonts, 587,186 codepoints, **0** |
 | `check-oracle-glyf` | every glyph's points, flags, contours, both boxes and its decomposed path | 312 fonts, 37,218 glyphs, 2,001,169 fields, **0** |
+| `check-oracle-cff` | every charstring's program operator by operator, the path it draws, the advance it states, its charset name and its control box | 43 fonts, 4,172 glyphs, 24,957 fields, **0** |
 | `check-golden` | the committed renderings, rebuilt for s390x, powerpc64 and sparc64 | 2,425 renderings x 3 targets, **0** |
 | `check-oracle-cmap-exhaustive` | all 1,114,112 codepoints per font | 364,314,624 comparisons, **0** |
 | `check-oracle-ttx` | every field of `head`, `hhea`, `OS/2`, `post`, `maxp`, the directory, the `cmap` inventory, every `name` record and every `post` glyph name | 352 faces, 292,609 fields, **0** |
@@ -1587,10 +1737,12 @@ moved:
   unique. Verified in the raw bytes before the category was written, which is the
   only way to tell that apart from being wrong (decision 18).
 
-**Not built:** charstrings and `CFF ` (phase 2, §7.4); the bitmap strikes
-(§7.5); colour (§7.6); variations (§7.7); shaping, layout, discovery and the
-writer; the multi-byte Macintosh and Microsoft `name` encodings (§7.2);
-`vhea`/`vmtx`, `gasp`, `kern` and WOFF 1. `maxp` has no `_dump` because nothing
+**Not built:** bare CFF and the Type 1 font format, which are containers rather
+than languages and which wait on a face whose tables do not come from an sfnt
+directory (§7.4); `CFF2` (§16); the bitmap strikes (§7.5); colour (§7.6);
+variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
+Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`
+and WOFF 1. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is
 still only its enum: the outline accessor is `gfnt_face_glyph_outline()`, and
 the union arrives with the second arm that gives it a reason rather than being

@@ -1590,6 +1590,12 @@ sfnt directory, and that is one piece of work shared with the bitmap formats of
   are unbiased; contours close with `closepath`; the accented character is `seac`
   with a side-bearing correction; and flex and hint replacement come through
   `callothersubr` and `pop`.
+  - The split is a fact about the byte range, and it has to reach **every** place
+    that reads one: the interpreter's dispatch, and the dump's operator-name
+    table, which names only what the language it was handed actually has. A dump
+    that named every byte in both would report that a font contains an operator
+    its language does not have - and for `hintmask` it would read a mask, so one
+    byte Type 1 reserves would make every operator printed after it fiction.
 - **Glyph names have two sources now**, and the charset wins for a CFF face: the
   specification says such a font carries `post` version 3 and every reference
   takes its glyph order from the charset. The three public name calls moved out of

@@ -32,11 +32,13 @@ units, and rounding here would make that a disagreement rather than a value.
 Usage: fonttools_charstrings.py <font> <face> <stride> <first>
 """
 
+import re
 import sys
 
 from fontTools.misc.roundTools import otRound
 from fontTools.pens.basePen import BasePen
 from fontTools.pens.boundsPen import ControlBoundsPen
+from fontTools.misc.psCharStrings import T1CharString
 from fontTools.ttLib import TTFont
 
 
@@ -183,6 +185,127 @@ def as_type1(charstring, subrs):
 _STREAMS = []
 
 
+def load_type1(path):
+    """`(order, charstrings, glyph_set, top)` for a Type 1 font program.
+
+    Built out of the reference's own cipher and its own Type 1 interpreter, and
+    deliberately **not** out of `t1Lib.T1Font`. That reader executes the font as
+    PostScript through `psLib`, a partial interpreter, and it cannot read a font
+    program whose `RD` it does not manage to call - it raises
+    `PSError: name error: RD` on the fixtures here, and on their derived programs
+    it reaches the binary charstrings as text and raises a UnicodeDecodeError.
+    Whether that is a limit of `psLib` or a shape of font it was never given is
+    the reference's business; either way it cannot be the reference for these.
+
+    What is used instead is the part of fontTools that matters most here:
+    `eexec.decrypt` for both ciphers, and `T1CharString` for the language. The
+    framing and the extraction below are this script's own, which is the honest
+    weakness of this arrangement - so it is written to find `/CharStrings` by
+    searching rather than by parsing, which is a different method from the
+    library's and fails loudly rather than agreeing by construction.
+    """
+    from fontTools.misc import eexec
+    from fontTools.misc.psCharStrings import T1CharString
+
+    data = open(path, "rb").read()
+    if data[:1] == b"\x80":
+        # PFB: join the segments, keeping the binary ones separate.
+        clear = b""
+        cipher = b""
+        at = 0
+        while at + 2 <= len(data) and data[at] == 0x80 and data[at + 1] != 3:
+            kind = data[at + 1]
+            size = int.from_bytes(data[at + 2:at + 6], "little")
+            at += 6
+            if kind == 2:
+                cipher += data[at:at + size]
+            else:
+                clear += data[at:at + size]
+            at += size
+    else:
+        at = data.find(b"eexec")
+        clear = data[:at + 5]
+        rest = data[at + 5:].lstrip(b"\r\n\t ")
+        text = b"".join(rest.split()[:])
+        hex_digits = []
+        for byte in text:
+            if chr(byte) in "0123456789abcdefABCDEF":
+                hex_digits.append(chr(byte))
+            else:
+                break
+        # The 512 zeros of the trailer are hex digits too, so the run of them is
+        # what ends the data - the same rule the library uses, reached
+        # independently because there is no other rule available.
+        joined = "".join(hex_digits)
+        zeros = joined.find("0" * 16)
+        if zeros >= 0:
+            joined = joined[:zeros]
+        cipher = bytes.fromhex(joined)
+
+    plain = eexec.decrypt(cipher, 55665)[0][4:]
+    len_iv = 4
+    match = re.search(rb"/lenIV\s+(\d+)", plain)
+    if match:
+        len_iv = int(match.group(1))
+
+    # Every `/name <length> RD <bytes>` of the CharStrings dictionary, found by
+    # search rather than by tokenising: a different method from the library's.
+    start = plain.find(b"/CharStrings")
+    order = []
+    programs = {}
+    at = plain.find(b"begin", start) if start >= 0 else -1
+    pattern = re.compile(rb"/([^\s/{}\[\]()]+)\s+(\d+)\s+(RD|-\|)[ ]")
+    while at >= 0:
+        match = pattern.search(plain, at)
+        if not match:
+            break
+        name = match.group(1).decode("latin-1")
+        length = int(match.group(2))
+        body = plain[match.end():match.end() + length]
+        order.append(name)
+        programs[name] = eexec.decrypt(body, 4330)[0][len_iv:]
+        at = match.end() + length
+
+    # Subroutines, the same way.
+    subrs = []
+    sub_at = plain.find(b"/Subrs")
+    sub_pattern = re.compile(rb"dup\s+(\d+)\s+(\d+)\s+(RD|-\|)[ ]")
+    if sub_at >= 0 and (start < 0 or sub_at < start):
+        at = sub_at
+        while True:
+            match = sub_pattern.search(plain, at)
+            if not match or (start >= 0 and match.start() > start):
+                break
+            index = int(match.group(1))
+            length = int(match.group(2))
+            body = plain[match.end():match.end() + length]
+            while len(subrs) <= index:
+                subrs.append(b"")
+            subrs[index] = eexec.decrypt(body, 4330)[0][len_iv:]
+            at = match.end() + length
+
+    if ".notdef" in order:
+        # The same rule the library applies, and it has to be applied here too or
+        # the two sides would be comparing different glyphs under one index.
+        order.remove(".notdef")
+        order.insert(0, ".notdef")
+
+    glyph_set = {}
+    for name in order:
+        glyph_set[name] = Type1Glyph(T1CharString(programs[name], subrs=subrs))
+    charstrings = {name: T1CharString(programs[name], subrs=subrs)
+                   for name in order}
+
+    # A stand-in Top DICT whose only field is the one the caller reads. Without
+    # it `getattr(top, "CharstringType", 2)` answers 2 and the reference runs
+    # these programs as Type 2 - which decompiles to two leftover operands and no
+    # operators, and reports every glyph as one the reference cannot run.
+    class Type1Top:
+        CharstringType = 1
+
+    return order, charstrings, glyph_set, Type1Top()
+
+
 def load(path, face):
     """`(order, charstrings, glyph_set, top)` for an sfnt or a bare CFF.
 
@@ -200,6 +323,9 @@ def load(path, face):
     """
     with open(path, "rb") as handle:
         head = handle.read(4)
+    # A Type 1 font program: PFB's segment marker, or a PostScript program.
+    if head[:1] == b"\x80" or head[:2] == b"%!":
+        return load_type1(path)
     if len(head) == 4 and head[0] == 1 and head[2] >= 4:
         from fontTools.cffLib import CFFFontSet
         from io import BytesIO
@@ -251,7 +377,12 @@ def main(argv):
     # re-wrapped below, which is the only way this reference can answer for the
     # Type 1 language at all.
     charstring_type = getattr(top, "CharstringType", 2)
-    if charstring_type == 1:
+    # A bare Type 1 font program arrives already wrapped in `T1CharString`s by
+    # load_type1(), with its subroutines already attached; only a *CFF* carrying
+    # Type 1 programs needs the re-wrap below, because fontTools' CFF reader
+    # ignores `CharstringType` and builds T2 objects regardless.
+    subrs = []
+    if charstring_type == 1 and hasattr(top, "Private"):
         subrs = type1_subrs(top)
         # A glyph set of Type 1 programs, so that an accented character's
         # components resolve to the same language the charstring is in.
@@ -266,7 +397,7 @@ def main(argv):
         # Before decompile(), which clears it: fontTools keeps the bytes and the
         # decompiled program in one attribute pair and discards the first.
         raw = len(charstring.bytecode or b"")
-        if charstring_type == 1:
+        if charstring_type == 1 and not isinstance(charstring, T1CharString):
             charstring = as_type1(charstring, subrs)
         try:
             charstring.decompile()

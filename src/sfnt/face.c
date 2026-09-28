@@ -95,6 +95,30 @@ static GFNT_Result gfnt_ttc_header(GFNT_Reader * reader, size_t * out_count,
   return GFNT_OK;
 }
 
+/**
+ * Whether a blob that is not an sfnt is one of the containers that has no
+ * directory, and which.
+ *
+ * Ordered by how strongly each format identifies itself, strongest first, so
+ * that a weak magic never gets to claim a file some other reader would have
+ * recognised outright. A bare CFF is last and will stay last: its header is
+ * four bytes, two of which are a version number.
+ *
+ * @param blob A reader over the whole blob.
+ * @param out_flavour Receives the flavour, on a match.
+ * @param out_tag Receives the tag its one synthetic entry should carry.
+ * @return Whether anything matched.
+ */
+static bool gfnt_face_bare_container(const GFNT_Reader * blob,
+    GFNT_Tag * out_flavour, GFNT_Tag * out_tag) {
+  if (gfnt_cff_header_plausible(blob)) {
+    *out_flavour = GFNT_FLAVOUR_BARE_CFF;
+    *out_tag = GFNT_TAG_CFF;
+    return true;
+  }
+  return false;
+}
+
 GFNT_Result gfnt_face_count(const GFNT_Blob * blob, const GFNT_Limits * limits,
     size_t * out_count, GFNT_Error * error) {
   GFNT_Reader reader;
@@ -133,11 +157,79 @@ GFNT_Result gfnt_face_count(const GFNT_Blob * blob, const GFNT_Limits * limits,
   // it is a font at all is this one.
   if (tag != GFNT_FLAVOUR_TRUETYPE && tag != GFNT_FLAVOUR_CFF
       && tag != GFNT_FLAVOUR_APPLE_TRUE && tag != GFNT_FLAVOUR_APPLE_TYPE1) {
+    GFNT_Tag flavour = 0;
+    GFNT_Tag entry = 0;
+
+    // A container with no directory is one face too. This counts without
+    // parsing the font program, which is the same bargain an sfnt gets: the
+    // count says a face is there and the load says whether it can be read.
+    if (gfnt_face_bare_container(&reader, &flavour, &entry)) {
+      *out_count = 1;
+      return GFNT_OK;
+    }
     return gfnt_error_set(error, GFNT_ERR_FORMAT, 0, 0, GFNT_GLYPH_NONE,
-        "not an sfnt version this library recognises");
+        "not an sfnt version this library recognises, a collection, or a bare "
+        "CFF");
   }
   *out_count = 1;
   return GFNT_OK;
+}
+
+/**
+ * Give the face its table directory: the one the file carries, or a synthetic
+ * one for a container that has no directory at all.
+ *
+ * @param face The face. Its blob, allocator, limits and directory_offset must
+ *   already be set, and its lock must exist - a bare container's font program is
+ *   parsed here, and that writes a memo.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return What the directory parse or the container's own parse returned.
+ */
+static GFNT_Result gfnt_face_build_directory(GFNT_Face * face,
+    GFNT_Error * error) {
+  GFNT_Reader blob_reader;
+  GFNT_Tag flavour = 0;
+  GFNT_Tag entry = 0;
+  const GFNT_Cff * cff = NULL;
+  GFNT_Result result = gfnt_sfnt_parse_directory(face, error);
+
+  // ERR_FORMAT is the directory parse saying "this is not an sfnt", which is
+  // the only result that hands the blob on. A corrupt sfnt is not offered to
+  // another reader: it identified itself.
+  if (result != GFNT_ERR_FORMAT) {
+    return result;
+  }
+  // Only a whole file can be another container, and that is enforced by where
+  // the probe reads rather than by a test of directory_offset here: the reader
+  // below starts at byte 0 of the blob, so a face inside a collection is
+  // offered its container's first bytes, which say `ttcf` and match nothing. A
+  // guard on directory_offset would be unreachable - there is no blob that both
+  // opens with `ttcf` and opens with another container's magic.
+  result = gfnt_reader_init_blob(&blob_reader, face->blob, 0, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (!gfnt_face_bare_container(&blob_reader, &flavour, &entry)) {
+    return gfnt_error_set(error, GFNT_ERR_FORMAT, 0, 0, GFNT_GLYPH_NONE,
+        "not an sfnt, a collection, or any container this library recognises");
+  }
+  result = gfnt_sfnt_single_table_directory(face, flavour, entry, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+
+  // The font program is parsed now rather than on first use, which is the one
+  // place this library departs from "loading a face parses the directory and
+  // nothing else" (design.md section 7.8) - and it departs because for this
+  // container the table *is* the identification. Four header bytes are not
+  // evidence, so a blob is not a bare CFF until its whole font program has
+  // parsed, and a face is not handed back for one that has not.
+  //
+  // The parse's own diagnostic is propagated rather than flattened to
+  // ERR_FORMAT: "a DICT byte the format reserves" says far more about the file
+  // than "not a font" does, and a caller who wanted the cheap question has
+  // ::gfnt_face_count().
+  return gfnt_face_cff(face, &cff, error);
 }
 
 GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
@@ -214,7 +306,7 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
   }
   face->lock_ready = true;
 
-  result = gfnt_sfnt_parse_directory(face, error);
+  result = gfnt_face_build_directory(face, error);
   if (result != GFNT_OK) {
     gfnt_face_free(face);
     return result;

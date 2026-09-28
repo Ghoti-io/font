@@ -58,6 +58,11 @@
 #include "cff_strings.h"
 
 /** Top DICT operators this library reads. One-byte. */
+#define GFNT_CFF_OP_VERSION 0
+#define GFNT_CFF_OP_NOTICE 1
+#define GFNT_CFF_OP_FULL_NAME 2
+#define GFNT_CFF_OP_FAMILY_NAME 3
+#define GFNT_CFF_OP_WEIGHT 4
 #define GFNT_CFF_OP_CHARSET 15
 #define GFNT_CFF_OP_ENCODING 16
 #define GFNT_CFF_OP_CHARSTRINGS 17
@@ -68,6 +73,7 @@
 #define GFNT_CFF_OP_NOMINAL_WIDTH_X 21
 
 /** Two-byte operators, spelled as 0x0c00 | the second byte. */
+#define GFNT_CFF_OP_COPYRIGHT 0x0c00
 #define GFNT_CFF_OP_CHARSTRING_TYPE 0x0c06
 #define GFNT_CFF_OP_FONT_MATRIX 0x0c07
 #define GFNT_CFF_OP_ROS 0x0c1e
@@ -465,6 +471,42 @@ static GFNT_Result gfnt_cff_top_visit(void * user,
   GFNT_Result result;
 
   switch (entry->op) {
+    // The Top DICT's own strings, kept as the SIDs they are. They are what a
+    // container with no `name` table has to answer for itself with, and
+    // resolving them here would mean holding six copies of bytes the String
+    // INDEX already holds.
+    case GFNT_CFF_OP_VERSION:
+    case GFNT_CFF_OP_NOTICE:
+    case GFNT_CFF_OP_FULL_NAME:
+    case GFNT_CFF_OP_FAMILY_NAME:
+    case GFNT_CFF_OP_WEIGHT:
+    case GFNT_CFF_OP_COPYRIGHT: {
+      int64_t value;
+
+      if (entry->count < 1) {
+        return GFNT_OK;
+      }
+      value = entry->values[0] >> 16;
+      // SID 0 is a real string (`.notdef`), so "absent" cannot be spelled as
+      // zero and is spelled as GFNT_CFF_SID_NONE instead. An out-of-range SID
+      // is left absent rather than refused: a font that names itself with a
+      // string it does not have is readable in every other way, and the
+      // resolution is where that is reported.
+      if (value < 0 || value > 0xFFFF) {
+        return GFNT_OK;
+      }
+      switch (entry->op) {
+        case GFNT_CFF_OP_VERSION: cff->sid_version = (uint32_t)value; break;
+        case GFNT_CFF_OP_NOTICE: cff->sid_notice = (uint32_t)value; break;
+        case GFNT_CFF_OP_FULL_NAME: cff->sid_full_name = (uint32_t)value; break;
+        case GFNT_CFF_OP_FAMILY_NAME:
+          cff->sid_family_name = (uint32_t)value;
+          break;
+        case GFNT_CFF_OP_WEIGHT: cff->sid_weight = (uint32_t)value; break;
+        default: cff->sid_copyright = (uint32_t)value; break;
+      }
+      return GFNT_OK;
+    }
     case GFNT_CFF_OP_CHARSET:
       result = gfnt_cff_offset_operand(entry, 0, cff->length, &offset, error);
       if (result != GFNT_OK) {
@@ -642,6 +684,39 @@ static GFNT_Result gfnt_cff_private_parse(const GFNT_Reader * table,
   return GFNT_OK;
 }
 
+bool gfnt_cff_header_plausible(const GFNT_Reader * blob) {
+  uint8_t major = 0;
+  uint8_t header_size = 0;
+  GFNT_Reader reader;
+
+  if (!blob) {
+    return false;
+  }
+  reader = *blob;
+  if (gfnt_reader_seek(&reader, 0) != GFNT_OK
+      || gfnt_read_u8(&reader, &major) != GFNT_OK) {
+    return false;
+  }
+  // minor and offSize are skipped rather than read: see below.
+  if (gfnt_reader_seek(&reader, 2) != GFNT_OK
+      || gfnt_read_u8(&reader, &header_size) != GFNT_OK) {
+    return false;
+  }
+  // Exactly the two things ::gfnt_cff_parse() itself refuses a header for, and
+  // nothing else. The temptation is to check more - absOffSize is 1 to 4, minor
+  // is 0 in every font anybody ships - but a probe stricter than the parser
+  // would give one library two doors to one format, and the bare door would
+  // refuse bytes that the same bytes inside an `OTTO` are read from happily.
+  // Two behaviours for one input, decided by a wrapper, is the shape of defect
+  // this is written to avoid.
+  //
+  // So this says no more than "it could be a CFF", and ::gfnt_cff_parse() is
+  // what decides. Four bytes, two of which are a version, cannot do better;
+  // this is why a bare CFF is the last container tried and why the face is not
+  // handed back until the whole font program has parsed.
+  return major == 1 && header_size >= 4 && header_size <= blob->length;
+}
+
 GFNT_Result gfnt_cff_parse(const GFNT_Face * face, void * out,
     GFNT_Error * error) {
   GFNT_Cff * cff = (GFNT_Cff *)out;
@@ -653,6 +728,12 @@ GFNT_Result gfnt_cff_parse(const GFNT_Face * face, void * out,
 
   memset(cff, 0, sizeof *cff);
   cff->charstring_type = 2;
+  cff->sid_version = GFNT_CFF_SID_NONE;
+  cff->sid_notice = GFNT_CFF_SID_NONE;
+  cff->sid_full_name = GFNT_CFF_SID_NONE;
+  cff->sid_family_name = GFNT_CFF_SID_NONE;
+  cff->sid_weight = GFNT_CFF_SID_NONE;
+  cff->sid_copyright = GFNT_CFF_SID_NONE;
   result = gfnt_face_table_reader(face, GFNT_TAG_CFF, &table, error);
   if (result != GFNT_OK) {
     return result;
@@ -998,6 +1079,54 @@ GFNT_Result gfnt_cff_glyph_for_sid(const GFNT_Face * face, const GFNT_Cff * cff,
   return gfnt_cff_charset_lookup(face, cff, false, sid, out_glyph, error);
 }
 
+GFNT_Result gfnt_cff_font_name(const GFNT_Face * face, const GFNT_Cff * cff,
+    char * buffer, size_t size, size_t * out_length, GFNT_Error * error) {
+  GFNT_Reader table;
+  GFNT_Reader element;
+  const uint8_t * bytes = NULL;
+  size_t length = 0;
+  GFNT_Result result;
+
+  if (!face || !cff || !out_length || (buffer && size == 0)
+      || (!buffer && size != 0)) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_TAG_CFF, 0,
+        GFNT_GLYPH_NONE, "no face, no CFF, or nowhere to put the length");
+  }
+  if (cff->names.count == 0) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_CFF, 0,
+        GFNT_GLYPH_NONE, "a CFF whose Name INDEX is empty, so the font program "
+        "does not say what it is called");
+  }
+  result = gfnt_face_table_reader(face, GFNT_TAG_CFF, &table, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  // Element 0 and not "the element for this face": a CFF INDEX of font names can
+  // hold several, and a CFF inside an sfnt or a PDF is one font by definition -
+  // the multiple-font form is a FontSet, which nothing in the wild ships.
+  result = gfnt_cff_index_at(&table, &cff->names, 0, &element, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  length = gfnt_reader_remaining(&element);
+  result = gfnt_read_bytes(&element, length, &bytes);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (buffer) {
+    if (length + 1 > size) {
+      return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_CFF, 0,
+          GFNT_GLYPH_NONE, "a font name longer than the caller's buffer");
+    }
+    if (length > 0) {
+      memcpy(buffer, bytes, length);
+    }
+    buffer[length] = '\0';
+  }
+  *out_length = length;
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_cff_string(const GFNT_Face * face, const GFNT_Cff * cff,
     uint32_t sid, char * buffer, size_t size, size_t * out_length,
     GFNT_Error * error) {
@@ -1007,13 +1136,21 @@ GFNT_Result gfnt_cff_string(const GFNT_Face * face, const GFNT_Cff * cff,
   size_t length;
   GFNT_Result result;
 
-  if (!face || !cff || !buffer || size == 0) {
+  // A NULL buffer with a zero size is a sizing call; a real buffer with a zero
+  // size is a caller error, because there is not even room for the terminator.
+  if (!face || !cff || (buffer && size == 0) || (!buffer && size != 0)) {
     return GFNT_ERR_INVALID;
   }
   if (sid < GFNT_CFF_STANDARD_STRING_COUNT) {
     const char * name = gfnt_cff_standard_strings[sid];
 
     length = strlen(name);
+    if (!buffer) {
+      if (out_length) {
+        *out_length = length;
+      }
+      return GFNT_OK;
+    }
     if (length + 1 > size) {
       return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_CFF, 0,
           GFNT_GLYPH_NONE, "a glyph name longer than the caller's buffer");
@@ -1034,6 +1171,15 @@ GFNT_Result gfnt_cff_string(const GFNT_Face * face, const GFNT_Cff * cff,
     return result;
   }
   length = gfnt_reader_remaining(&element);
+  if (!buffer) {
+    // A sizing call: what a caller that means to allocate needs, and what the
+    // face-name fallback uses. A string can be a copyright notice, so a fixed
+    // buffer of the size a *glyph* name needs would refuse most of them.
+    if (out_length) {
+      *out_length = length;
+    }
+    return GFNT_OK;
+  }
   if (length + 1 > size) {
     return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_CFF, 0,
         GFNT_GLYPH_NONE, "a glyph name longer than the caller's buffer");

@@ -427,6 +427,129 @@ static int gfnt_name_rank(const GFNT_NameRecord * record) {
   return 5;
 }
 
+/**
+ * A CFF string's bytes as UTF-8: counted with a NULL @p out, written with one.
+ *
+ * CFF says its strings hold ASCII, and fonts put Latin-1 in them. Latin-1 is
+ * what fontTools decodes them as, and fontTools is the reference every string
+ * this library reports is compared against - so a byte above 0x7F becomes the
+ * codepoint of the same value rather than being refused or passed through as
+ * a byte that would make the result invalid UTF-8.
+ */
+static size_t gfnt_name_latin1(const char * in, size_t length, char * out) {
+  size_t written = 0;
+
+  for (size_t i = 0; i < length; ++i) {
+    written += gfnt_name_utf8((unsigned char)in[i], out ? out + written : NULL);
+  }
+  return written;
+}
+
+/**
+ * The name a font program states about itself, for a container with no `name`.
+ *
+ * A bare CFF has no table directory and so no `name` table, and it still has to
+ * answer for what it is and who owns it - a PDF `FontFile3` is identified by the
+ * PostScript name in its Name INDEX, and a font file in a directory has to
+ * carry its own licence. The Top DICT holds the rest.
+ *
+ * Only the names a CFF can actually state are answered. `Weight` answers
+ * SUBFAMILY because that is the field it is: "Regular", "Bold". Everything else
+ * is unsupported, which is the truth rather than an empty string.
+ *
+ * The language is not consulted. A CFF string carries no language tag, so there
+ * is one string per name and it is the answer to every request - a font that
+ * states one unlabelled name has not said it is English.
+ */
+static GFNT_Result gfnt_name_from_font_program(const GFNT_Face * face,
+    uint16_t name_id, const GFNT_Allocator * allocator, char ** out_text,
+    size_t * out_length, GFNT_Error * error) {
+  const GFNT_Cff * cff = NULL;
+  uint32_t sid = GFNT_CFF_SID_NONE;
+  bool font_name = false;
+  char * raw = NULL;
+  char * text = NULL;
+  size_t length = 0;
+  size_t needed = 0;
+  GFNT_Result result;
+
+  result = gfnt_face_cff(face, &cff, NULL);
+  if (result != GFNT_OK) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "a face with no `name` table and no font program to "
+        "state its names instead");
+  }
+  switch (name_id) {
+    case GFNT_NAME_COPYRIGHT:
+      // Copyright first, then Notice: the two operators say the same kind of
+      // thing, most fonts state one of them, and Adobe's own tools write the
+      // copyright line into Notice.
+      sid = cff->sid_copyright != GFNT_CFF_SID_NONE
+          ? cff->sid_copyright : cff->sid_notice;
+      break;
+    case GFNT_NAME_FAMILY: sid = cff->sid_family_name; break;
+    case GFNT_NAME_SUBFAMILY: sid = cff->sid_weight; break;
+    case GFNT_NAME_FULL: sid = cff->sid_full_name; break;
+    case GFNT_NAME_VERSION: sid = cff->sid_version; break;
+    case GFNT_NAME_POSTSCRIPT: font_name = true; break;
+    default: break;
+  }
+  if (!font_name && sid == GFNT_CFF_SID_NONE) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "a name this font program does not state: a CFF states "
+        "its version, family, full name, weight, copyright and PostScript name, "
+        "and nothing else a `name` table would have held");
+  }
+
+  result = font_name
+      ? gfnt_cff_font_name(face, cff, NULL, 0, &length, error)
+      : gfnt_cff_string(face, cff, sid, NULL, 0, &length, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  raw = allocator->malloc_fn(allocator->ctx, length + 1);
+  if (!raw) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "allocating the font program's name");
+  }
+  result = font_name
+      ? gfnt_cff_font_name(face, cff, raw, length + 1, &length, error)
+      : gfnt_cff_string(face, cff, sid, raw, length + 1, &length, error);
+  if (result != GFNT_OK) {
+    allocator->free_fn(allocator->ctx, raw);
+    return result;
+  }
+
+  // Counted and written through one function, for the same reason the `name`
+  // path is: a size pass and a fill pass that walk different predicates is the
+  // defect this suite has met most often.
+  needed = gfnt_name_latin1(raw, length, NULL);
+  text = allocator->malloc_fn(allocator->ctx, needed + 1);
+  if (!text) {
+    allocator->free_fn(allocator->ctx, raw);
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "allocating the decoded name");
+  }
+  if (gfnt_name_latin1(raw, length, text) != needed) {
+    allocator->free_fn(allocator->ctx, raw);
+    allocator->free_fn(allocator->ctx, text);
+    return gfnt_error_set(error, GFNT_ERR_INTERNAL, GFNT_NAME_TAG, 0,
+        GFNT_GLYPH_NONE, "the name's size pass and fill pass disagreed");
+  }
+  allocator->free_fn(allocator->ctx, raw);
+  text[needed] = '\0';
+  gfnt_error_clear(error);
+
+  *out_text = text;
+  if (out_length) {
+    *out_length = needed;
+  }
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_face_name(const GFNT_Face * face, uint16_t name_id,
     uint16_t language_id, const GFNT_Allocator * allocator, char ** out_text,
     size_t * out_length, GFNT_Error * error) {
@@ -440,6 +563,12 @@ GFNT_Result gfnt_face_name(const GFNT_Face * face, uint16_t name_id,
         GFNT_GLYPH_NONE, "no face, or nowhere to put the string");
   }
   result = gfnt_face_name_count(face, &count, error);
+  if (result == GFNT_ERR_UNSUPPORTED) {
+    // No `name` table at all, which for a container with no table directory is
+    // the normal case rather than a defect.
+    return gfnt_name_from_font_program(face, name_id, allocator, out_text,
+        out_length, error);
+  }
   if (result != GFNT_OK) {
     return result;
   }

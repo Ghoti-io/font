@@ -70,6 +70,15 @@ typedef struct GFNT_Face GFNT_Face;
 #define GFNT_FLAVOUR_APPLE_TYPE1 GFNT_TAG('t', 'y', 'p', '1')
 /** @brief The tag that opens a font collection: `ttcf`. */
 #define GFNT_FLAVOUR_COLLECTION GFNT_TAG('t', 't', 'c', 'f')
+/**
+ * @brief A bare `CFF ` font program, which is not an sfnt at all: `CFF `.
+ *
+ * Not an sfnt version - a bare CFF has no offset table and no directory, and
+ * this is the value that says so. It is reported rather than
+ * ::GFNT_FLAVOUR_CFF because `OTTO` is a claim about a wrapper this font does
+ * not have, and a tool that printed it would be printing something untrue.
+ */
+#define GFNT_FLAVOUR_BARE_CFF GFNT_TAG('C', 'F', 'F', ' ')
 
 /**
  * @brief A point in a variable font's design space.
@@ -144,8 +153,11 @@ GFNT_API size_t gfnt_face_index(const GFNT_Face * face);
  * @brief The sfnt version this face carries.
  *
  * ::GFNT_FLAVOUR_TRUETYPE, ::GFNT_FLAVOUR_CFF, ::GFNT_FLAVOUR_APPLE_TRUE or
- * ::GFNT_FLAVOUR_APPLE_TYPE1. It says which outline format to expect and
- * nothing more: what a face can actually do is decided by which tables it has.
+ * ::GFNT_FLAVOUR_APPLE_TYPE1 - or ::GFNT_FLAVOUR_BARE_CFF for a font that is
+ * not an sfnt and has no directory of its own. It says which outline format to
+ * expect and nothing more: what a face can actually do is decided by which
+ * tables it has, and a container with no directory has the ones this library
+ * synthesised for it.
  *
  * @param face The face, or NULL.
  * @return The version tag, or 0 for NULL.

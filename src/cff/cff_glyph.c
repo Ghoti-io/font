@@ -149,6 +149,50 @@ static bool gfnt_cff_matrix_agrees(const GFNT_Cff * cff, size_t upem) {
       && implied <= GFNT_F16DOT16_ONE + (int64_t)upem;
 }
 
+bool gfnt_cff_units_per_em(const GFNT_Cff * cff, size_t * out_upem) {
+  int64_t scale;
+  size_t candidate;
+
+  if (!cff || !out_upem) {
+    return false;
+  }
+  // The format's own default, and exact: a Top DICT with no FontMatrix is a
+  // 1000-unit font by definition, which is what most CFFs are and what every
+  // one of them is authored in.
+  if (!cff->font_matrix_stated) {
+    *out_upem = 1000;
+    return true;
+  }
+  if (gfnt_cff_matrix_agrees(cff, 1000)) {
+    *out_upem = 1000;
+    return true;
+  }
+  // What is left has to be inverted, and 1/upem is a 16.16 approximation - so
+  // inverting recovers the em only where the division is exact. It is for every
+  // power of two (1/2048 is 32 exactly) and it is not for 1000: 0.001 is 65.536,
+  // which a font writes as 65 or 66, and those inverse to 1008 and 993. The
+  // check above is what covers that, and it has to come first for that reason.
+  scale = cff->font_matrix[0];
+  if (scale <= 0 || GFNT_F16DOT16_ONE % scale != 0) {
+    return false;
+  }
+  candidate = (size_t)(GFNT_F16DOT16_ONE / scale);
+  // The same bound `head` puts on an em, because this is the same quantity and a
+  // caller cannot tell which table it came from.
+  if (candidate < 16 || candidate > 16384) {
+    return false;
+  }
+  // And the matrix has to agree with the em just derived from it, which is not
+  // circular: the test also requires the two diagonals to match and the
+  // off-diagonals to be zero, so a matrix that skews or scales the axes
+  // differently is refused rather than reduced to one number.
+  if (!gfnt_cff_matrix_agrees(cff, candidate)) {
+    return false;
+  }
+  *out_upem = candidate;
+  return true;
+}
+
 /** Set up everything one glyph's run needs. */
 static GFNT_Result gfnt_cff_context(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Cff ** out_cff, GFNT_CffSubrs * local, GFNT_CffSubrs * global,
@@ -173,10 +217,27 @@ static GFNT_Result gfnt_cff_context(const GFNT_Face * face, uint32_t glyph,
         "this glyph index is past the face's glyph count");
   }
   result = gfnt_face_head(face, &head, error);
-  if (result != GFNT_OK) {
+  if (result == GFNT_ERR_UNSUPPORTED) {
+    size_t upem = 0;
+
+    // No `head` to disagree with: the FontMatrix is the only statement of the em
+    // this font makes, and it is refused for the same reason a disagreeing one
+    // is - a matrix that does not reduce to an em would have to be applied, and
+    // applying it would put these coordinates in a space no reference pen
+    // reports.
+    if (!gfnt_cff_units_per_em(cff, &upem)) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_CFF, 0, glyph,
+          "a CFF FontMatrix that does not reduce to an em, in a container with "
+          "no head to state one, so this font's charstring coordinates are in a "
+          "space this library would have to transform them out of rather than "
+          "report");
+    }
+    gfnt_error_clear(error);
+  }
+  else if (result != GFNT_OK) {
     return result;
   }
-  if (!gfnt_cff_matrix_agrees(cff, head->units_per_em)) {
+  else if (!gfnt_cff_matrix_agrees(cff, head->units_per_em)) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_CFF, 0, glyph,
         "a CFF FontMatrix that is not head.unitsPerEm's own scale, so this "
         "font's charstring coordinates are in a space this library would have "

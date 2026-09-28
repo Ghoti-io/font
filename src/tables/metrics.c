@@ -126,6 +126,23 @@ GFNT_Result gfnt_face_units_per_em(const GFNT_Face * face,
         "nowhere to put the em size");
   }
   result = gfnt_face_head(face, &head, error);
+  if (result == GFNT_ERR_UNSUPPORTED) {
+    // No `head`, so no directory carried an em: the font program states its own.
+    // A container whose tables are synthetic (a bare CFF, and Type 1 when it
+    // arrives) reaches the em this way and through nothing else, which is why
+    // this is here rather than in the CFF module - every caller that scales a
+    // glyph asks this one function.
+    const GFNT_Cff * cff = NULL;
+    size_t upem = 0;
+
+    if (gfnt_face_cff(face, &cff, NULL) == GFNT_OK
+        && gfnt_cff_units_per_em(cff, &upem)) {
+      gfnt_error_clear(error);
+      *out_units = (uint16_t)upem;
+      return GFNT_OK;
+    }
+    return result;
+  }
   if (result != GFNT_OK) {
     return result;
   }
@@ -189,6 +206,29 @@ static GFNT_Result gfnt_glyph_count_parse(const GFNT_Face * face, void * out,
   GFNT_Result result;
 
   result = gfnt_face_table_reader(face, tag, &reader, error);
+  if (result == GFNT_ERR_UNSUPPORTED) {
+    // No `maxp`: a container with no table directory of its own has nothing to
+    // carry a count, and the one table that indexes glyphs *is* the count
+    // rather than a minimum it could disagree with. `maxp` is left at zero
+    // because zero is what it claimed - nothing - and writing the count there
+    // would report an agreement between two sources when there was one source.
+    // No cap is applied here, because there is nowhere for an uncapped count to
+    // come from: gfnt_cff_parse() refuses a `CharStrings` INDEX with more
+    // elements than GFNT_Limits::max_glyphs, so a bound that arrives here has
+    // already been through it. A second check would be a line no input can
+    // reach - and for a bare CFF, whose font program is parsed at load, the
+    // refusal happens before there is a face to ask.
+    if (gfnt_cff_glyph_bound(face, &bound)) {
+      gfnt_error_clear(error);
+      *count = (GFNT_GlyphCount) {
+        .count = bound,
+        .maxp = 0,
+        .disagreement = false,
+      };
+      return GFNT_OK;
+    }
+    return result;
+  }
   if (result != GFNT_OK) {
     return result;
   }

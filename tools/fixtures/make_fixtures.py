@@ -1277,9 +1277,16 @@ def cff_dict_offset(value):
     return b"\x1d" + struct.pack(">i", value)
 
 
-def cff_dict_real(value, digits=6):
-    """A DICT real, nibble-encoded, as a `FontMatrix` carries one."""
-    text = ("%.*g" % (digits, value))
+def cff_dict_real(value=None, digits=6, *, text=None):
+    """A DICT real, nibble-encoded, as a `FontMatrix` carries one.
+
+    `text` writes an exact spelling instead of a formatted value, because with a
+    real number the *encoding* is what a fixture is for: one number can be
+    written with a decimal point, with an exponent, or with more mantissa digits
+    than a 16.16 can hold, and a reader has a separate path for each of those.
+    """
+    if text is None:
+        text = ("%.*g" % (digits, value))
     nibbles = []
     for char in text:
         if char.isdigit():
@@ -1289,9 +1296,13 @@ def cff_dict_real(value, digits=6):
         elif char in "eE":
             nibbles.append(0x0B)
         elif char == "-":
-            # A leading minus is 0x0E; one after an exponent marker is 0x0C,
-            # which replaces the marker, so it is handled by the caller's text.
-            nibbles.append(0x0E if not nibbles else 0x0C)
+            if nibbles and nibbles[-1] == 0x0B:
+                # 0x0C is "E-" in one nibble, so it *replaces* the exponent
+                # marker rather than following it. Emitting both would spell an
+                # exponent twice, which is not a number at all.
+                nibbles[-1] = 0x0C
+            else:
+                nibbles.append(0x0E)
         elif char == "+":
             continue
         else:
@@ -1434,7 +1445,9 @@ def assemble_cff(font_name, charstrings, *, strings=(), gsubrs=(),
             # supplement is a number.
             entries.append(((12, 30), [391, 392, 0]))
         if font_matrix is not None:
-            entries.append(((12, 7), [cff_dict_real(v) for v in font_matrix]))
+            entries.append(((12, 7), [
+                v if isinstance(v, bytes) else cff_dict_real(v)
+                for v in font_matrix]))
         if charstring_type is not None:
             entries.append(((12, 6), [charstring_type]))
         if charset is not None:
@@ -1456,7 +1469,10 @@ def assemble_cff(font_name, charstrings, *, strings=(), gsubrs=(),
             "fdselect": 0, "private": 0}
     header = bytes([1, 0, 4, 2])
     name_index = cff_index([font_name.encode("ascii")])
-    string_index = cff_index([s.encode("ascii") for s in strings])
+    # Latin-1 and not ASCII: CFF says its strings hold ASCII and fonts put
+    # Latin-1 in them, which is what fontTools decodes them as, so a fixture has
+    # to be able to carry a byte above 0x7F for the reader to be tested on one.
+    string_index = cff_index([s.encode("latin-1") for s in strings])
     gsubr_index = cff_index(list(gsubrs))
     top_index_probe = cff_index([top_dict(zero)])
 
@@ -1586,7 +1602,7 @@ def cff_names(order):
     return cff_charset_format0(sids), strings
 
 
-def build_cff_curves(out):
+def cff_curves_parts(font_matrix=None, licence_in_notice=False):
     """Every curve operator in the form a pen never writes.
 
     A `T2CharStringPen` writes `rrcurveto` and `rlineto` and nothing else, so a
@@ -1655,10 +1671,93 @@ def build_cff_curves(out):
             "endchar"),
     }
     charset, strings = cff_names(order)
-    table = assemble_cff(names("CFF curves")["psName"],
-        [programs[name] for name in order], charset=charset, strings=strings)
+    # The Top DICT's own strings, which this font program needs because it is
+    # also written out with no sfnt around it: a bare CFF has no `name` table,
+    # and a fixture in someone's font directory has to state its own licence
+    # (section 14.5). Both fixtures carry them so that the two files stay
+    # byte-identical - that is what makes comparing them a statement about the
+    # container rather than about two fonts - and the wrapped one is then also
+    # the font that has *both* sources, which is its own question to ask.
+    #
+    # `Notice` is deliberately left out: the copyright is in `Copyright`, and a
+    # reader that only looked at `Notice` should find nothing there.
+    label = names("CFF curves")
+    base = GFNT_CFF_STANDARD_STRING_COUNT + len(strings)
+    # "R\u00e9gular" earns two tests with one string. The \u00e9 is one Latin-1
+    # byte (0xE9) that has to come back as two bytes of UTF-8, which is the only
+    # place the reader's decoding of a CFF string is exercised. And the `name`
+    # table of the wrapped fixture says "Regular" for the same field, so the two
+    # sources disagree on purpose: that is what makes it possible to tell which
+    # one a face with both of them actually read.
+    strings = list(strings) + [label["version"], label["fullName"],
+        label["familyName"], "R\u00e9gular", label["copyright"]]
+    extra_top = (
+        (0, [base]),            # version
+        (2, [base + 1]),        # FullName
+        (3, [base + 2]),        # FamilyName
+        (4, [base + 3]),        # Weight
+        # Copyright, or Notice - the two operators say the same kind of thing and
+        # a font states one of them, so both spellings need a fixture. A reader
+        # that only looked at whichever one it happened to meet first would drop
+        # the licence of every font that used the other.
+        ((1, [base + 4]) if licence_in_notice else ((12, 0), [base + 4])),
+    )
+    table = assemble_cff(label["psName"],
+        [programs[name] for name in order], charset=charset, strings=strings,
+        extra_top=extra_top, font_matrix=font_matrix)
+    return order, advances, table
+
+
+def build_cff_curves(out):
+    order, advances, table = cff_curves_parts()
     fb = cff_otf("CFF curves", order, table, advances, {0x20: "space"})
     fb.save(out)
+
+
+def build_bare_matrix_cff(out):
+    """A bare CFF whose `FontMatrix` does not reduce to an em.
+
+    The two axes are scaled differently - 1/2048 across and 1/1024 down - which
+    is a font whose charstring coordinates mean something this library would have
+    to transform them out of rather than report. Wrapped in an sfnt it would be
+    refused for disagreeing with `head.unitsPerEm`; bare there is no `head`, and
+    the matrix is the only statement of the em there is, so the refusal has to
+    come from reading the matrix itself.
+
+    Both scales are exactly representable in 16.16, which is the point: the
+    refusal must come from the matrix not reducing, and not from a reciprocal
+    that could not be inverted.
+    """
+    # The translation components carry the real-number encodings nothing else
+    # states: an exponent, and a mantissa longer than a 16.16 can hold. They can
+    # live here precisely because this matrix is refused - no value read out of
+    # it is used for anything, so a fixture can ask the decoder the awkward
+    # questions without also having to mean something by the answers.
+    _, _, table = cff_curves_parts(
+        font_matrix=(1 / 2048, 0, 0, 1 / 1024,
+                     cff_dict_real(text="5E2"),
+                     cff_dict_real(text="12345678901234567890")),
+        licence_in_notice=True)
+    with open(out, "wb") as handle:
+        handle.write(table)
+
+
+def build_bare_cff(out):
+    """The same `CFF ` table as `cff-curves.otf`, with no sfnt around it.
+
+    Byte-for-byte the same font program, deliberately: a bare CFF face and the
+    wrapped face must draw every glyph identically, and that is only a statement
+    about the container if the bytes being read are the same bytes. It is the
+    test the synthetic table directory exists to pass.
+
+    A bare CFF is what a PDF `FontFile3` carries and what fontTools' `cffLib`
+    writes on its own, and it has no magic number: `01 00` is a version, and the
+    two bytes after it are sizes. So this fixture is also the only input that
+    can ask whether the loader accepts it for the right reasons.
+    """
+    _, _, table = cff_curves_parts()
+    with open(out, "wb") as handle:
+        handle.write(table)
 
 
 def build_cff_arith(out):
@@ -2123,6 +2222,15 @@ FIXTURES = {
         "seac with its side-bearing correction, flex and hint replacement "
         "through callothersubr and pop, div, dotsection, hstem3 and "
         "setcurrentpoint"),
+    "bare-matrix.cff": (build_bare_matrix_cff,
+        "A bare CFF whose FontMatrix scales the two axes differently, so it "
+        "states no em this library can report and is refused by name; its "
+        "translation components carry a DICT real in exponent form and one with "
+        "more mantissa digits than 16.16 holds, and it states its licence in "
+        "Notice rather than Copyright"),
+    "bare.cff": (build_bare_cff,
+        "A bare CFF font program with no sfnt around it: the same CFF table as "
+        "cff-curves.otf, so the two faces must draw identically"),
     "collection.ttc": (build_collection,
         "ttcf: two faces sharing tables, with different OS/2 versions"),
     "outline-simple.ttf": (build_outline_simple,

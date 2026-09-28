@@ -10,6 +10,8 @@
 # differential needs live only in the oracle image (design.md section 14.5).
 #
 # Tab-separated: <filename> <what it exercises>.
+bare-matrix.cff	A bare CFF whose FontMatrix scales the two axes differently, so it states no em this library can report and is refused by name; its translation components carry a DICT real in exponent form and one with more mantissa digits than 16.16 holds, and it states its licence in Notice rather than Copyright
+bare.cff	A bare CFF font program with no sfnt around it: the same CFF table as cff-curves.otf, so the two faces must draw identically
 basic.ttf	TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3
 cff-arith.otf	CFF: the arithmetic operators computing the coordinates they draw with - div, the 255 fixed-point operand, dup, exch, drop, index, put, get, eq, not, mul, add and ifelse; no random, which is refused
 cff-cid.otf	CFF: CID-keyed - ROS, an FDArray of two Font DICTs with different Private DICTs and different local subroutines, FDSelect format 3, and a charset holding CIDs rather than SIDs

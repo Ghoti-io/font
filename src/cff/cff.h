@@ -55,6 +55,9 @@ extern "C" {
 
 /** The tag of the table holding a CFF font. */
 #define GFNT_TAG_CFF GFNT_TAG('C', 'F', 'F', ' ')
+
+/** No SID: not a valid one, because SID 0 is the string `.notdef`. */
+#define GFNT_CFF_SID_NONE 0xFFFFFFFFu
 /** The tag of the CFF2 table, which this library reads no glyph from. */
 #define GFNT_TAG_CFF2 GFNT_TAG('C', 'F', 'F', '2')
 
@@ -120,6 +123,20 @@ typedef struct GFNT_Cff {
   GFNT_CffIndex charstrings;///< One element per glyph. Its count is numGlyphs.
 
   uint32_t charstring_type; ///< 2, or 1 for Type 1 charstrings in a CFF.
+
+  /**
+   * The Top DICT's own strings, as SIDs, or ::GFNT_CFF_SID_NONE for absent.
+   *
+   * What a container with no `name` table answers for itself with. SID 0 is the
+   * real string `.notdef`, so absence needs a sentinel of its own rather than a
+   * zero.
+   */
+  uint32_t sid_version;
+  uint32_t sid_notice;
+  uint32_t sid_full_name;
+  uint32_t sid_family_name;
+  uint32_t sid_weight;
+  uint32_t sid_copyright;
   size_t charset;           ///< Offset of the charset, when it has one.
   uint32_t charset_id;      ///< 0, 1 or 2 when the charset is predefined.
   bool charset_predefined;  ///< Whether `charset_id` is the answer.
@@ -147,6 +164,20 @@ typedef struct GFNT_Cff {
   GFNT_F16Dot16 font_matrix[6];
   bool font_matrix_stated;  ///< Whether the Top DICT carried one.
 } GFNT_Cff;
+
+/**
+ * Whether a blob could be a bare CFF font program.
+ *
+ * The identification a container with no magic number can offer: a major
+ * version of 1 and a header at least as long as the four bytes every CFF header
+ * has. It deliberately tests no more than ::gfnt_cff_parse() tests, so that the
+ * bare door cannot be stricter than the wrapped one, and it is therefore not
+ * evidence on its own - the caller must parse before accepting the font.
+ *
+ * @param blob A reader over the whole blob, or NULL.
+ * @return Whether to try parsing it as a CFF.
+ */
+bool gfnt_cff_header_plausible(const GFNT_Reader * blob);
 
 /**
  * Parse the face's `CFF ` table, for ::gfnt_table_cached().
@@ -189,6 +220,24 @@ GFNT_Result gfnt_face_cff(const GFNT_Face * face, const GFNT_Cff ** out_cff,
  *   news to break, not the glyph count's.
  */
 bool gfnt_cff_glyph_bound(const GFNT_Face * face, size_t * out_bound);
+
+/**
+ * How many charstring units this font program puts in an em.
+ *
+ * Where the em comes from when there is no `head` to carry one - a bare CFF, or
+ * a Type 1 font program. A CFF states it as the `FontMatrix`, whose default is
+ * 1/1000, and the charstring coordinates this library reports are in exactly
+ * those units.
+ *
+ * @param cff The parsed font program, or NULL.
+ * @param out_upem Receives the em, or NULL.
+ * @return true when the font program states an em this library can read. false
+ *   for a `FontMatrix` that does not reduce to one - a skew, different scales
+ *   per axis, or a reciprocal that 16.16 cannot hold exactly - which the caller
+ *   must refuse rather than guess at, because drawing in the wrong em silently
+ *   is the failure this returns false to prevent.
+ */
+bool gfnt_cff_units_per_em(const GFNT_Cff * cff, size_t * out_upem);
 
 /**
  * Set up a reader over one element of an INDEX.
@@ -293,6 +342,24 @@ GFNT_Result gfnt_cff_glyph_for_sid(const GFNT_Face * face,
 GFNT_Result gfnt_cff_string(const GFNT_Face * face, const GFNT_Cff * cff,
     uint32_t sid, char * buffer, size_t size, size_t * out_length,
     GFNT_Error * error);
+
+/**
+ * The name the font program gives itself: the Name INDEX's first element.
+ *
+ * A CFF's PostScript name, which is the one string it states outside its Top
+ * DICT. Sized like ::gfnt_cff_string(): call with a NULL buffer for the length.
+ *
+ * @param face The face.
+ * @param cff Its parsed CFF.
+ * @param buffer Where to put the bytes, or NULL to ask for the length only.
+ * @param size How much room @p buffer has.
+ * @param out_length Receives the length in bytes.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED for a font
+ *   program with an empty Name INDEX, or ::GFNT_ERR_CORRUPT.
+ */
+GFNT_Result gfnt_cff_font_name(const GFNT_Face * face, const GFNT_Cff * cff,
+    char * buffer, size_t size, size_t * out_length, GFNT_Error * error);
 
 /**
  * The glyph a code maps to under the font's own encoding.

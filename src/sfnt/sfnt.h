@@ -162,6 +162,30 @@ typedef enum {
 GFNT_Producer gfnt_sfnt_producer(const GFNT_Face * face);
 
 /**
+ * Give a face a synthetic directory: one table, spanning the whole blob.
+ *
+ * How a container with no table directory becomes a face. Every parser in the
+ * library reaches bytes through ::gfnt_face_table_reader(), which reads a
+ * directory entry - so a container whose font program *is* the file needs one
+ * entry describing it, and then every table parse, memo, limit and producer
+ * dispatch above it works unchanged and unaware.
+ *
+ * The tag is the real tag of the format the bytes are in, not an invented one:
+ * a bare CFF's entry is `CFF `, so ::gfnt_face_has_table() answers truthfully
+ * and ::gfnt_sfnt_producer() needs no special case. A container with several
+ * regions (Type 1's cleartext and eexec portions, PCF's typed table of
+ * contents) wants several entries and a variant of this.
+ *
+ * @param face The face to fill in. Its blob and allocator must already be set.
+ * @param flavour What ::gfnt_face_flavour() should report.
+ * @param tag The tag for the one entry.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID or ::GFNT_ERR_OOM.
+ */
+GFNT_Result gfnt_sfnt_single_table_directory(GFNT_Face * face,
+    GFNT_Tag flavour, GFNT_Tag tag, GFNT_Error * error);
+
+/**
  * Read the offset table and directory of the face at @p directory_offset.
  *
  * Fills in `flavour`, `tables` and `table_count`; allocates the table array

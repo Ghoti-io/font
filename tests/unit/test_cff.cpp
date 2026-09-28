@@ -27,6 +27,8 @@
 #include <vector>
 
 #include <ghoti.io/font/charstring.h>
+#include <ghoti.io/font/raster.h>
+#include <ghoti.io/font/name.h>
 // The container's own header, for the two lookups no public call reaches: a
 // glyph's SID and the glyph a *code* maps to. An sfnt-wrapped CFF's encoding is
 // one OpenType says to ignore - a `cmap` is what answers there - so the only
@@ -407,6 +409,680 @@ void names(const GFNT_Error & error, const char * fragment) {
   ASSERT_NE(error.message, nullptr);
   EXPECT_NE(std::string(error.message).find(fragment), std::string::npos)
       << error.message;
+}
+
+/** The parsed CFF of a face, for the container tests below. */
+const GFNT_Cff * cff_of(const GFNT_Face * face) {
+  const GFNT_Cff * cff = nullptr;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_cff(face, &cff, &error), GFNT_OK) << error.message;
+  return cff;
+}
+
+// ------------------------------------------------------- the bare container
+
+/** A face loaded from bytes, which may legitimately fail to load. */
+struct FromBytes {
+  std::vector<uint8_t> bytes;
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Error error{};
+  GFNT_Result result = GFNT_ERR_INTERNAL;
+
+  explicit FromBytes(std::vector<uint8_t> data) : bytes(std::move(data)) {
+    gfnt_error_clear(&error);
+    EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    result = gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error);
+  }
+  ~FromBytes() {
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+  FromBytes(const FromBytes &) = delete;
+  FromBytes & operator=(const FromBytes &) = delete;
+};
+
+/** The bytes of `bare.cff`, which are also `cff-curves.otf`'s CFF table. */
+std::vector<uint8_t> bare_cff_bytes() {
+  const std::string path = gfnttest::data("fonts/bare.cff");
+  std::vector<uint8_t> bytes;
+  FILE * handle = fopen(path.c_str(), "rb");
+  EXPECT_NE(handle, nullptr) << "could not read " << path;
+  if (!handle) {
+    return bytes;
+  }
+  uint8_t buffer[512];
+  size_t got;
+  while ((got = fread(buffer, 1, sizeof buffer, handle)) > 0) {
+    bytes.insert(bytes.end(), buffer, buffer + got);
+  }
+  fclose(handle);
+  return bytes;
+}
+
+TEST(CffBare, ABareFontProgramLoadsAsAFaceWithOneSyntheticTable) {
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK) << font.error.message;
+
+  // Not GFNT_FLAVOUR_CFF: `OTTO` is a claim about a wrapper this font has not
+  // got, and a tool printing it would be printing something untrue.
+  EXPECT_EQ(gfnt_face_flavour(font), GFNT_FLAVOUR_BARE_CFF);
+  EXPECT_EQ(gfnt_face_table_count(font), 1u);
+
+  GFNT_Tag tag = 0;
+  ASSERT_EQ(gfnt_face_table_tag_at(font, 0, &tag), GFNT_OK);
+  EXPECT_EQ(tag, GFNT_TAG_CFF);
+  // The synthetic entry carries the format's real tag, so every question asked
+  // by tag answers truthfully and the producer dispatch needs no special case.
+  EXPECT_TRUE(gfnt_face_has_table(font, GFNT_TAG_CFF));
+  EXPECT_FALSE(gfnt_face_has_table(font, GFNT_TAG('g', 'l', 'y', 'f')));
+  EXPECT_TRUE(gfnt_face_has_outlines(font));
+
+  size_t offset = 1;
+  size_t length = 0;
+  ASSERT_EQ(gfnt_face_table_range(font, GFNT_TAG_CFF, &offset, &length),
+      GFNT_OK);
+  EXPECT_EQ(offset, 0u);
+  EXPECT_EQ(length, bare_cff_bytes().size()) << "the entry must span the blob";
+}
+
+TEST(CffBare, ItIsTheSameFontProgramAsTheWrappedFixture) {
+  // The two fixtures are byte-for-byte the same CFF table, which is what makes
+  // this a statement about the container and not about two fonts.
+  Fixture bare("bare.cff");
+  Fixture wrapped("cff-curves.otf");
+  ASSERT_EQ(bare.result, GFNT_OK);
+  ASSERT_EQ(wrapped.result, GFNT_OK);
+
+  const GFNT_Cff * a = cff_of(bare);
+  const GFNT_Cff * b = cff_of(wrapped);
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  EXPECT_EQ(a->length, b->length);
+  EXPECT_EQ(a->charstrings.count, b->charstrings.count);
+  EXPECT_EQ(a->gsubrs.count, b->gsubrs.count);
+  EXPECT_EQ(a->charset, b->charset);
+  EXPECT_EQ(a->charstring_type, b->charstring_type);
+}
+
+/** Every point of every contour of one glyph, as a comparable string. */
+std::string path_of(const GFNT_Face * face, uint32_t glyph) {
+  GFNT_Outline * outline = nullptr;
+  GFNT_Error error{};
+  if (gfnt_face_glyph_outline(face, glyph, nullptr, nullptr, &outline, &error)
+      != GFNT_OK) {
+    return std::string("refused: ")
+        + (error.message ? error.message : "no reason");
+  }
+  std::string out;
+  const size_t contours = gfnt_outline_contour_count(outline);
+  for (size_t c = 0; c < contours; ++c) {
+    size_t first = 0;
+    size_t count = 0;
+    EXPECT_EQ(gfnt_outline_contour_at(outline, c, &first, &count), GFNT_OK);
+    out += "[";
+    for (size_t i = first; i < first + count; ++i) {
+      GFNT_Point point{};
+      GFNT_PointTag tag = GFNT_POINT_ON;
+      EXPECT_EQ(gfnt_outline_point_at(outline, i, &point, &tag), GFNT_OK);
+      out += std::to_string(point.x) + "," + std::to_string(point.y) + ":"
+          + gfnt_point_tag_string(tag) + " ";
+    }
+    out += "]";
+  }
+  gfnt_outline_destroy(outline);
+  return out;
+}
+
+TEST(CffBare, EveryGlyphDrawsExactlyWhatTheWrappedFixtureDraws) {
+  // The whole claim of the synthetic directory, stated at the only level that
+  // settles it: the same bytes read through a directory this library invented
+  // and through one a file carried produce the same points, in the same order,
+  // in the same contours.
+  Fixture bare("bare.cff");
+  Fixture wrapped("cff-curves.otf");
+  ASSERT_EQ(bare.result, GFNT_OK);
+  ASSERT_EQ(wrapped.result, GFNT_OK);
+
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(bare, &glyphs, nullptr), GFNT_OK);
+  ASSERT_EQ(glyphs, 13u);
+  size_t drawn = 0;
+  for (uint32_t glyph = 0; glyph < glyphs; ++glyph) {
+    const std::string from_bare = path_of(bare, glyph);
+    EXPECT_EQ(from_bare, path_of(wrapped, glyph)) << "glyph " << glyph;
+    if (from_bare.find("refused") == std::string::npos && !from_bare.empty()) {
+      ++drawn;
+    }
+  }
+  // Not vacuous: a comparison of thirteen refusals would also have been equal.
+  EXPECT_GE(drawn, 12u) << "the glyphs have to have drawn for this to mean "
+                           "anything";
+}
+
+TEST(CffBare, ItRendersThePixelsTheWrappedFixtureRenders) {
+  // And through the scan converter, which needs the em: a face whose em came
+  // from the FontMatrix and one whose em came from `head` must rasterise to the
+  // same coverage, or the em was recovered wrongly.
+  Fixture bare("bare.cff");
+  Fixture wrapped("cff-curves.otf");
+  ASSERT_EQ(bare.result, GFNT_OK);
+  ASSERT_EQ(wrapped.result, GFNT_OK);
+
+  for (uint32_t ppem : {8u, 16u, 64u}) {
+    for (uint32_t glyph = 2; glyph < 13; ++glyph) {
+      GFNT_Coverage a{};
+      GFNT_Coverage b{};
+      GFNT_Error error{};
+      ASSERT_EQ(gfnt_face_render_glyph(bare, glyph, ppem, nullptr, nullptr,
+          &a, &error), GFNT_OK) << error.message;
+      ASSERT_EQ(gfnt_face_render_glyph(wrapped, glyph, ppem, nullptr, nullptr,
+          &b, nullptr), GFNT_OK);
+      EXPECT_EQ(gfnt_coverage_hash(&a), gfnt_coverage_hash(&b))
+          << "glyph " << glyph << " at " << ppem << " ppem";
+      EXPECT_GT(gfnt_coverage_total(&a), 0u) << "glyph " << glyph;
+      gfnt_coverage_destroy(&a);
+      gfnt_coverage_destroy(&b);
+    }
+  }
+}
+
+TEST(CffBare, TheGlyphCountIsCharStringsAndNothingClaimedOtherwise) {
+  // `maxp` is where a count comes from when there is one. With no directory
+  // there is no `maxp`, and the INDEX that holds one charstring per glyph is
+  // not a minimum to be reconciled - it is the count.
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
+  EXPECT_EQ(glyphs, 13u);
+
+  // And no disagreement is reported, because there was one source rather than
+  // two that happened to match. What `maxp` claimed is zero: nothing.
+  size_t claimed = 0xFFFFFFFFu;
+  EXPECT_FALSE(gfnt_face_num_glyphs_disagreement(font, &claimed));
+  EXPECT_EQ(claimed, 0u);
+}
+
+TEST(CffBare, TheEmComesFromTheFontProgramWhenThereIsNoHead) {
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  uint16_t upem = 0;
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_units_per_em(font, &upem, &error), GFNT_OK)
+      << error.message;
+  // This font program states no FontMatrix, and a CFF that states none is a
+  // 1000-unit font by the format's own default - exactly, with no rounding.
+  EXPECT_EQ(upem, 1000);
+}
+
+TEST(CffBare, WhichFontMatricesReduceToAnEmAndWhichAreRefused) {
+  // The decision table, tested directly, because most of its cases cannot be
+  // reached from a fixture without writing a font per row.
+  struct Case {
+    const char * what;
+    bool stated;
+    GFNT_F16Dot16 xx;
+    GFNT_F16Dot16 yy;
+    GFNT_F16Dot16 xy;
+    bool ok;
+    size_t upem;
+  };
+  const std::vector<Case> cases = {
+      {"no FontMatrix at all: the format's default", false, 0, 0, 0, true, 1000},
+      // 0.001 is 65.536 in 16.16, so a font writes 65 or 66 and neither
+      // inverts to 1000 - 65 gives 1008 and 66 gives 993. Recognising 1000
+      // rather than inverting is what makes both of these right.
+      {"0.001 written as 65", true, 65, 65, 0, true, 1000},
+      {"0.001 written as 66", true, 66, 66, 0, true, 1000},
+      // A power of two inverts exactly, which is the only other case that can
+      // be answered without guessing.
+      {"1/2048, which 16.16 holds exactly", true, 32, 32, 0, true, 2048},
+      {"1/1024", true, 64, 64, 0, true, 1024},
+      // And the refusals, each for its own reason. The first two are refused
+      // before the inversion is attempted, because 1/65 is not exact; the two
+      // after them have an exactly invertible scale and so are refused by the
+      // check that the em just derived still agrees with the whole matrix -
+      // which is a different line, and was unreachable from the first two.
+      {"a skew", true, 65, 65, 7, false, 0},
+      {"different scales per axis", true, 65, 32, 0, false, 0},
+      {"a skew whose scale inverts exactly", true, 32, 32, 7, false, 0},
+      {"two exact scales that differ", true, 32, 64, 0, false, 0},
+      {"a scale of zero", true, 0, 0, 0, false, 0},
+      {"a negative scale", true, -65, -65, 0, false, 0},
+      {"an em below head's own floor of 16", true, 8192, 8192, 0, false, 0},
+      {"a reciprocal 16.16 cannot hold exactly", true, 97, 97, 0, false, 0},
+  };
+  for (const Case & item : cases) {
+    GFNT_Cff cff{};
+    cff.font_matrix_stated = item.stated;
+    cff.font_matrix[0] = item.xx;
+    cff.font_matrix[1] = item.xy;
+    cff.font_matrix[3] = item.yy;
+    size_t upem = 0;
+    EXPECT_EQ(gfnt_cff_units_per_em(&cff, &upem), item.ok) << item.what;
+    if (item.ok) {
+      EXPECT_EQ(upem, item.upem) << item.what;
+    }
+  }
+  EXPECT_FALSE(gfnt_cff_units_per_em(nullptr, nullptr));
+}
+
+TEST(CffBare, WhatItHasNoTableForItRefusesRatherThanInvents) {
+  // Required tables are per operation (design.md section 7.8), and this face
+  // has exactly one table - so every question that needs another one is
+  // unsupported, by name, rather than answered from a default.
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  const GFNT_Head * head = nullptr;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_head(font, &head, &error), GFNT_ERR_UNSUPPORTED);
+  names(error, "no such table");
+
+  const GFNT_Os2 * os2 = nullptr;
+  EXPECT_EQ(gfnt_face_os2(font, &os2, nullptr), GFNT_ERR_UNSUPPORTED);
+}
+
+/** One name of a face, or "" when the face does not state it. */
+std::string face_name(const GFNT_Face * face, uint16_t id) {
+  char * text = nullptr;
+  if (gfnt_face_name(face, id, GFNT_LANGUAGE_ANY, nullptr, &text, nullptr,
+      nullptr) != GFNT_OK) {
+    return std::string();
+  }
+  const std::string out = text;
+  gfnt_name_free(nullptr, text);
+  return out;
+}
+
+TEST(CffBare, ItNamesItselfFromTheFontProgramAndSaysWhoOwnsIt) {
+  // A fixture in someone's font directory has to answer for itself, and a bare
+  // CFF has no `name` table to answer with (section 14.5). The Top DICT and the
+  // Name INDEX are what it has.
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  EXPECT_EQ(face_name(font, GFNT_NAME_FAMILY), "Ghoti Fixture CFF curves");
+  EXPECT_EQ(face_name(font, GFNT_NAME_FULL),
+      "Ghoti Fixture CFF curves Regular");
+  EXPECT_EQ(face_name(font, GFNT_NAME_VERSION), "Version 1.000");
+  // The PostScript name comes from the Name INDEX rather than the Top DICT, and
+  // it is the string a PDF identifies a FontFile3 by.
+  EXPECT_EQ(face_name(font, GFNT_NAME_POSTSCRIPT),
+      "GhotiFixtureCFFcurves-Regular");
+  EXPECT_EQ(face_name(font, GFNT_NAME_COPYRIGHT),
+      "Copyright 2026 Corey Pennycuff. LGPL-3.0-only.");
+}
+
+TEST(CffBare, ACffStringIsDecodedAsLatinOneAndNotPassedThroughAsBytes) {
+  // The Weight string is "R\u00e9gular": one Latin-1 byte, 0xE9, which has to
+  // come back as the two bytes of UTF-8 for U+00E9. Passing it through would
+  // hand the caller a string that is not valid UTF-8 at all, and refusing it
+  // would lose a name fontTools reads without complaint.
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  const std::string weight = face_name(font, GFNT_NAME_SUBFAMILY);
+  EXPECT_EQ(weight, "R\xC3\xA9gular");
+  EXPECT_EQ(weight.size(), 8u) << "seven characters, eight bytes";
+}
+
+TEST(CffBare, AFaceWithBothSourcesReadsItsNameTable) {
+  // cff-curves.otf carries the same font program and a `name` table, and the
+  // two disagree on purpose: `name` says "Regular" where the Top DICT says
+  // "R\u00e9gular". The wrapped face has to read the table.
+  Fixture wrapped("cff-curves.otf");
+  ASSERT_EQ(wrapped.result, GFNT_OK);
+  EXPECT_EQ(face_name(wrapped, GFNT_NAME_SUBFAMILY), "Regular");
+
+  // And the names only a `name` table holds are there for the wrapped face and
+  // absent from the bare one, rather than being invented from somewhere.
+  Fixture bare("bare.cff");
+  ASSERT_EQ(bare.result, GFNT_OK);
+  EXPECT_FALSE(face_name(wrapped, GFNT_NAME_MANUFACTURER).empty());
+  EXPECT_TRUE(face_name(bare, GFNT_NAME_MANUFACTURER).empty());
+}
+
+TEST(CffBare, ANameAFontProgramCannotStateIsUnsupportedAndSaysWhich) {
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  // A CFF states six strings. Everything a `name` table would have held is
+  // unsupported by name rather than answered with an empty string, which a
+  // caller cannot tell from a font that states the empty string.
+  for (uint16_t id : {GFNT_NAME_MANUFACTURER, GFNT_NAME_DESIGNER,
+      GFNT_NAME_LICENSE, GFNT_NAME_LICENSE_URL, GFNT_NAME_UNIQUE_ID,
+      GFNT_NAME_SAMPLE_TEXT}) {
+    char * text = nullptr;
+    GFNT_Error error{};
+    EXPECT_EQ(gfnt_face_name(font, id, GFNT_LANGUAGE_ANY, nullptr, &text,
+        nullptr, &error), GFNT_ERR_UNSUPPORTED) << "name id " << id;
+    EXPECT_EQ(text, nullptr);
+    names(error, "does not state");
+  }
+}
+
+TEST(CffBare, TheLanguageIsNotConsultedBecauseACffStringHasNone) {
+  // A CFF string carries no language tag, so there is one string per name and it
+  // answers every request. A font that states one unlabelled name has not said
+  // it is English, and reporting it only for English would hide it from every
+  // caller that asked for anything else.
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  const std::string any = face_name(font, GFNT_NAME_FAMILY);
+  ASSERT_FALSE(any.empty());
+  for (uint16_t language : {uint16_t{0x0409}, uint16_t{0x0407}, uint16_t{0}}) {
+    char * text = nullptr;
+    ASSERT_EQ(gfnt_face_name(font, GFNT_NAME_FAMILY, language, nullptr, &text,
+        nullptr, nullptr), GFNT_OK) << "language " << language;
+    EXPECT_EQ(std::string(text), any);
+    gfnt_name_free(nullptr, text);
+  }
+}
+
+TEST(CffBare, AFaceWithNeitherANameTableNorAFontProgramSaysSo) {
+  // The other half of the fallback: a face that has a directory, no `name`, and
+  // nothing to state its names instead. It must say which of the two it is
+  // missing rather than reporting the absence of a `name` table it was never
+  // going to read.
+  std::vector<Table> tables = {Table{GFNT_TAG('h', 'e', 'a', 'd'),
+      std::vector<uint8_t>(54, 0)}};
+  FromBytes font(gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables));
+  ASSERT_EQ(font.result, GFNT_OK) << font.error.message;
+
+  char * text = nullptr;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_name(font.face, GFNT_NAME_FAMILY, GFNT_LANGUAGE_ANY,
+      nullptr, &text, nullptr, &error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(text, nullptr);
+  names(error, "no font program");
+}
+
+TEST(CffBare, AnAllocationFailureReadingAFontProgramsNameIsReported) {
+  // Two allocations: the string's bytes, and the UTF-8 it becomes. Neither arm
+  // is reachable from an allocator that works.
+  for (size_t fail_at = 0; fail_at < 2; ++fail_at) {
+    Fixture font("bare.cff");
+    ASSERT_EQ(font.result, GFNT_OK);
+    gfnttest::FailingAllocator allocator(fail_at);
+
+    char * text = nullptr;
+    GFNT_Error error{};
+    EXPECT_EQ(gfnt_face_name(font, GFNT_NAME_FAMILY, GFNT_LANGUAGE_ANY,
+        allocator.get(), &text, nullptr, &error), GFNT_ERR_OOM)
+        << "allocation " << fail_at;
+    EXPECT_EQ(text, nullptr);
+  }
+}
+
+TEST(CffBare, AGlyphCapRefusesTheFaceRatherThanTheCount) {
+  // Where the cap on glyphs actually is: gfnt_cff_parse() refuses a CharStrings
+  // INDEX longer than GFNT_Limits::max_glyphs, and a bare CFF parses its font
+  // program at load - so the limit is reported when the face is asked for, not
+  // when its glyphs are counted. A second cap where the count is taken would be
+  // a line no input can reach.
+  GFNT_Limits limits;
+  gfnt_limits_default(&limits);
+  limits.max_glyphs = 5;
+
+  const std::vector<uint8_t> bytes = bare_cff_bytes();
+  ASSERT_FALSE(bytes.empty());
+  GFNT_Blob * blob = nullptr;
+  ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+      GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+  GFNT_Face * face = nullptr;
+  GFNT_Error error{};
+
+  EXPECT_EQ(gfnt_face_load(blob, 0, &limits, nullptr, &face, &error),
+      GFNT_ERR_LIMIT);
+  EXPECT_EQ(face, nullptr);
+  names(error, "max_glyphs");
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
+}
+
+TEST(CffBare, AnAllocationFailureLoadingABareFontProgramIsReported) {
+  // A bare CFF allocates the face, the synthetic directory, and whatever its
+  // font program needs - and it parses that program during the load, so every
+  // one of those arms is on the path to a face rather than to a first use.
+  const std::vector<uint8_t> bytes = bare_cff_bytes();
+  ASSERT_FALSE(bytes.empty());
+
+  size_t refused = 0;
+  for (size_t fail_at = 0; fail_at < 6; ++fail_at) {
+    gfnttest::FailingAllocator allocator(fail_at);
+    GFNT_Blob * blob = nullptr;
+    ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    GFNT_Face * face = nullptr;
+    GFNT_Error error{};
+    const GFNT_Result result = gfnt_face_load(blob, 0, nullptr,
+        allocator.get(), &face, &error);
+    if (result != GFNT_OK) {
+      ++refused;
+      EXPECT_EQ(result, GFNT_ERR_OOM) << "allocation " << fail_at;
+      EXPECT_EQ(face, nullptr) << "allocation " << fail_at;
+    }
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+  // Not vacuous: a load that never allocated would have passed the loop.
+  EXPECT_GT(refused, 1u) << "the load has to allocate for this to mean anything";
+}
+
+TEST(CffBare, AFontProgramsNameReportsItsLengthWhenAsked) {
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  char * text = nullptr;
+  size_t length = 0;
+  ASSERT_EQ(gfnt_face_name(font, GFNT_NAME_FAMILY, GFNT_LANGUAGE_ANY, nullptr,
+      &text, &length, nullptr), GFNT_OK);
+  ASSERT_NE(text, nullptr);
+  // The length is of the UTF-8, which is what the caller was handed - not of the
+  // Latin-1 the font stored.
+  EXPECT_EQ(length, strlen(text));
+  EXPECT_EQ(length, strlen("Ghoti Fixture CFF curves"));
+  gfnt_name_free(nullptr, text);
+
+  char * weight = nullptr;
+  ASSERT_EQ(gfnt_face_name(font, GFNT_NAME_SUBFAMILY, GFNT_LANGUAGE_ANY, nullptr,
+      &weight, &length, nullptr), GFNT_OK);
+  EXPECT_EQ(length, 8u) << "R\u00e9gular is seven characters in eight bytes";
+  gfnt_name_free(nullptr, weight);
+}
+
+TEST(CffBare, AMatrixThatStatesNoEmIsRefusedByNameRatherThanDrawn) {
+  // `bare-matrix.cff` scales its two axes differently, so its charstring
+  // coordinates are in a space this library would have to transform them out of
+  // rather than report - and with no `head` there is nothing else that states an
+  // em. Wrapped in an sfnt the same font is refused for disagreeing with
+  // head.unitsPerEm; this is the arm that cannot be reached that way.
+  Fixture font("bare-matrix.cff");
+  ASSERT_EQ(font.result, GFNT_OK) << font.error.message;
+
+  // The font program itself is fine: it parses, and it has its glyphs.
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
+  EXPECT_EQ(glyphs, 13u);
+
+  uint16_t upem = 0;
+  EXPECT_EQ(gfnt_face_units_per_em(font, &upem, nullptr), GFNT_ERR_UNSUPPORTED);
+
+  GFNT_Outline * outline = nullptr;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_glyph_outline(font, 2, nullptr, nullptr, &outline, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(outline, nullptr);
+  names(error, "does not reduce to an em");
+  gfnt_outline_destroy(outline);
+
+  // It still states its licence, which every committed fixture must - through
+  // `Notice` rather than `Copyright`, which is the other spelling and the only
+  // fixture that uses it.
+  EXPECT_EQ(face_name(font, GFNT_NAME_COPYRIGHT),
+      "Copyright 2026 Corey Pennycuff. LGPL-3.0-only.");
+}
+
+TEST(CffBare, AnSfntCarryingOnlyACffGetsItsEmFromTheFontProgramToo) {
+  // The em fallback is not about the bare container: it is about there being no
+  // `head`. An sfnt with a `CFF ` and nothing else is the same situation, and it
+  // is the shape a subsetter produces.
+  std::vector<Table> tables = {Table{GFNT_TAG_CFF, bare_cff_bytes()}};
+  FromBytes font(gfnttest::build_sfnt(GFNT_FLAVOUR_CFF, tables));
+  ASSERT_EQ(font.result, GFNT_OK) << font.error.message;
+
+  uint16_t upem = 0;
+  EXPECT_EQ(gfnt_face_units_per_em(font.face, &upem, nullptr), GFNT_OK);
+  EXPECT_EQ(upem, 1000);
+  EXPECT_EQ(face_name(font.face, GFNT_NAME_FAMILY), "Ghoti Fixture CFF curves");
+}
+
+TEST(CffBare, TheFontNameAccessorAnswersSizingAndRefusesWhatItCannot) {
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Cff * cff = cff_of(font);
+  ASSERT_NE(cff, nullptr);
+
+  // A sizing call, which is what a caller that means to allocate makes.
+  size_t length = 0;
+  ASSERT_EQ(gfnt_cff_font_name(font, cff, nullptr, 0, &length, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(length, strlen("GhotiFixtureCFFcurves-Regular"));
+
+  // A buffer too small is ERR_LIMIT, and a real buffer of size zero is a caller
+  // error - there is not even room for the terminator.
+  char small[4];
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_cff_font_name(font, cff, small, sizeof small, &length, &error),
+      GFNT_ERR_LIMIT);
+  EXPECT_EQ(gfnt_cff_font_name(font, cff, small, 0, &length, nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_cff_font_name(font, cff, nullptr, 8, &length, nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_cff_font_name(nullptr, cff, nullptr, 0, &length, nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_cff_font_name(font, cff, nullptr, 0, nullptr, nullptr),
+      GFNT_ERR_INVALID);
+
+  // And a font program whose Name INDEX is empty does not say what it is called.
+  GFNT_Cff nameless = *cff;
+  nameless.names.count = 0;
+  EXPECT_EQ(gfnt_cff_font_name(font, &nameless, nullptr, 0, &length, &error),
+      GFNT_ERR_UNSUPPORTED);
+  names(error, "does not say what it is called");
+
+  // The sizing call reaches the standard strings as well, which are answered
+  // from a table rather than from the font.
+  ASSERT_EQ(gfnt_cff_string(font, cff, 0, nullptr, 0, &length, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(length, strlen(".notdef"));
+}
+
+TEST(CffBare, TheSyntheticEntryClaimsNoChecksumRatherThanItsOwn) {
+  // Nothing claimed anything about these bytes: there was no directory. Storing
+  // the computed checksum as the claim would manufacture an agreement that was
+  // never made, and a comparison that can only pass.
+  Fixture font("bare.cff");
+  ASSERT_EQ(font.result, GFNT_OK);
+
+  uint32_t stored = 0xFFFFFFFFu;
+  uint32_t computed = 0;
+  ASSERT_EQ(gfnt_face_table_checksum(font, GFNT_TAG_CFF, &stored, &computed),
+      GFNT_OK);
+  EXPECT_EQ(stored, 0u);
+  EXPECT_NE(computed, 0u);
+}
+
+TEST(CffBare, ACountIsOneWithoutParsingTheFontProgram) {
+  const std::vector<uint8_t> bytes = bare_cff_bytes();
+  ASSERT_FALSE(bytes.empty());
+  GFNT_Blob * blob = nullptr;
+  ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+      GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+
+  size_t count = 0;
+  EXPECT_EQ(gfnt_face_count(blob, nullptr, &count, nullptr), GFNT_OK);
+  EXPECT_EQ(count, 1u);
+  gfnt_blob_destroy(blob);
+}
+
+TEST(CffBare, AFileThatIsNoContainerAtAllIsNotAFont) {
+  FromBytes font(std::vector<uint8_t>(64, 0x7F));
+  EXPECT_EQ(font.result, GFNT_ERR_FORMAT);
+  EXPECT_EQ(font.face, nullptr);
+  names(font.error, "not an sfnt");
+}
+
+TEST(CffBare, AHeaderWithNoFontProgramBehindItIsRefusedWithTheParsesOwnReason) {
+  // The probe is four bytes, two of which are a version number, so it is not
+  // evidence - the parse is. A blob that gets past the probe and fails the parse
+  // is reported with the parse's specific complaint rather than flattened to
+  // "not a font", and no face is handed back for it.
+  std::vector<uint8_t> bytes = {1, 0, 4, 2};
+  bytes.resize(32, 0);
+  FromBytes font(std::move(bytes));
+  EXPECT_NE(font.result, GFNT_OK);
+  EXPECT_EQ(font.face, nullptr);
+  ASSERT_NE(font.error.message, nullptr);
+  EXPECT_EQ(font.error.table, GFNT_TAG_CFF)
+      << "the diagnostic should come from the CFF parse: " << font.error.message;
+}
+
+TEST(CffBare, TheBareDoorIsNoStricterThanTheWrappedOne) {
+  // A bare door that refused what the wrapped door accepts would give one
+  // library two behaviours for one input, decided only by whether there is an
+  // sfnt around it. `absOffSize` is the temptation: the format says 1 to 4,
+  // gfnt_cff_parse() reads it and never uses it, so the probe must not reject
+  // it either. The same altered bytes go through both doors here.
+  std::vector<uint8_t> altered = bare_cff_bytes();
+  ASSERT_FALSE(altered.empty());
+  altered[3] = 0x77;
+
+  FromBytes bare(altered);
+  EXPECT_EQ(bare.result, GFNT_OK) << "the bare door refused absOffSize 0x77: "
+                                  << (bare.error.message ? bare.error.message
+                                                         : "");
+
+  std::vector<Table> tables = {Table{GFNT_TAG_CFF, altered}};
+  FromBytes wrapped(gfnttest::build_sfnt(GFNT_FLAVOUR_CFF, tables));
+  ASSERT_EQ(wrapped.result, GFNT_OK) << wrapped.error.message;
+  const GFNT_Cff * cff = nullptr;
+  EXPECT_EQ(gfnt_face_cff(wrapped.face, &cff, nullptr), GFNT_OK)
+      << "the wrapped door refused what the bare door accepted";
+}
+
+TEST(CffBare, ACollectionWhoseFaceIsNotAnSfntIsACorruptCollection) {
+  // Only a whole file gets offered to another container's reader. A `ttcf`
+  // whose face offset points at something that is not an offset table is a
+  // corrupt collection - not a bare CFF that happens to live at byte 16.
+  //
+  // What enforces that is where the probe reads: from byte 0 of the blob, which
+  // here says `ttcf` and matches no container. This test passed before the
+  // explicit guard on directory_offset was written and after it was removed
+  // again, which is how the guard was found to be unreachable - there is no
+  // blob that opens with `ttcf` and also opens with another container's magic.
+  std::vector<uint8_t> bytes;
+  gfnttest::put_u32(bytes, GFNT_FLAVOUR_COLLECTION);
+  gfnttest::put_u16(bytes, 1);   // majorVersion
+  gfnttest::put_u16(bytes, 0);   // minorVersion
+  gfnttest::put_u32(bytes, 1);   // numFonts
+  gfnttest::put_u32(bytes, 16);  // the one face's offset
+  // A plausible CFF header, exactly where the offset table should be.
+  bytes.push_back(1);
+  bytes.push_back(0);
+  bytes.push_back(4);
+  bytes.push_back(1);
+  bytes.resize(64, 0);
+
+  FromBytes font(std::move(bytes));
+  EXPECT_EQ(font.result, GFNT_ERR_FORMAT);
+  EXPECT_EQ(font.face, nullptr);
 }
 
 // ---------------------------------------------------------------- fixtures
@@ -935,14 +1611,6 @@ TEST(Cff, ATruncatedTableIsRefusedRatherThanRead) {
   // nothing, and one where everything was would mean the builder is broken.
   EXPECT_GT(refusals, 10u);
   EXPECT_LT(refusals, whole.size() - 4);
-}
-
-/** The parsed CFF of a face, for the container tests below. */
-const GFNT_Cff * cff_of(const GFNT_Face * face) {
-  const GFNT_Cff * cff = nullptr;
-  GFNT_Error error{};
-  EXPECT_EQ(gfnt_face_cff(face, &cff, &error), GFNT_OK) << error.message;
-  return cff;
 }
 
 TEST(Cff, AFontsOwnEncodingMapsCodesToGlyphsAndIsNotTheCmap) {

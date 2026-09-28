@@ -93,10 +93,27 @@ struct Fixture {
 struct Entry {
   const char * name;
   size_t glyphs;
+  /**
+   * Whether this fixture states an em this library can report.
+   *
+   * True for every font that has a `head`, and for a bare CFF whose FontMatrix
+   * reduces to one. False for exactly one fixture, which exists to be refused -
+   * and it is a field rather than a relaxed assertion because "every fixture
+   * shares one em" is what catches a fixture that has drifted from the
+   * generator, and a check that tolerated both answers would catch nothing.
+   */
+  bool states_em = true;
 };
 
 const std::vector<Entry> & every_fixture() {
   static const std::vector<Entry> names = {
+      // The two bare CFFs, whose glyph counts come from `CharStrings` because
+      // neither has a `maxp` to carry one. `bare.cff` holds the same thirteen
+      // glyphs as cff-curves.otf, whose CFF table its bytes are; the other holds
+      // the same thirteen behind a FontMatrix that states no em, so it counts
+      // and names its glyphs and refuses to draw them.
+      {"bare-matrix.cff", 13, false},
+      {"bare.cff", 13},
       {"basic.ttf", kNumGlyphs},
       {"cff.otf", kNumGlyphs},
       // The seven phase 2 fixtures, each with its own repertoire: what they
@@ -201,9 +218,15 @@ TEST(Fixtures, EveryCommittedFixtureLoads) {
     // The em is shared by construction. A fixture that has drifted from the
     // generator fails here rather than in whichever suite uses it next.
     uint16_t upem = 0;
-    EXPECT_EQ(gfnt_face_units_per_em(fixture.face, &upem, nullptr), GFNT_OK)
-        << name;
-    EXPECT_EQ(upem, kUpem) << name;
+    if (entry.states_em) {
+      EXPECT_EQ(gfnt_face_units_per_em(fixture.face, &upem, nullptr), GFNT_OK)
+          << name;
+      EXPECT_EQ(upem, kUpem) << name;
+    }
+    else {
+      EXPECT_EQ(gfnt_face_units_per_em(fixture.face, &upem, nullptr),
+          GFNT_ERR_UNSUPPORTED) << name;
+    }
 
     size_t glyphs = 0;
     EXPECT_EQ(gfnt_face_num_glyphs(fixture.face, &glyphs, nullptr), GFNT_OK)

@@ -71,19 +71,17 @@ bool gfnt_face_has_outlines(const GFNT_Face * face) {
   if (!face) {
     return false;
   }
-  // glyf needs loca to be indexable at all, so a font with one and not the
-  // other has no outlines this library can reach.
+  // The question this predicate answers is *can asking for an outline succeed*,
+  // and the one place that knows is the producer table: `glyf` with `loca`, or
+  // `CFF `. Answering it here a second way is what once made `CFF ` report true
+  // while `CFF2` reported false, each justified by a different reading of the
+  // same sentence - and ::gfnt_face_strike_at() then told a caller with an OTTO
+  // font it had outlines to scale, months before anything could draw one.
   //
-  // `CFF ` is not counted, and that is the whole of the question this predicate
-  // answers: *can asking for an outline succeed*. A charstring interpreter
-  // arrives in phase 2 (design.md section 7.4) and this returns true for those
-  // faces on the day it does. Until then a `CFF ` face reports false for the
-  // same reason a `CFF2` one does, which is the inconsistency this replaced:
-  // `CFF ` said yes and `CFF2` said no, each justified by a different reading of
-  // the same sentence, and ::gfnt_face_strike_at() then told a caller with an
-  // OTTO font that it had outlines to scale.
-  return gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
-      && gfnt_face_has_table(face, GFNT_TAG('l', 'o', 'c', 'a'));
+  // `CFF ` reports true as of phase 2. `CFF2` still reports false, and now for
+  // the only reason left: it is a format this library does not read at all
+  // (design.md section 16).
+  return gfnt_sfnt_producer(face) != GFNT_PRODUCER_NONE;
 }
 
 /**

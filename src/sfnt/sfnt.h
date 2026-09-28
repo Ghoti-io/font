@@ -41,6 +41,7 @@
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/metrics.h>
+#include "../cff/cff.h"
 #include "../reader/reader.h"
 
 #ifdef __cplusplus
@@ -128,7 +129,37 @@ struct GFNT_Face {
   GFNT_GlyphCount glyph_count;
   GFNT_Cached cmap_best_state;      ///< Which `cmap` subtable answers lookups.
   GFNT_CmapSubtable cmap_best;
+  GFNT_Cached cff_state;            ///< The `CFF ` container, parsed on first use.
+  GFNT_Cff cff;
 };
+
+/**
+ * Which outline format a face carries, if either.
+ *
+ * A fact about the table directory rather than about outlines, which is why it
+ * lives here: `glyph.h`'s ::gfnt_face_has_outlines() is tier 0 and must not
+ * include `outline.h` to answer it, and `outline/producer.c` must not answer it
+ * a second way.
+ */
+typedef enum {
+  GFNT_PRODUCER_NONE = 0, ///< Neither, or a format this library cannot read.
+  GFNT_PRODUCER_GLYF,     ///< `glyf` with `loca`.
+  GFNT_PRODUCER_CFF       ///< `CFF ` charstrings.
+} GFNT_Producer;
+
+/**
+ * Which producer this face's outlines come from.
+ *
+ * `glyf` without `loca` - or `loca` without `glyf` - is neither, because neither
+ * table indexes a glyph without the other. `CFF2` is neither as well: it is a
+ * different format in a different table and is not read (design.md section 16).
+ * A face carrying both `glyf`/`loca` and `CFF ` is malformed and is read as
+ * TrueType, which is what every shipping implementation does.
+ *
+ * @param face The face, or NULL.
+ * @return Which one, or ::GFNT_PRODUCER_NONE.
+ */
+GFNT_Producer gfnt_sfnt_producer(const GFNT_Face * face);
 
 /**
  * Read the offset table and directory of the face at @p directory_offset.

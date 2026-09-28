@@ -802,32 +802,36 @@ TEST(Glyf, ACubicControlPointIsRefusedEvenWhenTheFontClaimsToBeOrdinary) {
   EXPECT_EQ(neighbour.result, GFNT_OK) << neighbour.error.message;
 }
 
-TEST(Glyf, AFaceWhoseOutlinesAreCharstringsSaysSoRatherThanSayingItHasNone) {
+TEST(Glyf, AFaceWhoseOutlinesAreCharstringsIsAnsweredByTheOtherProducer) {
   Font font("cff.otf");
   Loaded loaded(font, 2);
 
-  // The distinction design.md section 5.6 is about, and it lives in the
-  // *message*: this face has outlines, in a table phase 2 reads, and "no
-  // outlines at all" would be a false statement about it. What the predicate
-  // answers is the narrower question of whether asking can succeed, which for a
-  // charstring face is no until that phase lands.
-  EXPECT_FALSE(gfnt_face_has_outlines(font));
+  // **Every assertion here was the opposite until phase 2**, and each was right
+  // then: an OTTO face had outlines in a table nothing could read, so asking
+  // refused with a message saying which table and which phase. Kept and flipped
+  // rather than deleted, because a test that asserts something is unsupported
+  // goes on passing the day it becomes supported and says nothing.
+  EXPECT_TRUE(gfnt_face_has_outlines(font));
   EXPECT_TRUE(gfnt_face_has_table(font, GFNT_TAG('C', 'F', 'F', ' ')));
-  EXPECT_EQ(loaded.result, GFNT_ERR_UNSUPPORTED);
-  ASSERT_NE(loaded.error.message, nullptr);
-  EXPECT_NE(std::string(loaded.error.message).find("charstring"),
-      std::string::npos) << loaded.error.message;
+  EXPECT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
+  EXPECT_GT(gfnt_outline_point_count(loaded.outline), 0u);
 
-  // The other accessors reach the same face through gfnt_loca_range(), which
-  // answers for the pair of tables rather than for one glyph - a different
-  // sentence, and the one a caller asking "is this glyph a composite" gets.
+  // `glyf`'s own two accessors answer for a charstring face as well, and one of
+  // them has nothing to answer with: a CFF glyph states no bounding box, so the
+  // refusal names that rather than pretending the font's FontBBox is this
+  // glyph's.
   bool composite = false;
   GFNT_Error error{};
-  EXPECT_EQ(gfnt_face_glyph_is_composite(font, 2, &composite, &error),
+  EXPECT_EQ(gfnt_face_glyph_is_composite(font, 2, &composite, &error), GFNT_OK)
+      << error.message;
+  EXPECT_FALSE(composite);
+
+  GFNT_Box box{};
+  EXPECT_EQ(gfnt_face_glyph_stated_box(font, 2, &box, &error),
       GFNT_ERR_UNSUPPORTED);
   ASSERT_NE(error.message, nullptr);
-  EXPECT_NE(std::string(error.message).find("no glyf and loca"),
-      std::string::npos) << error.message;
+  EXPECT_NE(std::string(error.message).find("FontBBox"), std::string::npos)
+      << error.message;
 }
 
 TEST(Glyf, VariationCoordinatesAreRefusedRatherThanIgnored) {

@@ -36,6 +36,7 @@
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/name.h>
+#include <ghoti.io/font/outline.h>
 
 namespace {
 
@@ -98,6 +99,15 @@ const std::vector<Entry> & every_fixture() {
   static const std::vector<Entry> names = {
       {"basic.ttf", kNumGlyphs},
       {"cff.otf", kNumGlyphs},
+      // The seven phase 2 fixtures, each with its own repertoire: what they
+      // exercise is a *program*, and a program needs its own glyphs.
+      {"cff-arith.otf", 7},
+      {"cff-cid.otf", 4},
+      {"cff-curves.otf", 13},
+      {"cff-hints.otf", 8},
+      {"cff-seac.otf", 6},
+      {"cff-subrs.otf", 10},
+      {"cff-type1.otf", 8},
       {"cmap-format0.ttf", kNumGlyphs},
       {"cmap-format12.ttf", kNumGlyphs},
       {"cmap-format6.ttf", kNumGlyphs},
@@ -268,10 +278,20 @@ TEST(Fixtures, CffIsTheOttoFlavourWithNoGlyf) {
   EXPECT_EQ(gfnt_face_flavour(fixture.face), GFNT_FLAVOUR_CFF);
   EXPECT_TRUE(gfnt_face_has_table(fixture.face, GFNT_TAG('C', 'F', 'F', ' ')));
   EXPECT_FALSE(gfnt_face_has_table(fixture.face, GFNT_TAG('g', 'l', 'y', 'f')));
-  // The table is there and this library cannot read it, so the predicate that
-  // answers "can asking for an outline succeed" says no; the table check above
-  // is how a caller finds out that charstrings are what it would need.
-  EXPECT_FALSE(gfnt_face_has_outlines(fixture.face));
+  // **This assertion was `EXPECT_FALSE` until phase 2**, and it was right then:
+  // the predicate answers "can asking for an outline succeed", and until a
+  // charstring interpreter existed the answer for an OTTO face was no. It is
+  // kept and flipped rather than deleted, because an assertion that something
+  // is unsupported goes on passing after the support lands and says nothing.
+  EXPECT_TRUE(gfnt_face_has_outlines(fixture.face));
+
+  // And the outline is there to be had, which is the whole of what phase 2
+  // changed about this font.
+  GFNT_Outline * outline = nullptr;
+  ASSERT_EQ(gfnt_face_glyph_outline(fixture.face, 2, nullptr, nullptr, &outline,
+      nullptr), GFNT_OK);
+  EXPECT_GT(gfnt_outline_point_count(outline), 0u);
+  gfnt_outline_destroy(outline);
 
   // Every metric table is the same question over a different container.
   uint32_t glyph = GFNT_GLYPH_NONE;

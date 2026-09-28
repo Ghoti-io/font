@@ -64,6 +64,9 @@ void gfnt_limits_default(GFNT_Limits * limits) {
     .max_tables = 512,
     .max_glyphs = 65535,
     .max_composite_depth = 16,
+    // The Type 2 format's own stated subroutine nesting limit.
+    .max_charstring_depth = 10,
+    .max_charstring_ops = 65536,
     .max_outline_points = 65536,
     .max_contours = 4096,
     .max_ppem = 4096,

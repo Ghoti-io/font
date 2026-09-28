@@ -75,6 +75,9 @@ from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
 from fontTools.ttLib.tables._g_l_y_f import (Glyph, GlyphComponent,
     GlyphCoordinates, flagCubic, flagOnCurve)
 from fontTools.ttLib.tables import ttProgram
+from fontTools.cffLib import cffStandardStrings
+from fontTools.misc.roundTools import otRound
+from fontTools.ttLib.tables.DefaultTable import DefaultTable
 
 UPEM = 1000
 
@@ -1102,6 +1105,938 @@ def build_outline_broken_loca(out):
     with open(out, "wb") as handle:
         handle.write(bytes(data))
 
+# --------------------------------------------------------------------------
+# CFF, assembled here rather than by fontTools
+# --------------------------------------------------------------------------
+#
+# design.md section 7.4, and the reason this exists at all: a `T2CharStringPen`
+# writes the operators a *pen* needs - moves, lines, curves - and nothing else.
+# It writes no `flex`, no `hintmask`, no accented character, no arithmetic, no
+# subroutine, and it cannot build a CID-keyed font, a charset in a format other
+# than 0, or an encoding at all. A survey of the oracle image's 35 OTF fonts
+# found the same gaps from the other end: they use every curve operator,
+# `hintmask`, `cntrmask` and both subroutine flavours, and between them not one
+# flex, not one accented character and not one CID font.
+#
+# So the fixtures below are CFF tables written byte by byte and wrapped in an
+# sfnt that fontTools builds. That split is deliberate: everything a pen can
+# write comes from the reference, and the constructions it cannot write are
+# hand-built and named in the MANIFEST - the same arrangement `outline-simple`'s
+# repeated flag run and `outline-broken-loca`'s patched entry already use.
+#
+# Both sides of `cff_diff.py` still read these fonts: fontTools decompiles and
+# draws the same bytes this library does, so a hand-built charstring is not this
+# library's opinion about what it means.
+
+# Type 2 operators, by the name this file writes them as. A tuple of the bytes
+# the format spells them with, so the two-byte ones are not a special case at
+# every call site.
+T2_OPERATORS = {
+    "hstem": (1,), "vstem": (3,), "vmoveto": (4,), "rlineto": (5,),
+    "hlineto": (6,), "vlineto": (7,), "rrcurveto": (8,), "callsubr": (10,),
+    "return": (11,), "endchar": (14,), "hstemhm": (18,), "hintmask": (19,),
+    "cntrmask": (20,), "rmoveto": (21,), "hmoveto": (22,), "vstemhm": (23,),
+    "rcurveline": (24,), "rlinecurve": (25,), "vvcurveto": (26,),
+    "hhcurveto": (27,), "callgsubr": (29,), "vhcurveto": (30,),
+    "hvcurveto": (31,),
+    "and": (12, 3), "or": (12, 4), "not": (12, 5), "abs": (12, 9),
+    "add": (12, 10), "sub": (12, 11), "div": (12, 12), "neg": (12, 14),
+    "eq": (12, 15), "drop": (12, 18), "put": (12, 20), "get": (12, 21),
+    "ifelse": (12, 22), "random": (12, 23), "mul": (12, 24), "sqrt": (12, 26),
+    "dup": (12, 27), "exch": (12, 28), "index": (12, 29), "roll": (12, 30),
+    "hflex": (12, 34), "flex": (12, 35), "hflex1": (12, 36), "flex1": (12, 37),
+}
+
+# Type 1 operators. Sharing one table with Type 2 would be wrong in the way
+# that matters: `13` is `hsbw` in Type 1 and reserved in Type 2, `9` is
+# `closepath` in one and nothing in the other, and `255` introduces a plain
+# integer here and a 16.16 there.
+T1_OPERATORS = {
+    "hstem": (1,), "vstem": (3,), "vmoveto": (4,), "rlineto": (5,),
+    "hlineto": (6,), "vlineto": (7,), "rrcurveto": (8,), "closepath": (9,),
+    "callsubr": (10,), "return": (11,), "hsbw": (13,), "endchar": (14,),
+    "rmoveto": (21,), "hmoveto": (22,), "vhcurveto": (30,), "hvcurveto": (31,),
+    "dotsection": (12, 0), "vstem3": (12, 1), "hstem3": (12, 2),
+    "seac": (12, 6), "sbw": (12, 7), "div": (12, 12),
+    "callothersubr": (12, 16), "pop": (12, 17), "setcurrentpoint": (12, 33),
+}
+
+
+class Fixed:
+    """An operand written in the 255 form: 16.16 in Type 2, an integer in Type 1.
+
+    A wrapper rather than a float, because which form an operand is written in
+    is a property of the *program* being built and not of the number's value: a
+    charstring that says `100` and one that says `100.0` are different bytes and
+    a reader can be wrong about exactly one of them.
+    """
+
+    def __init__(self, value):
+        self.value = value
+
+
+def t2_operand(value):
+    """One Type 2 operand, in the shortest form that holds it."""
+    if isinstance(value, Fixed):
+        return b"\xff" + struct.pack(">i", otRound(value.value * 65536))
+    if not isinstance(value, int):
+        raise TypeError("a charstring operand is an int or a Fixed: %r" % value)
+    if -107 <= value <= 107:
+        return bytes([value + 139])
+    if 108 <= value <= 1131:
+        shifted = value - 108
+        return bytes([247 + (shifted >> 8), shifted & 0xFF])
+    if -1131 <= value <= -108:
+        shifted = -value - 108
+        return bytes([251 + (shifted >> 8), shifted & 0xFF])
+    if -32768 <= value <= 32767:
+        return b"\x1c" + struct.pack(">h", value)
+    # Past what the 16-bit form holds, the only way to say it is the 16.16 one.
+    return b"\xff" + struct.pack(">i", value * 65536)
+
+
+def t1_operand(value):
+    """One Type 1 operand. `255` is a plain 32-bit integer here."""
+    if isinstance(value, Fixed):
+        raise TypeError("Type 1 has no fixed-point operand")
+    if -107 <= value <= 107:
+        return bytes([value + 139])
+    if 108 <= value <= 1131:
+        shifted = value - 108
+        return bytes([247 + (shifted >> 8), shifted & 0xFF])
+    if -1131 <= value <= -108:
+        shifted = -value - 108
+        return bytes([251 + (shifted >> 8), shifted & 0xFF])
+    return b"\xff" + struct.pack(">i", value)
+
+
+def charstring(*tokens, type1=False):
+    """A charstring from operands, operator names and `("mask", bytes)` pairs."""
+    operators = T1_OPERATORS if type1 else T2_OPERATORS
+    operand = t1_operand if type1 else t2_operand
+    out = bytearray()
+    for token in tokens:
+        if isinstance(token, str):
+            if token not in operators:
+                raise KeyError("no such charstring operator: %s" % token)
+            out += bytes(operators[token])
+        elif isinstance(token, tuple) and token and token[0] == "mask":
+            out += token[1]
+        else:
+            out += operand(token)
+    return bytes(out)
+
+
+def cff_index(items):
+    """An INDEX: a count, an offset size, count+1 offsets, then the data.
+
+    The offsets are **one-based from the byte before the data**, which is the
+    detail a reader gets wrong silently: an off-by-one here shifts every element
+    by a byte, and a charstring read one byte late is a different program.
+    """
+    if not items:
+        return struct.pack(">H", 0)
+    offsets = [1]
+    for item in items:
+        offsets.append(offsets[-1] + len(item))
+    largest = offsets[-1]
+    off_size = 1 if largest < 0x100 else 2 if largest < 0x10000 else \
+        3 if largest < 0x1000000 else 4
+    out = bytearray(struct.pack(">HB", len(items), off_size))
+    for offset in offsets:
+        out += offset.to_bytes(off_size, "big")
+    for item in items:
+        out += item
+    return bytes(out)
+
+
+def cff_dict_operand(value):
+    """A DICT operand. Integers only: the reals this library reads are the
+    FontMatrix's, and the fixtures that carry one write it explicitly."""
+    if -107 <= value <= 107:
+        return bytes([value + 139])
+    if 108 <= value <= 1131:
+        shifted = value - 108
+        return bytes([247 + (shifted >> 8), shifted & 0xFF])
+    if -1131 <= value <= -108:
+        shifted = -value - 108
+        return bytes([251 + (shifted >> 8), shifted & 0xFF])
+    if -32768 <= value <= 32767:
+        return b"\x1c" + struct.pack(">h", value)
+    return b"\x1d" + struct.pack(">i", value)
+
+
+def cff_dict_offset(value):
+    """An offset operand, always in the five-byte form.
+
+    Not an optimisation to avoid: a DICT whose offsets change width when their
+    values change would change the DICT's *size* when it is patched, and every
+    offset in the font would move. Fixing the width makes the layout computable
+    in one pass.
+    """
+    return b"\x1d" + struct.pack(">i", value)
+
+
+def cff_dict_real(value, digits=6):
+    """A DICT real, nibble-encoded, as a `FontMatrix` carries one."""
+    text = ("%.*g" % (digits, value))
+    nibbles = []
+    for char in text:
+        if char.isdigit():
+            nibbles.append(int(char))
+        elif char == ".":
+            nibbles.append(0x0A)
+        elif char in "eE":
+            nibbles.append(0x0B)
+        elif char == "-":
+            # A leading minus is 0x0E; one after an exponent marker is 0x0C,
+            # which replaces the marker, so it is handled by the caller's text.
+            nibbles.append(0x0E if not nibbles else 0x0C)
+        elif char == "+":
+            continue
+        else:
+            raise ValueError("cannot spell %r as a DICT real" % text)
+    nibbles.append(0x0F)
+    if len(nibbles) % 2:
+        nibbles.append(0x0F)
+    out = bytearray(b"\x1e")
+    for at in range(0, len(nibbles), 2):
+        out.append((nibbles[at] << 4) | nibbles[at + 1])
+    return bytes(out)
+
+
+def cff_dict(entries):
+    """A DICT from `(operator, [operands])` pairs, operands first as the format
+    wants them. An operator is an int, or a tuple for the two-byte ones."""
+    out = bytearray()
+    for operator, operands in entries:
+        for operand in operands:
+            if isinstance(operand, bytes):
+                out += operand
+            else:
+                out += cff_dict_operand(operand)
+        if isinstance(operator, tuple):
+            out += bytes(operator)
+        else:
+            out += bytes([operator])
+    return bytes(out)
+
+
+def cff_charset_format0(sids):
+    """Format 0: one SID per glyph, glyph 0 left out because it is `.notdef`."""
+    out = bytearray(b"\x00")
+    for sid in sids:
+        out += struct.pack(">H", sid)
+    return bytes(out)
+
+
+def cff_charset_ranges(ranges, wide=False):
+    """Format 1 or 2: `(first SID, how many follow)` ranges.
+
+    The difference between the two is one field's width, which is exactly the
+    kind of pair where a reader tests one arm and assumes the other.
+    """
+    out = bytearray(b"\x02" if wide else b"\x01")
+    for first, left in ranges:
+        out += struct.pack(">HH" if wide else ">HB", first, left)
+    return bytes(out)
+
+
+def cff_encoding_format0(codes, supplements=()):
+    """Format 0: a code per glyph, from glyph 1, plus optional supplements."""
+    out = bytearray([0x80 if supplements else 0x00, len(codes)])
+    out += bytes(codes)
+    if supplements:
+        out.append(len(supplements))
+        for code, sid in supplements:
+            out += struct.pack(">BH", code, sid)
+    return bytes(out)
+
+
+def cff_encoding_format1(ranges, supplements=()):
+    """Format 1: `(first code, how many follow)` ranges, from glyph 1."""
+    out = bytearray([0x81 if supplements else 0x01, len(ranges)])
+    for first, left in ranges:
+        out += bytes([first, left])
+    if supplements:
+        out.append(len(supplements))
+        for code, sid in supplements:
+            out += struct.pack(">BH", code, sid)
+    return bytes(out)
+
+
+def cff_fdselect_format3(ranges, sentinel):
+    """Format 3: `(first glyph, FD)` ranges and a sentinel past the last glyph."""
+    out = bytearray(b"\x03")
+    out += struct.pack(">H", len(ranges))
+    for first, fd in ranges:
+        out += struct.pack(">HB", first, fd)
+    out += struct.pack(">H", sentinel)
+    return bytes(out)
+
+
+# What every fixture below claims as its FontBBox. A CFF's bounding box is the
+# font's own claim rather than a computed fact - this library never reads it -
+# but fontTools' `head` compiler does, so it has to be there and it has to
+# contain the glyphs, or the sfnt around the table would state a box its own
+# outlines leave.
+CFF_FONT_BBOX = (0, -200, 1000, 900)
+
+
+def assemble_cff(font_name, charstrings, *, strings=(), gsubrs=(),
+                 charset=None, encoding=None, privates=None, fdselect=None,
+                 is_cid=False, charstring_type=None, font_matrix=None,
+                 extra_top=()):
+    """One CFF table's bytes.
+
+    `privates` is a list of `(entries, local subrs)`: one for an ordinary font,
+    one per Font DICT for a CID-keyed one. Every offset is written in the
+    five-byte form, so each structure's size is known before its position is,
+    and the layout is computed in one pass rather than iterated to a fixed
+    point.
+
+    The `Subrs` offset is the one that is **relative to its own Private DICT**
+    rather than to the table, so it is the Private DICT's own length - which is
+    why the local subroutines are placed immediately after it.
+    """
+    privates = privates if privates is not None else [({}, ())]
+
+    # Each Private DICT, with its Subrs offset pointing just past itself.
+    private_blocks = []
+    for entries, subrs in privates:
+        items = [(op, [value]) for op, value in sorted(entries.items())]
+        if subrs:
+            probe = cff_dict(items + [(19, [cff_dict_offset(0)])])
+            block = cff_dict(items + [(19, [cff_dict_offset(len(probe))])])
+            private_blocks.append((block, cff_index(list(subrs))))
+        else:
+            private_blocks.append((cff_dict(items), b""))
+
+    # The Font DICTs of a CID-keyed font, each naming one Private DICT. Built
+    # with placeholder offsets first, only to learn their size.
+    def font_dicts(offsets):
+        return [cff_dict([((12, 38), [391 + index]),
+                          (18, [cff_dict_offset(size),
+                                cff_dict_offset(offset)])])
+                for index, (size, offset) in enumerate(offsets)]
+
+    placeholder = [(len(block), 0) for block, _ in private_blocks]
+    fdarray_probe = cff_index(font_dicts(placeholder)) if is_cid else b""
+
+    charstrings_index = cff_index(list(charstrings))
+
+    def top_dict(offsets):
+        entries = list(extra_top)
+        entries.append((5, list(CFF_FONT_BBOX)))
+        if is_cid:
+            # ROS first, which is what makes the font CID-keyed at all: the
+            # registry and ordering are SIDs into the strings, and the
+            # supplement is a number.
+            entries.append(((12, 30), [391, 392, 0]))
+        if font_matrix is not None:
+            entries.append(((12, 7), [cff_dict_real(v) for v in font_matrix]))
+        if charstring_type is not None:
+            entries.append(((12, 6), [charstring_type]))
+        if charset is not None:
+            entries.append((15, [cff_dict_offset(offsets["charset"])]))
+        if encoding is not None:
+            entries.append((16, [cff_dict_offset(offsets["encoding"])]))
+        entries.append((17, [cff_dict_offset(offsets["charstrings"])]))
+        if is_cid:
+            entries.append(((12, 36), [cff_dict_offset(offsets["fdarray"])]))
+            if fdselect is not None:
+                entries.append(((12, 37),
+                    [cff_dict_offset(offsets["fdselect"])]))
+        else:
+            entries.append((18, [cff_dict_offset(len(private_blocks[0][0])),
+                                 cff_dict_offset(offsets["private"])]))
+        return cff_dict(entries)
+
+    zero = {"charset": 0, "encoding": 0, "charstrings": 0, "fdarray": 0,
+            "fdselect": 0, "private": 0}
+    header = bytes([1, 0, 4, 2])
+    name_index = cff_index([font_name.encode("ascii")])
+    string_index = cff_index([s.encode("ascii") for s in strings])
+    gsubr_index = cff_index(list(gsubrs))
+    top_index_probe = cff_index([top_dict(zero)])
+
+    # Everything before the variable blocks is now a known size.
+    at = len(header) + len(name_index) + len(top_index_probe) \
+        + len(string_index) + len(gsubr_index)
+    offsets = dict(zero)
+    if charset is not None:
+        offsets["charset"] = at
+        at += len(charset)
+    if encoding is not None:
+        offsets["encoding"] = at
+        at += len(encoding)
+    if is_cid and fdselect is not None:
+        offsets["fdselect"] = at
+        at += len(fdselect)
+    offsets["charstrings"] = at
+    at += len(charstrings_index)
+    if is_cid:
+        offsets["fdarray"] = at
+        at += len(fdarray_probe)
+    private_offsets = []
+    for block, subrs in private_blocks:
+        private_offsets.append((len(block), at))
+        at += len(block) + len(subrs)
+    offsets["private"] = private_offsets[0][1]
+
+    top_index = cff_index([top_dict(offsets)])
+    if len(top_index) != len(top_index_probe):
+        raise AssertionError("the Top DICT changed size when it was patched, "
+                             "so every offset in this font is now wrong")
+
+    out = bytearray()
+    out += header
+    out += name_index
+    out += top_index
+    out += string_index
+    out += gsubr_index
+    if charset is not None:
+        out += charset
+    if encoding is not None:
+        out += encoding
+    if is_cid and fdselect is not None:
+        out += fdselect
+    out += charstrings_index
+    if is_cid:
+        fdarray = cff_index(font_dicts(private_offsets))
+        if len(fdarray) != len(fdarray_probe):
+            raise AssertionError("the FDArray changed size when it was patched")
+        out += fdarray
+    for block, subrs in private_blocks:
+        out += block
+        out += subrs
+    return bytes(out)
+
+
+def cff_otf(label, order, cff_bytes, advances, mapping=None):
+    """An `OTTO` face whose `CFF ` table is the bytes given.
+
+    fontTools builds the sfnt - the directory, `head`, `hhea`, `hmtx`, `cmap`,
+    `OS/2`, `name`, `post`, `maxp` - and then the `CFF ` table it made is
+    replaced. `setupCFF` still runs, and is still worth running: it is what sets
+    `maxp` to version 0.5 and makes the flavour `OTTO`, and getting that from the
+    reference rather than by hand is the point of building fixtures in the image.
+    """
+    fb = FontBuilder(UPEM, isTTF=False)
+    fb.setupGlyphOrder(order)
+    fb.setupCFF(names(label)["psName"],
+        {"FullName": names(label)["fullName"], "Weight": "Regular"},
+        {name: T2CharStringPen(advances.get(name, 600), None).getCharString()
+         for name in order},
+        {})
+    replacement = DefaultTable("CFF ")
+    replacement.data = cff_bytes
+    fb.font["CFF "] = replacement
+    # `head`'s own compiler reads the CFF Top DICT's FontBBox for xMin..yMax,
+    # and a table it cannot parse is one it cannot read that from. So the box is
+    # written here instead, from the same constant the table states, and the
+    # recalculation is turned off rather than left to fail.
+    fb.font.recalcBBoxes = False
+    head = fb.font["head"]
+    head.xMin, head.yMin, head.xMax, head.yMax = CFF_FONT_BBOX
+    fb.setupHorizontalMetrics({n: (advances.get(n, 600), 0) for n in order})
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, [subtable(4, 3, 1, mapping or {})])
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names(label), mac=True)
+    fb.setupPost(keepGlyphNames=False)
+    pin(fb)
+    return fb
+
+# How many standard strings CFF predefines, which is where a font's own strings
+# start. The same number src/cff/cff_strings.h carries, and from the same place.
+GFNT_CFF_STANDARD_STRING_COUNT = len(cffStandardStrings)
+
+
+def sid(name):
+    """A standard string's SID, asked of fontTools rather than remembered.
+
+    Every fixture below names glyphs the charset has to spell as SIDs, and
+    writing those numbers down would be writing down a table section 14 says
+    comes from an oracle. `cffStandardStrings` is the same list
+    `tools/vectors/make_vectors.py` generates the library's copy from.
+    """
+    return cffStandardStrings.index(name)
+
+
+def cff_names(order):
+    """A format 0 charset naming these glyphs, and the strings it needs.
+
+    A glyph whose name is one of the 391 standard strings is named by its SID;
+    anything else goes into the font's own `String` INDEX, which is what a SID
+    of 391 or more means. Getting this wrong is quiet: a charset of zeroes names
+    every glyph `.notdef`, and fontTools renames the duplicates rather than
+    complaining - which is how the first version of these fixtures passed its
+    own generation and failed the differential on eleven names.
+    """
+    strings = []
+    sids = []
+    for name in order[1:]:
+        if name in cffStandardStrings:
+            sids.append(cffStandardStrings.index(name))
+            continue
+        if name not in strings:
+            strings.append(name)
+        sids.append(GFNT_CFF_STANDARD_STRING_COUNT + strings.index(name))
+    return cff_charset_format0(sids), strings
+
+
+def build_cff_curves(out):
+    """Every curve operator in the form a pen never writes.
+
+    A `T2CharStringPen` writes `rrcurveto` and `rlineto` and nothing else, so a
+    fixture built by one exercises two of the eleven drawing operators. Each
+    glyph here is one operator in its hardest form:
+
+      * `hvcurveto` and `vhcurveto` with **three** groups and the trailing fifth
+        operand, which belongs to the last group and not to the count's parity;
+      * `hhcurveto` and `vvcurveto` with the leading odd operand, which applies
+        to the **first curve only** - a reader that applies it to every group
+        draws the second one wrong, and a planted defect of exactly that shape
+        produced three disagreements in 24,657 fields of real fonts and none at
+        all in a thinned run;
+      * `rcurveline` and `rlinecurve`, whose operand lists end in a segment of
+        the other kind;
+      * all four of `flex`, `hflex`, `hflex1` and `flex1`, of which the corpus's
+        35 CFF fonts contain not one. `flex1` appears twice, because which axis
+        its single trailing operand belongs to depends on which way the whole
+        flex travelled, and one glyph can only be one of those.
+    """
+    order = [".notdef", "space", "hv", "vh", "hh", "vv", "curveline",
+             "linecurve", "flex", "hflex", "hflex1", "flex1x", "flex1y"]
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    programs = {
+        ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+            "vlineto", -500, "hlineto", "endchar"),
+        "space": charstring(300, "endchar"),
+        "hv": charstring(600, 100, 100, "rmoveto",
+            50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 25,
+            "hvcurveto", "endchar"),
+        "vh": charstring(600, 100, 100, "rmoveto",
+            50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 25,
+            "vhcurveto", "endchar"),
+        "hh": charstring(600, 100, 100, "rmoveto",
+            20, 30, 40, 50, 60, 30, 40, 50, 60, "hhcurveto", "endchar"),
+        "vv": charstring(600, 100, 100, "rmoveto",
+            20, 30, 40, 50, 60, 30, 40, 50, 60, "vvcurveto", "endchar"),
+        "curveline": charstring(600, 100, 100, "rmoveto",
+            30, 40, 50, 60, 70, 80, 30, -40, 50, -60, 70, -80, 40, 50,
+            "rcurveline", "endchar"),
+        "linecurve": charstring(600, 100, 100, "rmoveto",
+            40, 50, 60, -30, 30, 40, 50, 60, 70, 80, "rlinecurve", "endchar"),
+        "flex": charstring(600, 100, 100, "rmoveto",
+            30, 20, 40, 30, 50, 0, 50, 0, 40, -30, 30, -20, 50, "flex",
+            "endchar"),
+        "hflex": charstring(600, 100, 100, "rmoveto",
+            30, 40, 30, 50, 60, 40, 30, "hflex", "endchar"),
+        "hflex1": charstring(600, 100, 100, "rmoveto",
+            30, 20, 40, 30, 50, 60, 40, -30, 50, "hflex1", "endchar"),
+        "flex1x": charstring(600, 100, 100, "rmoveto",
+            40, 10, 50, 20, 60, 0, 70, -10, 80, -20, 90, "flex1", "endchar"),
+        "flex1y": charstring(600, 100, 100, "rmoveto",
+            10, 40, 20, 50, 0, 60, -10, 70, -20, 80, 90, "flex1", "endchar"),
+    }
+    charset, strings = cff_names(order)
+    table = assemble_cff(names("CFF curves")["psName"],
+        [programs[name] for name in order], charset=charset, strings=strings)
+    fb = cff_otf("CFF curves", order, table, advances, {0x20: "space"})
+    fb.save(out)
+
+
+def build_cff_arith(out):
+    """The arithmetic operators, which compute the coordinates they draw with.
+
+    Nothing in the corpus uses one, and every one of them is a way for a
+    charstring to say a number this library has to get exactly right: `div`
+    produces a fraction, the 255 form *is* a fraction, and `put`/`get`,
+    `index`, `roll`, `dup` and `exch` move operands around under the drawing
+    operator that will read them.
+
+    `random` is the one member of the family this library refuses rather than
+    answers, and no fixture carries it: a font whose shape depends on a random
+    number cannot be part of design.md section 1's promise that one font at one
+    size gives one bitmap for ever.
+    """
+    order = [".notdef", "space", "divide", "fixed", "stack", "transient",
+             "logic"]
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    programs = {
+        ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+            "vlineto", -500, "hlineto", "endchar"),
+        "space": charstring(300, "endchar"),
+        # 600/5 is 120, and the quotient is what rlineto draws with.
+        "divide": charstring(600, 100, 100, "rmoveto", 600, 5, "div", 0,
+            "rlineto", 0, 300, "rlineto", "endchar"),
+        # Half a unit, in the only form that can say it.
+        "fixed": charstring(600, Fixed(100.5), 100, "rmoveto",
+            Fixed(200.25), 0, "rlineto", 0, Fixed(300.75), "rlineto",
+            "endchar"),
+        # dup, exch, drop and index, each leaving exactly what the next
+        # drawing operator takes.
+        "stack": charstring(600, 100, "dup", "rmoveto",
+            50, 60, "exch", "rlineto", 1, 2, 3, "drop", "rlineto",
+            40, 50, 1, "index", "drop", "drop", "rlineto", "endchar"),
+        # The transient array, which is the only storage a charstring has.
+        "transient": charstring(600, 50, 50, "rmoveto",
+            200, 5, "put", 5, "get", 0, "rlineto", 0, 400, "rlineto",
+            "endchar"),
+        # eq, not, or and ifelse, which a font would use to pick between two
+        # shapes and which here pick between two coordinates.
+        "logic": charstring(600, 100, 100, "rmoveto",
+            1, 1, "eq", 0, "not", "add", 100, "mul", 0, "rlineto",
+            300, 200, 1, 2, "ifelse", 0, "exch", "rlineto", "endchar"),
+    }
+    charset, strings = cff_names(order)
+    table = assemble_cff(names("CFF arith")["psName"],
+        [programs[name] for name in order], charset=charset, strings=strings)
+    fb = cff_otf("CFF arith", order, table, advances, {0x20: "space"})
+    fb.save(out)
+
+
+def build_cff_hints(out):
+    """Stem hints, and the masks whose width the stem count decides.
+
+    Nothing here is drawn from a hint: there is no hinter (design.md section
+    8.5). What the hints decide is **how many bytes to step over**, and a reader
+    that miscounts them reads its next operator out of the middle of a mask. So
+    the fixture's glyphs are the ways a stem count can be got wrong:
+
+      * an odd operand count on `hstemhm`, which means the first operand is the
+        glyph's advance and not a stem edge;
+      * ten stems, so the mask is two bytes rather than one;
+      * stems declared **inside a subroutine**, which is what makes a mask's
+        width unknowable without running the program - the reason
+        ::gfnt_charstring_dump() takes the metrics of a run;
+      * operands still on the stack at `hintmask`, which are an implicit `vstem`
+        declaration and the one place a stem count grows with no stem operator;
+      * `cntrmask`, which is the same counting with a different operator;
+      * and a width carried on `vstem`, which the specification's list of
+        stack-clearing operators that may carry one does not name - an omission
+        rather than a rule, and fontTools reads it the same way.
+    """
+    order = [".notdef", "space", "stems", "masktwo", "maskinsubr", "implicit",
+             "cntr", "widthstem"]
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    box = (100, 100, "rmoveto", 400, "hlineto", 600, "vlineto", -400,
+           "hlineto", "endchar")
+    # Five horizontal and five vertical stems: ten hints, so a two-byte mask.
+    ten_stems = (100, 20, 150, 20, 200, 20, 250, 20, 300, 20, "hstemhm",
+                 100, 20, 150, 20, 200, 20, 250, 20, 300, 20, "vstemhm")
+    subrs = [
+        # Declares the hints the charstring will mask with, and returns.
+        charstring(100, 30, 200, 30, 400, 30, "hstemhm", "return"),
+    ]
+    programs = {
+        ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+            "vlineto", -500, "hlineto", "endchar"),
+        "space": charstring(300, "endchar"),
+        # Five operands on hstemhm: two stems and, first, the advance.
+        "stems": charstring(600, 100, 50, 300, 50, "hstemhm",
+            100, 50, 300, 50, "vstemhm", "hintmask", ("mask", b"\xf0"), *box),
+        "masktwo": charstring(600, *ten_stems, "hintmask",
+            ("mask", b"\xaa\xc0"), *box),
+        # The subroutine declares three stems; the mask here is one byte wide
+        # because of them, and nothing in this charstring says so.
+        "maskinsubr": charstring(600, -107, "callsubr", "hintmask",
+            ("mask", b"\xe0"), *box),
+        # No stem operator at all: the four operands before hintmask are an
+        # implicit vstem declaration.
+        "implicit": charstring(600, 100, 50, 300, 50, "hintmask",
+            ("mask", b"\xc0"), *box),
+        "cntr": charstring(600, 100, 50, 300, 50, "hstemhm", 100, 50, 300, 50,
+            "vstemhm", "cntrmask", ("mask", b"\xf0"), "hintmask",
+            ("mask", b"\x90"), *box),
+        # The advance on vstem, which the specification's list omits.
+        "widthstem": charstring(600, 100, 50, 300, 50, "vstem", *box),
+    }
+    charset, strings = cff_names(order)
+    table = assemble_cff(names("CFF hints")["psName"],
+        [programs[name] for name in order], charset=charset, strings=strings,
+        # defaultWidthX 600 and nominalWidthX **0**, so that a stated width of
+        # 600 in these programs is an advance of 600 and agrees with `hmtx`.
+        # The glyph whose two disagree on purpose is in `cff-subrs.otf`, and a
+        # second one here by accident made the stem widths unreadable.
+        privates=[({20: 600, 21: 0}, subrs)])
+    fb = cff_otf("CFF hints", order, table, advances, {0x20: "space"})
+    fb.save(out)
+
+
+def build_cff_subrs(out):
+    """Subroutines, their bias, and the two width defaults.
+
+    The bias is the trap: a Type 2 subroutine number is biased by **how many
+    subroutines there are** - 107 below 1240 of them - so subroutine 0 of a
+    small font is called by pushing -107. A reader that forgets the bias calls
+    the wrong subroutine in every real font, which is why a planted off-by-one
+    in it produced 156 disagreements across the corpus.
+
+    The two width defaults are the other half: `defaultWidthX` is the advance of
+    a charstring that states none, and `nominalWidthX` is what a stated one is a
+    delta from. A reader that swapped them, or that read a delta as an absolute,
+    gets every advance in the font wrong and no outline comparison sees it. One
+    glyph here states a width its `hmtx` entry disagrees with, because the two
+    are different facts and a reader should report both.
+    """
+    order = [".notdef", "space", "local", "global", "nested", "noreturn",
+             "last", "defaultw", "nominalw", "mismatch"]
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    advances["defaultw"] = 555
+    advances["nominalw"] = 545
+    # hmtx says 400 and the charstring says 700.
+    advances["mismatch"] = 400
+    local = [
+        charstring(400, "hlineto", 600, "vlineto", -400, "hlineto", "return"),
+        # Calls subroutine 0, which is number -107 once the bias is applied.
+        # Written as -106 in the first version of this fixture, which made it
+        # call *itself* - and the depth limit refused the glyph, which is the
+        # right answer to the wrong program.
+        charstring(-107, "callsubr", "return"),
+        charstring(200, "hlineto", 300, "vlineto", -200, "hlineto"),
+    ]
+    global_subrs = [
+        charstring(300, "hlineto", 500, "vlineto", -300, "hlineto", "return"),
+    ]
+    programs = {
+        ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+            "vlineto", -500, "hlineto", "endchar"),
+        "space": charstring(300, "endchar"),
+        # Local subroutine 0, which is number -107 once the bias is applied.
+        "local": charstring(600, 100, 100, "rmoveto", -107, "callsubr",
+            "endchar"),
+        "global": charstring(600, 100, 100, "rmoveto", -107, "callgsubr",
+            "endchar"),
+        # Subroutine 1 calls subroutine 0: one level of nesting, reached by two
+        # different biased numbers.
+        "nested": charstring(600, 100, 100, "rmoveto", -106, "callsubr",
+            "endchar"),
+        # Subroutine 2 ends without `return`, which the format allows: running
+        # off the end of a subroutine returns to the caller.
+        "noreturn": charstring(600, 100, 100, "rmoveto", -105, "callsubr",
+            "endchar"),
+        # The last subroutine, so that the top of the range is reached as well
+        # as the bottom.
+        "last": charstring(600, 200, 200, "rmoveto", -105, "callsubr",
+            "endchar"),
+        # No width on the first stack-clearing operator: the advance is
+        # defaultWidthX.
+        "defaultw": charstring(100, 100, "rmoveto", 400, "hlineto", 600,
+            "vlineto", -400, "hlineto", "endchar"),
+        # A delta from nominalWidthX: 500 + 45.
+        "nominalw": charstring(45, 100, 100, "rmoveto", 400, "hlineto", 600,
+            "vlineto", -400, "hlineto", "endchar"),
+        # 500 + 200, which hmtx says is 400.
+        "mismatch": charstring(200, 100, 100, "rmoveto", 400, "hlineto", 600,
+            "vlineto", -400, "hlineto", "endchar"),
+    }
+    charset, strings = cff_names(order)
+    table = assemble_cff(names("CFF subrs")["psName"],
+        [programs[name] for name in order], gsubrs=global_subrs,
+        charset=charset, strings=strings,
+        privates=[({20: 555, 21: 500}, local)])
+    fb = cff_otf("CFF subrs", order, table, advances, {0x20: "space"})
+    fb.save(out)
+
+
+def build_cff_seac(out):
+    """An accented character, and the charset and encoding that make it findable.
+
+    `endchar` with four operands draws two *other* glyphs: a base and an accent,
+    named by **Standard Encoding code** whatever the font's own encoding says.
+    That is three lookups a reader can get wrong independently - the code to a
+    name, the name to a SID, the SID to a glyph - and the corpus's 35 CFF fonts
+    contain no glyph that uses the construction at all.
+
+    The charset is in format 1, one-glyph ranges, so the range arithmetic is
+    exercised by a font whose SIDs are not contiguous; one glyph's name lives in
+    the font's own `String` INDEX rather than among the standard strings, which
+    is the only way a SID at or above 391 is reached. The encoding is a custom
+    one **with a supplement**, which maps a code to a glyph by name rather than
+    by position - and which has to be read after the base format's array has
+    been walked past.
+    """
+    order = [".notdef", "space", "A", "acute", "Aacute", "ghoti.alt"]
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    programs = {
+        ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+            "vlineto", -500, "hlineto", "endchar"),
+        "space": charstring(300, "endchar"),
+        "A": charstring(600, 50, 0, "rmoveto", 250, 700, 250, -700, "rlineto",
+            "endchar"),
+        "acute": charstring(600, 200, 750, "rmoveto", 100, 150, 60, -150,
+            "rlineto", "endchar"),
+        # adx 0, ady 40, base 'A' (code 65), accent 'acute' (code 194).
+        "Aacute": charstring(600, 0, 40, 65, 194, "endchar"),
+        "ghoti.alt": charstring(600, 100, 100, "rmoveto", 300, "hlineto", 300,
+            "vlineto", -300, "hlineto", "endchar"),
+    }
+    # One range per glyph, because these SIDs are not contiguous - and the last
+    # is in this font's own String INDEX, which is what a SID of 391 means.
+    charset = cff_charset_ranges([(sid("space"), 0), (sid("A"), 0),
+        (sid("acute"), 0), (sid("Aacute"), 0), (391, 0)])
+    # Codes for glyphs 1..4, and a supplement naming the fifth by SID.
+    encoding = cff_encoding_format0([0x20, 0x41, 0xC2, 0xC1],
+        supplements=[(0xFF, 391)])
+    table = assemble_cff(names("CFF seac")["psName"],
+        [programs[name] for name in order],
+        strings=["ghoti.alt"], charset=charset, encoding=encoding)
+    fb = cff_otf("CFF seac", order, table, advances,
+        {0x20: "space", 0x41: "A", 0xC1: "Aacute"})
+    fb.save(out)
+
+
+def build_cff_cid(out):
+    """A CID-keyed font: an `FDArray`, an `FDSelect`, and a charset of CIDs.
+
+    Three things change when a Top DICT carries `ROS`, and a reader that handles
+    only the first two draws most CID fonts nearly right:
+
+      * the Private DICT is **per glyph**, chosen by `FDSelect` out of the
+        `FDArray`, so two glyphs in one font have different local subroutines
+        *and* different width defaults;
+      * the charset holds **CIDs and not SIDs**, so a reader that looks a glyph's
+        name up in the standard strings prints whatever string happens to sit at
+        that number;
+      * there is no `Encoding` at all - the format forbids one - so a code cannot
+        be resolved by anything but a `cmap`.
+
+    `FDSelect` is in format 3 here, the range form, which is what real CID fonts
+    use; format 0's array is exercised by a hand-built table in `test_cff.cpp`,
+    where a fixture would be 64 kB of one byte per glyph.
+    """
+    order = [".notdef", "cid.one", "cid.two", "cid.three"]
+    advances = {name: 600 for name in order}
+    first_subrs = [charstring(400, "hlineto", 600, "vlineto", -400, "hlineto",
+        "return")]
+    second_subrs = [charstring(200, "hlineto", 300, "vlineto", -200, "hlineto",
+        "return")]
+    programs = {
+        ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+            "vlineto", -500, "hlineto", "endchar"),
+        # FD 0's subroutine, and FD 0's defaultWidthX.
+        "cid.one": charstring(100, 100, "rmoveto", -107, "callsubr", "endchar"),
+        # FD 1's subroutine, which is a different shape at the same number.
+        "cid.two": charstring(100, 100, "rmoveto", -107, "callsubr", "endchar"),
+        "cid.three": charstring(600, 200, 200, "rmoveto", 200, "hlineto", 200,
+            "vlineto", -200, "hlineto", "endchar"),
+    }
+    table = assemble_cff(names("CFF cid")["psName"],
+        [programs[name] for name in order],
+        strings=["Ghoti", "Fixture"],
+        # CIDs, deliberately not 1, 2, 3: a reader that returned the glyph index
+        # would agree with a charset that did.
+        charset=cff_charset_ranges([(11, 0), (22, 0), (33, 0)], wide=True),
+        is_cid=True,
+        fdselect=cff_fdselect_format3([(0, 0), (2, 1)], len(order)),
+        privates=[({20: 600, 21: 600}, first_subrs),
+                  ({20: 480, 21: 500}, second_subrs)])
+    fb = cff_otf("CFF cid", order, table, advances, {})
+    fb.save(out)
+
+
+def build_cff_type1(out):
+    """Type 1 charstrings, inside a CFF that says so.
+
+    `CharstringType 1` is a Top DICT entry the format allows and nobody ships,
+    and it is the only way to put a Type 1 *program* where both this library and
+    fontTools will read it as one - fontTools has a Type 1 interpreter of its
+    own, so the language is compared against a reference rather than against
+    this library's expectations.
+
+    That matters because Type 1 is not a dialect of Type 2. It carries its
+    advance and side bearing in `hsbw`, its `255` operand is a plain integer
+    rather than a 16.16, its subroutine numbers are unbiased, it closes contours
+    with `closepath`, it spells the accented character `seac` and corrects the
+    accent's position by a side bearing, and it reaches flex and hint
+    replacement through `callothersubr` and `pop`. Every one of those is a glyph
+    here.
+    """
+    order = [".notdef", "space", "A", "acute", "Aacute", "flex", "hints",
+             "current"]
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    # Two drawing subroutines, called with **unbiased** numbers: Type 1 has no
+    # bias, which is the difference from Type 2 that a reader sharing one call
+    # path gets wrong in both directions at once.
+    subrs = [
+        charstring(400, "hlineto", 600, "vlineto", -400, "hlineto", "return",
+            type1=True),
+        charstring(200, "hlineto", 300, "vlineto", -200, "hlineto", "return",
+            type1=True),
+    ]
+    programs = {
+        # hsbw: a side bearing of 50 and an advance of 600, and the drawing
+        # starts at the side bearing rather than at the origin.
+        ".notdef": charstring(50, 600, "hsbw", 0, 0, "rmoveto", 500, "hlineto",
+            700, "vlineto", -500, "hlineto", "closepath", "endchar",
+            type1=True),
+        "space": charstring(0, 300, "hsbw", "endchar", type1=True),
+        "A": charstring(50, 600, "hsbw", 0, 0, "rmoveto", 250, 700, "rlineto",
+            250, -700, "rlineto", "closepath", "endchar", type1=True),
+        "acute": charstring(200, 600, "hsbw", 0, 750, "rmoveto", 100, 150,
+            "rlineto", 60, -150, "rlineto", "closepath", "endchar", type1=True),
+        # seac: asb adx ady bchar achar. The accent moves by adx corrected for
+        # the difference between this charstring's side bearing and asb.
+        "Aacute": charstring(50, 600, "hsbw", 200, 0, 40, 65, 194, "seac",
+            type1=True),
+        # Flex, the way Type 1 spells it: othersubr 1 opens it, seven rmovetos
+        # are collected rather than drawn, othersubr 0 closes it and leaves the
+        # end point for two pops and a setcurrentpoint.
+        # Flex, the way Type 1 spells it. The operand order is the trap:
+        # `callothersubr` takes the arguments, then **how many** of them, then
+        # **which** OtherSubr - so starting a flex is `0 1 callothersubr` and
+        # not `1 0`, which is OtherSubr 0 given one argument and which fontTools
+        # answers with an IndexError rather than a flex.
+        "flex": charstring(50, 600, "hsbw", 100, 100, "rmoveto",
+            0, 1, "callothersubr",
+            50, 50, "rmoveto", 0, 2, "callothersubr",
+            50, 0, "rmoveto", 0, 2, "callothersubr",
+            50, -50, "rmoveto", 0, 2, "callothersubr",
+            50, 0, "rmoveto", 0, 2, "callothersubr",
+            50, 50, "rmoveto", 0, 2, "callothersubr",
+            50, 0, "rmoveto", 0, 2, "callothersubr",
+            50, -50, "rmoveto", 0, 2, "callothersubr",
+            # The three arguments to OtherSubr 0 are the flex depth and the
+            # **absolute coordinates of the final point**, which the seven
+            # collected points have already reached: (500, 100) here. Writing
+            # anything else makes two references disagree - FreeType and this
+            # library leave the point the path actually reached for the two
+            # `pop`s, and fontTools leaves these arguments - and no font in the
+            # world can tell the readings apart, because in every one of them
+            # the two are the same numbers.
+            50, 500, 100, 3, 0, "callothersubr", "pop", "pop",
+            "setcurrentpoint",
+            0, 200, "rlineto", "closepath", "endchar", type1=True),
+        # hstem3 and vstem3, and hint replacement: othersubr 3 hands back the
+        # subroutine number that `pop callsubr` then calls.
+        "hints": charstring(50, 600, "hsbw", 0, 100, 300, 100, 500, 100,
+            "hstem3", 0, 100, 300, 100, 500, 100, "vstem3",
+            "dotsection", 100, 100, "rmoveto",
+            0, 1, 3, "callothersubr", "pop", "callsubr",
+            "closepath", "endchar", type1=True),
+        # sbw, div and setcurrentpoint: the two-axis side bearing, a quotient,
+        # and the one operator that sets an absolute position.
+        "current": charstring(50, 0, 600, 0, "sbw", 100, 100, "rmoveto",
+            600, 5, "div", 0, "rlineto", 300, 400, "setcurrentpoint",
+            100, "hlineto", "closepath", "endchar", type1=True),
+    }
+    charset, strings = cff_names(order)
+    table = assemble_cff(names("CFF type1")["psName"],
+        [programs[name] for name in order], charset=charset, strings=strings,
+        charstring_type=1, privates=[({20: 600, 21: 600}, subrs)])
+    fb = cff_otf("CFF type1", order, table, advances,
+        {0x20: "space", 0x41: "A"})
+    fb.save(out)
+
 FIXTURES = {
     "basic.ttf": (build_basic,
         "TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3"),
@@ -1137,6 +2072,37 @@ FIXTURES = {
         "name: every single-byte Macintosh encoding, all 128 high bytes each"),
     "cff.otf": (build_cff,
         "OTTO flavour: a CFF outline table, every metric table unchanged"),
+    "cff-curves.otf": (build_cff_curves,
+        "CFF: every curve operator in the form a pen never writes - three-group "
+        "hvcurveto and vhcurveto with the trailing operand, hhcurveto and "
+        "vvcurveto with the leading one, rcurveline, rlinecurve, and all four "
+        "of flex, hflex, hflex1 and flex1 (twice, once per axis)"),
+    "cff-arith.otf": (build_cff_arith,
+        "CFF: the arithmetic operators computing the coordinates they draw "
+        "with - div, the 255 fixed-point operand, dup, exch, drop, index, put, "
+        "get, eq, not, mul, add and ifelse; no random, which is refused"),
+    "cff-hints.otf": (build_cff_hints,
+        "CFF: stem hints and the masks their count sizes - an odd operand "
+        "count carrying the advance, a two-byte mask, stems declared inside a "
+        "subroutine, an implicit vstem before hintmask, cntrmask, and a width "
+        "on vstem"),
+    "cff-subrs.otf": (build_cff_subrs,
+        "CFF: local and global subroutines with the bias applied, nesting, a "
+        "subroutine that ends without return, defaultWidthX, a nominalWidthX "
+        "delta, and one glyph whose charstring advance hmtx disagrees with"),
+    "cff-seac.otf": (build_cff_seac,
+        "CFF: an accented character (endchar with four operands) named by "
+        "Standard Encoding code, a charset in format 1, a name in the font's "
+        "own String INDEX, and a custom encoding with a supplement"),
+    "cff-cid.otf": (build_cff_cid,
+        "CFF: CID-keyed - ROS, an FDArray of two Font DICTs with different "
+        "Private DICTs and different local subroutines, FDSelect format 3, and "
+        "a charset holding CIDs rather than SIDs"),
+    "cff-type1.otf": (build_cff_type1,
+        "CFF with CharstringType 1: Type 1 programs - hsbw, sbw, closepath, "
+        "seac with its side-bearing correction, flex and hint replacement "
+        "through callothersubr and pop, div, dotsection, hstem3 and "
+        "setcurrentpoint"),
     "collection.ttc": (build_collection,
         "ttcf: two faces sharing tables, with different OS/2 versions"),
     "outline-simple.ttf": (build_outline_simple,

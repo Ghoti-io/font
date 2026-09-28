@@ -149,19 +149,24 @@ TEST(Outlines, AreFoundWhenTheirTablesAreBothThere) {
   EXPECT_TRUE(gfnt_face_has_outlines(truetype.face));
   EXPECT_FALSE(gfnt_face_has_outlines(glyf_only.face));
   EXPECT_FALSE(gfnt_face_has_outlines(loca_only.face));
-  // A charstring face reports false until the interpreter that reads one
-  // exists. The predicate answers "can asking for an outline succeed", and this
-  // used to say yes for `CFF ` and no for `CFF2` - two answers to one question,
-  // which left gfnt_face_strike_at() telling the caller of an OTTO font that it
-  // had outlines to scale and gfnt_face_glyph_outline() then refusing.
-  EXPECT_FALSE(gfnt_face_has_outlines(cff.face));
+  // A `CFF ` face reports **true** as of phase 2, and this assertion is the
+  // history of the question: it said true before the coverage sweep of
+  // 2026-09-27, because the predicate counted the table; false after it, because
+  // no interpreter could read one and the predicate answers "can asking for an
+  // outline succeed"; and true again now, because one can. What stayed wrong
+  // throughout the first period was that `CFF2` answered the other way for the
+  // same reason - two answers to one question, which left
+  // gfnt_face_strike_at() telling the caller of an OTTO font it had outlines to
+  // scale and gfnt_face_glyph_outline() then refusing.
+  EXPECT_TRUE(gfnt_face_has_outlines(cff.face));
   EXPECT_FALSE(gfnt_face_has_outlines(neither.face));
   EXPECT_FALSE(gfnt_face_has_outlines(nullptr));
 }
 
 TEST(Outlines, ACff2OnlyFaceHasNoneThisLibraryReads) {
-  // Section 16 defers CFF2. What a caller needs to know is whether asking for
-  // an outline can succeed, and here it cannot.
+  // Section 16 defers CFF2, and this is now the *only* reason a charstring face
+  // answers no: `CFF ` says yes, so a test that could not tell "deferred" from
+  // "not implemented yet" is one this pair of tests no longer has.
   Font font({stub(GFNT_TAG('C', 'F', 'F', '2'))}, GFNT_FLAVOUR_CFF);
   EXPECT_FALSE(gfnt_face_has_outlines(font.face));
 }

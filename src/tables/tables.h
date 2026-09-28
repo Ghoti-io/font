@@ -94,6 +94,36 @@ GFNT_Result gfnt_os2_parse(const GFNT_Face * face, void * out,
 GFNT_Result gfnt_post_parse(const GFNT_Face * face, void * out,
     GFNT_Error * error);
 
+/**
+ * The longest name any of these formats stores.
+ *
+ * `post`'s Pascal strings cannot exceed 255 bytes, and a CFF `String` INDEX
+ * element can be longer - so this is the buffer a scan uses and the length at
+ * which a name is refused rather than truncated. A truncated name is a name,
+ * and a lookup would find the wrong glyph by it.
+ */
+#define GFNT_GLYPH_NAME_MAX 511u
+
+/**
+ * One glyph's name from `post`, counted when @p out is NULL and written
+ * otherwise.
+ *
+ * Shared with `glyph/names.c`, which decides whether `post` or a CFF charset
+ * answers for a given face.
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param out Where the NUL-terminated name goes, or NULL to only count.
+ * @param capacity How big @p out is; ignored when it is NULL.
+ * @param out_length Receives the length, excluding the NUL.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_UNSUPPORTED when the font states it has no
+ *   names or uses a `post` version this library does not read;
+ *   ::GFNT_ERR_INVALID; or ::GFNT_ERR_CORRUPT.
+ */
+GFNT_Result gfnt_post_name_at(const GFNT_Face * face, uint32_t glyph,
+    char * out, size_t capacity, size_t * out_length, GFNT_Error * error);
+
 #ifdef __cplusplus
 }
 #endif

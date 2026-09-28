@@ -11,6 +11,13 @@
 #
 # Tab-separated: <filename> <what it exercises>.
 basic.ttf	TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3
+cff-arith.otf	CFF: the arithmetic operators computing the coordinates they draw with - div, the 255 fixed-point operand, dup, exch, drop, index, put, get, eq, not, mul, add and ifelse; no random, which is refused
+cff-cid.otf	CFF: CID-keyed - ROS, an FDArray of two Font DICTs with different Private DICTs and different local subroutines, FDSelect format 3, and a charset holding CIDs rather than SIDs
+cff-curves.otf	CFF: every curve operator in the form a pen never writes - three-group hvcurveto and vhcurveto with the trailing operand, hhcurveto and vvcurveto with the leading one, rcurveline, rlinecurve, and all four of flex, hflex, hflex1 and flex1 (twice, once per axis)
+cff-hints.otf	CFF: stem hints and the masks their count sizes - an odd operand count carrying the advance, a two-byte mask, stems declared inside a subroutine, an implicit vstem before hintmask, cntrmask, and a width on vstem
+cff-seac.otf	CFF: an accented character (endchar with four operands) named by Standard Encoding code, a charset in format 1, a name in the font's own String INDEX, and a custom encoding with a supplement
+cff-subrs.otf	CFF: local and global subroutines with the bias applied, nesting, a subroutine that ends without return, defaultWidthX, a nominalWidthX delta, and one glyph whose charstring advance hmtx disagrees with
+cff-type1.otf	CFF with CharstringType 1: Type 1 programs - hsbw, sbw, closepath, seac with its side-bearing correction, flex and hint replacement through callothersubr and pop, div, dotsection, hstem3 and setcurrentpoint
 cff.otf	OTTO flavour: a CFF outline table, every metric table unchanged
 cmap-format0.ttf	cmap format 0 on (1,0): the 256-byte glyph array
 cmap-format12.ttf	cmap format 12 on (3,10) past the BMP, beside a format 4

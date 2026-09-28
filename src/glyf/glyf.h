@@ -74,6 +74,37 @@ GFNT_Result gfnt_loca_range(const GFNT_Face * face, uint32_t glyph,
 GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
     size_t depth, GFNT_Outline * outline, GFNT_Error * error);
 
+/**
+ * Whether this glyph's `glyf` description is a composite.
+ *
+ * The `glyf` half of ::gfnt_face_glyph_is_composite(); `outline/producer.c`
+ * decides which producer answers.
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param out_composite Receives true for a negative contour count.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED or
+ *   ::GFNT_ERR_CORRUPT.
+ */
+GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,
+    bool * out_composite, GFNT_Error * error);
+
+/**
+ * The bounding box this glyph's `glyf` entry states.
+ *
+ * The `glyf` half of ::gfnt_face_glyph_stated_box().
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param out_box Receives the box, empty for a glyph with no description.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED or
+ *   ::GFNT_ERR_CORRUPT.
+ */
+GFNT_Result gfnt_glyf_stated_box(const GFNT_Face * face, uint32_t glyph,
+    GFNT_Box * out_box, GFNT_Error * error);
+
 #ifdef __cplusplus
 }
 #endif

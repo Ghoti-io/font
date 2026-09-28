@@ -173,6 +173,20 @@ const GFNT_SfntTable * gfnt_sfnt_find(const GFNT_Face * face, GFNT_Tag tag) {
   return NULL;
 }
 
+GFNT_Producer gfnt_sfnt_producer(const GFNT_Face * face) {
+  if (!face) {
+    return GFNT_PRODUCER_NONE;
+  }
+  if (gfnt_sfnt_find(face, GFNT_TAG('g', 'l', 'y', 'f'))
+      && gfnt_sfnt_find(face, GFNT_TAG('l', 'o', 'c', 'a'))) {
+    return GFNT_PRODUCER_GLYF;
+  }
+  if (gfnt_sfnt_find(face, GFNT_TAG_CFF)) {
+    return GFNT_PRODUCER_CFF;
+  }
+  return GFNT_PRODUCER_NONE;
+}
+
 GFNT_Result gfnt_face_table_reader(const GFNT_Face * face, GFNT_Tag tag,
     GFNT_Reader * out_reader, GFNT_Error * error) {
   const GFNT_SfntTable * entry;

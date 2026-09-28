@@ -211,9 +211,16 @@ static GFNT_Result gfnt_glyph_count_parse(const GFNT_Face * face, void * out,
     .disagreement = false,
   };
 
-  // `loca` and CFF's CharStrings join this minimum when their parsers arrive
-  // (phases 1 and 2); `hmtx` is the one that can disagree today.
+  // `hmtx` and CFF's `CharStrings` are the two that can disagree. `loca` is
+  // deliberately **not** here: a `loca` entry that runs backwards or past `glyf`
+  // condemns that one glyph and leaves the rest of the font answering (M11),
+  // whereas a glyph past the end of `CharStrings` has no charstring at all -
+  // there is nothing to condemn, so the count is what shrinks.
   if (gfnt_hmtx_glyph_bound(face, &bound) && bound < count->count) {
+    count->count = bound;
+    count->disagreement = true;
+  }
+  if (gfnt_cff_glyph_bound(face, &bound) && bound < count->count) {
     count->count = bound;
     count->disagreement = true;
   }

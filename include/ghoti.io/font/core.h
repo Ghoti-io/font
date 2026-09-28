@@ -311,6 +311,25 @@ typedef struct GFNT_Limits {
   size_t max_tables;          ///< sfnt table directory entries. 512.
   size_t max_glyphs;          ///< Glyphs per face; the format's own 65,535.
   size_t max_composite_depth; ///< Composite glyph nesting. 16.
+  /**
+   * Charstring subroutine nesting. 10, which is the Type 2 format's own.
+   *
+   * Separate from ::max_composite_depth because they are different recursions
+   * in different formats: a `glyf` composite nests glyphs, and a charstring
+   * nests *programs*, whose depth the specification states and whose limit a
+   * caller may therefore leave alone.
+   */
+  size_t max_charstring_depth;
+  /**
+   * Operators one glyph's charstring may execute. 65,536.
+   *
+   * The cap that makes a charstring terminate. Type 2 has no jump and no loop,
+   * so a program's length bounds its own straight-line work - but a subroutine
+   * may call two subroutines, each of which may call two more, and ten levels
+   * of that is a thousand-fold expansion from a few hundred bytes. Depth alone
+   * does not bound it; this does.
+   */
+  size_t max_charstring_ops;
   size_t max_outline_points;  ///< Points in one glyph's outline. 65,536.
   size_t max_contours;        ///< Contours in one glyph. 4,096.
   size_t max_ppem;            ///< Largest pixel size rasterised. 4,096.

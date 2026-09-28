@@ -721,44 +721,7 @@ GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph, size_t depth,
   return GFNT_OK;
 }
 
-GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
-    const GFNT_Variation * variation, const GFNT_Allocator * allocator,
-    GFNT_Outline ** out_outline, GFNT_Error * error) {
-  GFNT_Outline * outline = NULL;
-  GFNT_Result result;
-
-  gfnt_error_clear(error);
-  if (!face || !out_outline) {
-    return GFNT_ERR_INVALID;
-  }
-  if (variation && variation->count != 0) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        "this library does not read gvar yet, so it cannot honour variation "
-        "coordinates rather than quietly ignoring them");
-  }
-  if (!gfnt_sfnt_find(face, GFNT_TAG_GLYF)
-      || !gfnt_sfnt_find(face, GFNT_TAG_LOCA)) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        gfnt_sfnt_find(face, GFNT_TAG('C', 'F', 'F', ' '))
-            ? "this face's outlines are charstrings, which arrive in phase 2"
-            : "this face has no outlines at all");
-  }
-  result = gfnt_outline_create(allocator ? allocator : face->allocator,
-      &outline, error);
-  if (result != GFNT_OK) {
-    return result;
-  }
-  gfnt_outline_set_limits(outline, &face->limits);
-  result = gfnt_glyf_load(face, glyph, 0, outline, error);
-  if (result != GFNT_OK) {
-    gfnt_outline_destroy(outline);
-    return result;
-  }
-  *out_outline = outline;
-  return GFNT_OK;
-}
-
-GFNT_Result gfnt_face_glyph_is_composite(const GFNT_Face * face, uint32_t glyph,
+GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,
     bool * out_composite, GFNT_Error * error) {
   GFNT_Reader reader;
   bool empty = false;
@@ -785,7 +748,7 @@ GFNT_Result gfnt_face_glyph_is_composite(const GFNT_Face * face, uint32_t glyph,
   return GFNT_OK;
 }
 
-GFNT_Result gfnt_face_glyph_stated_box(const GFNT_Face * face, uint32_t glyph,
+GFNT_Result gfnt_glyf_stated_box(const GFNT_Face * face, uint32_t glyph,
     GFNT_Box * out_box, GFNT_Error * error) {
   GFNT_Reader reader;
   bool empty = false;

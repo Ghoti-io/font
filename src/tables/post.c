@@ -121,8 +121,6 @@ GFNT_Result gfnt_post_dump(const GFNT_Post * post, FILE * out) {
 /** Where format 2.0's `numberOfGlyphs` sits: straight after the 32-byte header. */
 #define GFNT_POST_HEADER_BYTES 32u
 
-/** The longest a Pascal string can be, so a reverse scan needs no allocation. */
-#define GFNT_POST_NAME_MAX 255u
 
 /**
  * One glyph's name, counted when @p out is NULL and written when it is not.
@@ -131,7 +129,7 @@ GFNT_Result gfnt_post_dump(const GFNT_Post * post, FILE * out) {
  * walk different predicates is the defect this suite has met most often. @p
  * capacity is ignored when @p out is NULL.
  */
-static GFNT_Result gfnt_post_name_at(const GFNT_Face * face, uint32_t glyph,
+GFNT_Result gfnt_post_name_at(const GFNT_Face * face, uint32_t glyph,
     char * out, size_t capacity, size_t * out_length, GFNT_Error * error) {
   static const GFNT_Tag tag = GFNT_TAG('p', 'o', 's', 't');
   const GFNT_Post * post = NULL;
@@ -265,141 +263,4 @@ static GFNT_Result gfnt_post_name_at(const GFNT_Face * face, uint32_t glyph,
     }
     at = next;
   }
-}
-
-GFNT_Result gfnt_face_glyph_name(const GFNT_Face * face, uint32_t glyph,
-    const GFNT_Allocator * allocator, char ** out_name, size_t * out_length,
-    GFNT_Error * error) {
-  static const GFNT_Tag tag = GFNT_TAG('p', 'o', 's', 't');
-  size_t needed = 0;
-  size_t written = 0;
-  char * name;
-  GFNT_Result result;
-
-  if (!face || !out_name) {
-    return gfnt_error_set(error, GFNT_ERR_INVALID, tag, 0, glyph,
-        "no face, or nowhere to put the name");
-  }
-
-  result = gfnt_post_name_at(face, glyph, NULL, 0, &needed, error);
-  if (result != GFNT_OK) {
-    return result;
-  }
-
-  if (!allocator) {
-    allocator = gfnt_allocator_default();
-  }
-  name = allocator->malloc_fn(allocator->ctx, needed + 1);
-  if (!name) {
-    return gfnt_error_set(error, GFNT_ERR_OOM, tag, 0, glyph,
-        "allocating the glyph name");
-  }
-
-  result = gfnt_post_name_at(face, glyph, name, needed + 1, &written, error);
-  if (result != GFNT_OK) {
-    allocator->free_fn(allocator->ctx, name);
-    return result;
-  }
-  if (written != needed) {
-    allocator->free_fn(allocator->ctx, name);
-    return gfnt_error_set(error, GFNT_ERR_INTERNAL, tag, 0, glyph,
-        "the glyph name's size pass and fill pass disagreed");
-  }
-
-  *out_name = name;
-  if (out_length) {
-    *out_length = written;
-  }
-  return GFNT_OK;
-}
-
-void gfnt_glyph_name_free(const GFNT_Allocator * allocator, char * name) {
-  if (!name) {
-    return;
-  }
-  if (!allocator) {
-    allocator = gfnt_allocator_default();
-  }
-  allocator->free_fn(allocator->ctx, name);
-}
-
-GFNT_Result gfnt_face_glyph_for_name(const GFNT_Face * face, const char * name,
-    uint32_t * out_glyph, GFNT_Error * error) {
-  static const GFNT_Tag tag = GFNT_TAG('p', 'o', 's', 't');
-  char buffer[GFNT_POST_NAME_MAX + 1u];
-  size_t glyphs = 0;
-  GFNT_Result result;
-
-  if (!face || !name || !out_glyph) {
-    return gfnt_error_set(error, GFNT_ERR_INVALID, tag, 0, GFNT_GLYPH_NONE,
-        "no face, no name, or nowhere to put the glyph");
-  }
-
-  result = gfnt_face_num_glyphs(face, &glyphs, error);
-  if (result != GFNT_OK) {
-    return result;
-  }
-
-  // A linear scan, and deliberately not an index: this is a text-extraction
-  // path asked once per distinct name, and a map would have to be built,
-  // memoised and invalidated for a question most callers never ask. The stack
-  // buffer is the format's own maximum, so the scan allocates nothing.
-  for (size_t glyph = 0; glyph < glyphs; ++glyph) {
-    size_t length = 0;
-
-    result = gfnt_post_name_at(face, (uint32_t)glyph, buffer, sizeof(buffer),
-        &length, NULL);
-    if (result == GFNT_ERR_UNSUPPORTED) {
-      // The table has no names at all. Reported once rather than per glyph.
-      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, tag, 0,
-          GFNT_GLYPH_NONE, "this font has no glyph names to search");
-    }
-    if (result != GFNT_OK) {
-      continue;
-    }
-    if (strcmp(buffer, name) == 0) {
-      *out_glyph = (uint32_t)glyph;
-      return GFNT_OK;
-    }
-  }
-
-  return gfnt_error_set(error, GFNT_ERR_INVALID, tag, 0, GFNT_GLYPH_NONE,
-      "no glyph in this font has that name");
-}
-
-GFNT_Result gfnt_face_glyph_names_dump(const GFNT_Face * face, FILE * out) {
-  char buffer[GFNT_POST_NAME_MAX + 1u];
-  size_t glyphs = 0;
-
-  if (!face || !out) {
-    return GFNT_ERR_INVALID;
-  }
-  if (gfnt_face_num_glyphs(face, &glyphs, NULL) != GFNT_OK) {
-    return GFNT_ERR_UNSUPPORTED;
-  }
-
-  for (size_t glyph = 0; glyph < glyphs; ++glyph) {
-    size_t length = 0;
-    const GFNT_Result result = gfnt_post_name_at(face, (uint32_t)glyph, buffer,
-        sizeof(buffer), &length, NULL);
-
-    if (result == GFNT_ERR_UNSUPPORTED) {
-      // Said once, and said rather than left out: a dump that silently omits a
-      // table lets a differential read "no names" as agreement.
-      if (fprintf(out, "glyph names: none in this font\n") < 0) {
-        return GFNT_ERR_IO;
-      }
-      return GFNT_OK;
-    }
-    if (result != GFNT_OK) {
-      if (fprintf(out, "glyph name %zu: unreadable\n", glyph) < 0) {
-        return GFNT_ERR_IO;
-      }
-      continue;
-    }
-    if (fprintf(out, "glyph name %zu: '%s'\n", glyph, buffer) < 0) {
-      return GFNT_ERR_IO;
-    }
-  }
-  return GFNT_OK;
 }

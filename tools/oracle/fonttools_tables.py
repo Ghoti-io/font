@@ -219,11 +219,29 @@ def main(argv):
                       % (index, subtable.platformID, subtable.platEncID,
                          subtable.format))
 
-    # The `post` glyph names, but only where the font actually has them:
-    # fontTools *invents* names ("glyph00012") for a format 3.0 font, and
-    # emitting those would score this library's honest refusal as a
-    # disagreement with a name nobody wrote.
-    if "post" in font and font["post"].formatType in (1.0, 2.0):
+    # Glyph names, from whichever table actually holds them - and where neither
+    # does, said rather than invented: fontTools makes up "glyph00012" for a
+    # TrueType font with `post` format 3.0, and emitting that would score this
+    # library's honest refusal as a disagreement with a name nobody wrote.
+    #
+    # **A CFF font names its glyphs in its charset**, and `getGlyphOrder()`
+    # returns those rather than invented ones - which is why the condition is not
+    # just `post`. It was until phase 2, when this library started reading the
+    # charset: the reference then reported "no names" for a font whose names it
+    # was itself reading, and 42 of them came out as disagreements.
+    top = None
+    if "CFF " in font:
+        cff = font["CFF "].cff
+        top = cff[cff.fontNames[0]]
+    if top is not None and hasattr(top, "ROS"):
+        # A CID-keyed font's charset holds CIDs, and a CID is not a name:
+        # fontTools invents `cidNNNNN` for them. The one name the format does give
+        # is glyph 0's, which is `.notdef` in every CFF - so that, and then
+        # nothing.
+        out.write("glyphname.0\t.notdef\n")
+        out.write("glyphnames.absent\t1\n")
+    elif top is not None or ("post" in font
+            and font["post"].formatType in (1.0, 2.0)):
         order = font.getGlyphOrder()
         for index, name in enumerate(order):
             out.write("glyphname.%d\t%s\n" % (index, escape(name)))

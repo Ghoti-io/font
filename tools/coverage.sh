@@ -30,8 +30,13 @@ OBJ_DIR="${1:?usage: coverage.sh <object-dir>}"
 # is fine about a report that collapsed: a sweep that measured one file would
 # print 100% and pass a floor of any height. So the denominator has a floor of
 # its own.
+#
+# **It has to be raised when the library grows**, or it stops being a control: it
+# was 3,000 against a 3,148-line library, and phase 2 took that to 4,951. A floor
+# a third below the real figure would let a report that lost a third of the
+# library through unnoticed.
 FLOOR="${GFNT_COVERAGE_FLOOR:-96}"
-LINES_FLOOR="${GFNT_COVERAGE_LINES:-3000}"
+LINES_FLOOR="${GFNT_COVERAGE_LINES:-4500}"
 
 if ! command -v gcov >/dev/null 2>&1; then
   echo "coverage: gcov not found (install gcc's gcov)" >&2

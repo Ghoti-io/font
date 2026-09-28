@@ -18,6 +18,7 @@
  */
 
 #include "test_helpers.h"
+#include "failing_allocator.h"
 
 #include <cstring>
 #include <set>
@@ -1073,6 +1074,364 @@ TEST(Charstring, EachLanguageRefusesTheOthersOperators) {
   }
 }
 
+TEST(Charstring, EveryArithmeticOperatorIsExercised) {
+  // One glyph per operator would be sixteen fixtures; what matters is that each
+  // one's arithmetic is the specification's, so each is checked by drawing a
+  // line whose length only the right answer produces.
+  struct Case {
+    Program program;
+    const char * expected;
+  };
+  const std::vector<Case> cases = {
+      // 300 - 100 = 200 across.
+      {Program().num(0).num(0).op(kRmoveto).num(300).num(100).op2(kSub).num(0)
+           .op(kRlineto).op(kEndchar), "line 200 0"},
+      // -(-200) = 200.
+      {Program().num(0).num(0).op(kRmoveto).num(-200).op2(kNeg).num(0)
+           .op(kRlineto).op(kEndchar), "line 200 0"},
+      // |-200| = 200.
+      {Program().num(0).num(0).op(kRmoveto).num(-200).op2(kAbs).num(0)
+           .op(kRlineto).op(kEndchar), "line 200 0"},
+      // sqrt(40000) = 200, on integers.
+      {Program().num(0).num(0).op(kRmoveto).num(200).num(200).op2(kMul)
+           .op2(kSqrt).num(0).op(kRlineto).op(kEndchar), "line 200 0"},
+      // 1 and 1 is true, which is one unit in 16.16; 200 times that is 200.
+      {Program().num(0).num(0).op(kRmoveto).num(1).num(1).op2(kAnd).num(200)
+           .op2(kMul).num(0).op(kRlineto).op(kEndchar), "line 200 0"},
+      // 0 or 1 is true as well.
+      {Program().num(0).num(0).op(kRmoveto).num(0).num(1).op2(kOr).num(200)
+           .op2(kMul).num(0).op(kRlineto).op(kEndchar), "line 200 0"},
+      // not 0 is true.
+      {Program().num(0).num(0).op(kRmoveto).num(0).op2(kNot).num(200)
+           .op2(kMul).num(0).op(kRlineto).op(kEndchar), "line 200 0"},
+      // 3 2 1 rolled by one puts the 200 where rlineto's dx goes.
+      {Program().num(0).num(0).op(kRmoveto).num(0).num(200).num(2).num(1)
+           .op2(kRoll).op(kRlineto).op(kEndchar), "line 200 0"},
+      // A negative roll turns the other way and is the same cycle of two.
+      {Program().num(0).num(0).op(kRmoveto).num(0).num(200).num(2).num(-1)
+           .op2(kRoll).op(kRlineto).op(kEndchar), "line 200 0"},
+      // ifelse picks the second when the comparison is false.
+      {Program().num(0).num(0).op(kRmoveto).num(500).num(200).num(3).num(2)
+           .op2(kIfelse).num(0).op(kRlineto).op(kEndchar), "line 200 0"},
+  };
+  for (size_t at = 0; at < cases.size(); ++at) {
+    GFNT_CharstringContext context = bare();
+    Drawn drawn;
+    ASSERT_EQ(drawn.go(cases[at].program, &context), GFNT_OK)
+        << "case " << at << ": " << drawn.error.message;
+    const std::vector<std::string> path = path_of(drawn.outline);
+    ASSERT_EQ(path.size(), 3u) << "case " << at;
+    EXPECT_EQ(path[1], cases[at].expected) << "case " << at;
+  }
+}
+
+TEST(Charstring, SqrtOfZeroAndOfANegativeIsZero) {
+  // Not a number this can answer, and the answer is the one that keeps the
+  // program running: the alternative is an interpreter that refuses a glyph
+  // over an operand nothing draws with.
+  for (int operand : {0, -400}) {
+    Program program;
+    program.num(0).num(0).op(kRmoveto).num(operand).op2(kSqrt).num(100)
+        .op(kRlineto).op(kEndchar);
+    GFNT_CharstringContext context = bare();
+    Drawn drawn;
+    ASSERT_EQ(drawn.go(program, &context), GFNT_OK) << drawn.error.message;
+    EXPECT_EQ(path_of(drawn.outline), (std::vector<std::string>{
+        "move 0 0", "line 0 100", "close"})) << operand;
+  }
+}
+
+TEST(Charstring, RrcurvetoDrawsEveryTripleItIsGiven) {
+  // The plainest curve operator, and the one the short forms are shorthand for.
+  Program program;
+  program.num(0).num(0).op(kRmoveto)
+      .num(10).num(20).num(30).num(40).num(50).num(60)
+      .num(10).num(-20).num(30).num(-40).num(50).num(-60)
+      .op(kRrcurveto).op(kEndchar);
+  GFNT_CharstringContext context = bare();
+  Drawn drawn;
+
+  ASSERT_EQ(drawn.go(program, &context), GFNT_OK) << drawn.error.message;
+  EXPECT_EQ(path_of(drawn.outline), (std::vector<std::string>{
+      "move 0 0",
+      "cubic 10 20 40 60 90 120",
+      "cubic 100 100 130 60 180 0",
+      "close"}));
+}
+
+TEST(Charstring, TheSubroutineBiasHasThreeStepsAndTheCountPicksOne) {
+  // 107 below 1240 subroutines, 1131 below 33900, 32768 above. A font with that
+  // many subroutines is a CJK font; what is tested here is the arithmetic, so
+  // the accessor reports the count and refuses every index - which makes the
+  // *number* the interpreter asked for the thing under test.
+  struct Case {
+    size_t count;
+    int32_t number;   ///< What the program pushes.
+  };
+  // Each pushes the number that, correctly biased, asks for subroutine 0 - and
+  // subroutine 0 is refused, so a reader using the wrong bias asks for a
+  // different index and gets the same refusal. What separates them is the
+  // message's *index*, so this checks the refusal and the fixture below checks
+  // the arithmetic where it can be seen.
+  const std::vector<Case> cases = {{1300, -1131}, {40000, -32768}};
+  for (const Case & item : cases) {
+    Subrs empty;
+    Program program;
+    program.num(0).num(0).op(kRmoveto).num(item.number).op(kCallsubr)
+        .op(kEndchar);
+    GFNT_CharstringContext context = bare();
+    empty.fill(&context.local);
+    // The count is what the bias comes from, and it is a claim the container
+    // makes rather than something the accessor proves.
+    context.local.count = item.count;
+    Drawn drawn;
+    EXPECT_EQ(drawn.go(program, &context), GFNT_ERR_CORRUPT)
+        << "count " << item.count;
+    // The biased number is *inside* the count the container claimed, so the
+    // interpreter asks for it and the accessor is what refuses - which is the
+    // arm a font with a lying subroutine count reaches.
+    names(drawn.error, "the container refused to produce");
+  }
+
+  // And with the subroutine there, the biased number reaches it.
+  Subrs local;
+  Program body;
+  body.num(100).num(0).op(kRlineto).op(kReturn);
+  local.items.push_back(body.bytes);
+  Program program;
+  program.num(0).num(0).op(kRmoveto).num(-107).op(kCallsubr).op(kEndchar);
+  GFNT_CharstringContext context = bare();
+  local.fill(&context.local);
+  Drawn drawn;
+  ASSERT_EQ(drawn.go(program, &context), GFNT_OK) << drawn.error.message;
+  EXPECT_EQ(gfnt_outline_point_count(drawn.outline), 2u);
+}
+
+TEST(Charstring, AnAllocationFailureAnywhereInARunIsReported) {
+  // Every point a curve adds is an allocation that can refuse, and the arms
+  // that carry the refusal out of the interpreter are unreachable from a
+  // working allocator. The sweep is by request number, so each one stops the
+  // run at a different operator.
+  Program program;
+  program.num(0).num(0).op(kRmoveto);
+  for (int i = 0; i < 6; ++i) {
+    program.num(10).num(20).num(30).num(40).num(50).num(60).op(kRrcurveto)
+        .num(10).num(10).op(kRlineto).num(20).num(30).op(kRmoveto);
+  }
+  program.op(kEndchar);
+
+  gfnttest::FailingAllocator counter((size_t)-1);
+  GFNT_Outline * measured = nullptr;
+  ASSERT_EQ(gfnt_outline_create(counter.get(), &measured, nullptr), GFNT_OK);
+  GFNT_CharstringContext context = bare();
+  ASSERT_EQ(gfnt_charstring_run(GFNT_CHARSTRING_TYPE2, program.bytes.data(),
+      program.bytes.size(), &context, measured, nullptr, nullptr), GFNT_OK);
+  gfnt_outline_destroy(measured);
+  const size_t requests = counter.requests();
+  ASSERT_GT(requests, 2u);
+
+  size_t refusals = 0;
+  for (size_t at = 0; at < requests; ++at) {
+    gfnttest::FailingAllocator allocator(at);
+    GFNT_Outline * outline = nullptr;
+    if (gfnt_outline_create(allocator.get(), &outline, nullptr) != GFNT_OK) {
+      allocator.stop_failing();
+      continue;
+    }
+    GFNT_Error error{};
+    const GFNT_Result result = gfnt_charstring_run(GFNT_CHARSTRING_TYPE2,
+        program.bytes.data(), program.bytes.size(), &context, outline, nullptr,
+        &error);
+    if (result != GFNT_OK) {
+      EXPECT_EQ(result, GFNT_ERR_OOM) << "refusing request " << at;
+      ++refusals;
+    }
+    allocator.stop_failing();
+    gfnt_outline_destroy(outline);
+    EXPECT_EQ(allocator.live(), 0u) << "refusing request " << at;
+  }
+  // The denominator: a sweep where nothing was refused measured nothing.
+  EXPECT_GT(refusals, 1u);
+}
+
+TEST(Charstring, AnAccentedCharacterCarriesTheAllocationFailureOut) {
+  // `seac` builds a second outline of its own, so it has an allocation path the
+  // ordinary run does not.
+  StandardGlyphs glyphs;
+  Program base;
+  base.num(0).num(0).op(kRmoveto).num(100).num(0).op(kRlineto).op(kEndchar);
+  glyphs.items.push_back({65, base.bytes});
+  glyphs.items.push_back({194, base.bytes});
+
+  Program program;
+  program.num(200).num(700).num(65).num(194).op(kEndchar);
+  GFNT_CharstringContext context = bare();
+  context.standard_code = &StandardGlyphs::at;
+  context.standard_user = &glyphs;
+
+  size_t refusals = 0;
+  for (size_t at = 0; at < 12; ++at) {
+    gfnttest::FailingAllocator allocator(at);
+    GFNT_Outline * outline = nullptr;
+    if (gfnt_outline_create(allocator.get(), &outline, nullptr) != GFNT_OK) {
+      allocator.stop_failing();
+      continue;
+    }
+    const GFNT_Result result = gfnt_charstring_run(GFNT_CHARSTRING_TYPE2,
+        program.bytes.data(), program.bytes.size(), &context, outline, nullptr,
+        nullptr);
+    if (result != GFNT_OK) {
+      EXPECT_EQ(result, GFNT_ERR_OOM) << "refusing request " << at;
+      ++refusals;
+    }
+    allocator.stop_failing();
+    gfnt_outline_destroy(outline);
+    EXPECT_EQ(allocator.live(), 0u) << "refusing request " << at;
+  }
+  EXPECT_GT(refusals, 1u);
+}
+
+TEST(Charstring, EveryOperatorRefusesAnOperandListItCannotUse) {
+  // One table rather than thirty tests, because what is being checked is the
+  // same thing thirty times: an operator given fewer operands than it takes is a
+  // corrupt charstring, and the arm that says so is unreachable from a font -
+  // no writer emits one. The expected result is the same for all of them; what
+  // differs is which line reports it.
+  struct Case {
+    Program program;
+    GFNT_CharstringType type;
+    const char * what;
+  };
+  const GFNT_CharstringType two = GFNT_CHARSTRING_TYPE2;
+  const GFNT_CharstringType one = GFNT_CHARSTRING_TYPE1;
+  const std::vector<Case> cases = {
+      {Program().op(kRmoveto), two, "rmoveto with nothing"},
+      {Program().num(1).op(kRmoveto), two, "rmoveto with one operand"},
+      {Program().op(kHmoveto), two, "hmoveto with nothing"},
+      {Program().op(kVmoveto), two, "vmoveto with nothing"},
+      {Program().num(1).num(2).op(kRcurveline), two, "rcurveline too short"},
+      {Program().num(1).num(2).op(kRlinecurve), two, "rlinecurve too short"},
+      {Program().num(1).op2(kFlex), two, "flex too short"},
+      {Program().num(1).op2(kHflex), two, "hflex too short"},
+      {Program().num(1).op2(kHflex1), two, "hflex1 too short"},
+      {Program().num(1).op2(kFlex1), two, "flex1 too short"},
+      {Program().op(kCallsubr), two, "callsubr with no number"},
+      {Program().op(kCallgsubr), two, "callgsubr with no number"},
+      // Type 1's own, and the Type 2 operators it does not have.
+      {Program().num(1).op(kHsbw), one, "hsbw with one operand"},
+      {Program().num(1).op2(kSbw), one, "sbw too short"},
+      {Program().num(1).op2(kSeac), one, "seac too short"},
+      {Program().num(1).op2(kSetcurrentpoint), one, "setcurrentpoint too short"},
+      {Program().num(1).op2(kCallothersubr), one, "callothersubr too short"},
+      // callothersubr claiming more arguments than the stack holds.
+      {Program().num(9).num(0).op2(kCallothersubr), one, "callothersubr lying"},
+      {Program().num(0).num(0).op(kVvcurveto), one, "vvcurveto in Type 1"},
+      {Program().num(0).num(0).op(kHhcurveto), one, "hhcurveto in Type 1"},
+      {Program().num(0).num(0).op(kRlinecurve), one, "rlinecurve in Type 1"},
+      {Program().num(0).num(0).op(kCntrmask), one, "cntrmask in Type 1"},
+      {Program().num(0).num(0).op2(kHflex), one, "hflex in Type 1"},
+      {Program().num(0).num(0).op2(kHflex1), one, "hflex1 in Type 1"},
+      {Program().num(0).num(0).op2(kFlex1), one, "flex1 in Type 1"},
+      {Program().num(0).num(0).op2(kDotsection), two, "dotsection in Type 2"},
+      {Program().num(0).num(0).op2(kVstem3), two, "vstem3 in Type 2"},
+      {Program().num(0).num(0).op2(kSbw), two, "sbw in Type 2"},
+      {Program().num(0).num(0).op2(kPop), two, "pop in Type 2"},
+      {Program().num(0).num(0).op2(kSetcurrentpoint), two,
+          "setcurrentpoint in Type 2"},
+      {Program().num(0).num(0).op(kClosepath), two, "closepath in Type 2"},
+      // A two-byte operator whose second byte is not there.
+      {Program().op(kEscape), two, "an escape at the end"},
+      // A two-byte operator neither format defines.
+      {Program().num(1).op2(99), two, "an undefined two-byte operator"},
+      {Program().num(1).op2(99), one, "an undefined two-byte operator, Type 1"},
+  };
+  for (const Case & item : cases) {
+    GFNT_CharstringContext context = bare();
+    Drawn drawn;
+    EXPECT_EQ(drawn.go(item.program, &context, item.type), GFNT_ERR_CORRUPT)
+        << item.what;
+    EXPECT_NE(drawn.error.message, nullptr) << item.what;
+  }
+}
+
+TEST(Charstring, ATypeOneProgramThatDrawsBeforeItMovesOpensAContourWhereItIs) {
+  // The one place a charstring may draw with no current contour, and the arm
+  // that opens one. A curve reaches it as well as a line, and both have to
+  // begin where the path *is* rather than where the segment ends.
+  Program lines;
+  lines.num(50).num(600).op(kHsbw).num(100).num(0).op(kRlineto).op(kEndchar);
+  Program curves;
+  curves.num(50).num(600).op(kHsbw)
+      .num(10).num(20).num(30).num(40).num(50).num(60).op(kRrcurveto)
+      .op(kEndchar);
+  GFNT_CharstringContext context = bare();
+
+  Drawn first;
+  ASSERT_EQ(first.go(lines, &context, GFNT_CHARSTRING_TYPE1), GFNT_OK)
+      << first.error.message;
+  EXPECT_EQ(path_of(first.outline), (std::vector<std::string>{
+      "move 50 0", "line 150 0", "close"}));
+
+  Drawn second;
+  ASSERT_EQ(second.go(curves, &context, GFNT_CHARSTRING_TYPE1), GFNT_OK)
+      << second.error.message;
+  EXPECT_EQ(path_of(second.outline), (std::vector<std::string>{
+      "move 50 0", "cubic 60 20 90 60 140 120", "close"}));
+}
+
+TEST(Charstring, AHintReplacementWithNoArgumentsStillLeavesAResult) {
+  // `0 3 callothersubr` - no arguments at all, which a font should not write and
+  // which the reference interpreters answer rather than refuse. What `pop` reads
+  // back is then the subroutine number 3 itself.
+  Program program;
+  program.num(0).num(600).op(kHsbw).num(0).num(0).op(kRmoveto)
+      .num(0).num(3).op2(kCallothersubr).op2(kPop).num(0).op(kRlineto)
+      .op(kEndchar);
+  GFNT_CharstringContext context = bare();
+  Drawn drawn;
+
+  ASSERT_EQ(drawn.go(program, &context, GFNT_CHARSTRING_TYPE1), GFNT_OK)
+      << drawn.error.message;
+  EXPECT_EQ(path_of(drawn.outline), (std::vector<std::string>{
+      "move 0 0", "line 3 0", "close"}));
+}
+
+TEST(Charstring, AnAccentedCharacterNamingACodeOutsideTheByteRangeIsCorrupt) {
+  StandardGlyphs glyphs;
+  Program base;
+  base.num(0).num(0).op(kRmoveto).num(10).num(0).op(kRlineto).op(kEndchar);
+  glyphs.items.push_back({65, base.bytes});
+
+  Program program;
+  program.num(0).num(0).num(65).wide(300).op(kEndchar);
+  GFNT_CharstringContext context = bare();
+  context.standard_code = &StandardGlyphs::at;
+  context.standard_user = &glyphs;
+  Drawn drawn;
+
+  EXPECT_EQ(drawn.go(program, &context), GFNT_ERR_CORRUPT);
+  names(drawn.error, "outside 0-255");
+}
+
+TEST(Charstring, AnAccentWhoseCharstringIsMissingIsRefusedSeparately) {
+  // The base resolves and the accent does not, which is a different line from
+  // the base failing: a font can have one and not the other.
+  StandardGlyphs glyphs;
+  Program base;
+  base.num(0).num(0).op(kRmoveto).num(10).num(0).op(kRlineto).op(kEndchar);
+  glyphs.items.push_back({65, base.bytes});
+
+  Program program;
+  program.num(0).num(0).num(65).num(194).op(kEndchar);
+  GFNT_CharstringContext context = bare();
+  context.standard_code = &StandardGlyphs::at;
+  context.standard_user = &glyphs;
+  Drawn drawn;
+
+  EXPECT_EQ(drawn.go(program, &context), GFNT_ERR_CORRUPT);
+  names(drawn.error, "whose accent");
+}
+
 // ---------------------------------------------------------------- the dump
 
 TEST(CharstringDump, EveryOperatorIsNamedWithItsOperands) {
@@ -1163,9 +1522,12 @@ TEST(CharstringDump, EveryWriteIsCheckedForFailure) {
   // rather than swallowed.
   Program program;
   program.num(600).num(0).num(0).op(kRmoveto).num(100).num(20).op(kHstemhm)
-      .op(kHintmask).raw(0xC0).num(10).op(kHlineto).op(kEndchar);
+      .op(kHintmask).raw(0xC0).num(10).op(kHlineto).op(kEndchar)
+      // A mask whose bytes are written one fprintf each, and two trailing
+      // operands, so that every write in the function is on the path.
+      .num(100).num(20).op(kHstemhm).op(kHintmask).raw(0x80).num(1).num(2);
   size_t reported = 0;
-  for (size_t writes = 0; writes < 12; ++writes) {
+  for (size_t writes = 0; writes < 40; ++writes) {
     gfnttest::FailingSink sink(writes);
     const GFNT_Result result = gfnt_charstring_dump(GFNT_CHARSTRING_TYPE2,
         program.bytes.data(), program.bytes.size(), nullptr, sink.get());
@@ -1177,6 +1539,117 @@ TEST(CharstringDump, EveryWriteIsCheckedForFailure) {
     }
   }
   EXPECT_GT(reported, 5u) << "a failing stream should be reported, not ignored";
+}
+
+TEST(CharstringDump, EveryOperatorTheFormatDefinesHasAName) {
+  // The dump's name table is one line per operator, and a dump of a program
+  // that uses six of them leaves the rest unread - which for a table whose
+  // entries are *strings* means nothing checks that they are the right strings.
+  // So one program uses every one-byte operator and every two-byte operator,
+  // and the dump of it is required to name each.
+  Program program;
+  const std::vector<uint8_t> one_byte = {kHstem, kVstem, kVmoveto, kRlineto,
+      kHlineto, kVlineto, kRrcurveto, kReturn, kHstemhm, kRmoveto, kHmoveto,
+      kVstemhm, kRcurveline, kRlinecurve, kVvcurveto, kHhcurveto, kCallgsubr,
+      kVhcurveto, kHvcurveto, kEndchar};
+  for (uint8_t which : one_byte) {
+    program.num(1).num(2).op(which);
+  }
+  const std::vector<uint8_t> two_byte = {kAnd, kOr, kNot, kAbs, kAdd, kSub,
+      kDiv, kNeg, kEq, kDrop, kPut, kGet, kIfelse, kRandom, kMul, kSqrt, kDup,
+      kExch, kIndex, kRoll, kHflex, kFlex, kHflex1, kFlex1};
+  for (uint8_t which : two_byte) {
+    program.num(3).op2(which);
+  }
+  // And the numeric forms, each of which the dump decodes separately.
+  program.num(-500).wide(-30000).fixed(-70000).num(-40).num(700);
+  program.raw(31);  // An operator to hang the trailing operands on.
+
+  gfnttest::CapturedOutput out;
+  ASSERT_EQ(gfnt_charstring_dump(GFNT_CHARSTRING_TYPE2, program.bytes.data(),
+      program.bytes.size(), nullptr, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+
+  for (const char * name : {"hstem", "vstem", "vmoveto", "rlineto", "hlineto",
+      "vlineto", "rrcurveto", "return", "hstemhm", "rmoveto", "hmoveto",
+      "vstemhm", "rcurveline", "rlinecurve", "vvcurveto", "hhcurveto",
+      "callgsubr", "vhcurveto", "hvcurveto", "endchar", "and", "or", "not",
+      "abs", "add", "sub", "div", "neg", "eq", "drop", "put", "get", "ifelse",
+      "random", "mul", "sqrt", "dup", "exch", "index", "roll", "hflex", "flex",
+      "hflex1", "flex1"}) {
+    EXPECT_NE(text.find(std::string(" ") + name), std::string::npos)
+        << name << " is not named in the dump";
+  }
+  // The negative operand forms, which are where a shift of a negative value
+  // used to be - and are printed as themselves.
+  EXPECT_NE(text.find("-500"), std::string::npos) << text;
+  EXPECT_NE(text.find("-30000"), std::string::npos) << text;
+}
+
+TEST(CharstringDump, TypeOnesOperatorsAreNamedAndItsReservedOnesSaidSo) {
+  Program program;
+  for (uint8_t which : {kClosepath, kHsbw, kCallsubr}) {
+    program.num(1).num(2).op(which);
+  }
+  for (uint8_t which : {kDotsection, kVstem3, kHstem3, kSeac, kSbw,
+      kCallothersubr, kPop, kSetcurrentpoint}) {
+    program.num(3).op2(which);
+  }
+  // A Type 2 flex operator, which Type 1 does not have: the dump says
+  // `reserved` rather than naming an operator this program cannot contain.
+  program.num(4).op2(kFlex);
+  // Type 1's 255 is an integer, so this is -70000 and not a fraction.
+  program.fixed(-70000).num(1).op(kEndchar);
+
+  gfnttest::CapturedOutput out;
+  ASSERT_EQ(gfnt_charstring_dump(GFNT_CHARSTRING_TYPE1, program.bytes.data(),
+      program.bytes.size(), nullptr, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+
+  EXPECT_NE(text.find("charstring Type 1"), std::string::npos) << text;
+  for (const char * name : {"closepath", "hsbw", "callsubr", "dotsection",
+      "vstem3", "hstem3", "seac", "sbw", "callothersubr", "pop",
+      "setcurrentpoint", "reserved"}) {
+    EXPECT_NE(text.find(std::string(" ") + name), std::string::npos)
+        << name << " is not named in the dump";
+  }
+  EXPECT_NE(text.find("-70000"), std::string::npos) << text;
+}
+
+TEST(CharstringDump, AReservedOperatorIsNamedRatherThanGuessedAt) {
+  Program program;
+  program.raw(15).raw(16).raw(17).op(kEndchar);
+  gfnttest::CapturedOutput out;
+
+  ASSERT_EQ(gfnt_charstring_dump(GFNT_CHARSTRING_TYPE2, program.bytes.data(),
+      program.bytes.size(), nullptr, out.get()), GFNT_OK);
+  const std::string text = out.finish();
+  // Three of them, so the dump is not stopping at the first.
+  size_t at = 0;
+  size_t found = 0;
+  while ((at = text.find("reserved", at)) != std::string::npos) {
+    ++found;
+    at += 1;
+  }
+  EXPECT_EQ(found, 3u) << text;
+}
+
+TEST(CharstringDump, ATruncatedOperandEndsTheDumpWithoutReadingPastIt) {
+  // Each multi-byte form, cut short. The dump stops rather than reading the
+  // byte after the charstring, and says what it had.
+  const std::vector<Program> cases = {
+      Program().raw(247),
+      Program().raw(kShortint).raw(0x01),
+      Program().raw(kFixed).raw(0x01).raw(0x02),
+      Program().raw(251),
+  };
+  for (const Program & program : cases) {
+    gfnttest::CapturedOutput out;
+    EXPECT_EQ(gfnt_charstring_dump(GFNT_CHARSTRING_TYPE2, program.bytes.data(),
+        program.bytes.size(), nullptr, out.get()), GFNT_OK);
+    const std::string text = out.finish();
+    EXPECT_NE(text.find("charstring Type 2"), std::string::npos) << text;
+  }
 }
 
 TEST(CharstringDump, NullArgumentsAreCallerErrors) {

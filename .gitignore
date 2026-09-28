@@ -29,3 +29,13 @@ tests/data/out
 
 # Pycache files (for generated test fixtures, in any directory)
 **/__pycache__
+
+# libFuzzer's artifacts. It writes them into the working directory - which for
+# `make fuzz-run-*` is the repository root - with these exact prefixes, and one
+# of them turned up in `git status` after the first run of a new harness. Named
+# by prefix rather than ignored wholesale: an artifact worth keeping is worth
+# committing under a name of its own, and the corpus itself lives under build/.
+crash-*
+leak-*
+timeout-*
+oom-*

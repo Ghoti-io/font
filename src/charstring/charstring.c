@@ -74,6 +74,29 @@
  */
 #define GFNT_FIXED_ONE 65536
 
+/**
+ * The largest value that can still be scaled to 16.16 inside an int64.
+ *
+ * `div` and `sqrt` both form their result by scaling an operand up by 65,536
+ * first, and 2^61 times that is not an int64. Saturating to *int32* instead was
+ * the first fix and was wrong in a way a test caught: `200 200 mul` is 40,000 in
+ * 16.16, which is 2.6 billion as a raw value, so clamping it to int32 turned
+ * `sqrt` of it into 181 rather than 200. The bound that matters is the one the
+ * scaling needs, and this is it.
+ */
+#define GFNT_FIXED_SCALE_MAX (INT64_MAX / GFNT_FIXED_ONE)
+
+/** Clamp to a magnitude ::GFNT_FIXED_SCALE_MAX allows, keeping the sign. */
+static int64_t gfnt_cs_scalable(int64_t value) {
+  if (value > GFNT_FIXED_SCALE_MAX) {
+    return GFNT_FIXED_SCALE_MAX;
+  }
+  if (value < -GFNT_FIXED_SCALE_MAX) {
+    return -GFNT_FIXED_SCALE_MAX;
+  }
+  return value;
+}
+
 /** The transient array `put` and `get` share. The specification's size. */
 #define GFNT_CS_TRANSIENT 32
 
@@ -493,9 +516,8 @@ static int64_t gfnt_cs_sqrt_fixed(int64_t value) {
   if (value <= 0) {
     return 0;
   }
-  // sqrt(v / 65536) * 65536 == sqrt(v * 65536), computed on integers - and the
-  // operand is saturated into int32 first for the reason `div`'s is.
-  target = (int64_t)gfnt_saturate32(value) * GFNT_FIXED_ONE;
+  // sqrt(v / 65536) * 65536 == sqrt(v * 65536), computed on integers.
+  target = gfnt_cs_scalable(value) * GFNT_FIXED_ONE;
   guess = 1;
   for (step = 0; step < 64; step++) {
     int64_t next;
@@ -552,12 +574,8 @@ static GFNT_Result gfnt_cs_arithmetic(GFNT_CsState * state, uint8_t op,
         return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, offset,
             "a charstring divided by zero");
       }
-      // Saturated into int32 before scaling, not clamped: 2^61 times 65,536 is
-      // not an int64 either, and a 16.16 value *is* an int32 by definition - so
-      // an operand past that range has already lost its meaning and saturating
-      // is the answer that stays in the type.
       state->stack[state->count - 1] = gfnt_clamp64(gfnt_round_div(
-          (int64_t)gfnt_saturate32(a) * GFNT_FIXED_ONE, b));
+          gfnt_cs_scalable(a) * GFNT_FIXED_ONE, b));
       return GFNT_OK;
     case GFNT_CS2_NEG:
       if (state->count < 1) { break; }

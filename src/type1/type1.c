@@ -338,7 +338,10 @@ GFNT_Result gfnt_type1_derive(GFNT_Face * face, GFNT_Error * error) {
   clear.allocator = face->allocator;
   cipher.allocator = face->allocator;
 
-  result = gfnt_reader_init_blob(&reader, face->blob, GFNT_TAG_TYPE1, error);
+  // `bytes` rather than `blob`, so that a `.pfb.gz` works: the gzip layer has
+  // already replaced the bytes by the time this runs, and reading the caller's
+  // blob here would decipher the compressed file.
+  result = gfnt_reader_init_blob(&reader, face->bytes, GFNT_TAG_TYPE1, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -395,8 +398,9 @@ GFNT_Result gfnt_type1_derive(GFNT_Face * face, GFNT_Error * error) {
     return result;
   }
 
-  face->owned = derived;
-  face->bytes = derived;
+  // Through the helper, which frees whatever layer these bytes were derived from -
+  // the caller's blob is not owned and is left alone, but a gzip layer is.
+  gfnt_face_adopt_bytes(face, derived);
   return gfnt_sfnt_single_table_directory(face, GFNT_FLAVOUR_TYPE1,
       GFNT_TAG_TYPE1, error);
 }

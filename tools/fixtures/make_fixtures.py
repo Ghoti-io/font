@@ -2866,7 +2866,63 @@ def build_bitmap_swap_pcf(out):
     """
     build_pcf(out, pad=4, bit_msb=False, byte_msb=True, scan=4)
 
+
+def gzip_bytes(data):
+    """Gzip @p data reproducibly.
+
+    `mtime=0` because the default is the clock, and RFC 1952 puts it in the header:
+    without it these fixtures would differ on every run and `check-fixtures` would
+    fail on the second one. The compression level is stated rather than defaulted
+    for the same reason, and **the zlib doing the work is the image's**, which is
+    what makes byte-comparing a regeneration mean anything (section 14.7).
+    """
+    import gzip
+
+    return gzip.compress(data, compresslevel=9, mtime=0)
+
+
+def build_bitmap_gz_pcf(out):
+    """The PCF that `bitmap.pcf` is, in the wrapper PCFs actually ship in.
+
+    All 234 PCFs in the oracle image are `.pcf.gz`; a reader that cannot undo gzip
+    reads almost no PCF that exists. It must produce byte-identical glyphs to
+    `bitmap.pcf`, which is the whole assertion - the wrapper decides nothing about
+    what the font is.
+    """
+    build_pcf(out + ".plain")
+    with open(out + ".plain", "rb") as handle:
+        plain = handle.read()
+    os.remove(out + ".plain")
+    with open(out, "wb") as handle:
+        handle.write(gzip_bytes(plain))
+
+
+def build_type1_gz_pfb(out):
+    """A gzipped Type 1 program: two derivations, stacked.
+
+    Nobody ships a `.pfb.gz`, and this fixture is not about that. It is about the
+    *composition*: the gzip layer replaces the face's bytes, and then `eexec`
+    replaces them again - so each layer has to free the one it consumed after
+    reading it, and the first version of that code leaked the gzip blob because the
+    Type 1 path assigned ownership directly. It must read identically to
+    `type1.pfb`.
+    """
+    build_type1_pfb(out + ".plain")
+    with open(out + ".plain", "rb") as handle:
+        plain = handle.read()
+    os.remove(out + ".plain")
+    with open(out, "wb") as handle:
+        handle.write(gzip_bytes(plain))
+
 FIXTURES = {
+    "bitmap-gz.pcf.gz": (build_bitmap_gz_pcf,
+        "The same PCF as bitmap.pcf inside gzip, which is how every PCF in the "
+        "world ships: it must read to identical glyphs, because the wrapper "
+        "decides nothing about what the font is"),
+    "type1-gz.pfb.gz": (build_type1_gz_pfb,
+        "A gzipped Type 1 program - two derivations stacked, inflate then eexec - "
+        "which nobody ships and which is the only input where each layer has to "
+        "free the one it consumed"),
     "bitmap.hex": (build_bitmap_hex,
         "GNU Unifont .hex: eight glyphs of 8x16 in hexadecimal, one per line, "
         "with no header, no baseline and no names - the same design as "

@@ -31,6 +31,9 @@
 #include <string>
 #include <vector>
 
+#include <ghoti.io/compress/compress.h>
+#include <ghoti.io/compress/errors.h>
+
 #include <ghoti.io/font/bitmap.h>
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/face.h>
@@ -44,6 +47,7 @@
 #include "sfnt_builder.h"
 
 #include "../../src/bitmap/bitmap.h"
+#include "../../src/blob/gzip.h"
 
 namespace {
 
@@ -109,6 +113,51 @@ struct Crafted {
   Crafted(const Crafted &) = delete;
   Crafted & operator=(const Crafted &) = delete;
 };
+
+/** A fixture's bytes, for the tests that damage one. */
+std::string read_fixture(const std::string & name) {
+  const std::string path = gfnttest::data("fonts/" + name);
+  FILE * handle = fopen(path.c_str(), "rb");
+  std::string out;
+  if (!handle) {
+    return out;
+  }
+  char buffer[4096];
+  size_t got;
+  while ((got = fread(buffer, 1, sizeof buffer, handle)) > 0) {
+    out.append(buffer, got);
+  }
+  fclose(handle);
+  return out;
+}
+
+/**
+ * @p data as a gzip member, built here rather than read from a fixture.
+ *
+ * A bomb is 256 KiB of zeros in 300 bytes, which no committed fixture should be:
+ * `check-fixtures` would regenerate it every run and the repository would carry a
+ * file whose only purpose is to be refused. So the two tests that need one build it,
+ * with a **stored** deflate block for the header and a run-length one for the body -
+ * the minimum of RFC 1951 that produces a member every inflater accepts.
+ */
+std::string gzip_of(const std::string & data) {
+  // A gzip member wrapping a single dynamic-Huffman-free deflate stream is awkward
+  // to write by hand, so this uses the deflate encoder the library already links:
+  // the point of these tests is this library's *decoder* and its ceiling, and an
+  // encoder from the same dependency is the shortest path to a legal member.
+  void * out = nullptr;
+  size_t size = 0;
+  std::string result;
+
+  if (gcomp_encode_alloc(nullptr, "gzip", nullptr, data.data(), data.size(),
+          &out, &size)
+      != GCOMP_OK) {
+    return result;
+  }
+  result.assign(static_cast<const char *>(out), size);
+  gcomp_buffer_free(nullptr, out);
+  return result;
+}
 
 /** One glyph's pixels as a string of rows, for comparing containers. */
 std::string pixels(const GFNT_Face * face, uint32_t glyph) {
@@ -176,6 +225,151 @@ TEST(Bitmap, FourContainersDrawOneDesign) {
         << shared_design()[0] << " and " << shared_design()[i]
         << " hold one design and read differently";
   }
+}
+
+TEST(Bitmap, AGzippedPcfIsThePcfInsideIt) {
+  // Every PCF in the world ships as `.pcf.gz` - all 234 in the oracle image do - so
+  // this is not an extra feature but the shape the format is found in. The
+  // assertion is that gzip decides *nothing*: same flavour, same strike, same
+  // glyphs, same pixels, and the same directory the uncompressed file has.
+  Fixture compressed("bitmap-gz.pcf.gz");
+  Fixture plain("bitmap.pcf");
+  ASSERT_EQ(compressed.result, GFNT_OK) << compressed.error.message;
+  ASSERT_EQ(plain.result, GFNT_OK);
+
+  EXPECT_EQ(gfnt_face_flavour(compressed.face), GFNT_FLAVOUR_PCF)
+      << "the wrapper's flavour reached the face";
+  EXPECT_EQ(gfnt_face_table_count(compressed.face),
+      gfnt_face_table_count(plain.face));
+
+  size_t glyphs = 0;
+  size_t theirs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(compressed.face, &glyphs, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_num_glyphs(plain.face, &theirs, nullptr), GFNT_OK);
+  ASSERT_EQ(glyphs, theirs);
+  for (uint32_t glyph = 0; glyph < glyphs; ++glyph) {
+    EXPECT_EQ(pixels(compressed.face, glyph), pixels(plain.face, glyph))
+        << "glyph " << glyph;
+  }
+
+  // The offsets are into the *inflated* bytes, and the face says which blob it
+  // reads: a tool that printed the file's size beside a table offset past it would
+  // be printing two different things as one.
+  size_t offset = 0;
+  size_t length = 0;
+  ASSERT_EQ(gfnt_face_table_range(compressed.face, GFNT_TAG('B', 'M', 'A', 'P'),
+      &offset, &length), GFNT_OK);
+  EXPECT_GT(offset + length, gfnt_blob_size(compressed.blob))
+      << "the fixture no longer compresses, so this asserts nothing";
+
+  // And the cheap question answers without a face being built.
+  size_t faces = 0;
+  ASSERT_EQ(gfnt_face_count(compressed.blob, nullptr, &faces, nullptr), GFNT_OK);
+  EXPECT_EQ(faces, 1u);
+}
+
+TEST(Bitmap, GzipIsRefusedWhenItIsNotGzip) {
+  // The wrapper's own refusals. Each is a file that passes the three-byte magic and
+  // then is not a gzip member, which is the only way to reach this layer's errors -
+  // a file that fails the magic is handed to the container probes instead and comes
+  // back as ERR_FORMAT.
+  const std::string magic("\x1f\x8b\x08", 3);
+
+  // A header and nothing else.
+  {
+    Crafted crafted(magic);
+    EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT) << crafted.error.message;
+    EXPECT_EQ(crafted.error.table, GFNT_TAG('G', 'Z', 'I', 'P'))
+        << "the refusal did not name the layer it came from";
+  }
+  // A truncated member: the deflate stream stops mid-block.
+  {
+    std::string bytes = read_fixture("bitmap-gz.pcf.gz");
+    ASSERT_GT(bytes.size(), 40u);
+    Crafted crafted(bytes.substr(0, bytes.size() / 2));
+    EXPECT_NE(crafted.result, GFNT_OK);
+  }
+  // A member whose trailing CRC and length do not match the data. RFC 1952 puts
+  // both at the end, and a reader that ignored them would hand a corrupted font on
+  // to the container probe, where it would be refused with the wrong diagnostic -
+  // or worse, read.
+  {
+    std::string bytes = read_fixture("bitmap-gz.pcf.gz");
+    ASSERT_GT(bytes.size(), 8u);
+    bytes[bytes.size() - 5] = static_cast<char>(bytes[bytes.size() - 5] ^ 0xFF);
+    Crafted crafted(bytes);
+    EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT) << crafted.error.message;
+  }
+  // Something that inflates to bytes no container recognises: the wrapper succeeds
+  // and the *probe* refuses, with its own message rather than the gzip layer's.
+  {
+    Crafted crafted(gzip_of(std::string(64, 'x')));
+    EXPECT_EQ(crafted.result, GFNT_ERR_FORMAT) << crafted.error.message;
+    EXPECT_NE(std::string(crafted.error.message).find("not an sfnt"),
+        std::string::npos) << crafted.error.message;
+  }
+}
+
+TEST(Bitmap, AnEmptyGzipMemberIsNotAFont) {
+  // A legal gzip member holding nothing. It passes the magic, inflates, and yields
+  // no bytes - so the wrapper refuses rather than handing an empty blob to the
+  // container probe, where "not an sfnt" would be the wrong thing to say about a
+  // file that is a perfectly good gzip of nothing.
+  Crafted crafted(gzip_of(std::string()));
+  EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT) << crafted.error.message;
+  EXPECT_NE(std::string(crafted.error.message).find("no bytes at all"),
+      std::string::npos) << crafted.error.message;
+}
+
+TEST(Bitmap, TheInflaterRefusesItsOwnCallerErrors) {
+  // The internal entry point, called wrongly on purpose. Reached from nowhere else:
+  // the face load only calls it after the magic has matched and with its own
+  // limits, so these arms exist for the next caller rather than for this one.
+  GFNT_Blob * blob = nullptr;
+  GFNT_Blob * out = nullptr;
+  GFNT_Error error{};
+  GFNT_Limits limits;
+
+  gfnt_limits_default(&limits);
+  const std::string bytes = gzip_of(std::string("hello", 5));
+  ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_COPY,
+      &limits, nullptr, &blob, &error), GFNT_OK);
+
+  EXPECT_EQ(gfnt_gzip_inflate(nullptr, &limits, nullptr, &out, &error),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_gzip_inflate(blob, nullptr, nullptr, &out, &error),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_gzip_inflate(blob, &limits, nullptr, nullptr, &error),
+      GFNT_ERR_INVALID);
+  // And correctly, which is what says the refusals above are about the arguments.
+  ASSERT_EQ(gfnt_gzip_inflate(blob, &limits, nullptr, &out, &error), GFNT_OK)
+      << error.message;
+  EXPECT_EQ(gfnt_blob_size(out), 5u);
+  gfnt_blob_destroy(out);
+  gfnt_blob_destroy(blob);
+}
+
+TEST(Bitmap, AGzipBombIsRefusedByTheBlobCeiling) {
+  // The threat model's own case: a small file that inflates to more than a caller
+  // agreed to hold. The cap is GFNT_Limits::max_blob_bytes - the same one a file
+  // read from disk is held to, because what comes out of the inflater *is* the font
+  // file from there on - and `compress` checks it before each enlargement, so this
+  // is a refusal rather than an allocation that happens to fail.
+  const std::string bomb = gzip_of(std::string(256 * 1024, '\0'));
+  ASSERT_LT(bomb.size(), 2048u) << "the bomb did not compress, so it is not one";
+
+  GFNT_Limits limits;
+  gfnt_limits_default(&limits);
+  limits.max_blob_bytes = 4096;
+  Crafted crafted(bomb, &limits);
+  EXPECT_EQ(crafted.result, GFNT_ERR_LIMIT) << crafted.error.message;
+
+  // Under a ceiling that admits it, the same bytes inflate and are then refused for
+  // what they are rather than for their size - which is what says the limit was the
+  // thing that fired above.
+  gfnt_limits_default(&limits);
+  Crafted admitted(bomb, &limits);
+  EXPECT_EQ(admitted.result, GFNT_ERR_FORMAT) << admitted.error.message;
 }
 
 TEST(Bitmap, TheTwoBitOrdersAreNotEachOther) {
@@ -1266,6 +1460,41 @@ TEST(Bitmap, BdfRefusesEachMissingPieceByName) {
   // a scan that found STARTFONT further down would claim a shell script that
   // mentions one.
   EXPECT_EQ(Crafted("# a comment\nSTARTFONT 2.1\n").result, GFNT_ERR_FORMAT);
+}
+
+TEST(Bitmap, BdfBoxWithHeightAndNoWidthHasNoRowsToRead) {
+  // `BBX 0 4 0 0`: a box with rows and no columns, whose BITMAP then has rows in it.
+  // There is nothing in them to read and no buffer to read them into - the row
+  // buffer is allocated from the box's byte count, which is zero - so the offset
+  // arithmetic was `NULL + 0`, which is undefined behaviour that every compiler
+  // computes correctly. **UBSan found it in the fuzzer**, on a shape no fixture had:
+  // the glyph loads, so nothing failed and nothing was wrong with the answer.
+  BdfBuilder builder;
+  builder.bbx = "0 4 0 0";
+  builder.box = "8 8 0 0";
+  builder.rows = {"00", "00", "00", "00"};
+  Crafted crafted(builder.build());
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  GFNT_BitmapGlyph bitmap{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 0, 0, &bitmap, nullptr),
+      GFNT_OK);
+  // No width means no pixels at all, whatever the height said.
+  EXPECT_EQ(bitmap.width, 0u);
+  EXPECT_EQ(bitmap.height, 0u);
+  EXPECT_EQ(bitmap.bits, nullptr);
+  EXPECT_EQ(bitmap.advance, 8);
+
+  // And the rows are still counted, so a BITMAP with more of them than the BBX
+  // states is still refused - which is what the permissive path must not cost.
+  BdfBuilder extra;
+  extra.bbx = "0 4 0 0";
+  extra.box = "8 8 0 0";
+  extra.rows = {"00", "00", "00", "00", "00"};
+  Crafted refused(extra.build());
+  EXPECT_EQ(refused.result, GFNT_ERR_CORRUPT) << refused.error.message;
+  EXPECT_NE(std::string(refused.error.message).find("more rows than its BBX"),
+      std::string::npos) << refused.error.message;
 }
 
 TEST(Bitmap, BdfAcceptsWhatTheSpecificationAllows) {

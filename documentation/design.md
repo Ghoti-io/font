@@ -121,7 +121,7 @@ which of them this library takes, and which of those it reads today.
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
 | | WOFF 2 | not here; it waits on Brotli in `compress` |
 | | `CFF2`, AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
-| **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented.** 1,885 of them on a stock Linux box. The `.gz` a PCF usually arrives in is not: `compress` has gzip and this library does not yet declare the dependency |
+| **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
 | **standalone outline** | Type 1 (`.pfb`/`.pfa` + `.afm`/`.pfm`), bare `CFF` | **wanted**, not implemented |
@@ -393,13 +393,19 @@ records that this is the format's silence rather than a measurement. A PSF witho
 its Unicode table states no characters at all, and a codepoint lookup on one is
 refused by name rather than pretending a cell index is a character.
 
-**The gzip a PCF usually arrives in is not read.** Not for want of a decoder:
-`compress` implements RFC 1952 with concatenated members and an output ceiling, and
-`gcomp_decode_alloc()` is one call. What is missing is that this library declares
-only `cutil` as a dependency, so taking gzip is an edit to `suite/libraries.txt`,
-the `.pc`'s `Requires`, and one call in `blob.h`'s file path. Until then the
-differential decompresses the corpus itself, so the container is covered over 234
-real fonts and its wrapper by nothing.
+**The gzip a PCF usually arrives in is read**, through `compress` (RFC 1952). It
+is a **wrapper and not a container**: inflating a `.pcf.gz` produces a PCF, and
+the probe that follows does not know the difference. So it happens once, in
+`gfnt_face_load()`, before the flavour is looked at, and the inflated bytes are
+*derived* in exactly the sense `GFNT_Face::bytes` already meant for a Type 1
+program. The two stack - a `.pfb.gz` is inflated and then deciphered - and each
+layer frees the one it consumed once it has read it.
+
+The ceiling on the inflated size is `GFNT_Limits::max_blob_bytes`, the same cap
+a file read from disk is held to, because what comes out of the inflater *is*
+the font file from there on. `compress` checks it before every enlargement, so a
+decompression bomb is refused by the documented number rather than by
+exhausting memory.
 
 **A PCF's encodings are positions in the font's own charset**, which its XLFD
 `CHARSET_REGISTRY` and `CHARSET_ENCODING` properties name. For an `ISO10646-1`
@@ -1842,7 +1848,8 @@ them from (§7.1).
 **The four bitmap containers are built, as of 2026-09-28**: PCF, BDF, PSF 1 and
 2, and GNU Unifont's `.hex`, each a face with one strike and no outlines, with
 `bitmap.h` as the `GFNT_GLYPH_BITMAP_MONO` arm's data and `GFNT_Strike` finally
-answering from something (§7.1, §7.5).
+answering from something (§7.1, §7.5). **`ghoti.io-compress` is this library's
+second dependency**, taken the same day for the gzip those fonts arrive in.
 
 - **One internal representation, four parsers.** The formats share no bytes and
   every font underneath them is the same thing: a pixel size, glyphs with boxes
@@ -1870,9 +1877,26 @@ answering from something (§7.1, §7.5).
   every glyph, reproduced on s390x, powerpc64 and sparc64. Every step from a file's
   bytes to a strike's pixels is an explicit shift, so they *should* be identical
   there - and that sentence was a claim until this measured it.
+- **A gzipped font is inflated before its format is looked at**, so nothing below
+  `gfnt_face_load()` knows the file was compressed. The wrapper reuses the derived-
+  bytes field Type 1 introduced, and the two **stack**: a `.pfb.gz` is inflated and
+  then deciphered, each layer freeing the one it consumed. The cross build for the
+  golden gate shims the inflater out rather than cross-building `compress`, for the
+  reason it shims `cutil`: a generated header built for the wrong target is the
+  class of defect that gate exists to find.
 
 **What the bitmap containers cost, in findings.** Each is why something above is
 shaped the way it is:
+
+- **`compress`'s gzip reported a full output buffer as a corrupt stream.** Its
+  `finish()` ignored the output buffer, so "the input ended early" and "there is
+  nowhere to put the rest" were one answer - and `gcomp_decode_alloc()`'s growth
+  loop reads `GCOMP_ERR_LIMIT` as "grow and ask again", so a `.pcf.gz` over a
+  caller's ceiling came back as a corrupt font. Fixed there rather than mapped
+  around here, because §5.6's vocabulary only means anything if the two answers stay
+  apart. Its own ceiling test used zstd, whose frame states its size and which
+  therefore takes a different path; the test now sweeps all seven methods and six of
+  them were already right.
 
 - **`bdftopcf` overstates one table's size in every file it writes.** The last
   entry's size is that of an accelerator table *with* ink bounds whether it wrote
@@ -1926,8 +1950,7 @@ shaped the way it is:
   them.
 
 **Not built:** `CFF2` (§16); the sfnt bitmap strikes - `EBDT`/`EBLC`, `CBDT` and
-`sbix` (§7.5); the gzip a PCF usually ships in, which is a `compress` dependency
-this library has not taken rather than a decoder that does not exist; colour
+`sbix` (§7.5); colour
 (§7.6);
 variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`

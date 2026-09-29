@@ -150,7 +150,12 @@ WITH_STRIKES = (
 # failing on it since it landed** - and nothing noticed, because `check-golden`
 # reads the committed file and no gate ran this script. That hole is closed in
 # check_golden.py, which now regenerates first.
-NO_OUTLINES = ("bare-matrix.cff",) + WITH_STRIKES
+#
+# `bitmap-gz.pcf.gz` is a strike too, and is here rather than in WITH_STRIKES: its
+# renderings would be `bitmap.pcf`'s under another name, and what needs saying about
+# it is about the gzip wrapper rather than about the pixels - which is
+# `test_bitmap.cpp`'s to say, as `bare.cff`'s equivalence is `test_cff.cpp`'s.
+NO_OUTLINES = ("bare-matrix.cff", "bitmap-gz.pcf.gz") + WITH_STRIKES
 
 HEADER = """\
 # Every committed fixture's glyphs, rasterised.

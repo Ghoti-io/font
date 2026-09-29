@@ -21,7 +21,8 @@
 /**
  * @file
  *
- * The six cutil functions this library links, for the big-endian golden build.
+ * The cutil and compress functions this library links, for the big-endian golden
+ * build.
  *
  * **Why this exists, stated rather than buried.** `make check-golden` builds
  * this library for a big-endian target and compares its renderings against the
@@ -32,25 +33,44 @@
  * target is exactly the class of defect this gate is looking for - it would make
  * the gate's answer depend on the thing it is testing.
  *
- * So the gate cross-builds `font` alone and links these six definitions.
- * `nm` says they are the whole of what it needs:
+ * So the gate cross-builds `font` alone and links these definitions. `nm` says
+ * they are the whole of what it needs:
  *
  *   gcu_allocator_default, gcu_file_read, gcu_file_free,
  *   gcu_file_result_string, gcu_mmap_open, gcu_mmap_close
+ *   gcomp_decode_alloc, gcomp_buffer_free, gcomp_options_create,
+ *   gcomp_options_destroy, gcomp_options_set_bool, gcomp_options_set_uint64,
+ *   gcomp_status_to_string
  *
  * and the list is checked by the gate rather than trusted, so a seventh
  * dependency appearing fails the build instead of silently linking cutil's.
  *
- * **What this is not.** It is not a cutil. It does not implement cutil's
- * behaviour beyond what this library asks of it, and `gcu_mmap_open` refuses
- * rather than mapping - the golden driver reads files, and a mapping would test
- * the target's `mmap` rather than this library's arithmetic. Nothing outside
- * this gate links it.
+ * **What this is not.** It is not a cutil and it is certainly not a compress. It
+ * does not implement either library's behaviour beyond what this one asks of it,
+ * and two of the shims **refuse** rather than working: `gcu_mmap_open`, because
+ * the golden driver reads files and a mapping would test the target's `mmap`
+ * rather than this library's arithmetic; and `gcomp_decode_alloc`, because a
+ * second inflater is not what this gate measures.
+ *
+ * Refusing the inflate costs nothing, and it is worth saying why rather than
+ * leaving it to be discovered. No committed rendering comes from a compressed
+ * file: gzip is byte-identical decompression, so what a gzipped PCF renders to is
+ * what the PCF inside it renders to, and *that* is in the committed set nine
+ * times over. A rendering of `bitmap-gz.pcf.gz` would repeat `bitmap.pcf`'s under
+ * another name, which is the same reason `bare.cff` is not in the golden set. If
+ * one is ever added, this shim has to grow a real inflater or the gate will
+ * report it as refused - and `check_golden.py` compares refusals too, so it would
+ * say so rather than pass.
+ *
+ * Nothing outside this gate links this file.
  *
  * The names are written plain and cutil's headers rename them, so the symbols
  * this defines are the namespaced ones the library calls.
  */
 
+#include <ghoti.io/compress/compress.h>
+#include <ghoti.io/compress/errors.h>
+#include <ghoti.io/compress/options.h>
 #include <ghoti.io/cutil/allocator.h>
 #include <ghoti.io/cutil/file.h>
 #include <ghoti.io/cutil/mmap.h>
@@ -176,4 +196,53 @@ int gcu_mmap_open(GCU_Mapped_File * map, const char * path, bool writable) {
 int gcu_mmap_close(GCU_Mapped_File * map) {
   (void)map;
   return 0;
+}
+
+//
+// compress, for the gzip wrapper a bitmap font usually arrives in.
+//
+
+gcomp_status_t gcomp_options_create(gcomp_options_t ** options_out) {
+  // A non-NULL handle nothing dereferences: the library sets options on it and
+  // then hands it to the decode below, which refuses before reading any.
+  static int placeholder;
+
+  if (!options_out) {
+    return GCOMP_ERR_INVALID_ARG;
+  }
+  *options_out = (gcomp_options_t *)&placeholder;
+  return GCOMP_OK;
+}
+
+void gcomp_options_destroy(GCOMP_MAYBE_UNUSED(gcomp_options_t * options)) {
+}
+
+gcomp_status_t gcomp_options_set_uint64(GCOMP_MAYBE_UNUSED(gcomp_options_t * o),
+    GCOMP_MAYBE_UNUSED(const char * key), GCOMP_MAYBE_UNUSED(uint64_t value)) {
+  return GCOMP_OK;
+}
+
+gcomp_status_t gcomp_options_set_bool(GCOMP_MAYBE_UNUSED(gcomp_options_t * o),
+    GCOMP_MAYBE_UNUSED(const char * key), GCOMP_MAYBE_UNUSED(int value)) {
+  return GCOMP_OK;
+}
+
+gcomp_status_t gcomp_decode_alloc(GCOMP_MAYBE_UNUSED(gcomp_registry_t * r),
+    GCOMP_MAYBE_UNUSED(const char * method_name),
+    GCOMP_MAYBE_UNUSED(gcomp_options_t * options),
+    GCOMP_MAYBE_UNUSED(const void * input_data),
+    GCOMP_MAYBE_UNUSED(size_t input_size),
+    GCOMP_MAYBE_UNUSED(void ** data_out),
+    GCOMP_MAYBE_UNUSED(size_t * size_out)) {
+  // Refused, for the reason in the header: no committed rendering comes from a
+  // compressed file, and a second inflater is not what this gate measures.
+  return GCOMP_ERR_UNSUPPORTED;
+}
+
+void gcomp_buffer_free(GCOMP_MAYBE_UNUSED(gcomp_registry_t * registry),
+    GCOMP_MAYBE_UNUSED(void * data)) {
+}
+
+const char * gcomp_status_to_string(GCOMP_MAYBE_UNUSED(gcomp_status_t status)) {
+  return "the golden gate's shim does not inflate";
 }

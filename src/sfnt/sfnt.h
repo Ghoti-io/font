@@ -187,6 +187,21 @@ typedef enum {
 GFNT_Producer gfnt_sfnt_producer(const GFNT_Face * face);
 
 /**
+ * Install bytes this face derived, and free the layer they were derived from.
+ *
+ * Two derivations can stack: a `.pfb.gz` is inflated by `blob/gzip.c` and then
+ * deciphered by `type1.c`, and each layer has to free the one it consumed *after*
+ * reading it. A parser that assigned `owned` directly - which the Type 1 path did,
+ * because it was the only derivation there was - leaks the layer beneath it the
+ * first time there are two.
+ *
+ * @param face The face. Its `bytes` becomes @p derived.
+ * @param derived The new bytes, which the face now owns. Must have been built
+ *   from `face->bytes` and not point into it.
+ */
+void gfnt_face_adopt_bytes(GFNT_Face * face, GFNT_Blob * derived);
+
+/**
  * Give a face a synthetic directory: one table, spanning the whole blob.
  *
  * How a container with no table directory becomes a face. Every parser in the

@@ -306,6 +306,20 @@ static GFNT_Result gfnt_bdf_bitmap_row(GFNT_BdfState * state,
         (uint32_t)gfnt_bitmap_build_count(state->build),
         "a BITMAP row with fewer digits than the glyph is wide");
   }
+  if (state->stride == 0) {
+    // A `BBX 0 4 0 0` - a box with height and no width - whose BITMAP then has
+    // rows. There is nothing in them to read, and there is no buffer either:
+    // `gfnt_bdf_rows()` allocated none for zero bytes, so `state->rows` is NULL and
+    // the arithmetic below would be `NULL + 0`, which is undefined behaviour even
+    // though every compiler computes NULL. UBSan caught it in the fuzzer, on a
+    // font no fixture had.
+    //
+    // The row is counted rather than refused, which keeps the "more rows than its
+    // BBX" check above meaning something, and no reader draws anything for a glyph
+    // with no width.
+    state->rows_read += 1;
+    return GFNT_OK;
+  }
   row = state->rows + (size_t)state->rows_read * state->stride;
   for (size_t i = 0; i < state->stride; ++i) {
     unsigned high = gfnt_bdf_hex(line[at + 2u * i]);

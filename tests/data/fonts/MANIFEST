@@ -13,6 +13,7 @@
 bare-matrix.cff	A bare CFF whose FontMatrix scales the two axes differently, so it states no em this library can report and is refused by name; its translation components carry a DICT real in exponent form and one with more mantissa digits than 16.16 holds, and it states its licence in Notice rather than Copyright
 bare.cff	A bare CFF font program with no sfnt around it: the same CFF table as cff-curves.otf, so the two faces must draw identically
 basic.ttf	TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3
+bitmap-gz.pcf.gz	The same PCF as bitmap.pcf inside gzip, which is how every PCF in the world ships: it must read to identical glyphs, because the wrapper decides nothing about what the font is
 bitmap-ink.bdf	BDF: what only a per-glyph box can say - a negative x offset, a descender whose BBX y is below the baseline, advances narrower and wider than the box, ENCODING -1 for a glyph with no character, an empty BBX with no BITMAP rows at all, and a row whose bits past the glyph's width are set, which a reader has to clear
 bitmap-lsb.pcf	PCF laid out the other way in every dimension: bits and bytes least-significant first, a two-byte scan unit, rows padded to four, compressed metrics and an ink-metrics table nothing reads - and the same glyphs as bitmap.pcf, which is the only check on that arithmetic
 bitmap-swap.pcf	PCF whose bits run least-significant-first and whose bytes run most, with a four-byte scan unit: the one combination where a scan unit's bytes have to be reversed as well as its bits, which no other fixture reaches and which Pillow cannot read
@@ -53,5 +54,6 @@ post-v1.ttf	post format 1.0: all 258 standard glyphs, no stored names
 post-v2.ttf	post format 2.0: standard indices including 257, and one extra name
 post-v3.ttf	post format 3.0: a header that states it has no names
 type1-big.pfb	A Type 1 program larger than one allocation: 80 glyphs, subroutine numbers 0, 1 and 40 with a gap between, and a glyph that calls the high one - the three reallocation paths no other fixture reaches
+type1-gz.pfb.gz	A gzipped Type 1 program - two derivations stacked, inflate then eexec - which nobody ships and which is the only input where each layer has to free the one it consumed
 type1.pfa	The same Type 1 font as ASCII: hex after eexec, no segment framing, the -| |- | spellings, /lenIV 0, a /CharStrings count smaller than the glyphs it defines, and StandardEncoding
 type1.pfb	A Type 1 font program in PFB framing: binary segments with little-endian lengths, eexec, a per-charstring cipher, a custom /Encoding, and the same charstrings as cff-type1.otf

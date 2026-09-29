@@ -35,6 +35,7 @@
 #include <ghoti.io/cutil/safemath.h>
 #include <ghoti.io/font/macros.h>
 #include "../bitmap/bitmap.h"
+#include "../blob/gzip.h"
 #include "../type1/type1.h"
 #include "sfnt.h"
 
@@ -137,20 +138,18 @@ static bool gfnt_face_bare_container(const GFNT_Reader * blob,
   return false;
 }
 
-GFNT_Result gfnt_face_count(const GFNT_Blob * blob, const GFNT_Limits * limits,
-    size_t * out_count, GFNT_Error * error) {
+/**
+ * How many faces these bytes hold, the file's compression already undone.
+ *
+ * Split from ::gfnt_face_count() so that the gzip case can call it on the inflated
+ * bytes rather than duplicating the whole decision tree.
+ */
+static GFNT_Result gfnt_face_count_bytes(const GFNT_Blob * blob,
+    const GFNT_Limits * effective, size_t * out_count, GFNT_Error * error) {
   GFNT_Reader reader;
   GFNT_Tag tag = 0;
-  GFNT_Limits effective;
   GFNT_Result result;
   size_t count = 0;
-
-  gfnt_error_clear(error);
-  if (!out_count) {
-    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
-        "nowhere to put the count");
-  }
-  gfnt_face_limits(limits, &effective);
 
   result = gfnt_reader_init_blob(&reader, blob, 0, error);
   if (result != GFNT_OK) {
@@ -189,8 +188,44 @@ GFNT_Result gfnt_face_count(const GFNT_Blob * blob, const GFNT_Limits * limits,
         "not an sfnt version this library recognises, a collection, a bare CFF, "
         "a Type 1 program, or a standalone bitmap font");
   }
+  (void)effective;
   *out_count = 1;
   return GFNT_OK;
+}
+
+GFNT_Result gfnt_face_count(const GFNT_Blob * blob, const GFNT_Limits * limits,
+    size_t * out_count, GFNT_Error * error) {
+  GFNT_Reader reader;
+  GFNT_Limits effective;
+  GFNT_Blob * inflated = NULL;
+  GFNT_Result result;
+
+  gfnt_error_clear(error);
+  if (!out_count) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "nowhere to put the count");
+  }
+  gfnt_face_limits(limits, &effective);
+
+  result = gfnt_reader_init_blob(&reader, blob, 0, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  // A compressed file has to be inflated before the question can even be asked,
+  // and the answer is thrown away with the bytes: counting a `.pcf.gz` costs an
+  // inflate that ::gfnt_face_load() will pay again. That is the same bargain
+  // counting a collection gets - the cheap question is "is a face there" and it is
+  // cheap relative to reading the font, not to reading nothing.
+  if (gfnt_gzip_looks_like(&reader)) {
+    result = gfnt_gzip_inflate(blob, &effective, NULL, &inflated, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    result = gfnt_face_count_bytes(inflated, &effective, out_count, error);
+    gfnt_blob_destroy(inflated);
+    return result;
+  }
+  return gfnt_face_count_bytes(blob, &effective, out_count, error);
 }
 
 /**
@@ -224,7 +259,9 @@ static GFNT_Result gfnt_face_build_directory(GFNT_Face * face,
   // offered its container's first bytes, which say `ttcf` and match nothing. A
   // guard on directory_offset would be unreachable - there is no blob that both
   // opens with `ttcf` and opens with another container's magic.
-  result = gfnt_reader_init_blob(&blob_reader, face->blob, 0, error);
+  // `bytes` and not `blob`: a file that arrived gzipped has been inflated by now,
+  // and what this probes is the container *inside* the wrapper.
+  result = gfnt_reader_init_blob(&blob_reader, face->bytes, 0, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -278,6 +315,8 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
   GFNT_Tag tag = 0;
   GFNT_Limits effective;
   GFNT_Face * face;
+  const GFNT_Blob * source;
+  GFNT_Blob * inflated = NULL;
   size_t directory_offset = 0;
   GFNT_Result result;
 
@@ -292,7 +331,26 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
   if (result != GFNT_OK) {
     return result;
   }
+  // **Before the flavour is looked at**, because gzip is a wrapper and not a
+  // container: inflating a `.pcf.gz` produces a PCF, and the probe that follows
+  // should not know the difference. Everything below reads `source`, which is the
+  // caller's blob or the inflated one, and the face takes ownership of the
+  // inflated blob the moment it exists - until then, every early return frees it.
+  source = blob;
+  if (gfnt_gzip_looks_like(&reader)) {
+    result = gfnt_gzip_inflate(blob, &effective, allocator, &inflated, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    source = inflated;
+    result = gfnt_reader_init_blob(&reader, source, 0, error);
+    if (result != GFNT_OK) {
+      gfnt_blob_destroy(inflated);
+      return result;
+    }
+  }
   if (gfnt_read_tag(&reader, &tag) != GFNT_OK) {
+    gfnt_blob_destroy(inflated);
     return gfnt_error_set(error, GFNT_ERR_FORMAT, 0, 0, GFNT_GLYPH_NONE,
         "too short to be a font");
   }
@@ -303,9 +361,11 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
 
     result = gfnt_ttc_header(&reader, &count, error);
     if (result != GFNT_OK) {
+      gfnt_blob_destroy(inflated);
       return result;
     }
     if (index >= count) {
+      gfnt_blob_destroy(inflated);
       return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_FLAVOUR_COLLECTION,
           GFNT_TTC_HEADER_BYTES, GFNT_GLYPH_NONE,
           "the collection has no face at that index");
@@ -313,6 +373,7 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
     result = gfnt_reader_u32_at(&reader,
         GFNT_TTC_HEADER_BYTES + index * 4, &offset);
     if (result != GFNT_OK) {
+      gfnt_blob_destroy(inflated);
       return result;
     }
     directory_offset = offset;
@@ -320,6 +381,7 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
   else if (index != 0) {
     // Asking for face 3 of a font that is not a collection is a caller error,
     // not a corrupt font.
+    gfnt_blob_destroy(inflated);
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
         "this font is not a collection and has only face 0");
   }
@@ -329,13 +391,15 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
   }
   face = allocator->calloc_fn(allocator->ctx, 1, sizeof *face);
   if (!face) {
+    gfnt_blob_destroy(inflated);
     return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "allocating the face");
   }
   face->blob = blob;
-  // Until a container replaces it, the bytes the directory describes are the
-  // caller's own.
-  face->bytes = blob;
+  // The bytes the directory describes: the caller's own, or the ones this library
+  // inflated. `owned` is what gets freed, and it is NULL for an uncompressed file.
+  face->bytes = source;
+  face->owned = inflated;
   face->allocator = allocator;
   face->limits = effective;
   face->index = index;
@@ -465,6 +529,16 @@ GFNT_Result gfnt_face_dump(const GFNT_Face * face, FILE * out) {
           face->index, gfnt_tag_string(face->flavour, tag),
           (unsigned)face->flavour, face->table_count)
       < 0) {
+    return GFNT_ERR_IO;
+  }
+  // Where the offsets below point, when it is not the caller's blob. Without this
+  // a dump of a gzipped PCF or a Type 1 program reads as a font whose tables run
+  // past the end of the file - every offset is into bytes this library made, and
+  // nothing in the dump said so.
+  if (face->owned
+      && fprintf(out, "bytes: %zu derived, from a %zu-byte file\n",
+             gfnt_blob_size(face->bytes), gfnt_blob_size(face->blob))
+          < 0) {
     return GFNT_ERR_IO;
   }
   for (size_t i = 0; i < face->table_count; ++i) {

@@ -17,12 +17,10 @@ This is what the library implements.
 - That outline rasterised to 8-bit coverage, at any pixel size and any sub-pixel offset.
 - A **bare `CFF `** font program and a **Type 1** one — `.pfb`, `.pfa` or raw — each a face with no sfnt directory at all, stating its em, its glyph count, its names and its advances out of the program itself.
 - The four **standalone bitmap** containers: PCF, BDF, PSF 1 and 2, and GNU Unifont's `.hex`. Each is a face with one strike and no outlines, and a glyph comes back as pixels with its own box and advance.
+- A font that arrives **gzipped**, which is how a PCF almost always does: the wrapper is undone before the format is looked at, under the same size ceiling a file read from disk is held to.
 
-`CFF2`, the bitmap strikes *inside* an sfnt (`EBDT`/`EBLC`, `CBDT`, `sbix`), the
-gzip a PCF usually ships in, colour, variations, shaping, layout, discovery and
-writing are not built. A `.pcf.gz` has to be decompressed before this library will
-read it: `ghoti.io-compress` has gzip, and this library has not taken the
-dependency yet.
+`CFF2`, the bitmap strikes *inside* an sfnt (`EBDT`/`EBLC`, `CBDT`, `sbix`),
+colour, variations, shaping, layout, discovery and writing are not built.
 
 ## Before you call it
 
@@ -158,7 +156,8 @@ asks which glyph a code point maps to does not link a rasteriser.
 Found through pkg-config, and the installed `.pc` file names it, so a
 program that links `ghoti.io-font-0` links this too.
 
-- [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) — the allocator.
+- [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) — the allocator, the growable array, and the overflow-checked size arithmetic.
+- [ghoti.io-compress](https://github.com/Ghoti-io/compress) — gzip, for the `.pcf.gz` and `.psf.gz` a bitmap font usually arrives in, and zlib when WOFF 1 lands.
 
 ## Documentation
 
@@ -171,8 +170,9 @@ model (the file is the attacker), what is implemented, and what is not.
 The tables named above are parsed, glyphs from `glyf` and from `CFF `
 charstrings are turned into outlines, and those outlines are rasterised. Six
 containers are read: an sfnt, a collection, a bare `CFF `, a Type 1 program, and
-the four standalone bitmap formats. `CFF2`, the sfnt bitmap strikes, colour,
-variations, shaping, layout, font discovery and writing are not implemented.
+the four standalone bitmap formats, any of them gzipped. `CFF2`, the sfnt bitmap
+strikes, colour, variations, shaping, layout, font discovery and writing are not
+implemented.
 
 Every glyph of 312 real fonts is compared against fontTools — 1,999,069 fields
 over 37,218 glyphs — and every charstring of another 43 is compared three ways:

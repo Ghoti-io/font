@@ -62,6 +62,16 @@ static bool gfnt_sfnt_is_flavour(GFNT_Tag tag) {
       || tag == GFNT_FLAVOUR_APPLE_TRUE || tag == GFNT_FLAVOUR_APPLE_TYPE1;
 }
 
+void gfnt_face_adopt_bytes(GFNT_Face * face, GFNT_Blob * derived) {
+  GFNT_Blob * previous = face->owned;
+
+  face->bytes = derived;
+  face->owned = derived;
+  // After, not before: the new bytes were built by reading the old ones, so the
+  // old ones have to outlive the derivation that consumed them.
+  gfnt_blob_destroy(previous);
+}
+
 GFNT_Result gfnt_sfnt_table_directory(GFNT_Face * face, GFNT_Tag flavour,
     const GFNT_SfntTable * entries, size_t count, GFNT_Error * error) {
   GFNT_Reader blob_reader;
@@ -142,7 +152,9 @@ GFNT_Result gfnt_sfnt_parse_directory(GFNT_Face * face, GFNT_Error * error) {
   size_t blob_size;
   GFNT_Result result;
 
-  result = gfnt_reader_init_blob(&blob_reader, face->blob, 0, error);
+  // `bytes` and not `blob`: a file that arrived compressed has been inflated by
+  // now, and the directory this reads is the inflated one's.
+  result = gfnt_reader_init_blob(&blob_reader, face->bytes, 0, error);
   if (result != GFNT_OK) {
     return result;
   }

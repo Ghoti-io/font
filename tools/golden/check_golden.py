@@ -77,6 +77,9 @@ TARGETS = {
 SHIMMED = {
     "gcu_allocator_default", "gcu_file_read", "gcu_file_free",
     "gcu_file_result_string", "gcu_mmap_open", "gcu_mmap_close",
+    "gcomp_decode_alloc", "gcomp_buffer_free", "gcomp_options_create",
+    "gcomp_options_destroy", "gcomp_options_set_bool",
+    "gcomp_options_set_uint64", "gcomp_status_to_string",
 }
 
 
@@ -107,7 +110,15 @@ def committed():
 
 
 def cutil_dependencies():
-    """The cutil symbols the built library needs, so the shim can be checked."""
+    """The dependency symbols the built library needs, so the shim can be checked.
+
+    Both dependencies, despite the name this kept: `font` took `compress` for the
+    gzip a bitmap font arrives in, and the cross build has to satisfy those symbols
+    too. Cross-building `compress` itself is the same bad trade cross-building
+    `cutil` would be - its generated headers would have to be produced for the
+    target, and a generated header produced for the wrong target is the class of
+    defect this gate exists to find.
+    """
     archive = os.path.join(ROOT, "build", "linux", "release", "apps",
                            "libghoti.io-font-0.a")
     if not os.path.exists(archive):
@@ -116,12 +127,17 @@ def cutil_dependencies():
     wanted = set()
     for line in listed.stdout.splitlines():
         parts = line.split()
-        if len(parts) == 2 and parts[0] == "U" and "cutil" in parts[1]:
-            # ghotiio_cutil_0_gcu_file_read -> gcu_file_read
-            name = parts[1]
-            at = name.find("gcu_")
-            if at >= 0:
-                wanted.add(name[at:])
+        if len(parts) != 2 or parts[0] != "U":
+            continue
+        # ghotiio_cutil_0_gcu_file_read -> gcu_file_read, and the same shape for
+        # ghotiio_compress_0_gcomp_decode_alloc.
+        name = parts[1]
+        for prefix in ("gcu_", "gcomp_"):
+            if ("cutil" in name and prefix == "gcu_") or (
+                    "compress" in name and prefix == "gcomp_"):
+                at = name.find(prefix)
+                if at >= 0:
+                    wanted.add(name[at:])
     return wanted
 
 
@@ -140,12 +156,12 @@ mkdir -p %(out)s
 cd %(root)s
 %(cc)s -std=c17 -O2 -w -fno-strict-aliasing \
     -I include -I build/linux/release/generated \
-    -I %(cutil)s \
+    -I %(cutil)s -I %(compress)s \
     -o %(out)s/font-render \
     $(find src -name '*.c') examples/font-render.c %(shim)s
 %(cc)s -std=c17 -O2 -w -fno-strict-aliasing \
     -I include -I build/linux/release/generated \
-    -I %(cutil)s \
+    -I %(cutil)s -I %(compress)s \
     -o %(out)s/font-bitmap \
     $(find src -name '*.c') examples/font-bitmap.c %(shim)s
 for name in %(outlines)s; do
@@ -162,6 +178,10 @@ done
         "cc": compiler,
         "cutil": os.path.join(WORKSPACE, ".local", "include", "ghoti.io",
                               "cutil-0"),
+        # Headers only: the shim defines the functions, and cross-building the
+        # library itself is the trade cross_shim.c's own header explains.
+        "compress": os.path.join(WORKSPACE, ".local", "include", "ghoti.io",
+                                 "compress-0"),
         "shim": SHIM,
         "qemu": qemu,
         "triple": triple,
@@ -298,9 +318,10 @@ def main(argv):
     missing = needed - SHIMMED
     if missing:
         sys.stderr.write(
-            "check-golden: this library now needs cutil's %s, which "
+            "check-golden: this library now needs its dependencies' %s, which "
             "tools/golden/cross_shim.c does not provide. Add it there (and to "
-            "SHIMMED) rather than letting the cross build reach for cutil.\n"
+            "SHIMMED) rather than letting the cross build reach for the real "
+            "library.\n"
             % ", ".join(sorted(missing)))
         return 1
     unused = SHIMMED - needed

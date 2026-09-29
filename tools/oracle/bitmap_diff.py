@@ -22,11 +22,15 @@ a font whose rows are all shifted by one still has the right box.
 
 The population is the real one. `xfonts-terminus` in the oracle image ships
 several hundred PCF files - one per encoding, several hundred glyphs each - and
-they are **compressed**, which this library does not read - not for want of a
-decoder, since `compress` implements RFC 1952, but because `font` has not taken that
-dependency (design.md section 7.1). So this driver
-decompresses each into `build/oracle` and feeds both readers the plain bytes; the
-gzip container itself is therefore not under test here, and the report says so.
+they are **compressed**, which this library now reads: `font` takes
+`ghoti.io-compress` and `gfnt_face_load()` inflates a gzip wrapper before it looks
+at what is inside (design.md section 7.1). So our side is handed the `.pcf.gz`
+exactly as the image ships it, and the gzip layer is under test over 234 real files.
+
+Pillow cannot read one, so the reference's side is decompressed into
+`build/oracle`. That asymmetry is the comparison's point rather than a compromise:
+**the two readers are given the same font in different wrappers**, and agreement
+then says the wrapper changed nothing.
 
 What this differential **cannot** cover, stated because a run that printed a clean
 number without saying so would be claiming more than it checked:
@@ -116,16 +120,17 @@ def fixtures():
             if line.startswith("#") or "\t" not in line:
                 continue
             name = line.split("\t", 1)[0]
-            if name.endswith(".pcf") or name.endswith(".bdf"):
+            if name.endswith((".pcf", ".bdf", ".pcf.gz")):
                 found.append(os.path.join(FIXTURES, name))
     return sorted(found)
 
 
 def plain(path):
-    """A readable path for @p path, decompressing a `.pcf.gz` if it is one.
+    """A path Pillow can read: @p path itself, or a decompressed copy of it.
 
-    Both readers are handed the same plain bytes, so the comparison is of two
-    readings of one PCF and not of two decompressors.
+    Only the reference needs this. This library reads the `.pcf.gz` as it ships, so
+    the two sides are handed the same font in different wrappers and agreement says
+    the wrapper changed nothing.
     """
     if not path.endswith(".gz"):
         return path
@@ -218,7 +223,9 @@ def our_glyphs(text):
 def compare(path, stride, categories, report):
     """One font. Returns (fields, disagreements, glyphs, kind)."""
     readable = plain(path)
-    mine_text = subprocess.run([DRIVER, readable, "1"], capture_output=True,
+    # Ours reads the file the image ships; the reference reads the decompressed
+    # copy. For an uncompressed font the two paths are the same path.
+    mine_text = subprocess.run([DRIVER, path, "1"], capture_output=True,
         text=True)
     if mine_text.returncode != 0:
         raise Skip("this library: %s"
@@ -357,12 +364,15 @@ def main(argv):
     skipped = []
     report = [0]
     per_kind = {"pcf": 0, "bdf": 0}
+    gzipped = [0]
     categories = {"no-reference-glyph": 0, "no-reference-row": 0,
                   "no-reference-mapping": 0, "pcf-mapping-unchecked": 0,
                   "unencoded-glyph": 0}
 
     for path in fonts:
         try:
+            if path.endswith(".gz"):
+                gzipped[0] += 1
             fields, differed, seen, kind = compare(path,
                 1 if path in synthetic else stride, categories, report)
         except Skip as why:
@@ -391,6 +401,9 @@ def main(argv):
     print("bitmap_diff: PSF and .hex have no reference in this image at all; "
           "what covers them is one design written four ways in "
           "tests/unit/test_bitmap.cpp")
+    print("bitmap_diff: %d font(s) this library read compressed and the reference "
+          "read decompressed, so the gzip wrapper is under test and agreement says "
+          "it changed nothing" % gzipped[0])
     print("bitmap_diff: %d glyph(s), %d row(s) and %d mapping(s) the reference "
           "did not report at all, and %d BDF glyph(s) with no character, which "
           "Pillow keeps no record of"

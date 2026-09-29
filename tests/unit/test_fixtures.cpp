@@ -133,6 +133,11 @@ const std::vector<Entry> & every_fixture() {
       // - so every one of them is a `states_em` of false, and there are eight of
       // them rather than one relaxed assertion because each container counts its
       // glyphs a different way.
+      // The two gzipped fixtures. Each must answer exactly as the uncompressed one
+      // does, which is asserted glyph by glyph in test_bitmap.cpp and test_type1.cpp;
+      // here they are simply two more fixtures that have to load and count.
+      {"bitmap-gz.pcf.gz", 8, false},
+      {"type1-gz.pfb.gz", 8},
       {"bitmap-ink.bdf", 5, false},
       {"bitmap-lsb.pcf", 8, false},
       {"bitmap-v1.psf", 512, false, false},

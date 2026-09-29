@@ -19,7 +19,10 @@
  * than a subrange of it.
  *
  * The input is used unaltered, so a real `.pcf`, `.bdf`, `.psf` or `.hex` is a
- * seed and the corpus is grown from the fixtures.
+ * seed and the corpus is grown from the fixtures - **including a gzipped one**,
+ * which puts the inflater in the path too. `compress` fuzzes its own decoder; what
+ * is new here is the composition, where a mutated wrapper decides how many bytes
+ * the container probe is then handed.
  *
  * Copyright 2026 by Corey Pennycuff
  */

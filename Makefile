@@ -514,6 +514,18 @@ DEPFILES := $(LIBOBJECTS:.o=.d) $(TEST_HELPER_OBJ:.o=.d) $(TEST_DEPFILES)
 ####################################################################
 
 LIBVER_GEN := $(GEN_DIR)/ghoti.io/$(PROJECT)/libver_gen.h
+# EVERY rule that compiles a translation unit carries `| $(LIBVER_GEN)`, not
+# just the release library's. Each one reaches this generated header -
+# macros.h includes namespace.h includes libver.h includes libver_gen.h - so
+# a rule without it works only on a tree where something else already
+# generated the file. That is the worst shape a build defect takes: it passes
+# for everyone who has built before and fails for everyone who has not, and
+# under -j it is a race rather than a clean failure.
+#
+# CONVENTIONS.md section 6 states the rule and section 12 warns that copying
+# a Makefile copies its defects. This is that: the release rule had it and
+# the ASan, fuzz and test rules did not, so `make test` passed on any warm
+# tree while `make clean && make test-asan` failed on all of them.
 
 # libver_gen.h is regenerated on every build and rewritten only when its content
 # changes, so a variable given on the command line - make MAJOR_VERSION=2, or
@@ -591,12 +603,12 @@ endif
 
 # Test sources live in tests/ and tests/unit/; the object name comes from the
 # basename either way, so the executable name matches.
-$(OBJ_DIR)/tests/%.o: tests/%.cpp $(FLAGS_STAMP)
+$(OBJ_DIR)/tests/%.o: tests/%.cpp $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGFNT_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-$(OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(FLAGS_STAMP)
+$(OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGFNT_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -1420,7 +1432,7 @@ ifeq ($(UNAME_S), Linux)
 	ASAN_CFLAGS += -fPIC
 endif
 
-$(ASAN_OBJ_DIR)/%.o: src/%.c $(ASAN_FLAGS_STAMP)
+$(ASAN_OBJ_DIR)/%.o: src/%.c $(ASAN_FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling (ASan+UBSan): $< ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -1430,12 +1442,12 @@ $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $^ $(ASAN_LDFLAGS) $(DEP_LIBS)
 
-$(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp $(ASAN_FLAGS_STAMP)
+$(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp $(ASAN_FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGFNT_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-$(ASAN_OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(ASAN_FLAGS_STAMP)
+$(ASAN_OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(ASAN_FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGFNT_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -1511,7 +1523,7 @@ FUZZ_CORPUS := tests/fuzz/corpus
 # A smoke-test length by default; for a real campaign: make fuzz FUZZ_TIME=3600
 FUZZ_TIME ?= 60
 
-$(FUZZ_OBJ_DIR)/%.o: src/%.c $(FUZZ_FLAGS_STAMP)
+$(FUZZ_OBJ_DIR)/%.o: src/%.c $(FUZZ_FLAGS_STAMP) | $(LIBVER_GEN)
 	@mkdir -p $(@D)
 	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -o $@ \
 		-MMD -MP -MF $(@:.o=.d)

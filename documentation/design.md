@@ -470,9 +470,16 @@ Macintosh and Microsoft encodings (Japanese, the two Chinese, Korean, Shift-JIS
 and friends) are refused: they are a data set of their own, and a byte-per-
 codepoint guess would produce plausible mojibake, which is worse than an error.
 
-All 658 Macintosh records across the 327-font oracle corpus are
-`(platEncID 0, Mac Roman)`, so the language-keyed rules and the seven non-Roman
-tables have **no coverage from real fonts at all**. `name-mac-encodings.ttf`
+**Every one of the 557 Macintosh `name` records in the oracle corpus is
+`(platEncID 0, langID 0)`** - Mac Roman - so the language-keyed rules and the
+seven non-Roman tables have **no coverage from real fonts at all**. Measured
+2026-10-01 over all 329 fonts of the corpus, every face of a collection included,
+by counting `platformID 1` records with fontTools; this library's own dump counts
+530 of them over face 0 of each file, and the two numbers differ by exactly the
+collections' further faces. Both are stated because an earlier edition of this
+paragraph gave a figure that neither instrument reproduces at any face policy,
+and a count whose instrument is not named beside it cannot be checked where it is
+read. `name-mac-encodings.ttf`
 exists for them, and carries every one of the 128 high bytes in each encoding. Name IDs 0-25 by constant; family, style,
 full, PostScript and the typographic and WWS families by function.
 
@@ -613,6 +620,21 @@ guarantee, and `mona.ttf` - one of the two files in Debian with this table -
 states three that overlap their neighbours by eight bytes each. fontTools refuses
 the font for it and every renderer displays it, because no renderer reads the
 field. So a subtable is bounded by the table and by what its own format needs.
+
+**And the file itself is four bytes short of what that subtable needs**, which
+is the defect underneath the overstated length rather than a second one.
+`mona.ttf`'s last strike puts its format-1 `sbitOffsets` at 57,992 of an 86,900
+byte `EBLC`; an array for glyphs 0..7,224 needs 28,912 bytes and 28,908 are
+there, so the **sentinel entry that bounds the last glyph is missing**. The two
+earlier strikes do have those four bytes, and what is in them is the next
+strike's `indexSubTableArray` header - a number that reads as an offset of
+7,224 where the previous entry is larger. So this library refuses glyph 7,224 of
+each of the three strikes and no other glyph of any of them, for *two* different
+stated reasons - "offsets run backwards" in strikes 0 and 1 and "past the end of
+the table" in strike 2 - and answers for 7,224 of 7,225 glyphs three times over.
+That is M11 earning its place: the alternative to a per-glyph refusal is
+declining three strikes of a font that renders everywhere, which is what the
+reference does.
 `CBLC`/`CBDT` formats 17-19 carry PNG, and `sbix` carries PNG, JPEG or TIFF
 per strike with `dupe` records; both come back as `GFNT_GLYPH_BITMAP_PNG` with
 the bytes, and the raster bridge decodes them through `image` when it is
@@ -1066,7 +1088,8 @@ memory.** Fonts have three excellent oracles and one of them can also
 | written fonts are valid | read back by this library, fontTools and FreeType (§12.5) | `make check-writer` | `fonttools`, `freetype` |
 | line breaking and bidi | `unicode`'s conformance gates, already passed there | - | none: `unicode`'s committed conformance files |
 | paragraph layout | **Pango** `pango-view --output` positions for a paragraph corpus, with the line-breaking differences that come from Pango's ICU tailorings recorded as known | `tools/oracle/pango_diff.py` | `pango`, built here: `pango-view` from the pinned apt package, `C.UTF-8` pinned in the image |
-| bitmap formats | `bdftopcf` (BDF → PCF, then both read here and compared); `psftools` | `tools/oracle/bitmap_diff.sh` | `xfonts`, built here: `bdftopcf` and `psftools` |
+| bitmap formats | **Pillow**'s `PcfFontFile` and `BdfFontFile`, every pixel of every glyph; a *second* reading of PCF and the only reading of PSF and `.hex` would need `bdftopcf` and `psftools` | `tools/oracle/bitmap_diff.py`, `make check-oracle-bitmap` | `fonttools` (Pillow is pinned in it); the `xfonts` image is not built |
+| **embedded** bitmap strikes are read identically | **fontTools**' `EBLC`/`EBDT`: every strike's ppem both ways, depth and baseline, each strike's present/absent/corrupt glyph counts over *every* glyph, and every sampled glyph's box, bearings, advance and pixels | `tools/oracle/eblc_diff.py`, `make check-oracle-eblc` | `fonttools`; the image carries the **whole** Debian population of the table, which is two fonts |
 | Type 1 | FreeType again, over fixtures converted from OFL fonts | `ft_outline.c` | `freetype` |
 
 **None of the three principal oracles is installed on the development
@@ -1288,6 +1311,27 @@ packages; the synthetic fixtures live only in the repository, mounted
 read-only at the same path on both sides. Neither crosses, and no licence
 question arises in the repository (§14.5).
 
+**Which fonts a differential covers is a list in the image, not a glob in the
+driver**, so that "what did that run read" has one answer and adding a package is
+one edit. There are three: `fonttools-corpus` is every sfnt (329 files),
+`fonttools-corpus-bitmap` is the PCF strikes (234), and `fonttools-corpus-ebdt`
+is the fonts with embedded bitmap strikes (two - the whole Debian population).
+Two things the third one does that the other two do not, and both were paid for:
+
+- **It reads a table directory with `struct` and opens nothing.** A population
+  chosen by the reader under test lets a reader that lost a table compare nothing
+  and pass; a population chosen by the *reference* drops `mona.ttf`, the one font
+  where the two disagree about whether the font is readable at all. Neither
+  reader gets to pick.
+- **It resolves symlinks and deduplicates.** Debian's alternatives put
+  `fonts-japanese-gothic.ttf` beside `mona.ttf` as a link to it, so a list keyed
+  on paths reports two fonts where there is one. `find -type f` already drops a
+  link; the dedupe is what says so rather than assuming it.
+
+The same program is what selects the *fixtures* for that differential, so a new
+strike fixture joins it by existing rather than by somebody remembering a second
+list.
+
 ### 14.8 Generated vectors, and which gate covers what
 
 Three vectors are generated from the pinned image and committed:
@@ -1314,7 +1358,7 @@ its UCD tables, and for the same reason:
 | --- | --- | --- |
 | `check-vectors` | a table edited by hand, or a generator changed without regenerating | the image |
 | `testVectors` | the same, on a fresh clone | nothing; runs in `make test` |
-| `check-oracle-ttx` | a table **wrong about reality**, over 346 faces | the image |
+| `check-oracle-ttx` | a table **wrong about reality**, over 362 faces | the image |
 | `check-oracle-cff` | the CFF tables wrong about reality: every glyph's name comes from the charset through the standard strings, and every accented character through the Standard Encoding | the image |
 
 Only the third can find the generator wrong; only the first two can find a
@@ -1989,13 +2033,14 @@ equidistant from 11 ppem, so the tie rule is a rule. What that cost in findings:
   population a gate samples has to contain the input that discriminates, and
   "every strike container is one strike" made that impossible rather than merely
   absent.
-- **Nothing on this machine has the table, and one font in the 327-font corpus
-  does.** That one is `NotoColorEmoji.ttf`, which is `CBLC` - the same layout with
-  PNG payloads - so the corpus could not check a single `EBDT` glyph. Two Debian
-  packages carry the real thing (`fonts-arphic-uming`, `fonts-mona`), found by
+- **Nothing on this machine has the table, and the oracle corpus had nothing
+  with it either.** The one font that looked like it was `NotoColorEmoji.ttf`,
+  which is `CBLC` - the same layout with PNG payloads - so the corpus could not
+  check a single `EBDT` glyph. Two Debian packages carry the real thing, found by
   installing candidates in a throwaway container rather than by reasoning about
   which fonts ought to have bitmaps: `fonts-wqy-zenhei` was the obvious guess and
-  does not.
+  does not. Both are pinned in the image now, which is what took the corpus from
+  327 fonts to 329.
 - **`(index 2, image 5)` is 54,136 of 55,356 index subtables in that
   population - 97.8%.** A reader that implemented only that pair would read almost
   every real glyph. Image formats 1, 2, 8 and 9 and index formats 3, 4 and 5 occur
@@ -2085,6 +2130,73 @@ What that cost in findings, all of them about what a test could see:
   parse can also run out of memory, and that arrived as UNSUPPORTED carrying an
   out-of-memory message - a code and a diagnostic disagreeing, which is worse than
   either being wrong alone.
+
+**The strike differential is built, as of 2026-10-01**: `eblc_diff.py` against
+fontTools over the whole Debian population of this table and both format
+fixtures. Until it, every claim in the two blocks above rested on two fixtures
+this repository wrote and the reference reading them back; the population is
+`uming.ttc`'s four faces of six strikes over 27,123 glyphs, and nothing had
+compared a single one of them. **7,246,262 fields over six faces, 0
+disagreements**, exhaustively - every glyph of every strike, not a stride, because
+this corpus is two files and the reference takes eleven seconds a face.
+
+- **It is a gate with no `-exhaustive` variant, deliberately.** Every other
+  differential here samples because its corpus is 329 fonts; this one's is two,
+  so a strided default would leave the format's only real population sampled for
+  no saving worth having.
+- **The three glyph counts are over every glyph whatever the stride.** A stride
+  samples pixels; a strike's glyph *set* is what the whole index subtable walk
+  decides. Both mutations that moved a glyph's offset by one entry were caught by
+  `present` and `corrupt` disagreeing before any pixel was compared - which is
+  the check that survives a developer running `--stride 997`.
+- **The population must not be chosen by either reader.** `fonttools-corpus-ebdt`
+  reads a table directory with `struct` and opens nothing, because selecting with
+  the reader under test lets a reader that lost `EBLC` support compare nothing and
+  pass, and selecting with the reference drops `mona.ttf` - the one font the two
+  disagree about being *readable*. The same program picks the fixtures, so a new
+  strike fixture joins the differential by existing.
+- **A font the reference declines is an assertion, not a skip.** `mona.ttf` is
+  named with the error fontTools must fail with. If a future fontTools reads it,
+  the gate fails and says to move the font to the both-sides population; if it
+  fails differently, the gate says that too. Both arms were planted and seen to
+  fire. What the report prints beside the skip is what *this* library read of it -
+  three strikes, 7,224 present and 1 corrupt each - because "skipped" and "read by
+  one reader and nobody else" are different facts and the second is a claim with
+  no second opinion behind it.
+- **The report names the cells of the grid the run visited**, from the
+  reference's own census: `(2,5)` 54,139 subtables, `(1,7)` 1,221, and one each of
+  `(1,1)`, `(1,2)`, `(3,6)`, `(4,2)` and `(5,5)` - every one of those five from
+  `strike-formats.ttf`, which is therefore the only reference check image formats
+  1, 2 and 6 and index formats 3, 4 and 5 have. It also prints that 28 strikes had
+  `flags` of 1 and a depth of 1 and none had anything else, so the vertical
+  `sbitLineMetrics` arm and every grey depth are fixture-only in a number rather
+  than in a sentence.
+- **Six faces over three distinct table extents.** `uming.ttc`'s four faces name
+  the *same* `EBLC` and `EBDT` byte range, so three of those four re-check the
+  collection path rather than the format, and the report prints both numbers so
+  that 7.2 million fields cannot be read as four times the evidence it is.
+- **A run that compares nothing fails.** An image rebuilt without the two font
+  packages still answers its version probe, so the corpus would come back empty
+  and every number above would be zero - and a clean report of nothing reads
+  exactly like a clean report of everything. The gate fails if no face was
+  compared, and fails if every face compared was a fixture.
+
+Adding two packages moved every differential's denominator, so all of them were
+re-measured the same day and all are clean:
+
+| gate | result, 2026-10-01 |
+| --- | ---: |
+| `check-oracle-eblc` | 6 faces, 650,980 glyphs, 7,246,262 fields, **0** |
+| `check-oracle-ttx` | 362 faces, 349,372 fields, **0** (1 named skip: `mona.ttf`'s `OS/2` is short too) |
+| `check-oracle-cmap` | 329 fonts, 634,109 codepoints, **0** |
+| `check-oracle-glyf` | 316 fonts, 42,144 glyphs, 3,094,387 fields, **0** |
+| `check-oracle-cff` | 47 fonts, 4,268 glyphs, 25,530 fields, **0** |
+| `check-oracle-bitmap` | 239 fonts, 10,639 glyphs, 230,300 fields, **0** |
+| `check-golden` | 6,421 renderings x 3 big-endian targets, **0** |
+
+`mona.ttf` is compared by `glyf_diff` without complaint, which is worth noting
+beside the three tables of it the reference cannot read: the font is short in
+several places and sound everywhere else.
 
 **Not built:** `CFF2` (§16); `EBDT`'s composite image formats 8 and 9, `EBSC`,
 and `CBDT` and `sbix` (§7.5); colour

@@ -56,6 +56,19 @@ RUN pip install --no-cache-dir --no-compile \
 #                            sequences, and CBDT/CBLC strikes for phase 6
 #   xfonts-terminus          PCF bitmap strikes, for phase 1b; nothing reads
 #                            them yet and they cost two megabytes
+#   fonts-arphic-uming       EBLC/EBDT strikes inside an sfnt: four faces over
+#                            one table, six strikes of 27,123 glyphs, index
+#                            formats 1 and 2 with image formats 5 and 7
+#   fonts-mona               the other half of that population, and the only
+#                            image format 6 in Debian - and a font whose EBLC
+#                            fontTools cannot parse at all (fonttools#317), so
+#                            it is the case where the two readers disagree about
+#                            whether the font is readable
+#
+# Those last two are **the whole population** of embedded bitmap strikes in
+# Debian: every other font in this image and on the host has none, which is why
+# a survey came before the parser (notes/font/EBLC.md). `fonts-wqy-zenhei` is the
+# obvious guess and does not have them.
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends \
       fonts-dejavu-core=2.37-8 \
@@ -64,15 +77,19 @@ RUN apt-get update -qq \
       fonts-noto-core=20201225-2 \
       fonts-noto-color-emoji=2.051-0+deb13u1 \
       xfonts-terminus=4.48-3.1 \
+      fonts-arphic-uming=0.2.20080216.2-11 \
+      fonts-mona=1:2.90-1.1 \
     && rm -rf /var/lib/apt/lists/*
 
-# The three scripts an oracle driver runs, copied in rather than written with
+# The four scripts an oracle driver runs, copied in rather than written with
 # printf inside a RUN. The first draft did use printf, and its \x27 escapes
 # reached the file as literal backslash-x-2-7 - a quoting layer between the
 # check and the fact it checks, which is the same reason `unicode`'s ICU image
 # compiles a version program instead of parsing icuinfo's XML.
 COPY fonttools-version fonttools-corpus fonttools-corpus-bitmap \
+     fonttools-corpus-ebdt \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/fonttools-version \
       /usr/local/bin/fonttools-corpus \
-      /usr/local/bin/fonttools-corpus-bitmap
+      /usr/local/bin/fonttools-corpus-bitmap \
+      /usr/local/bin/fonttools-corpus-ebdt

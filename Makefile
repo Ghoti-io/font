@@ -667,6 +667,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
+.PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
 # Fixture commands
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
@@ -905,6 +906,7 @@ oracle-version:
 
 oracle-corpus: ## Copy the image's fonts to build/oracle/corpus for both sides
 	@python3 $(ORACLE)/corpus.py sfnt
+	@python3 $(ORACLE)/corpus.py ebdt
 
 oracle-corpus-clean: ## Remove the materialised corpus (it is cache, not content)
 	@rm -rf build/oracle/corpus
@@ -916,7 +918,7 @@ check-oracle-ttx: $(EXAMPLES)
 
 check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
-check-oracle: check-oracle-cff check-oracle-bitmap
+check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -936,6 +938,18 @@ check-oracle-bitmap: ## Diff every PCF and BDF glyph's pixels against Pillow
 check-oracle-bitmap: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools -- \
 		python3 $(ORACLE)/bitmap_diff.py --quiet
+
+# **No -exhaustive variant**, and the absence is the point: this corpus is two
+# fonts, so the exhaustive run *is* the gate. Every other differential here
+# samples because its corpus is 329 fonts and an exhaustive pass is minutes; this
+# one compares all 1.8 million facts of each face in eleven seconds of reference
+# time, and a strided default would leave the format's only real population
+# sampled for no saving worth having. `--stride` exists for a developer looking
+# at one font.
+check-oracle-eblc: ## Diff every EBLC/EBDT strike's glyphs and pixels against fontTools
+check-oracle-eblc: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+		python3 $(ORACLE)/eblc_diff.py --quiet
 
 check-oracle-bitmap-exhaustive: ## The same, over every glyph of every font
 check-oracle-bitmap-exhaustive: $(EXAMPLES)

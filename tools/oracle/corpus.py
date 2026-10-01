@@ -20,9 +20,9 @@ stdout and the host unpacks them under `build/oracle/corpus`, which `build/` is
 already gitignored. They are cache, not content - `make oracle-corpus-clean`
 removes them, and a fresh checkout has none until a differential asks.
 
-Doing it in one `tar` rather than a `cp` per font is not only speed: 327
-container starts is 327 chances for a partial copy, and the tar either arrives
-or does not.
+Doing it in one `tar` rather than a `cp` per font is not only speed: a container
+start per font is a chance per font for a partial copy, and the tar either
+arrives whole or does not arrive.
 """
 
 import os
@@ -36,12 +36,17 @@ import oracle_env
 ROOT = oracle_env.ROOT
 CORPUS = os.path.join(ROOT, "build", "oracle", "corpus")
 
-# Which list in the image to read. The bitmap corpus is several hundred PCF
-# files that nothing reads yet (phase 1b), and mixing them in would make every
-# differential's denominator mostly files it skipped.
+# Which list in the image to read. Each is a list rather than a glob here for
+# the same reason: a denominator that is mostly files the differential skipped
+# reports the same clean number whatever it covered. The bitmap corpus is several
+# hundred PCF files, and the EBDT corpus is the **whole** Debian population of
+# embedded bitmap strikes inside an sfnt - two fonts, which is the measurement
+# that `notes/font/EBLC.md` records and the reason that differential's report
+# says what rests on fixtures instead.
 LISTS = {
     "sfnt": "fonttools-corpus",
     "bitmap": "fonttools-corpus-bitmap",
+    "ebdt": "fonttools-corpus-ebdt",
 }
 
 

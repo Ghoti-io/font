@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""The EBDT corpus: every font in this image with embedded bitmap strikes.
+
+A list of its own, like fonttools-corpus-bitmap, because two fonts of the
+image's several hundred have this table and mixing them into the sfnt corpus
+would make eblc_diff's denominator mostly files it skipped.
+
+Two things this does *not* do, and both are deliberate:
+
+  * **It does not open a font with fontTools.** The table directory is read with
+    struct, here, because the population must not be chosen by either reader
+    being compared. fontTools cannot parse mona.ttf's EBLC at all
+    (fonttools#317) and mona.ttf is precisely the font this corpus exists to
+    name: a selector that asked the reference whether it could read a font would
+    drop the only case where the two readers disagree about whether the font is
+    readable.
+
+  * **It does not glob the font tree and trust the paths.** Debian's
+    alternatives put /usr/share/fonts/truetype/fonts-japanese-gothic.ttf beside
+    mona.ttf as a symlink to it, so a list keyed on paths reports two fonts where
+    there is one and every count downstream is wrong by one. `find -type f`
+    already drops a symlink, and the realpath dedupe below is the check that
+    says so rather than the assumption that it does.
+"""
+
+import os
+import struct
+import subprocess
+import sys
+
+WANTED = (b"EBLC", b"EBDT")
+
+
+def tags(data, offset):
+    """The four-character tags of one sfnt's table directory."""
+    if offset + 12 > len(data):
+        return set()
+    count = struct.unpack(">H", data[offset + 4:offset + 6])[0]
+    found = set()
+    for index in range(count):
+        at = offset + 12 + 16 * index
+        if at + 4 > len(data):
+            break
+        found.add(data[at:at + 4])
+    return found
+
+
+def carries_strikes(path):
+    """Whether any face of this file has both EBLC and EBDT.
+
+    Both, because neither names a glyph without the other - the same rule the
+    library applies in gfnt_face_has_eblc().
+    """
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except OSError:
+        return False
+    if data[:4] == b"ttcf":
+        if len(data) < 12:
+            return False
+        faces = struct.unpack(">I", data[8:12])[0]
+        offsets = []
+        for index in range(faces):
+            at = 12 + 4 * index
+            if at + 4 > len(data):
+                break
+            offsets.append(struct.unpack(">I", data[at:at + 4])[0])
+    else:
+        offsets = [0]
+    for offset in offsets:
+        if all(tag in tags(data, offset) for tag in WANTED):
+            return True
+    return False
+
+
+def main(roots):
+    """Every font with strikes under @p roots, one per line.
+
+    The roots are arguments so that this is the **only** implementation of
+    "does this file carry strikes": `eblc_diff.py` runs it over the image's
+    fonts through corpus.py and over `tests/data/fonts` directly, and a fixture
+    that stops being a strike fixture - or a new one that starts - changes what
+    that differential compares without anybody editing a second list.
+    """
+    finished = subprocess.run(
+        ["find"] + list(roots) + ["-type", "f",
+         "-name", "*.ttf", "-o", "-type", "f", "-name", "*.otf",
+         "-o", "-type", "f", "-name", "*.ttc",
+         "-o", "-type", "f", "-name", "*.otc"],
+        capture_output=True, text=True, check=True)
+    seen = set()
+    found = []
+    for path in finished.stdout.split("\n"):
+        if not path:
+            continue
+        real = os.path.realpath(path)
+        if real in seen:
+            continue
+        seen.add(real)
+        if carries_strikes(real):
+            found.append(real)
+    for path in sorted(found):
+        print(path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:] or ["/usr/share/fonts"]))

@@ -28,7 +28,7 @@
 # (cmap_diff), *and* the image the fixture generator will run in, so that a
 # fixture's bytes depend on a pinned fontTools rather than on whatever the host
 # has (design.md section 14.7).
-fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0 Pillow 12.3.0	Every sfnt table's fields, every cmap's mapping, PCF and BDF bitmaps through Pillow, and the corpus of real fonts
+fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0 Pillow 12.3.0	Every sfnt table's fields, every cmap's mapping, EBLC/EBDT strikes glyph by glyph, PCF and BDF bitmaps through Pillow, and the corpus of real fonts - including the whole Debian population of embedded bitmap strikes, which is two fonts
 
 # Not here yet, and each is a phase rather than an afternoon:
 #   freetype   outline and coverage differentials (phase 1), built here,
@@ -39,3 +39,9 @@ fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0 Pillow 1
 #              reading of PSF and `.hex` there is. Pillow covers PCF's bitmaps
 #              and BDF outright, so what is still missing is PSF, `.hex`, and an
 #              independent reading of PCF's encodings table - see bitmap_diff.py
+#
+# `freetype` has one more job than the list above gives it: it is the only reader
+# of `EBDT` outside fontTools, and fontTools cannot parse `mona.ttf`'s `EBLC` at
+# all. So that font's three strikes are read here and nowhere else, which
+# eblc_diff.py prints beside its skip. If the freetype image ever lands,
+# `mona.ttf` is the first thing to point it at.

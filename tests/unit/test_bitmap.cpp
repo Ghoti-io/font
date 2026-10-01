@@ -27,9 +27,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <latch>
 #include <memory>
 #include <sstream>
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <ghoti.io/compress/compress.h>
@@ -1468,6 +1471,170 @@ TEST(Eblc, ADirectoryEntryThatLeavesTheFileFailsTheLoadAndNotTheParse) {
   Crafted crafted(bytes);
   EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT);
   EXPECT_EQ(crafted.face, nullptr);
+}
+
+/**
+ * An allocator that counts, safely, from several threads at once.
+ *
+ * `gfnttest::FailingAllocator` counts with plain `size_t` members, which is right
+ * for every other sweep in this suite and wrong here: eight threads incrementing
+ * it lose updates, and the first version of the race test below read a live count
+ * of **-1** with the code correct and a live count of 7 with it broken, both from
+ * the same unsynchronised counter. Neither number meant anything.
+ */
+class ThreadSafeCounter {
+public:
+  ThreadSafeCounter() {
+    allocator_.ctx = this;
+    allocator_.malloc_fn = &ThreadSafeCounter::malloc_fn;
+    allocator_.calloc_fn = &ThreadSafeCounter::calloc_fn;
+    allocator_.realloc_fn = &ThreadSafeCounter::realloc_fn;
+    allocator_.free_fn = &ThreadSafeCounter::free_fn;
+  }
+
+  const GFNT_Allocator * get() const { return &allocator_; }
+
+  /** Blocks allocated and not yet freed. Zero at the end, or something leaked. */
+  long live() const { return live_.load(); }
+  /** How many allocations were served, for a denominator. */
+  long requests() const { return requests_.load(); }
+
+private:
+  static void * malloc_fn(void * ctx, size_t size) {
+    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
+    void * block = malloc(size);
+    if (block) {
+      ++self->requests_;
+      ++self->live_;
+    }
+    return block;
+  }
+
+  static void * calloc_fn(void * ctx, size_t count, size_t size) {
+    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
+    void * block = calloc(count, size);
+    if (block) {
+      ++self->requests_;
+      ++self->live_;
+    }
+    return block;
+  }
+
+  static void * realloc_fn(void * ctx, void * block, size_t size) {
+    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
+    void * grown = realloc(block, size);
+    if (grown && !block) {
+      ++self->requests_;
+      ++self->live_;
+    }
+    return grown;
+  }
+
+  static void free_fn(void * ctx, void * block) {
+    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
+    if (block) {
+      --self->live_;
+    }
+    free(block);
+  }
+
+  GFNT_Allocator allocator_{};
+  std::atomic<long> live_{0};
+  std::atomic<long> requests_{0};
+};
+
+TEST(Eblc, RacingThreadsLeakNothingWhenOneLosesThePublication) {
+  // The EBLC memo is the first one in this library that is **both** parsed lazily
+  // and holds an allocation. Every allocating memo before it - the bitmap
+  // containers', Type 1's - is parsed during the face load, where there is one
+  // thread and no race to lose; and every lazily parsed memo before it holds
+  // offsets into the blob and owns nothing.
+  //
+  // gfnt_table_cached() deliberately parses with no lock held, so two threads can
+  // parse one table at once and only one publishes. The loser's scratch holds
+  // everything its parse built, and dropping it is a leak that lives as long as
+  // the face.
+  //
+  // **Two things here are what make the test able to see that, and the first
+  // draft had neither.** Eight threads over strikes.ttf's three strikes never
+  // raced once in thirty-two passes - spawning a thread takes longer than parsing
+  // 152 bytes, so the first one was always finished before the second started, and
+  // removing the release hook changed nothing. So: the threads wait on a barrier
+  // and are released together, and the font carries the most strikes the default
+  // limit allows, which makes the parse long enough to overlap. With both, the
+  // dropped scratch is caught.
+  constexpr std::ptrdiff_t kRaceThreads = 8;
+  std::vector<uint8_t> body;
+  const size_t strikes = 256;
+  for (size_t i = 0; i < strikes; ++i) {
+    const std::vector<uint8_t> one = size_table(
+        (uint32_t)(8 + 48 * strikes), 8, 1, 1, 1,
+        (uint8_t)(1 + i % 255), (uint8_t)(1 + i % 255), 1, 1);
+    body.insert(body.end(), one.begin(), one.end());
+  }
+  const std::string bytes = eblc_font(eblc_header(0x00020000,
+      (uint32_t)strikes, body));
+
+  size_t raced = 0;
+  // One face per pass: the race can only happen on a memo nobody has parsed yet,
+  // and a second pass over the same face reads the published answer.
+  for (int pass = 0; pass < 24; ++pass) {
+    ThreadSafeCounter counter;
+    GFNT_Blob * blob = nullptr;
+    GFNT_Face * face = nullptr;
+    GFNT_Error error{};
+
+    ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+        GFNT_BLOB_COPY, nullptr, counter.get(), &blob, &error), GFNT_OK);
+    ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, counter.get(), &face, &error),
+        GFNT_OK) << error.message;
+
+    const long before = counter.requests();
+    // A blocking latch and not a spin. The first version spun on an atomic, which
+    // works on hardware and **hangs under valgrind**: its scheduler runs one
+    // thread at a time, so eight threads busy-waiting on a ninth store make no
+    // progress worth the cycles, and `make test-valgrind` stopped there rather
+    // than failing. A latch parks them in the kernel and releases them together,
+    // which is what the test wanted in the first place.
+    std::latch start{kRaceThreads + 1};
+    std::atomic<int> failures{0};
+    std::vector<std::thread> threads;
+    for (int i = 0; i < kRaceThreads; ++i) {
+      threads.emplace_back([face, &failures, &start, strikes]() {
+        start.arrive_and_wait();
+        size_t count = 0;
+        if (gfnt_face_strike_count(face, &count, nullptr) != GFNT_OK
+            || count != strikes) {
+          ++failures;
+        }
+      });
+    }
+    start.arrive_and_wait();
+    for (std::thread & thread : threads) {
+      thread.join();
+    }
+    EXPECT_EQ(failures.load(), 0) << "pass " << pass;
+    // More than one strike array allocated means more than one thread ran the
+    // parse, which is the only situation this test is about.
+    if (counter.requests() - before > 1) {
+      ++raced;
+    }
+
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+    // The assertion. Without the release hook this is the strike array of however
+    // many threads lost the race.
+    EXPECT_EQ(counter.live(), 0L) << "pass " << pass;
+  }
+  // The denominator. A run where no pass raced proves nothing about the hook, and
+  // would pass whether it was there or not - so say so rather than reporting
+  // green. It is not an EXPECT_GT because a loaded machine can legitimately
+  // serialise every pass; what must not happen silently is *believing* the test
+  // ran.
+  if (raced == 0) {
+    GTEST_SKIP() << "no pass actually raced, so the release hook was never "
+        "exercised; this says nothing either way";
+  }
 }
 
 TEST(Eblc, ReleasingNothingIsHarmless) {

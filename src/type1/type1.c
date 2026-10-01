@@ -1233,7 +1233,9 @@ GFNT_Result gfnt_type1_parse(const GFNT_Face * face, void * out,
   return GFNT_OK;
 }
 
-void gfnt_type1_release(const GFNT_Allocator * allocator, GFNT_Type1 * type1) {
+void gfnt_type1_release(const GFNT_Allocator * allocator, void * table) {
+  GFNT_Type1 * type1 = table;
+
   if (!allocator || !type1) {
     return;
   }
@@ -1399,7 +1401,7 @@ GFNT_Result gfnt_face_type1(const GFNT_Face * face, const GFNT_Type1 ** out_type
     return GFNT_ERR_INVALID;
   }
   result = gfnt_table_cached(face, &owner->type1_state, &owner->type1, &scratch,
-      sizeof scratch, gfnt_type1_parse, error);
+      sizeof scratch, gfnt_type1_parse, gfnt_type1_release, error);
   if (result == GFNT_OK) {
     *out_type1 = &owner->type1;
   }

@@ -192,7 +192,7 @@ GFNT_Result gfnt_type1_parse(const GFNT_Face * face, void * out,
     GFNT_Error * error);
 
 /** Release what a parse allocated. For the face's cache teardown. */
-void gfnt_type1_release(const GFNT_Allocator * allocator, GFNT_Type1 * type1);
+void gfnt_type1_release(const GFNT_Allocator * allocator, void * table);
 
 /**
  * The face's parsed program, parsing it on first use.

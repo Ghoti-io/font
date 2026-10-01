@@ -242,7 +242,7 @@ GFNT_Result gfnt_face_cmap_best(const GFNT_Face * face,
   // Memoised: every codepoint lookup needs this, and it costs a walk of the
   // whole record list.
   result = gfnt_table_cached(face, &owner->cmap_best_state, &owner->cmap_best,
-      &scratch, sizeof scratch, gfnt_cmap_best_parse, error);
+      &scratch, sizeof scratch, gfnt_cmap_best_parse, NULL, error);
   if (result == GFNT_OK) {
     *out_subtable = owner->cmap_best;
   }

@@ -244,7 +244,9 @@ GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
   return GFNT_OK;
 }
 
-void gfnt_eblc_release(const GFNT_Allocator * allocator, GFNT_Eblc * eblc) {
+void gfnt_eblc_release(const GFNT_Allocator * allocator, void * table) {
+  GFNT_Eblc * eblc = table;
+
   if (!allocator || !eblc) {
     return;
   }
@@ -278,7 +280,7 @@ GFNT_Result gfnt_face_eblc(const GFNT_Face * face, const GFNT_Eblc ** out_eblc,
   }
   result = gfnt_table_cached(face, &((GFNT_Face *)face)->eblc_state,
       &((GFNT_Face *)face)->eblc, &scratch, sizeof scratch, gfnt_eblc_parse,
-      error);
+      gfnt_eblc_release, error);
   if (result != GFNT_OK) {
     return result;
   }

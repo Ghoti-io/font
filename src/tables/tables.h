@@ -49,6 +49,17 @@ extern "C" {
 typedef GFNT_Result (*GFNT_TableParse)(const GFNT_Face * face, void * out,
     GFNT_Error * error);
 
+/**
+ * Release what a parse allocated into @p table.
+ *
+ * Required of any memo whose type owns memory, and NULL for the ones that are
+ * plain data. ::gfnt_table_cached() calls it on the **losing** scratch of a race:
+ * two threads may parse one table at once, and the one that does not publish has
+ * to free what it built or the allocation is lost for the life of the face.
+ */
+typedef void (*GFNT_TableRelease)(const GFNT_Allocator * allocator,
+    void * table);
+
 /*
  * A parser must leave @p out in a state the face can destroy **on every path**,
  * failures included, and the cheap way to guarantee that is to zero it before
@@ -85,13 +96,17 @@ typedef GFNT_Result (*GFNT_TableParse)(const GFNT_Face * face, void * out,
  *   any knowledge of the types it copies.
  * @param size `sizeof` that type.
  * @param parse The parser to run on the first call.
+ * @param release How to free what a parse allocated, or NULL for a memo that
+ *   owns nothing. **Not optional for a memo that does**: see
+ *   ::GFNT_TableRelease. The duplicate parse two threads can perform is
+ *   invisible for plain data and is a leak without this.
  * @param error Receives the diagnostic - the first attempt's, replayed - when
  *   the result is a failure. May be NULL.
  * @return whatever the parse returned, the first time and every time after.
  */
 GFNT_Result gfnt_table_cached(const GFNT_Face * face, GFNT_Cached * state,
     void * storage, void * scratch, size_t size, GFNT_TableParse parse,
-    GFNT_Error * error);
+    GFNT_TableRelease release, GFNT_Error * error);
 
 /** The `head` parser, for ::gfnt_table_cached(). */
 GFNT_Result gfnt_head_parse(const GFNT_Face * face, void * out,

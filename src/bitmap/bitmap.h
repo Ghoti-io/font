@@ -215,9 +215,13 @@ GFNT_Result gfnt_bitmap_derive(GFNT_Face * face, GFNT_Tag flavour, GFNT_Tag tag,
 GFNT_Result gfnt_face_bitmap(const GFNT_Face * face,
     const GFNT_BitmapFont ** out_font, GFNT_Error * error);
 
-/** Release everything a parse allocated. Harmless on a zeroed struct. */
-void gfnt_bitmap_release(const GFNT_Allocator * allocator,
-    GFNT_BitmapFont * font);
+/**
+ * Release everything a parse allocated. Harmless on a zeroed struct.
+ *
+ * `void *` so that it is ::gfnt_table_cached()'s release hook itself; see
+ * ::gfnt_eblc_release() for why a typed wrapper would be unreachable code.
+ */
+void gfnt_bitmap_release(const GFNT_Allocator * allocator, void * table);
 
 /**
  * This glyph's name, for `glyph.h`'s name accessors.

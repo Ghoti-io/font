@@ -41,7 +41,7 @@
 
 GFNT_Result gfnt_table_cached(const GFNT_Face * face, GFNT_Cached * state,
     void * storage, void * scratch, size_t size, GFNT_TableParse parse,
-    GFNT_Error * error) {
+    GFNT_TableRelease release, GFNT_Error * error) {
   // The one cast in the library that writes through a const GFNT_Face *. A
   // face is immutable after load *except* for these memos, which is what lets
   // one face be shared read-only across threads; the lock is what makes the
@@ -51,6 +51,7 @@ GFNT_Result gfnt_table_cached(const GFNT_Face * face, GFNT_Cached * state,
   GFNT_Result result;
   GFNT_Error recorded;
   GFNT_Error attempt;
+  bool discard = false;
 
   if (!face || !state || !storage || !scratch || !parse || size == 0) {
     return GFNT_ERR_INVALID;
@@ -97,8 +98,19 @@ GFNT_Result gfnt_table_cached(const GFNT_Face * face, GFNT_Cached * state,
     // over it, so that storage is written exactly once.
     result = state->result;
     attempt = state->error;
+    discard = true;
   }
   GCU_MUTEX_UNLOCK(cache_owner->lock);
+
+  // Outside the lock, because a release calls the allocator and an allocator is
+  // the caller's code. The scratch that lost the race holds everything its parse
+  // built, and for a memo whose type owns memory - `EBLC`'s strike list, and
+  // every one that follows it - dropping it on the floor is a leak that lives as
+  // long as the face. It went unnoticed while every allocating memo was parsed
+  // during load, where there is one thread and no race to lose.
+  if (discard && release) {
+    release(face->allocator, scratch);
+  }
 
   if (result != GFNT_OK && error) {
     *error = attempt;

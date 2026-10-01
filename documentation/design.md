@@ -1438,6 +1438,14 @@ contention. So a parse runs into caller-supplied scratch storage and only the
 publication takes the lock; two threads may therefore parse the same table at
 once, reach the same answer from the same immutable bytes, and the first to
 finish publishes.
+
+**The loser has to free what it built.** A memo whose type owns memory - `EBLC`'s
+strike list, and every one that follows it - leaves that memory in the scratch of
+whichever thread did not publish, and dropping it leaks for the life of the face.
+So `gfnt_table_cached()` takes a release hook, required of any such memo and NULL
+only for the ones that are plain data or offsets into the blob. It went unnoticed
+until `EBLC` because every allocating memo before it is parsed during the *load*,
+where there is one thread and no race to lose.
 Every other object - outline, coverage, buffer, shaped run, paragraph, font
 set, cache - is used from one thread at a time. There is no process-wide
 state: no default face, no global cache, no environment read outside
@@ -2002,6 +2010,29 @@ equidistant from 11 ppem, so the tie rule is a rule. What that cost in findings:
 - **`GFNT_Limits::max_strikes` had never been read.** It was declared in phase 0
   with a value of 256 and nothing consulted it, which is the
   `unread-table-constants` shape in a field rather than a table.
+- **The memo helper leaked a losing parse, and this is the first memo that could
+  tell.** `gfnt_table_cached()` parses with no lock held - deliberately, because
+  one table's parse legitimately needs another's and a non-recursive mutex held
+  across that deadlocks - so two threads may parse one table and only one
+  publishes. The loser's scratch was dropped. That was invisible for every memo
+  before this one: `head`, `hhea`, `OS/2`, `post`, the numGlyphs minimum, the
+  `cmap` choice and `CFF ` own nothing but offsets into the blob, and the bitmap
+  containers' and Type 1's arenas are built during the *load*, where there is one
+  thread. `EBLC` is the first memo that is both lazy and owning. The helper takes
+  a release hook now, required of any memo whose type owns memory, and §15.3 says
+  so.
+  - **The test for it could not see the leak until the race was forced.** Eight
+    threads over `strikes.ttf` raced zero times in thirty-two passes - spawning a
+    thread takes longer than parsing 152 bytes - so removing the hook changed
+    nothing and the test passed either way. It needs a barrier releasing the
+    threads together *and* a font with 256 strikes to make the parse long enough
+    to overlap, and it counts how many passes actually raced so that a run which
+    serialised reports a skip rather than a pass.
+  - **And the instrument could not count.** `FailingAllocator` keeps plain
+    `size_t` counters, which is right for every other sweep in the suite and wrong
+    across eight threads: it reported a live count of -1 with the code correct and
+    7 with it broken, from the same unsynchronised increments. The figure that
+    matters came from an atomic counter written for this test.
 
 **Not built:** `CFF2` (§16); `EBDT`'s glyph data, and `CBDT` and `sbix`
 (§7.5) - an `EBLC` face lists its strikes and refuses their pixels, naming

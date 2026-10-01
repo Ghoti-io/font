@@ -407,8 +407,9 @@ void gfnt_bitmap_build_finish(GFNT_BitmapBuild * build,
   allocator->free_fn(allocator->ctx, build);
 }
 
-void gfnt_bitmap_release(const GFNT_Allocator * allocator,
-    GFNT_BitmapFont * font) {
+void gfnt_bitmap_release(const GFNT_Allocator * allocator, void * table) {
+  GFNT_BitmapFont * font = table;
+
   if (!font) {
     return;
   }
@@ -523,7 +524,8 @@ GFNT_Result gfnt_face_bitmap(const GFNT_Face * face,
     return GFNT_ERR_INVALID;
   }
   result = gfnt_table_cached(face, &owner->bitmap_state, &owner->bitmap,
-      &scratch, sizeof scratch, gfnt_bitmap_parse, error);
+      &scratch, sizeof scratch, gfnt_bitmap_parse, gfnt_bitmap_release,
+      error);
   if (result == GFNT_OK) {
     *out_font = &owner->bitmap;
   }

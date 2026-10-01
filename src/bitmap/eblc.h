@@ -122,8 +122,17 @@ typedef struct GFNT_Eblc {
 GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
     GFNT_Error * error);
 
-/** Release what a parse allocated. Harmless on a zeroed struct. */
-void gfnt_eblc_release(const GFNT_Allocator * allocator, GFNT_Eblc * eblc);
+/**
+ * Release what a parse allocated. Harmless on a zeroed struct.
+ *
+ * `void *` rather than `GFNT_Eblc *` so that it **is**
+ * ::gfnt_table_cached()'s release hook rather than needing a wrapper around it -
+ * the same reason ::gfnt_eblc_parse() takes one. A wrapper would be a function
+ * nothing could reach: the race it exists for happens only for a memo parsed
+ * lazily, so for the memos parsed during the face load the wrapper would be
+ * uncovered and uncoverable.
+ */
+void gfnt_eblc_release(const GFNT_Allocator * allocator, void * table);
 
 /**
  * The face's parsed `EBLC`, parsing it on first use.

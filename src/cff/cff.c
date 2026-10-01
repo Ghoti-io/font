@@ -879,7 +879,7 @@ GFNT_Result gfnt_face_cff(const GFNT_Face * face, const GFNT_Cff ** out_cff,
     return GFNT_ERR_INVALID;
   }
   result = gfnt_table_cached(face, &owner->cff_state, &owner->cff, &scratch,
-      sizeof scratch, gfnt_cff_parse, error);
+      sizeof scratch, gfnt_cff_parse, NULL, error);
   if (result == GFNT_OK) {
     *out_cff = &owner->cff;
   }

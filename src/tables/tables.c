@@ -41,7 +41,7 @@
 
 GFNT_Result gfnt_table_cached(const GFNT_Face * face, GFNT_Cached * state,
     void * storage, void * scratch, size_t size, GFNT_TableParse parse,
-    GFNT_TableRelease release, GFNT_Error * error) {
+    void * context, GFNT_TableRelease release, GFNT_Error * error) {
   // The one cast in the library that writes through a const GFNT_Face *. A
   // face is immutable after load *except* for these memos, which is what lets
   // one face be shared read-only across threads; the lock is what makes the
@@ -80,7 +80,7 @@ GFNT_Result gfnt_table_cached(const GFNT_Face * face, GFNT_Cached * state,
   // them does. See the header for why that is a requirement rather than a
   // convenience.
   gfnt_error_clear(&attempt);
-  result = parse(face, scratch, &attempt);
+  result = parse(face, scratch, context, &attempt);
 
   if (GCU_MUTEX_LOCK(cache_owner->lock) != 0) {
     return gfnt_error_set(error, GFNT_ERR_INTERNAL, 0, 0, GFNT_GLYPH_NONE,

@@ -2034,9 +2034,60 @@ equidistant from 11 ppem, so the tie rule is a rule. What that cost in findings:
     7 with it broken, from the same unsynchronised increments. The figure that
     matters came from an atomic counter written for this test.
 
-**Not built:** `CFF2` (§16); `EBDT`'s glyph data, and `CBDT` and `sbix`
-(§7.5) - an `EBLC` face lists its strikes and refuses their pixels, naming
-`EBDT`; colour
+**`EBDT`'s glyph data is built, as of 2026-10-01**: index subtable formats 1-5
+and image formats 1, 2, 5, 6 and 7, so an `EBLC` face's glyphs come back as
+::GFNT_BitmapGlyph through the same accessor a PCF's do. The index format says how
+to find a glyph's bytes and the image format says what those bytes are, and the two
+are **independent axes** - a reader that conflated them would work on the one
+pairing that is 97.8% of the real population and fail on the rest.
+
+- **Bit-aligned rows are widened and then go through the same path as every other
+  container.** Image formats 2, 5, 7 and 9 pack the next row at the next *bit*;
+  1, 6 and 8 start each row on a byte. `EBDT` is MSB-first with no scan unit, so
+  the byte-aligned forms are `gfnt_bitmap_build_glyph()`'s identity case and the
+  bit-aligned ones need one widening pass first.
+- **A glyph is absent, present, or corrupt** - three states on a record, not two.
+  A strike is sparse over the face's glyph count, so "this strike has no bitmap for
+  that glyph" is a different fact from "that glyph's bitmap is empty", which a space
+  legitimately is; and M11 means one unreadable glyph must not condemn the strike it
+  is in. The first draft returned the failure from the strike parse, which made one
+  wrong offset in a 27,000-glyph strike lose all 27,000 - caught because it also
+  made a *correct* glyph of the same strike unreadable.
+- **Grey strikes are listed and their glyphs are refused.** The strike list reports
+  a bit depth of 2, 4 or 8 honestly, because that is what the table says; every row
+  in this library is one bit per pixel, from `GFNT_BitmapRecord::stride` through the
+  widening to `gfnt_coverage_from_bitmap()`, so the glyph data is declined by name
+  rather than unpacked wrongly.
+
+What that cost in findings, all of them about what a test could see:
+
+- **A fixture 8 pixels wide cannot tell the two alignments apart.** At any width
+  that is a multiple of eight, bit-aligned and byte-aligned rows are the *same
+  bytes* - so a mutation routing image format 2 through the byte-aligned path passed
+  the entire suite. `strike-formats.ttf` is 11 by 7 for that reason, and the comment
+  that predicted the hole was in the test before the mutation found it.
+- **The golden gate rendered one strike of three.** Its driver asked for strike 0,
+  which was right while every strike container had exactly one, so two thirds of a
+  three-strike fixture's pixels were never checked on a big-endian target. Both
+  drivers iterate every strike now, and the ppem column already distinguished them.
+- **Which driver produced a line was guessed from the file extension.** `.pcf`,
+  `.bdf`, `.psf`, `.hex` meant "pixels" and anything else meant "paths" - and an
+  sfnt with `EBLC` strikes is a `.ttf` whose pixels are committed. The cross-build
+  rendered it as outlines and produced 422 lines the committed file does not have.
+  Both checkers read the file's own section marker now, which cannot drift from the
+  file the way a heuristic about names can.
+- **`WITH_STRIKES` and `NO_OUTLINES` had been one list.** "Has a strike" and "has
+  no outlines" named the same fixtures until an sfnt had both, and collapsing them
+  again would have asserted that a font with both draws nothing.
+- **A result code was overwritten with a constant.** `gfnt_face_glyph_bitmap()`
+  returned `ERR_UNSUPPORTED` for every failure of the strike count, which was right
+  while the only such failure was "this library cannot enumerate them". An `EBLC`
+  parse can also run out of memory, and that arrived as UNSUPPORTED carrying an
+  out-of-memory message - a code and a diagnostic disagreeing, which is worse than
+  either being wrong alone.
+
+**Not built:** `CFF2` (§16); `EBDT`'s composite image formats 8 and 9, `EBSC`,
+and `CBDT` and `sbix` (§7.5); colour
 (§7.6);
 variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`

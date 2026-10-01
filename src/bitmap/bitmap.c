@@ -255,6 +255,11 @@ GFNT_Result gfnt_bitmap_build_glyph(GFNT_BitmapBuild * build,
   size_t needed;
   void * array;
 
+  // A glyph added here is one the file carries and this library read; the other
+  // two states have functions of their own, so a caller cannot reach them by
+  // accident.
+  record.presence = GFNT_BITMAP_PRESENT;
+
   if (scan_unit != 1 && scan_unit != 2 && scan_unit != 4) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, build->font.container, 0,
         (uint32_t)build->record_count,
@@ -338,6 +343,82 @@ GFNT_Result gfnt_bitmap_build_glyph(GFNT_BitmapBuild * build,
   build->records = array;
   build->records[build->record_count++] = record;
   return GFNT_OK;
+}
+
+GFNT_Result gfnt_bitmap_build_rows(GFNT_BitmapBuild * build, size_t bytes,
+    uint8_t ** out_rows, GFNT_Error * error) {
+  if (bytes > build->row_capacity) {
+    uint8_t * grown = build->allocator->realloc_fn(build->allocator->ctx,
+        build->row, bytes);
+
+    if (!grown) {
+      return gfnt_error_set(error, GFNT_ERR_OOM, build->font.container, 0,
+          (uint32_t)build->record_count, "a row buffer for a bitmap glyph");
+    }
+    build->row = grown;
+    build->row_capacity = bytes;
+  }
+  *out_rows = build->row;
+  return GFNT_OK;
+}
+
+/** One record in a state no glyph data was read for. */
+static GFNT_Result gfnt_bitmap_build_placeholder(GFNT_BitmapBuild * build,
+    GFNT_BitmapPresence presence, const char * reason, GFNT_Error * error) {
+  GFNT_BitmapRecord record;
+  void * array = build->records;
+
+  memset(&record, 0, sizeof record);
+  record.name = GFNT_BITMAP_NO_STRING;
+  record.presence = presence;
+  record.reason = reason;
+
+  if (!gfnt_bitmap_reserve(build->allocator, &array, &build->record_capacity,
+          build->record_count, sizeof *build->records)) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, build->font.container, 0,
+        (uint32_t)build->record_count, "the bitmap glyph array");
+  }
+  build->records = array;
+  build->records[build->record_count++] = record;
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_bitmap_build_absent(GFNT_BitmapBuild * build,
+    GFNT_Error * error) {
+  return gfnt_bitmap_build_placeholder(build, GFNT_BITMAP_ABSENT, NULL, error);
+}
+
+GFNT_Result gfnt_bitmap_build_corrupt(GFNT_BitmapBuild * build,
+    const char * reason, GFNT_Error * error) {
+  return gfnt_bitmap_build_placeholder(build, GFNT_BITMAP_CORRUPT, reason,
+      error);
+}
+
+bool gfnt_bitmap_widen_rows(uint8_t * out, const uint8_t * source,
+    size_t available, uint32_t width, uint32_t height) {
+  size_t stride = ((size_t)width + 7u) / 8u;
+  size_t bits;
+
+  if (!gcu_safe_mul_size(width, height, &bits)) {
+    return false;
+  }
+  if ((bits + 7u) / 8u > available) {
+    return false;
+  }
+  memset(out, 0, stride * (size_t)height);
+  for (uint32_t y = 0; y < height; ++y) {
+    size_t base = (size_t)y * width;
+    uint8_t * row = out + (size_t)y * stride;
+
+    for (uint32_t x = 0; x < width; ++x) {
+      size_t at = base + x;
+
+      if ((source[at >> 3] >> (7u - (at & 7u))) & 1u) {
+        row[x >> 3] |= (uint8_t)(0x80u >> (x & 7u));
+      }
+    }
+  }
+  return true;
 }
 
 GFNT_Result gfnt_bitmap_build_map(GFNT_BitmapBuild * build, uint32_t codepoint,
@@ -465,6 +546,7 @@ bool gfnt_bitmap_looks_like(const GFNT_Reader * blob, GFNT_Tag * out_flavour,
  * is the shape `outline/producer.c` settled on for the same reason.
  */
 static GFNT_Result gfnt_bitmap_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
   // Zeroed **before** anything can return, because ::gfnt_table_cached() copies
   // its scratch into the memo whatever the result was - so a parser that returns
@@ -475,13 +557,13 @@ static GFNT_Result gfnt_bitmap_parse(const GFNT_Face * face, void * out,
   memset(out, 0, sizeof(GFNT_BitmapFont));
   switch (face->flavour) {
     case GFNT_FLAVOUR_PCF:
-      return gfnt_pcf_parse(face, out, error);
+      return gfnt_pcf_parse(face, out, context, error);
     case GFNT_FLAVOUR_PSF:
-      return gfnt_psf_parse(face, out, error);
+      return gfnt_psf_parse(face, out, context, error);
     case GFNT_FLAVOUR_BDF:
-      return gfnt_bdf_parse(face, out, error);
+      return gfnt_bdf_parse(face, out, context, error);
     case GFNT_FLAVOUR_HEX:
-      return gfnt_hex_parse(face, out, error);
+      return gfnt_hex_parse(face, out, context, error);
     default:
       break;
   }
@@ -524,8 +606,8 @@ GFNT_Result gfnt_face_bitmap(const GFNT_Face * face,
     return GFNT_ERR_INVALID;
   }
   result = gfnt_table_cached(face, &owner->bitmap_state, &owner->bitmap,
-      &scratch, sizeof scratch, gfnt_bitmap_parse, gfnt_bitmap_release,
-      error);
+      &scratch, sizeof scratch, gfnt_bitmap_parse, NULL,
+      gfnt_bitmap_release, error);
   if (result == GFNT_OK) {
     *out_font = &owner->bitmap;
   }
@@ -588,10 +670,35 @@ GFNT_Result gfnt_bitmap_glyph_for_codepoint(const GFNT_BitmapFont * font,
   return GFNT_OK;
 }
 
+/**
+ * Turn a record into the public glyph.
+ *
+ * Both paths end here - a standalone container's one strike and an `EBLC`
+ * strike's - because they differ in how a record is *found* and not at all in what
+ * a record means. Two copies of this would be two chances for `bits` to be wrong
+ * for an empty glyph.
+ */
+static GFNT_Result gfnt_bitmap_answer(const GFNT_BitmapFont * font,
+    uint32_t glyph, GFNT_BitmapGlyph * out_glyph) {
+  const GFNT_BitmapRecord * record = &font->glyphs[glyph];
+
+  *out_glyph = (GFNT_BitmapGlyph) {
+    .width = record->width,
+    .height = record->height,
+    .stride = record->stride,
+    .bearing_x = record->bearing_x,
+    .bearing_y = record->bearing_y,
+    .advance = record->advance,
+    .bit_depth = font->strike.bit_depth,
+    .bits = record->height ? font->pixels + record->offset : NULL,
+    .strike = font->strike,
+  };
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_face_glyph_bitmap(const GFNT_Face * face, uint32_t glyph,
     size_t strike, GFNT_BitmapGlyph * out_glyph, GFNT_Error * error) {
   const GFNT_BitmapFont * font = NULL;
-  const GFNT_BitmapRecord * record;
   GFNT_Result result;
 
   gfnt_error_clear(error);
@@ -607,24 +714,55 @@ GFNT_Result gfnt_face_glyph_bitmap(const GFNT_Face * face, uint32_t glyph,
       // count draws the same distinction for the same reason.
       size_t count = 0;
       GFNT_Error strikes;
+      GFNT_Result counted;
 
       gfnt_error_clear(&strikes);
-      if (gfnt_face_strike_count(face, &count, &strikes) != GFNT_OK) {
+      counted = gfnt_face_strike_count(face, &count, &strikes);
+      if (counted != GFNT_OK) {
         if (error) {
           *error = strikes;
         }
-        return GFNT_ERR_UNSUPPORTED;
+        // **The result, not a constant.** This returned GFNT_ERR_UNSUPPORTED
+        // whatever had gone wrong, which was right while the only failure a strike
+        // count could have was "this library cannot enumerate them". An EBLC parse
+        // can also run out of memory or exceed a limit, and that arrived here as
+        // UNSUPPORTED carrying an out-of-memory message - a code and a diagnostic
+        // disagreeing, which is worse than either being wrong alone.
+        return counted;
       }
       if (count > 0) {
-        // An EBLC face: the strikes are listed, with their sizes and their
-        // baselines, and the glyph data in EBDT is not read yet. Three answers
-        // live on this path now and the whole value of the path is that they
-        // stay apart - no strikes, strikes nobody can enumerate, and strikes
-        // enumerated whose pixels are still out of reach.
-        return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBDT, 0,
-            glyph,
-            "the face's strikes are listed from EBLC, and their glyph data in "
-            "EBDT is not read yet");
+        // An EBLC face. The strike is parsed whole on first use and each strike
+        // separately, so asking about one glyph of one size does not read the
+        // other five strikes a font like uming.ttc carries.
+        if (strike >= count) {
+          return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_TAG_EBLC, 0, glyph,
+              "a strike index the face does not have");
+        }
+        result = gfnt_eblc_strike_glyphs(face, strike, &font, error);
+        if (result != GFNT_OK) {
+          return result;
+        }
+        if (glyph >= font->glyph_count) {
+          return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_TAG_EBDT, 0, glyph,
+              "a glyph index past the end of the face");
+        }
+        if (font->glyphs[glyph].presence == GFNT_BITMAP_ABSENT) {
+          // A strike is sparse over the face: this one does not carry the glyph.
+          // UNSUPPORTED rather than INVALID, because the glyph index is perfectly
+          // good and another strike may well answer for it.
+          return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBDT, 0,
+              glyph, "a glyph this strike does not carry");
+        }
+        if (font->glyphs[glyph].presence == GFNT_BITMAP_CORRUPT) {
+          // M11: the strike claims the glyph and its bytes do not make sense, and
+          // that condemns this glyph rather than the strike. Every other glyph of
+          // the strike still answers, which is the whole point.
+          return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, 0, glyph,
+              font->glyphs[glyph].reason
+                  ? font->glyphs[glyph].reason
+                  : "a glyph whose EBDT data this strike gets wrong");
+        }
+        return gfnt_bitmap_answer(font, glyph, out_glyph);
       }
       return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, face->flavour, 0,
           glyph, "a face with no bitmap strikes at all");
@@ -639,19 +777,7 @@ GFNT_Result gfnt_face_glyph_bitmap(const GFNT_Face * face, uint32_t glyph,
     return gfnt_error_set(error, GFNT_ERR_INVALID, font->container, 0, glyph,
         "a glyph index past the end of the font");
   }
-  record = &font->glyphs[glyph];
-  *out_glyph = (GFNT_BitmapGlyph) {
-    .width = record->width,
-    .height = record->height,
-    .stride = record->stride,
-    .bearing_x = record->bearing_x,
-    .bearing_y = record->bearing_y,
-    .advance = record->advance,
-    .bit_depth = font->strike.bit_depth,
-    .bits = record->height ? font->pixels + record->offset : NULL,
-    .strike = font->strike,
-  };
-  return GFNT_OK;
+  return gfnt_bitmap_answer(font, glyph, out_glyph);
 }
 
 uint8_t gfnt_bitmap_pixel(const GFNT_BitmapGlyph * glyph, uint32_t x,

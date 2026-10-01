@@ -52,6 +52,7 @@
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/macros.h>
 #include "../reader/reader.h"
+#include "bitmap.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,6 +62,14 @@ extern "C" {
 #define GFNT_TAG_EBLC GFNT_TAG('E', 'B', 'L', 'C')
 /** @brief Where its glyphs are: `EBDT`. */
 #define GFNT_TAG_EBDT GFNT_TAG('E', 'B', 'D', 'T')
+
+/**
+ * @brief Bytes in a `BigGlyphMetrics`, which index formats 2 and 5 carry.
+ *
+ * Eight: the horizontal five and a vertical three. ::GFNT_EblcMetrics keeps only
+ * the five, so this is the size on disk rather than `sizeof` anything.
+ */
+#define GFNT_EBLC_METRICS_BYTES 8u
 
 /**
  * One `sbitLineMetrics`: how a line of this strike is spaced.
@@ -106,20 +115,83 @@ typedef struct GFNT_EblcStrike {
 } GFNT_EblcStrike;
 
 /**
+ * One glyph's box and advance, as `EBLC` or `EBDT` states it.
+ *
+ * The horizontal three only. `BigGlyphMetrics` carries a vertical set as well and
+ * nothing reads it: no accessor in this library asks for a vertical advance yet,
+ * and a field parsed into a struct nobody reads is the shape that makes a
+ * differential compare a number neither side means.
+ *
+ * `SmallGlyphMetrics` is these five values and `BigGlyphMetrics` is these five
+ * plus three, so one struct serves both and the image format decides how many
+ * bytes were read.
+ */
+typedef struct GFNT_EblcMetrics {
+  uint8_t height;     ///< Rows.
+  uint8_t width;      ///< Pixels across.
+  int8_t bearing_x;   ///< Left side bearing; may be negative.
+  int8_t bearing_y;   ///< Top row's edge above the baseline, y-up.
+  uint8_t advance;    ///< Pen movement, pixels.
+} GFNT_EblcMetrics;
+
+/**
+ * One index subtable: which glyphs it covers, and where to find them.
+ *
+ * `body_offset` is into the `EBLC` table and points past the eight-byte
+ * `indexSubHeader`; `image_data_offset` is into **`EBDT`**. The two bases are the
+ * one piece of bookkeeping this format reliably invites an error in, so they are
+ * named for the table they belong to rather than both being "offset".
+ *
+ * `image_size` and `metrics` are the constant ones index formats 2 and 5 state for
+ * every glyph they cover. `sparse_count` is the glyph-id array's length in formats
+ * 4 and 5. A field a format does not have is zero, and nothing reads it.
+ */
+typedef struct GFNT_EblcSubtable {
+  uint16_t first_glyph;       ///< `firstGlyphIndex`, inclusive.
+  uint16_t last_glyph;        ///< `lastGlyphIndex`, inclusive.
+  uint16_t index_format;      ///< 1-5.
+  uint16_t image_format;      ///< 1, 2, 5, 6 or 7; 8 and 9 are composites.
+  uint32_t image_data_offset; ///< Into `EBDT`.
+  size_t body_offset;         ///< Into `EBLC`, past the `indexSubHeader`.
+  uint32_t image_size;        ///< Index formats 2 and 5: bytes per glyph.
+  GFNT_EblcMetrics metrics;   ///< Index formats 2 and 5: every glyph's box.
+  uint32_t sparse_count;      ///< Index formats 4 and 5: glyph ids listed.
+} GFNT_EblcSubtable;
+
+/**
  * A parsed `EBLC`: its version and its strikes.
  *
  * `strikes` is allocated on the face's allocator and freed by
  * ::gfnt_eblc_release(). Nothing here points into the blob, so a strike survives
  * being copied out.
  */
+/**
+ * Declared rather than included: `GFNT_Cached` lives in `sfnt.h`, and `sfnt.h`
+ * includes *this* file to put the memo on the face. A pointer to an incomplete
+ * type is all this header needs, and `eblc.c` sees the definition through
+ * `tables.h`.
+ */
+struct GFNT_Cached;
+
 typedef struct GFNT_Eblc {
   uint32_t version;            ///< 0x00020000 in every file seen.
   GFNT_EblcStrike * strikes;   ///< One per `bitmapSizeTable`, in table order.
   size_t strike_count;
+  /**
+   * One memo per strike, for the glyphs - allocated with `strikes`.
+   *
+   * A strike's glyph data is parsed on first use and each strike separately, so
+   * each needs its own `done` flag and its own published copy. They live here
+   * rather than on the face because their number is the table's to state: a face
+   * cannot declare an array of them before anything has read `numSizes`.
+   */
+  struct GFNT_Cached * strike_states;
+  GFNT_BitmapFont * strike_glyphs;
 } GFNT_Eblc;
 
 /** The `EBLC` parser, for ::gfnt_table_cached(). */
 GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error);
 
 /**
@@ -158,6 +230,60 @@ bool gfnt_face_has_eblc(const GFNT_Face * face);
 
 /** Write an `EBLC` as text, one line per strike, for the differentials. */
 GFNT_Result gfnt_eblc_dump(const GFNT_Eblc * eblc, FILE * out);
+
+/**
+ * One strike's glyphs, parsed on first use, as a ::GFNT_BitmapFont.
+ *
+ * **One memo per strike**, which is the whole reason ::gfnt_table_cached() takes a
+ * context. A strike is parsed whole - every glyph it covers, pixels and all, into
+ * one arena - because ::GFNT_BitmapGlyph::bits is borrowed from the face and has
+ * to outlive the call, so the face must own it; and it is parsed *per strike*
+ * because `uming.ttc` has six of 27,123 glyphs and nothing should read five of
+ * them to answer about the sixth.
+ *
+ * The cost is still a whole strike to answer one glyph. That is the honest
+ * statement of it: an arena grown glyph by glyph under the face's lock would be
+ * the smaller answer, and is not worth its complexity until something measures
+ * this as a problem.
+ *
+ * The returned font's records are indexed by the **face's** glyph id, not by a
+ * position in the strike: a strike is sparse over the face, so a glyph it does not
+ * cover is a record with ::GFNT_BitmapRecord::present false - which is a different
+ * fact from a glyph with no pixels, and the reason that field exists.
+ *
+ * @param face The face.
+ * @param strike Which strike, from 0.
+ * @param out_font Receives it. Borrowed; it lives as long as the face.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID for a strike the face does not have;
+ *   ::GFNT_ERR_UNSUPPORTED for a face with no `EBLC`; or what the parse returned.
+ */
+GFNT_Result gfnt_eblc_strike_glyphs(const GFNT_Face * face, size_t strike,
+    const GFNT_BitmapFont ** out_font, GFNT_Error * error);
+
+/**
+ * Parse one strike's index subtable array into @p out.
+ *
+ * Split out of the glyph parse so that a test can read the subtable headers of a
+ * strike whose glyph data is deliberately broken, and so that `ebdt.c` has one
+ * place to look up which subtable covers a glyph.
+ *
+ * @param out Receives `subtable_count` entries, allocated on the face's allocator.
+ */
+GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
+    const GFNT_EblcStrike * strike, GFNT_EblcSubtable ** out_subtables,
+    size_t * out_count, GFNT_Error * error);
+
+/**
+ * Decode every glyph of one strike into @p build.
+ *
+ * `ebdt.c`'s entry point. Walks the strike's index, and for each glyph the strike
+ * covers reads its metrics and its rows in whichever of the image formats the
+ * subtable names.
+ */
+GFNT_Result gfnt_ebdt_read_strike(const GFNT_Face * face,
+    const GFNT_EblcStrike * strike, const GFNT_EblcSubtable * subtables,
+    size_t subtable_count, GFNT_BitmapBuild * build, GFNT_Error * error);
 
 #ifdef __cplusplus
 }

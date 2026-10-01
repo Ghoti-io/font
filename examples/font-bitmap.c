@@ -55,14 +55,14 @@
  * One glyph as a golden line: the coverage the strike becomes, hashed.
  */
 static int golden_glyph(const GFNT_Face * face, const char * label,
-    uint32_t glyph) {
+    uint32_t glyph, size_t strike) {
   GFNT_BitmapGlyph bitmap;
   GFNT_Coverage coverage;
   GFNT_Error error;
   GFNT_Result result;
 
   gfnt_error_clear(&error);
-  result = gfnt_face_glyph_bitmap(face, glyph, 0, &bitmap, &error);
+  result = gfnt_face_glyph_bitmap(face, glyph, strike, &bitmap, &error);
   if (result != GFNT_OK) {
     printf("%s %u 0 0 0 refused %s\n", label, (unsigned)glyph,
         gfnt_result_string(result));
@@ -93,6 +93,7 @@ static int golden(const char * label, const char * path) {
   GFNT_Face * face = NULL;
   GFNT_Error error;
   size_t glyphs = 0;
+  size_t strikes = 0;
   GFNT_Result result;
 
   gfnt_error_clear(&error);
@@ -113,11 +114,24 @@ static int golden(const char * label, const char * path) {
     gfnt_blob_destroy(blob);
     return 1;
   }
-  for (size_t glyph = 0; glyph < glyphs; ++glyph) {
-    if (golden_glyph(face, label, (uint32_t)glyph) != 0) {
-      gfnt_face_free(face);
-      gfnt_blob_destroy(blob);
-      return 1;
+  // **Every strike, not strike 0.** A standalone container has exactly one and
+  // this loop ran once; an `EBLC` face has as many as the table lists, and
+  // committing only the first would leave two thirds of strikes.ttf's pixels
+  // unchecked on the big-endian targets this gate exists for. The ppem column
+  // already distinguishes them, so the line format does not change.
+  //
+  // A face with no strikes at all still prints one line per glyph, refused, which
+  // is what says the refusal itself reproduces.
+  if (gfnt_face_strike_count(face, &strikes, &error) != GFNT_OK) {
+    strikes = 0;
+  }
+  for (size_t strike = 0; strike < (strikes ? strikes : 1); ++strike) {
+    for (size_t glyph = 0; glyph < glyphs; ++glyph) {
+      if (golden_glyph(face, label, (uint32_t)glyph, strike) != 0) {
+        gfnt_face_free(face);
+        gfnt_blob_destroy(blob);
+        return 1;
+      }
     }
   }
   gfnt_face_free(face);

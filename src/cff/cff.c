@@ -718,7 +718,11 @@ bool gfnt_cff_header_plausible(const GFNT_Reader * blob) {
 }
 
 GFNT_Result gfnt_cff_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   GFNT_Cff * cff = (GFNT_Cff *)out;
   GFNT_CffTopState state;
   GFNT_Reader table;
@@ -879,7 +883,7 @@ GFNT_Result gfnt_face_cff(const GFNT_Face * face, const GFNT_Cff ** out_cff,
     return GFNT_ERR_INVALID;
   }
   result = gfnt_table_cached(face, &owner->cff_state, &owner->cff, &scratch,
-      sizeof scratch, gfnt_cff_parse, NULL, error);
+      sizeof scratch, gfnt_cff_parse, NULL, NULL, error);
   if (result == GFNT_OK) {
     *out_cff = &owner->cff;
   }

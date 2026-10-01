@@ -31,14 +31,26 @@
  * GNU Unifont's `.hex` - and each produces a face with **one strike and no
  * outlines**.
  *
- * Inside an sfnt there can be several. `EBLC`'s strike *list* is read, so a face
- * with embedded strikes reports how many it has, at what sizes, and where each
- * puts its baseline - which is what ::gfnt_face_select_strike() needs and the
- * first thing in this library that has to **choose** between strikes rather than
- * confirm the only one. Their glyph data in `EBDT` is not read yet, and asking for
- * it returns ::GFNT_ERR_UNSUPPORTED naming that table. `bloc`, `CBDT` and `sbix`
- * are not read at all and refuse at the strike list, which is a third answer
- * again - `glyph.h` exists to keep the three apart.
+ * Inside an sfnt there can be several. `EBLC`/`EBDT` is read: a face with embedded
+ * strikes reports how many it has, at what sizes, and where each puts its
+ * baseline - which is what ::gfnt_face_select_strike() needs and the first thing in
+ * this library that has to **choose** between strikes rather than confirm the only
+ * one - and its glyphs come back through this same accessor.
+ *
+ * Two things differ for such a face, and both are about a strike being sparse over
+ * a glyph count that came from `maxp` rather than from the strike itself:
+ *
+ *  - **A glyph a strike does not carry is ::GFNT_ERR_UNSUPPORTED**, not an invalid
+ *    index. The index is fine and another strike may well answer for it.
+ *  - **A glyph whose data the font gets wrong is ::GFNT_ERR_CORRUPT, and only that
+ *    glyph** (M11). Every other glyph of the strike still answers, as a face with
+ *    one bad `loca` entry still answers for every other glyph.
+ *
+ * `bloc`, `CBDT` and `sbix` are not read at all and refuse at the strike list,
+ * which is a different answer again - `glyph.h` exists to keep them apart. So are
+ * `EBDT`'s composite image formats and its grey depths: a grey strike is *listed*,
+ * with its depth, and its glyph data declined, because every row here is one bit
+ * per pixel.
  *
  * Two things are normalised on the way out, and both are deliberate:
  *
@@ -113,11 +125,11 @@ typedef struct GFNT_BitmapGlyph {
  * @param error Receives a diagnostic on failure, or NULL.
  * @return ::GFNT_OK; ::GFNT_ERR_INVALID for no face, a glyph past the count, or
  *   a strike the face does not have; ::GFNT_ERR_UNSUPPORTED for a face with no
- *   bitmaps this library reads - a face whose strikes are listed from `EBLC` but
- *   whose `EBDT` is not read yet names that table, and a face whose strike table
- *   this library cannot read at all names *that*, because the three are not one
- *   answer; ::GFNT_ERR_CORRUPT for a glyph whose bitmap the container gets wrong,
- *   which is per glyph (M11).
+ *   bitmaps this library reads, for a strike whose depth or image format it
+ *   declines, and for a glyph **this strike does not carry** - three different
+ *   sentences, because a caller can act on each differently;
+ *   ::GFNT_ERR_CORRUPT for a glyph whose bitmap the font gets wrong, which is per
+ *   glyph (M11) and leaves the rest of the strike answering.
  */
 GFNT_API GFNT_Result gfnt_face_glyph_bitmap(const GFNT_Face * face,
     uint32_t glyph, size_t strike, GFNT_BitmapGlyph * out_glyph,

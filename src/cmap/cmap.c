@@ -185,7 +185,11 @@ static int gfnt_cmap_rank(uint16_t platform, uint16_t encoding) {
  * Choose the subtable to use, skipping formats this library cannot read.
  */
 static GFNT_Result gfnt_cmap_best_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   GFNT_CmapSubtable * best = out;
   size_t count = 0;
   int best_rank = -1;
@@ -242,7 +246,7 @@ GFNT_Result gfnt_face_cmap_best(const GFNT_Face * face,
   // Memoised: every codepoint lookup needs this, and it costs a walk of the
   // whole record list.
   result = gfnt_table_cached(face, &owner->cmap_best_state, &owner->cmap_best,
-      &scratch, sizeof scratch, gfnt_cmap_best_parse, NULL, error);
+      &scratch, sizeof scratch, gfnt_cmap_best_parse, NULL, NULL, error);
   if (result == GFNT_OK) {
     *out_subtable = owner->cmap_best;
   }

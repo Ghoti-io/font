@@ -144,8 +144,7 @@ def cutil_dependencies():
 def script(label, compiler, qemu, triple):
     """The shell the container runs for one target: build, then render."""
     out = "/tmp/golden-%s" % label
-    outlines = [name for name in golden_fixtures() if not is_strike(name)]
-    strikes = [name for name in golden_fixtures() if is_strike(name)]
+    outlines, strikes = golden_fixtures()
     # Two drivers, because two kinds of glyph reach a coverage by different paths:
     # an outline through the scan converter and a strike through
     # gfnt_coverage_from_bitmap(). Both are compiled for the target rather than one
@@ -190,32 +189,47 @@ done
     }
 
 
-def is_strike(name):
-    """Whether this fixture's glyphs are pixels rather than paths.
-
-    By extension, which for these four containers *is* the format: a `.pcf` is a
-    PCF. The alternative was to import the generator's list, and the two files
-    deliberately do not import each other - this one reads the committed file,
-    which is the contract.
-    """
-    return name.endswith((".pcf", ".bdf", ".psf", ".hex"))
+# The comment line that begins the committed file's strike section. Everything
+# after it is a strike rendering and everything before it is an outline one, which
+# is how this file knows which driver produced which line.
+STRIKE_SECTION = "# And the bitmap containers, whose glyphs are pixels"
 
 
 def golden_fixtures():
-    """The fixtures the committed file covers, in its own order.
+    """The fixtures the committed file covers, split by which driver made them.
 
-    Read out of the file rather than imported from the generator, so that the
-    two cannot disagree about which fonts a run should render: the file is the
-    contract and this reads the contract.
+    Read out of the file rather than imported from the generator, so that the two
+    cannot disagree about which fonts a run should render: the file is the contract
+    and this reads the contract.
+
+    **The split is read from the file's own section marker**, not guessed from the
+    file extension. It was guessed, by extension - `.pcf`, `.bdf`, `.psf`, `.hex` -
+    and that was exactly right while "has a strike" meant "is a standalone bitmap
+    container". An sfnt with `EBLC` strikes is a `.ttf` whose pixels are committed,
+    so the heuristic sent it to the outline driver and the cross build produced 422
+    lines the committed file does not contain. The marker cannot drift that way:
+    whichever section a line is in is the driver that wrote it.
+
+    @return (outline fixtures, strike fixtures), each in the file's own order.
     """
-    names = []
+    outlines = []
+    strikes = []
+    seen_marker = False
     for line in committed().splitlines():
+        if line.startswith(STRIKE_SECTION):
+            seen_marker = True
+            continue
         if line.startswith("#") or not line.strip():
             continue
         name = line.split()[0]
-        if name not in names:
-            names.append(name)
-    return names
+        target = strikes if seen_marker else outlines
+        if name not in target:
+            target.append(name)
+    if not strikes:
+        raise SystemExit("the committed file has no strike section; its marker "
+                         "has moved and this check would render nothing as a "
+                         "strike")
+    return outlines, strikes
 
 
 def render_on(tool, label):

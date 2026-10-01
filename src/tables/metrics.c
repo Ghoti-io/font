@@ -57,7 +57,7 @@ GFNT_Result gfnt_face_head(const GFNT_Face * face, const GFNT_Head ** out_head,
         "no face, or nowhere to put the table");
   }
   result = gfnt_table_cached(face, &owner->head_state, &owner->head, &scratch,
-      sizeof scratch, gfnt_head_parse, NULL, error);
+      sizeof scratch, gfnt_head_parse, NULL, NULL, error);
   if (result == GFNT_OK) {
     *out_head = &owner->head;
   }
@@ -75,7 +75,7 @@ GFNT_Result gfnt_face_hhea(const GFNT_Face * face, const GFNT_Hhea ** out_hhea,
         "no face, or nowhere to put the table");
   }
   result = gfnt_table_cached(face, &owner->hhea_state, &owner->hhea, &scratch,
-      sizeof scratch, gfnt_hhea_parse, NULL, error);
+      sizeof scratch, gfnt_hhea_parse, NULL, NULL, error);
   if (result == GFNT_OK) {
     *out_hhea = &owner->hhea;
   }
@@ -93,7 +93,7 @@ GFNT_Result gfnt_face_os2(const GFNT_Face * face, const GFNT_Os2 ** out_os2,
         "no face, or nowhere to put the table");
   }
   result = gfnt_table_cached(face, &owner->os2_state, &owner->os2, &scratch,
-      sizeof scratch, gfnt_os2_parse, NULL, error);
+      sizeof scratch, gfnt_os2_parse, NULL, NULL, error);
   if (result == GFNT_OK) {
     *out_os2 = &owner->os2;
   }
@@ -111,7 +111,7 @@ GFNT_Result gfnt_face_post(const GFNT_Face * face, const GFNT_Post ** out_post,
         "no face, or nowhere to put the table");
   }
   result = gfnt_table_cached(face, &owner->post_state, &owner->post, &scratch,
-      sizeof scratch, gfnt_post_parse, NULL, error);
+      sizeof scratch, gfnt_post_parse, NULL, NULL, error);
   if (result == GFNT_OK) {
     *out_post = &owner->post;
   }
@@ -219,7 +219,11 @@ static bool gfnt_hmtx_glyph_bound(const GFNT_Face * face, size_t * out_bound) {
  * that indexes glyphs.
  */
 static GFNT_Result gfnt_glyph_count_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   static const GFNT_Tag tag = GFNT_TAG('m', 'a', 'x', 'p');
   GFNT_GlyphCount * count = out;
   GFNT_Reader reader;
@@ -304,7 +308,7 @@ GFNT_Result gfnt_face_num_glyphs(const GFNT_Face * face, size_t * out_count,
   }
   result = gfnt_table_cached(face, &owner->glyph_count_state,
       &owner->glyph_count, &scratch, sizeof scratch, gfnt_glyph_count_parse,
-      NULL, error);
+      NULL, NULL, error);
   if (result == GFNT_OK) {
     *out_count = owner->glyph_count.count;
   }

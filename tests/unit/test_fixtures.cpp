@@ -187,6 +187,10 @@ const std::vector<Entry> & every_fixture() {
       {"outline-loca-long.ttf", kOutlineGlyphs},
       {"outline-simple.ttf", kOutlineGlyphs},
       {"post-v1.ttf", 258},
+      // One strike, six index/image format pairings. Thirteen glyphs because each
+      // pairing owns a range of them, so a test can name which cell of the grid it
+      // is asserting.
+      {"strike-formats.ttf", 13},
       // The first fixture with more than one strike. An ordinary TrueType face -
       // five glyphs, an em, a `name` - with three EBLC strikes beside its
       // outlines, so it is the one fixture here that is both, and `states_em`
@@ -716,8 +720,12 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
     if (is_strike) {
       EXPECT_EQ(strikes, 1u) << name;
     } else if (has_eblc) {
-      EXPECT_GT(strikes, 1u) << name << ": the one EBLC fixture there is has "
-          "three, and a fixture with one would not exercise a choice";
+      // Not "more than one": strike-formats.ttf has a single strike, because what
+      // it varies is how that strike is *indexed*. The two EBLC fixtures split the
+      // two axes - how many strikes, and how one strike is laid out - and a sweep
+      // that demanded both of each would have to be satisfied by a fixture that
+      // did neither well.
+      EXPECT_GE(strikes, 1u) << name;
     } else {
       EXPECT_EQ(strikes, 0u) << name;
     }
@@ -731,8 +739,10 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
   // Counted, because the three branches above are only worth anything if the
   // fixture set reaches all of them: a sweep over a set that had lost its
   // multi-strike font would pass every assertion and check nothing new.
-  EXPECT_EQ(with_strikes, 11u) << "ten standalone containers and strikes.ttf";
-  EXPECT_EQ(with_many, 1u) << "strikes.ttf is the only fixture with a choice";
+  EXPECT_EQ(with_strikes, 12u) << "ten standalone containers, strikes.ttf and "
+      "strike-formats.ttf";
+  EXPECT_EQ(with_many, 1u) << "strikes.ttf is the only fixture with a choice of "
+      "strike; strike-formats.ttf has one strike and six ways of indexing it";
 }
 
 } // namespace

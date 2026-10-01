@@ -30,8 +30,10 @@
 #include <latch>
 #include <memory>
 #include <sstream>
+#include <algorithm>
 #include <atomic>
 #include <string>
+#include <utility>
 #include <thread>
 #include <vector>
 
@@ -117,6 +119,76 @@ struct Crafted {
 
   Crafted(const Crafted &) = delete;
   Crafted & operator=(const Crafted &) = delete;
+};
+
+/**
+ * An allocator that counts, safely, from several threads at once.
+ *
+ * `gfnttest::FailingAllocator` counts with plain `size_t` members, which is right
+ * for every other sweep in this suite and wrong here: eight threads incrementing
+ * it lose updates, and the first version of the race test below read a live count
+ * of **-1** with the code correct and a live count of 7 with it broken, both from
+ * the same unsynchronised counter. Neither number meant anything.
+ */
+class ThreadSafeCounter {
+public:
+  ThreadSafeCounter() {
+    allocator_.ctx = this;
+    allocator_.malloc_fn = &ThreadSafeCounter::malloc_fn;
+    allocator_.calloc_fn = &ThreadSafeCounter::calloc_fn;
+    allocator_.realloc_fn = &ThreadSafeCounter::realloc_fn;
+    allocator_.free_fn = &ThreadSafeCounter::free_fn;
+  }
+
+  const GFNT_Allocator * get() const { return &allocator_; }
+
+  /** Blocks allocated and not yet freed. Zero at the end, or something leaked. */
+  long live() const { return live_.load(); }
+  /** How many allocations were served, for a denominator. */
+  long requests() const { return requests_.load(); }
+
+private:
+  static void * malloc_fn(void * ctx, size_t size) {
+    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
+    void * block = malloc(size);
+    if (block) {
+      ++self->requests_;
+      ++self->live_;
+    }
+    return block;
+  }
+
+  static void * calloc_fn(void * ctx, size_t count, size_t size) {
+    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
+    void * block = calloc(count, size);
+    if (block) {
+      ++self->requests_;
+      ++self->live_;
+    }
+    return block;
+  }
+
+  static void * realloc_fn(void * ctx, void * block, size_t size) {
+    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
+    void * grown = realloc(block, size);
+    if (grown && !block) {
+      ++self->requests_;
+      ++self->live_;
+    }
+    return grown;
+  }
+
+  static void free_fn(void * ctx, void * block) {
+    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
+    if (block) {
+      --self->live_;
+    }
+    free(block);
+  }
+
+  GFNT_Allocator allocator_{};
+  std::atomic<long> live_{0};
+  std::atomic<long> requests_{0};
 };
 
 /** A fixture's bytes, for the tests that damage one. */
@@ -877,6 +949,233 @@ TEST(Bitmap, StrikePoliciesResolveAgainstTheOneStrike) {
 constexpr uint32_t kStrikePpems[] = {10, 12, 16};
 constexpr size_t kStrikeCount = 3;
 
+/**
+ * An sfnt whose `EBLC` is these bytes, with an `EBDT` beside it.
+ *
+ * The pair is what makes the strike list readable at all, so a test about the
+ * *list* needs an `EBDT` it never looks at - four bytes of version is enough, and
+ * the one test about the missing half builds the font without this helper.
+ */
+std::string eblc_font(const std::vector<uint8_t> & eblc) {
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'), eblc});
+  tables.push_back({GFNT_TAG('E', 'B', 'D', 'T'),
+      std::vector<uint8_t>{0, 2, 0, 0}});
+  const std::vector<uint8_t> bytes =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+}
+
+/**
+ * One `bitmapSizeTable`, every field a parameter so a test can spoil one.
+ *
+ * Written here rather than copied from the generator because what these tests
+ * need is a field at a time *wrong*, and a generator that could produce those
+ * would be a generator with no opinion about what a font is.
+ */
+std::vector<uint8_t> size_table(uint32_t index_offset, uint32_t index_size,
+    uint32_t subtables, uint16_t first, uint16_t last, uint8_t ppem_x,
+    uint8_t ppem_y, uint8_t depth, int8_t flags, int8_t ascender = 6,
+    int8_t descender = -1) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u32(out, index_offset);
+  gfnttest::put_u32(out, index_size);
+  gfnttest::put_u32(out, subtables);
+  gfnttest::put_u32(out, 0); // colorRef
+  for (int direction = 0; direction < 2; ++direction) {
+    // Horizontal first, then vertical. The vertical pair is zeros, which is what
+    // the population states and what makes a reader taking the wrong one visible.
+    const int8_t asc = direction == 0 ? ascender : 0;
+    const int8_t desc = direction == 0 ? descender : 0;
+    gfnttest::put_u8(out, (uint8_t)asc);
+    gfnttest::put_u8(out, (uint8_t)desc);
+    for (int i = 0; i < 10; ++i) {
+      gfnttest::put_u8(out, 0);
+    }
+  }
+  gfnttest::put_u16(out, first);
+  gfnttest::put_u16(out, last);
+  gfnttest::put_u8(out, ppem_x);
+  gfnttest::put_u8(out, ppem_y);
+  gfnttest::put_u8(out, depth);
+  gfnttest::put_u8(out, (uint8_t)flags);
+  return out;
+}
+
+/**
+ * An `EBLC` header, @p count size tables, then an index region.
+ *
+ * The region is eight bytes of nothing and exists only so that a size table's
+ * `indexSubTableArrayOffset` can point *inside* the table. Nothing in this commit
+ * reads it - but every strike has to clear the one check that is made on the
+ * offset, or a test aimed at some other field is refused for this one instead,
+ * and would pass while asserting the wrong sentence.
+ */
+std::vector<uint8_t> eblc_header(uint32_t version, uint32_t count,
+    const std::vector<uint8_t> & body = {}) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u32(out, version);
+  gfnttest::put_u32(out, count);
+  out.insert(out.end(), body.begin(), body.end());
+  for (int i = 0; i < 8; ++i) {
+    gfnttest::put_u8(out, 0);
+  }
+  return out;
+}
+
+/** The offset a one-strike EBLC's index region starts at: header plus one table. */
+constexpr uint32_t kOneStrikeIndexBase = 8 + 48;
+
+/** `BigGlyphMetrics` as a size table or a constant-metrics subtable carries it. */
+std::vector<uint8_t> big_metrics(uint8_t height, uint8_t width,
+    int8_t bearing_x, int8_t bearing_y, uint8_t advance) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u8(out, height);
+  gfnttest::put_u8(out, width);
+  gfnttest::put_u8(out, (uint8_t)bearing_x);
+  gfnttest::put_u8(out, (uint8_t)bearing_y);
+  gfnttest::put_u8(out, advance);
+  for (int i = 0; i < 3; ++i) {
+    gfnttest::put_u8(out, 0);  // the vertical three, which nothing reads
+  }
+  return out;
+}
+
+/** `SmallGlyphMetrics`: the same five, and no vertical set at all. */
+std::vector<uint8_t> small_metrics(uint8_t height, uint8_t width,
+    int8_t bearing_x, int8_t bearing_y, uint8_t advance) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u8(out, height);
+  gfnttest::put_u8(out, width);
+  gfnttest::put_u8(out, (uint8_t)bearing_x);
+  gfnttest::put_u8(out, (uint8_t)bearing_y);
+  gfnttest::put_u8(out, advance);
+  return out;
+}
+
+/**
+ * A whole font with one strike, one subtable, and glyph data.
+ *
+ * `head` and `maxp` because the glyph parse needs a glyph count, which an EBLC
+ * face takes from the face like any other sfnt - unlike a standalone container,
+ * where the file is the glyph list.
+ *
+ * @param region The strike's indexSubTableArray and the subtables it points at.
+ * @param ebdt Everything after `EBDT`'s four-byte version.
+ */
+std::string strike_font(const std::vector<uint8_t> & region,
+    const std::vector<uint8_t> & ebdt, uint16_t glyphs = 4,
+    uint16_t subtables = 1, uint16_t first = 1, uint16_t last = 2,
+    uint8_t depth = 1) {
+  std::vector<uint8_t> eblc;
+  gfnttest::put_u32(eblc, 0x00020000);
+  gfnttest::put_u32(eblc, 1);
+  const std::vector<uint8_t> size = size_table(8 + 48, (uint32_t)region.size(),
+      subtables, first, last, 12, 12, depth, 1);
+  eblc.insert(eblc.end(), size.begin(), size.end());
+  eblc.insert(eblc.end(), region.begin(), region.end());
+
+  std::vector<uint8_t> data;
+  gfnttest::put_u32(data, 0x00020000);
+  data.insert(data.end(), ebdt.begin(), ebdt.end());
+
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  tables.push_back({GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(glyphs)});
+  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'), eblc});
+  tables.push_back({GFNT_TAG('E', 'B', 'D', 'T'), data});
+  const std::vector<uint8_t> bytes =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+}
+
+/** An `indexSubTableArray` of one entry pointing at @p body. */
+std::vector<uint8_t> one_subtable(uint16_t first, uint16_t last,
+    const std::vector<uint8_t> & body) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u16(out, first);
+  gfnttest::put_u16(out, last);
+  gfnttest::put_u32(out, 8);  // from the start of the array, which is this entry
+  out.insert(out.end(), body.begin(), body.end());
+  return out;
+}
+
+/**
+ * Where an `EBDT`'s glyph data can start: after its four-byte version.
+ *
+ * `imageDataOffset` is from the start of the **table**, not from the start of its
+ * payload, so zero points at the version. Writing 0 here is what the first draft
+ * of these tests did, and every one of them then read `00 02 00 00` as a glyph's
+ * metrics and got a height of zero and an advance of 4 - a wrong expectation that
+ * made the library look wrong.
+ */
+constexpr uint32_t kEbdtHeader = 4;
+
+/** An index format 3 subtable: the same as 1 with 16-bit offsets. */
+std::vector<uint8_t> index3(uint16_t image_format, uint32_t data_offset,
+    const std::vector<uint16_t> & offsets, bool pad = true) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u16(out, 3);
+  gfnttest::put_u16(out, image_format);
+  gfnttest::put_u32(out, data_offset);
+  for (uint16_t offset : offsets) {
+    gfnttest::put_u16(out, offset);
+  }
+  if (pad && offsets.size() % 2) {
+    gfnttest::put_u16(out, 0);  // padded to a long-word boundary
+  }
+  return out;
+}
+
+/** An index format 4 subtable: a count, then (glyphID, Offset16) pairs. */
+std::vector<uint8_t> index4(uint16_t image_format, uint32_t data_offset,
+    uint32_t count, const std::vector<std::pair<uint16_t, uint16_t>> & pairs) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u16(out, 4);
+  gfnttest::put_u16(out, image_format);
+  gfnttest::put_u32(out, data_offset);
+  gfnttest::put_u32(out, count);
+  for (const std::pair<uint16_t, uint16_t> & pair : pairs) {
+    gfnttest::put_u16(out, pair.first);
+    gfnttest::put_u16(out, pair.second);
+  }
+  return out;
+}
+
+/** An index format 5 subtable: constant metrics, then a sparse glyph list. */
+std::vector<uint8_t> index5(uint16_t image_format, uint32_t data_offset,
+    uint32_t image_size, const std::vector<uint8_t> & metrics,
+    uint32_t count, const std::vector<uint16_t> & ids) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u16(out, 5);
+  gfnttest::put_u16(out, image_format);
+  gfnttest::put_u32(out, data_offset);
+  gfnttest::put_u32(out, image_size);
+  out.insert(out.end(), metrics.begin(), metrics.end());
+  gfnttest::put_u32(out, count);
+  for (uint16_t id : ids) {
+    gfnttest::put_u16(out, id);
+  }
+  if (ids.size() % 2) {
+    gfnttest::put_u16(out, 0);
+  }
+  return out;
+}
+
+/** An index format 1 subtable body: the header, then `count + 1` offsets. */
+std::vector<uint8_t> index1(uint16_t image_format, uint32_t data_offset,
+    const std::vector<uint32_t> & offsets) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u16(out, 1);
+  gfnttest::put_u16(out, image_format);
+  gfnttest::put_u32(out, data_offset);
+  for (uint32_t offset : offsets) {
+    gfnttest::put_u32(out, offset);
+  }
+  return out;
+}
+
 TEST(Eblc, TheStrikeListIsEveryBitmapSizeTable) {
   Fixture fixture("strikes.ttf");
   ASSERT_EQ(fixture.result, GFNT_OK);
@@ -1012,20 +1311,905 @@ TEST(Eblc, ExactTakesTheOutlinesWhenNoStrikeMatches) {
   EXPECT_TRUE(from_outlines);
 }
 
-TEST(Eblc, TheStrikesAreListedAndTheirPixelsAreNotReadYet) {
-  // Three answers live on one path and the whole value of the path is that they
-  // stay apart: a face with no strikes, a face whose strike table this library
-  // cannot read, and - new here - a face whose strikes are listed and whose
-  // glyph data is still out of reach.
+/** One glyph's pixels as text, the shape gfnt_bitmap_dump writes. */
+std::vector<std::string> art(const GFNT_BitmapGlyph & glyph) {
+  std::vector<std::string> rows;
+  for (uint32_t y = 0; y < glyph.height; ++y) {
+    std::string row;
+    for (uint32_t x = 0; x < glyph.width; ++x) {
+      row += gfnt_bitmap_pixel(&glyph, x, y) ? '#' : '.';
+    }
+    rows.push_back(row);
+  }
+  return rows;
+}
+
+TEST(Eblc, AStrikesGlyphsAreTheBytesTheReferenceReads) {
+  // The literal pixels, transcribed from what the pinned fontTools reads out of
+  // this fixture - not from what the generator meant to write. The generator and
+  // this library are the two things being compared; taking the expectation from
+  // either would compare one of them against itself.
   Fixture fixture("strikes.ttf");
   ASSERT_EQ(fixture.result, GFNT_OK);
 
   GFNT_BitmapGlyph glyph{};
-  EXPECT_EQ(gfnt_face_glyph_bitmap(fixture.face, 2, 0, &glyph, &fixture.error),
-      GFNT_ERR_UNSUPPORTED);
-  EXPECT_EQ(fixture.error.table, GFNT_TAG('E', 'B', 'D', 'T'));
-  EXPECT_NE(std::string(fixture.error.message).find("not read yet"),
+  // Glyph 2 ("A") at the smallest strike: a 6x6 box with a bar on row 3.
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 2, 0, &glyph, &fixture.error),
+      GFNT_OK) << fixture.error.message;
+  EXPECT_EQ(glyph.width, 6u);
+  EXPECT_EQ(glyph.height, 6u);
+  EXPECT_EQ(glyph.stride, 1u);
+  EXPECT_EQ(glyph.bearing_x, 1);
+  EXPECT_EQ(glyph.bearing_y, 6);
+  EXPECT_EQ(glyph.advance, 8);
+  EXPECT_EQ(glyph.bit_depth, 1);
+  EXPECT_EQ(glyph.strike.ppem_y, 10u);
+  EXPECT_EQ(art(glyph), (std::vector<std::string>{
+      "######",
+      "#....#",
+      "#....#",
+      "######",
+      "#....#",
+      "######"}));
+
+  // Glyph 3 ("B") at the same strike, whose bar is one row lower. Two glyphs of
+  // one strike that differ, which is what makes a reader that returned the same
+  // bytes for every glyph visible.
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 3, 0, &glyph, &fixture.error),
+      GFNT_OK) << fixture.error.message;
+  EXPECT_EQ(art(glyph), (std::vector<std::string>{
+      "######",
+      "#....#",
+      "#....#",
+      "#....#",
+      "######",
+      "######"}));
+
+  // The same glyph at the largest strike: 12x12, and its bar is still row 3.
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 2, 2, &glyph, &fixture.error),
+      GFNT_OK) << fixture.error.message;
+  EXPECT_EQ(glyph.width, 12u);
+  EXPECT_EQ(glyph.height, 12u);
+  EXPECT_EQ(glyph.stride, 2u);
+  EXPECT_EQ(glyph.bearing_y, 12);
+  EXPECT_EQ(glyph.advance, 14);
+  EXPECT_EQ(glyph.strike.ppem_y, 16u);
+  EXPECT_EQ(art(glyph), (std::vector<std::string>{
+      "############",
+      "#..........#",
+      "#..........#",
+      "############",
+      "#..........#",
+      "#..........#",
+      "#..........#",
+      "#..........#",
+      "#..........#",
+      "#..........#",
+      "#..........#",
+      "############"}));
+}
+
+TEST(Eblc, EveryStrikeAndGlyphIsItsOwnPixels) {
+  // The property that makes "which strike answered" an answerable question: if any
+  // two of these were equal, a test asserting a strike's pixels could pass against
+  // a reader that had picked the wrong strike. Twelve glyphs, all distinct.
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  std::vector<std::string> seen;
+  for (size_t strike = 0; strike < kStrikeCount; ++strike) {
+    for (uint32_t id = 1; id <= 4; ++id) {
+      GFNT_BitmapGlyph glyph{};
+
+      ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, id, strike, &glyph,
+          &fixture.error), GFNT_OK)
+          << "strike " << strike << " glyph " << id << ": "
+          << fixture.error.message;
+      ASSERT_EQ(glyph.strike.index, strike);
+      std::string flat;
+      for (const std::string & row : art(glyph)) {
+        flat += row + "/";
+      }
+      seen.push_back(flat);
+    }
+  }
+  ASSERT_EQ(seen.size(), 12u);
+  std::vector<std::string> unique = seen;
+  std::sort(unique.begin(), unique.end());
+  unique.erase(std::unique(unique.begin(), unique.end()), unique.end());
+  EXPECT_EQ(unique.size(), seen.size())
+      << "two glyphs of this fixture draw the same thing, so a test that asserts "
+         "one of them cannot tell which answered";
+}
+
+TEST(Eblc, AGlyphNoStrikeCarriesIsUnsupportedAndNotInvalid) {
+  // Glyph 0 is outside every strike's range in this fixture, which is the sparse
+  // case: the glyph index is perfectly good and this strike has no bitmap for it.
+  // UNSUPPORTED, because INVALID would say the caller asked a nonsense question
+  // and another strike might well answer the same one.
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  for (size_t strike = 0; strike < kStrikeCount; ++strike) {
+    GFNT_BitmapGlyph glyph{};
+
+    EXPECT_EQ(gfnt_face_glyph_bitmap(fixture.face, 0, strike, &glyph,
+        &fixture.error), GFNT_ERR_UNSUPPORTED) << "strike " << strike;
+    EXPECT_NE(std::string(fixture.error.message).find("does not carry"),
+        std::string::npos) << fixture.error.message;
+  }
+
+  // And a glyph past the face's count, which is the caller's error.
+  GFNT_BitmapGlyph glyph{};
+  EXPECT_EQ(gfnt_face_glyph_bitmap(fixture.face, 99, 0, &glyph, &fixture.error),
+      GFNT_ERR_INVALID);
+  // And a strike the face does not have.
+  EXPECT_EQ(gfnt_face_glyph_bitmap(fixture.face, 2, kStrikeCount, &glyph,
+      &fixture.error), GFNT_ERR_INVALID);
+  EXPECT_NE(std::string(fixture.error.message).find("strike index"),
       std::string::npos) << fixture.error.message;
+}
+
+TEST(Eblc, AStrikeIsParsedOnceAndOnlyWhenAsked) {
+  // Section 5.3's promise, and the reason there is a memo per strike rather than
+  // one for the table: asking about one strike must not read the others. Measured
+  // by allocations, because that is what a strike's arenas are.
+  const std::string bytes = read_fixture("strikes.ttf");
+  ASSERT_FALSE(bytes.empty());
+
+  ThreadSafeCounter counter;
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_COPY,
+      nullptr, counter.get(), &blob, &error), GFNT_OK);
+  ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, counter.get(), &face, &error),
+      GFNT_OK) << error.message;
+
+  GFNT_BitmapGlyph glyph{};
+  const long before = counter.requests();
+  ASSERT_EQ(gfnt_face_glyph_bitmap(face, 2, 1, &glyph, &error), GFNT_OK)
+      << error.message;
+  const long after_first = counter.requests();
+  EXPECT_GT(after_first, before) << "the strike had to be parsed";
+
+  // The same strike again: the memo answers and nothing is allocated.
+  ASSERT_EQ(gfnt_face_glyph_bitmap(face, 3, 1, &glyph, &error), GFNT_OK);
+  EXPECT_EQ(counter.requests(), after_first) << "a second glyph of a parsed "
+      "strike must cost nothing";
+
+  // A different strike: parsed now, which it was not before.
+  ASSERT_EQ(gfnt_face_glyph_bitmap(face, 2, 2, &glyph, &error), GFNT_OK);
+  EXPECT_GT(counter.requests(), after_first) << "the second strike was not read "
+      "when the first was, which is the whole point of a memo per strike";
+
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
+  EXPECT_EQ(counter.live(), 0L);
+}
+
+TEST(Eblc, EverySubtableAndImageFormatReadsTheSameDesign) {
+  // The cross-product. strike-formats.ttf draws **one design** six ways - the
+  // bytes differ in every pairing and the pixels must not - so a wrong offset
+  // base, a missed sentinel, or a bit-aligned row read as byte-aligned shows up as
+  // a difference rather than as a plausible other glyph.
+  //
+  // The expected rows are transcribed from what the pinned fontTools reads out of
+  // this fixture, not from what the generator meant: the generator and this
+  // library are the two things being compared.
+  //
+  // Only two of these six cells occur in the real population at all - (2, 5) and
+  // (1, 7) - so for the other four this fixture is the whole of the evidence, and
+  // the bar's row is what distinguishes them from each other.
+  Fixture fixture("strike-formats.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  size_t strikes = 0;
+  ASSERT_EQ(gfnt_face_strike_count(fixture.face, &strikes, &fixture.error),
+      GFNT_OK) << fixture.error.message;
+  ASSERT_EQ(strikes, 1u);
+
+  struct Case {
+    uint32_t glyph;
+    int bar;            ///< Which row is solid, counting from the top.
+    const char * pairing;
+  };
+  // The bar's row is the glyph index modulo the height, which is seven - so
+  // glyphs 8 and 1 share a row and glyphs 9 and 2 do. That is deliberate: what each
+  // case asserts is the *pairing*, and a design whose rows were all distinct would
+  // let a reader that mixed up two subtables pass by returning a plausible glyph.
+  const Case cases[] = {
+    {1, 1, "index 1, image 1: 4-byte offsets, small metrics, byte-aligned"},
+    {2, 2, "index 1, image 1"},
+    {3, 3, "index 1, image 2: the same offsets over bit-aligned rows"},
+    {4, 4, "index 1, image 2"},
+    {5, 5, "index 3, image 6: 2-byte offsets, big metrics, byte-aligned"},
+    {6, 6, "index 3, image 6"},
+    {7, 0, "index 1, image 7: big metrics, bit-aligned, bar wrapped to row 0"},
+    {8, 1, "index 1, image 7"},
+    {9, 2, "index 4, image 2: a sparse glyph list"},
+    {11, 4, "index 5, image 5: sparse and constant metrics"},
+    {12, 5, "index 5, image 5"},
+  };
+
+  for (const Case & test : cases) {
+    GFNT_BitmapGlyph glyph{};
+
+    ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, test.glyph, 0, &glyph,
+        &fixture.error), GFNT_OK)
+        << test.pairing << ": " << fixture.error.message;
+    EXPECT_EQ(glyph.width, 11u) << test.pairing;
+    EXPECT_EQ(glyph.height, 7u) << test.pairing;
+    EXPECT_EQ(glyph.stride, 2u) << test.pairing;
+    EXPECT_EQ(glyph.bearing_x, 1) << test.pairing;
+    EXPECT_EQ(glyph.bearing_y, 7) << test.pairing;
+    EXPECT_EQ(glyph.advance, 13) << test.pairing;
+
+    std::vector<std::string> expected;
+    for (int row = 0; row < 7; ++row) {
+      expected.push_back(row == test.bar ? "###########" : "#..........");
+    }
+    EXPECT_EQ(art(glyph), expected) << "glyph " << test.glyph << ", "
+        << test.pairing;
+  }
+
+  // Glyph 10 is inside the index 4 subtable's *range* and not in its glyph list,
+  // which is the one state no non-sparse index format can express - and the reason
+  // GFNT_BitmapRecord carries a `present` field rather than a sentinel in height.
+  GFNT_BitmapGlyph absent{};
+  EXPECT_EQ(gfnt_face_glyph_bitmap(fixture.face, 10, 0, &absent,
+      &fixture.error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::string(fixture.error.message).find("does not carry"),
+      std::string::npos) << fixture.error.message;
+
+  // And glyph 0, which no subtable's range covers at all. The same answer by a
+  // different route, which is what says the two routes agree.
+  EXPECT_EQ(gfnt_face_glyph_bitmap(fixture.face, 0, 0, &absent, &fixture.error),
+      GFNT_ERR_UNSUPPORTED);
+}
+
+TEST(Eblc, TheAlignmentAxisIsWhatTheFixturesWidthIsFor) {
+  // Glyphs 1-2 and 3-4 differ in exactly one thing - image format 1 against image
+  // format 2, byte-aligned rows against bit-aligned - and that difference is only
+  // *visible* at a width that is not a multiple of eight.
+  //
+  // This test is here because a mutation routing format 2 through the byte-aligned
+  // path passed the whole suite while this fixture was 8 pixels wide: at that
+  // width the two layouts are the same bytes, so there was no input that could
+  // tell the two code paths apart. The fixture is 11 wide now, and the assertion
+  // worth making is the one the mutation broke.
+  Fixture fixture("strike-formats.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+  ASSERT_NE(11u % 8u, 0u) << "the whole point of this fixture's width";
+
+  GFNT_BitmapGlyph byte_aligned{};
+  GFNT_BitmapGlyph bit_aligned{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 2, 0, &byte_aligned, nullptr),
+      GFNT_OK);
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 4, 0, &bit_aligned, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(byte_aligned.width, bit_aligned.width);
+  EXPECT_EQ(byte_aligned.stride, bit_aligned.stride);
+  // Each draws its own design correctly: glyph 2's bar is row 2 and glyph 4's is
+  // row 4. A reader that read the bit-aligned glyph as byte-aligned reports a bar
+  // in the wrong row, or none at all, because every row after the first is shifted
+  // by three bits.
+  EXPECT_EQ(art(byte_aligned)[2], "###########");
+  EXPECT_EQ(art(bit_aligned)[4], "###########");
+  for (size_t row = 0; row < 7; ++row) {
+    if (row != 2) {
+      EXPECT_EQ(art(byte_aligned)[row], "#..........") << "row " << row;
+    }
+    if (row != 4) {
+      EXPECT_EQ(art(bit_aligned)[row], "#..........") << "row " << row;
+    }
+  }
+}
+
+TEST(Eblc, WideningBitAlignedRowsIsWhereTheAlignmentActuallyBites) {
+  // gfnt_bitmap_widen_rows() directly, at the widths where the two layouts differ.
+  // A width that is a multiple of eight makes bit-aligned and byte-aligned
+  // identical, so a fixture of 8-pixel glyphs cannot tell a reader that ignored the
+  // distinction from one that implemented it - the cross-product fixture is 8 wide
+  // for other reasons, and this is the control that covers the gap.
+  struct Case {
+    uint32_t width;
+    uint32_t height;
+    const char * rows[4];
+  };
+  const Case cases[] = {
+    {1, 4, {"#", ".", "#", "#"}},
+    {3, 3, {"#.#", ".#.", "###", nullptr}},
+    {7, 2, {"#.#.#.#", ".#.#.#.", nullptr, nullptr}},
+    {9, 2, {"#........", "........#", nullptr, nullptr}},
+  };
+
+  for (const Case & test : cases) {
+    // Pack the design bit-aligned: every row's bits follow the previous row's
+    // last bit with no padding, which is what makes this different from the
+    // byte-aligned form at any width that is not a multiple of eight.
+    std::vector<uint8_t> packed(((size_t)test.width * test.height + 7) / 8, 0);
+    size_t bit = 0;
+    for (uint32_t y = 0; y < test.height; ++y) {
+      for (uint32_t x = 0; x < test.width; ++x) {
+        if (test.rows[y][x] == '#') {
+          packed[bit >> 3] |= (uint8_t)(0x80u >> (bit & 7u));
+        }
+        ++bit;
+      }
+    }
+
+    const size_t stride = (test.width + 7u) / 8u;
+    std::vector<uint8_t> widened(stride * test.height, 0xAA);
+    ASSERT_TRUE(gfnt_bitmap_widen_rows(widened.data(), packed.data(),
+        packed.size(), test.width, test.height)) << test.width;
+
+    for (uint32_t y = 0; y < test.height; ++y) {
+      std::string got;
+      for (uint32_t x = 0; x < test.width; ++x) {
+        got += (widened[y * stride + (x >> 3)] >> (7 - (x & 7))) & 1 ? '#' : '.';
+      }
+      EXPECT_EQ(got, std::string(test.rows[y]))
+          << test.width << "x" << test.height << " row " << y;
+      // The bits past the width are cleared, not left at the 0xAA this buffer was
+      // filled with - which is what `bitmap.h` promises and what makes two faces
+      // of one design compare equal.
+      if (test.width % 8) {
+        const uint8_t mask = (uint8_t)(0xFFu >> (test.width % 8));
+        EXPECT_EQ(widened[y * stride + stride - 1] & mask, 0)
+            << test.width << " row " << y << " has padding bits set";
+      }
+    }
+  }
+
+  // One byte short of the bits the box needs, which has to be refused rather than
+  // read off the end.
+  const uint8_t one[] = {0xFF};
+  uint8_t out[4] = {0};
+  EXPECT_FALSE(gfnt_bitmap_widen_rows(out, one, sizeof one, 8, 2));
+  EXPECT_TRUE(gfnt_bitmap_widen_rows(out, one, sizeof one, 8, 1));
+}
+
+/** Ask for glyph @p glyph of strike 0 and return what happened. */
+GFNT_Result ask(const std::string & bytes, uint32_t glyph, GFNT_Error * error) {
+  Crafted crafted(bytes);
+  if (crafted.result != GFNT_OK) {
+    return crafted.result;
+  }
+  GFNT_BitmapGlyph out{};
+  return gfnt_face_glyph_bitmap(crafted.face, glyph, 0, &out, error);
+}
+
+TEST(Ebdt, EveryWayAnIndexSubtableCanContradictItselfIsRefused) {
+  // One field wrong at a time, each reaching its own arm. The index subtable and
+  // the glyph data are separate tables that have to agree, and most of these are
+  // disagreements between them rather than damage to either - which is the class of
+  // defect a reader that validated each table alone would miss.
+  struct Case {
+    const char * why;
+    std::vector<uint8_t> body;
+    GFNT_Result result;
+    const char * phrase;
+  };
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  std::vector<uint8_t> good_glyph = small_metrics(4, 8, 1, 4, 10);
+  good_glyph.insert(good_glyph.end(), rows.begin(), rows.end());
+
+  const Case cases[] = {
+    {"an index format the specification does not define",
+     [&] {
+       std::vector<uint8_t> out;
+       gfnttest::put_u16(out, 6);
+       gfnttest::put_u16(out, 1);
+       gfnttest::put_u32(out, 0);
+       return out;
+     }(),
+     GFNT_ERR_UNSUPPORTED, "index subtable format"},
+    {"index format zero, which is below the defined range rather than above it",
+     [&] {
+       std::vector<uint8_t> out;
+       gfnttest::put_u16(out, 0);
+       gfnttest::put_u16(out, 1);
+       gfnttest::put_u32(out, 0);
+       return out;
+     }(),
+     GFNT_ERR_UNSUPPORTED, "index subtable format"},
+    {"an image format the specification calls obsolete",
+     index1(4, kEbdtHeader, {0, 9}),
+     GFNT_ERR_UNSUPPORTED, "image format"},
+    {"a composite image format, which is its own piece of work",
+     index1(8, kEbdtHeader, {0, 9}),
+     GFNT_ERR_UNSUPPORTED, "image format"},
+    {"image format 5, whose metrics are the index's, under an index that states "
+     "none",
+     index1(5, kEbdtHeader, {0, 4}),
+     GFNT_ERR_CORRUPT, "states none"},
+    {"glyph offsets that run backwards",
+     index1(1, kEbdtHeader, {9, 0}),
+     GFNT_ERR_CORRUPT, "run backwards"},
+    {"a glyph whose data starts past the end of EBDT",
+     index1(1, 0xFFFF, {0, 9}),
+     GFNT_ERR_CORRUPT, "past the end"},
+    {"a stated length that does not reach past the metrics",
+     index1(1, kEbdtHeader, {0, 3}),
+     GFNT_ERR_CORRUPT, "does not reach past its metrics"},
+    {"a glyph with fewer rows than its box",
+     index1(1, kEbdtHeader, {0, 6}),
+     GFNT_ERR_CORRUPT, "fewer rows"},
+  };
+
+  for (const Case & test : cases) {
+    GFNT_Error error{};
+    const std::string bytes = strike_font(one_subtable(1, 1, test.body),
+        good_glyph, 4, 1, 1, 1);
+
+    EXPECT_EQ(ask(bytes, 1, &error), test.result) << test.why;
+    EXPECT_NE(std::string(error.message ? error.message : "").find(test.phrase),
+        std::string::npos) << test.why << ": got " << error.message;
+  }
+
+  // The control: the same font with nothing wrong reads the glyph. Without it
+  // every case above could be passing for a reason none of them names.
+  GFNT_Error error{};
+  const std::string good = strike_font(
+      one_subtable(1, 1, index1(1, kEbdtHeader, {0, 9})), good_glyph, 4, 1, 1, 1);
+  ASSERT_EQ(ask(good, 1, &error), GFNT_OK) << error.message;
+}
+
+TEST(Ebdt, OneBadGlyphCondemnsThatGlyphAndNotTheStrike) {
+  // M11, and the reason GFNT_BitmapRecord carries three states rather than two: a
+  // face with one bad `loca` entry loads and answers for every other glyph, and a
+  // strike with one bad offset has to work the same way. The first draft returned
+  // the failure from the strike parse, which made one wrong offset in a
+  // 27,000-glyph strike lose all 27,000.
+  std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+  // Glyph 1 is sound; glyph 2's offsets run backwards.
+  const std::string bytes = strike_font(
+      one_subtable(1, 2, index1(1, kEbdtHeader, {0, 9, 2})), glyph_data);
+
+  Crafted crafted(bytes);
+  ASSERT_EQ(crafted.result, GFNT_OK);
+
+  GFNT_BitmapGlyph glyph{};
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &glyph, &error), GFNT_OK)
+      << "the sound glyph of a strike with a bad one: " << error.message;
+  EXPECT_EQ(glyph.width, 8u);
+  EXPECT_EQ(glyph.height, 4u);
+
+  EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 2, 0, &glyph, &error),
+      GFNT_ERR_CORRUPT);
+  EXPECT_EQ(error.glyph, 2u) << "the diagnostic names the glyph, not the strike";
+  // The *specific* reason, kept per record: a per-glyph refusal that reported only
+  // "something was wrong with this glyph" would throw away what the parse knew.
+  EXPECT_NE(std::string(error.message).find("offsets run backwards"),
+      std::string::npos) << error.message;
+
+  // And the strike still lists itself, which is what "usable" means here.
+  size_t strikes = 0;
+  ASSERT_EQ(gfnt_face_strike_count(crafted.face, &strikes, nullptr), GFNT_OK);
+  EXPECT_EQ(strikes, 1u);
+}
+
+TEST(Ebdt, AGlyphOfZeroLengthIsASpaceAndKeepsItsAdvance) {
+  // Consecutive equal offsets: the strike lists the glyph and carries no bitmap
+  // for it. A space, which is a different fact from a glyph the strike does not
+  // have - and its advance still matters, which is the whole reason the record
+  // exists.
+  std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+
+  // Glyph 1 gets nothing, glyph 2 gets the data.
+  const std::string bytes = strike_font(
+      one_subtable(1, 2, index1(1, kEbdtHeader, {0, 0, 9})), glyph_data);
+  Crafted crafted(bytes);
+  ASSERT_EQ(crafted.result, GFNT_OK);
+
+  GFNT_BitmapGlyph empty{};
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &empty, &error), GFNT_OK)
+      << error.message;
+  EXPECT_EQ(empty.width, 0u);
+  EXPECT_EQ(empty.height, 0u);
+  EXPECT_EQ(empty.bits, nullptr);
+  // The index states no metrics for format 1, so there is no advance to report and
+  // zero is the honest answer rather than an invented one.
+  EXPECT_EQ(empty.advance, 0);
+
+  GFNT_BitmapGlyph drawn{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 2, 0, &drawn, &error), GFNT_OK)
+      << error.message;
+  EXPECT_EQ(drawn.width, 8u);
+  EXPECT_EQ(drawn.advance, 10);
+}
+
+TEST(Ebdt, AGlyphWithAZeroBoxIsEmptyRatherThanRefused) {
+  // A width or height of zero with metrics that are otherwise fine. The rows are
+  // not read at all, so a glyph like this is legal however little data follows it.
+  std::vector<uint8_t> glyph_data = small_metrics(0, 0, 0, 0, 7);
+  const std::string bytes = strike_font(
+      one_subtable(1, 1, index1(1, kEbdtHeader, {0, 5})), glyph_data);
+  Crafted crafted(bytes);
+  ASSERT_EQ(crafted.result, GFNT_OK);
+
+  GFNT_BitmapGlyph glyph{};
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &glyph, &error), GFNT_OK)
+      << error.message;
+  EXPECT_EQ(glyph.width, 0u);
+  EXPECT_EQ(glyph.bits, nullptr);
+  EXPECT_EQ(glyph.advance, 7);
+}
+
+TEST(Ebdt, AGlyphInsideTheStrikeAndOutsideEverySubtableIsAbsent) {
+  // Three routes reach "this strike does not carry that glyph" and they are not
+  // the same code: outside the strike's own startGlyphIndex..endGlyphIndex,
+  // inside those and covered by no subtable, and inside a subtable's range but
+  // missing from its sparse list. The middle one is this test; without it that arm
+  // is unreachable, because in both committed fixtures every glyph of the strike's
+  // range belongs to some subtable.
+  std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+
+  // The strike claims glyphs 1..3 and its one subtable covers only 1..2.
+  // Two glyphs of nine bytes each, so both are sound and the only absence is
+  // glyph 3 - which the subtable's range does not reach.
+  std::vector<uint8_t> two = glyph_data;
+  two.insert(two.end(), glyph_data.begin(), glyph_data.end());
+  const std::string bytes = strike_font(
+      one_subtable(1, 2, index1(1, kEbdtHeader, {0, 9, 18})), two, 4, 1, 1, 3);
+  Crafted crafted(bytes);
+  ASSERT_EQ(crafted.result, GFNT_OK);
+
+  GFNT_BitmapGlyph glyph{};
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 3, 0, &glyph, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::string(error.message).find("does not carry"),
+      std::string::npos) << error.message;
+  // And glyph 1, inside the subtable, still reads - so the refusal above is about
+  // glyph 3 and not about the font.
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &glyph, &error), GFNT_OK)
+      << error.message;
+}
+
+TEST(Ebdt, AnEbdtThatIsNotTheVersionThisLibraryReadsIsUnsupported) {
+  std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+
+  std::string bytes = strike_font(one_subtable(1, 2, index1(1, kEbdtHeader, {0, 9})),
+      glyph_data);
+  // Find EBDT in the directory and rewrite the version its data starts with.
+  const size_t count = ((unsigned char)bytes[4] << 8) | (unsigned char)bytes[5];
+  size_t where = 0;
+  for (size_t i = 0; i < count; ++i) {
+    const size_t at = 12 + 16 * i;
+    if (memcmp(bytes.data() + at, "EBDT", 4) == 0) {
+      where = (size_t)(((unsigned char)bytes[at + 8] << 24)
+          | ((unsigned char)bytes[at + 9] << 16)
+          | ((unsigned char)bytes[at + 10] << 8)
+          | (unsigned char)bytes[at + 11]);
+      break;
+    }
+  }
+  ASSERT_NE(where, 0u);
+
+  GFNT_Error error{};
+  // The control first: untouched, the glyph reads.
+  ASSERT_EQ(ask(bytes, 1, &error), GFNT_OK) << error.message;
+
+  bytes[where + 1] = 0x03;  // version 3.0
+  EXPECT_EQ(ask(bytes, 1, &error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::string(error.message).find("EBDT version"), std::string::npos)
+      << error.message;
+
+  // And an EBDT too short to hold its own version.
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  tables.push_back({GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(4)});
+  std::vector<uint8_t> eblc;
+  gfnttest::put_u32(eblc, 0x00020000);
+  gfnttest::put_u32(eblc, 1);
+  const std::vector<uint8_t> size = size_table(8 + 48, 16, 1, 1, 2, 12, 12, 1, 1);
+  eblc.insert(eblc.end(), size.begin(), size.end());
+  const std::vector<uint8_t> region =
+      one_subtable(1, 2, index1(1, kEbdtHeader, {0, 9}));
+  eblc.insert(eblc.end(), region.begin(), region.end());
+  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'), eblc});
+  tables.push_back({GFNT_TAG('E', 'B', 'D', 'T'), std::vector<uint8_t>{0, 2}});
+  const std::vector<uint8_t> raw =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  EXPECT_EQ(ask(std::string(reinterpret_cast<const char *>(raw.data()),
+                    raw.size()),
+                1, &error),
+      GFNT_ERR_CORRUPT);
+  EXPECT_NE(std::string(error.message).find("shorter than its own header"),
+      std::string::npos) << error.message;
+}
+
+TEST(Ebdt, AnIndexArrayOrSubheaderPastTheTableIsRefused) {
+  // The two offsets the index array is reached through, each pointed past the end.
+  // `indexSubTableArrayOffset` is checked when the strike list is parsed - it is a
+  // field of the bitmapSizeTable - and `additionalOffsetToIndexSubtable` here,
+  // which is why damaging one does not cover the other.
+  std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+
+  // An array entry whose additionalOffset lands past the table.
+  std::vector<uint8_t> region;
+  gfnttest::put_u16(region, 1);
+  gfnttest::put_u16(region, 2);
+  gfnttest::put_u32(region, 0x7FFFFF);
+  GFNT_Error error{};
+  EXPECT_EQ(ask(strike_font(region, glyph_data), 1, &error), GFNT_ERR_CORRUPT);
+  EXPECT_NE(std::string(error.message).find("indexSubHeader"),
+      std::string::npos) << error.message;
+
+  // Two subtables claimed and one entry written. There is no bounds error to find:
+  // the second entry is read out of the *first subtable's body*, which is inside
+  // the table, and what it says there is nonsense rather than missing. This is the
+  // price of not trusting `indexTablesSize` - mona.ttf overstates it in every file
+  // bdftopcf-era tools wrote - and the answer is whatever the bytes claim, which
+  // here is an index format the specification does not define.
+  EXPECT_EQ(ask(strike_font(one_subtable(1, 2, index1(1, kEbdtHeader, {0, 9})),
+                    glyph_data, 4, 2),
+                1, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::string(error.message).find("index subtable format"),
+      std::string::npos) << error.message;
+
+  // A subtable whose own glyph range runs backwards, which the strike's range
+  // check cannot catch because it is a different pair of numbers.
+  std::vector<uint8_t> backwards;
+  gfnttest::put_u16(backwards, 2);
+  gfnttest::put_u16(backwards, 1);
+  gfnttest::put_u32(backwards, 8);
+  const std::vector<uint8_t> body = index1(1, kEbdtHeader, {0, 9});
+  backwards.insert(backwards.end(), body.begin(), body.end());
+  EXPECT_EQ(ask(strike_font(backwards, glyph_data), 1, &error), GFNT_ERR_CORRUPT);
+  EXPECT_NE(std::string(error.message).find("runs backwards"),
+      std::string::npos) << error.message;
+}
+
+TEST(Ebdt, AFormatOneOffsetArrayCutShortIsRefused) {
+  // Index format 1 holds one more offset than it has glyphs, and the last glyph is
+  // the one that needs it - so an array one entry short is a font where every
+  // glyph but the last reads correctly. That asymmetry is why the sweep asks for
+  // the last glyph.
+  std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+
+  // Two glyphs need three offsets; this writes two.
+  const std::string bytes = strike_font(
+      one_subtable(1, 2, index1(1, kEbdtHeader, {0, 9})), glyph_data);
+  GFNT_Error error{};
+  // Glyph 1 reads: its own offset and its successor are both there.
+  ASSERT_EQ(ask(bytes, 1, &error), GFNT_OK) << error.message;
+  // Glyph 2's successor is not, and that condemns glyph 2 alone (M11).
+  EXPECT_EQ(ask(bytes, 2, &error), GFNT_ERR_CORRUPT);
+  EXPECT_NE(std::string(error.message).find("format 1 offset"),
+      std::string::npos) << error.message;
+}
+
+TEST(Ebdt, TheSparseFormatsFindAGlyphAndSayWhenTheyCannot) {
+  // Index formats 4 and 5 bisect a sorted glyph list, so three branches have to be
+  // reached for each: the target below the middle, above it, and found. A list of
+  // one entry exercises only the third, which is what the committed fixture has -
+  // so these lists have four.
+  std::vector<uint8_t> one = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  one.insert(one.end(), rows.begin(), rows.end());
+  std::vector<uint8_t> data;
+  for (int i = 0; i < 4; ++i) {
+    data.insert(data.end(), one.begin(), one.end());
+  }
+
+  // Glyphs 2, 4, 6 and 8 are listed; 1, 3, 5, 7 and 9 are not, and each of those
+  // lands on a different side of the bisection.
+  const std::vector<std::pair<uint16_t, uint16_t>> pairs = {
+      {2, 0}, {4, 9}, {6, 18}, {8, 27}, {0xFFFF, 36}};
+  const std::string sparse = strike_font(
+      one_subtable(1, 9, index4(2, kEbdtHeader, 4, pairs)), data, 10, 1, 1, 9);
+  Crafted crafted(sparse);
+  ASSERT_EQ(crafted.result, GFNT_OK);
+
+  for (uint32_t id : {2u, 4u, 6u, 8u}) {
+    GFNT_BitmapGlyph glyph{};
+    GFNT_Error error{};
+
+    ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, id, 0, &glyph, &error),
+        GFNT_OK) << "glyph " << id << ": " << error.message;
+    EXPECT_EQ(glyph.width, 8u) << id;
+  }
+  for (uint32_t id : {1u, 3u, 5u, 7u, 9u}) {
+    GFNT_BitmapGlyph glyph{};
+    GFNT_Error error{};
+
+    EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, id, 0, &glyph, &error),
+        GFNT_ERR_UNSUPPORTED) << "glyph " << id;
+    EXPECT_NE(std::string(error.message).find("does not carry"),
+        std::string::npos) << error.message;
+  }
+
+  // Index format 5, the same bisection over a list with no offsets at all: the
+  // *position* in the list multiplies imageSize. A reader using the glyph's
+  // distance from firstGlyphIndex instead would hand back glyph 8's pixels for
+  // glyph 4, which is why the four glyphs' data differ below.
+  std::vector<uint8_t> constant;
+  for (int i = 0; i < 4; ++i) {
+    std::vector<std::string> design;
+    for (int y = 0; y < 4; ++y) {
+      design.push_back(y == i ? "########" : "#......#");
+    }
+    for (const std::string & row : design) {
+      uint8_t packed = 0;
+      for (int x = 0; x < 8; ++x) {
+        if (row[(size_t)x] == '#') {
+          packed |= (uint8_t)(0x80u >> x);
+        }
+      }
+      constant.push_back(packed);
+    }
+  }
+  const std::string flat = strike_font(
+      one_subtable(1, 9, index5(5, kEbdtHeader, 4,
+          big_metrics(4, 8, 1, 4, 10), 4, {2, 4, 6, 8})),
+      constant, 10, 1, 1, 9);
+  Crafted five(flat);
+  ASSERT_EQ(five.result, GFNT_OK);
+
+  int position = 0;
+  for (uint32_t id : {2u, 4u, 6u, 8u}) {
+    GFNT_BitmapGlyph glyph{};
+    GFNT_Error error{};
+
+    ASSERT_EQ(gfnt_face_glyph_bitmap(five.face, id, 0, &glyph, &error), GFNT_OK)
+        << "glyph " << id << ": " << error.message;
+    // The solid row is the glyph's *position in the list*, so glyph 4 is position
+    // 1 - and a reader that used (4 - firstGlyphIndex) would report row 3.
+    EXPECT_EQ(art(glyph)[(size_t)position], "########")
+        << "glyph " << id << " is position " << position;
+    ++position;
+  }
+  for (uint32_t id : {1u, 5u, 9u}) {
+    GFNT_BitmapGlyph glyph{};
+    EXPECT_EQ(gfnt_face_glyph_bitmap(five.face, id, 0, &glyph, nullptr),
+        GFNT_ERR_UNSUPPORTED) << "glyph " << id;
+  }
+}
+
+TEST(Ebdt, EverySparseOrShortOffsetArrayThatRunsOffTheTableIsRefused) {
+  // Each index format's own array, cut so that the lookup reads past the table.
+  // Four formats, four different arrays, and the arm for each is reachable only
+  // from its own shape.
+  std::vector<uint8_t> one = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  one.insert(one.end(), rows.begin(), rows.end());
+
+  struct Case {
+    const char * why;
+    std::vector<uint8_t> body;
+    uint32_t glyph;
+    const char * phrase;
+  };
+  const Case cases[] = {
+    // Unpadded, deliberately. With the long-word padding the specification calls
+    // for, a one-entry array is *two* entries' worth of bytes and the missing
+    // offset reads back as zero - a glyph of length zero, which is legal. So the
+    // short case has to be short of the padding too, and the first draft of this
+    // case passed because it was not.
+    {"format 3's 16-bit offset array one entry short",
+     index3(2, kEbdtHeader, {0}, false), 1, "format 3 offset"},
+    {"format 4's pair list shorter than the count it states",
+     index4(2, kEbdtHeader, 4, {{1, 0}}), 1, "format 4"},
+    {"format 5's glyph list shorter than the count it states",
+     index5(5, kEbdtHeader, 9, big_metrics(4, 8, 1, 4, 10), 4, {1}), 1,
+     "format 5 glyph list"},
+  };
+
+  for (const Case & test : cases) {
+    GFNT_Error error{};
+    const std::string bytes = strike_font(one_subtable(1, 2, test.body), one);
+
+    EXPECT_EQ(ask(bytes, test.glyph, &error), GFNT_ERR_CORRUPT) << test.why;
+    EXPECT_NE(std::string(error.message ? error.message : "").find(test.phrase),
+        std::string::npos) << test.why << ": got " << error.message;
+  }
+
+  // A sparse list longer than the caller's glyph ceiling, which is a limit rather
+  // than a corruption: the table may be perfectly well formed.
+  GFNT_Limits limits;
+  gfnt_limits_default(&limits);
+  limits.max_glyphs = 2;
+  const std::string big = strike_font(
+      one_subtable(1, 2, index4(2, kEbdtHeader, 99, {{1, 0}})), one);
+  Crafted crafted(big, &limits);
+  if (crafted.result == GFNT_OK) {
+    GFNT_BitmapGlyph glyph{};
+    GFNT_Error error{};
+    EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &glyph, &error),
+        GFNT_ERR_LIMIT);
+    EXPECT_NE(std::string(error.message).find("max_glyphs"), std::string::npos)
+        << error.message;
+  }
+}
+
+TEST(Ebdt, AGlyphCutInsideItsOwnMetricsIsRefused) {
+  // The two metrics readers' failure arms: five bytes for SmallGlyphMetrics and
+  // eight for Big, and a glyph whose data ends inside either. Reached through the
+  // *table* ending rather than through the stated length, which the arm above it
+  // covers - two ways to be too short, and both have to be checked because the
+  // length a subtable states and the bytes the table holds are different facts.
+  struct Case {
+    const char * why;
+    uint16_t image_format;
+    std::vector<uint8_t> data;
+    const char * phrase;
+  };
+  const Case cases[] = {
+    {"a SmallGlyphMetrics cut off by the end of EBDT", 2,
+     {4, 8, 1}, "SmallGlyphMetrics"},
+    {"a BigGlyphMetrics cut off by the end of EBDT", 7,
+     {4, 8, 1, 4, 10, 0}, "BigGlyphMetrics"},
+  };
+
+  for (const Case & test : cases) {
+    GFNT_Error error{};
+    // The stated length reaches past the data, so the metrics read is what fails
+    // rather than the length check.
+    const std::string bytes = strike_font(
+        one_subtable(1, 1, index1(test.image_format, kEbdtHeader,
+            {0, (uint32_t)test.data.size() + 8})),
+        test.data, 4, 1, 1, 1);
+
+    EXPECT_EQ(ask(bytes, 1, &error), GFNT_ERR_CORRUPT) << test.why;
+    EXPECT_NE(std::string(error.message ? error.message : "").find(test.phrase),
+        std::string::npos) << test.why << ": got " << error.message;
+  }
+}
+
+TEST(Ebdt, TheStrikeParseSurvivesEveryRefusedAllocation) {
+  const std::string bytes = read_fixture("strike-formats.ttf");
+  ASSERT_FALSE(bytes.empty());
+  size_t refused = 0;
+
+  for (size_t at = 0; at < 96; ++at) {
+    gfnttest::FailingAllocator failing(at);
+    GFNT_Blob * blob = nullptr;
+    GFNT_Face * face = nullptr;
+    GFNT_Error error{};
+
+    if (gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_COPY,
+            nullptr, failing.get(), &blob, &error) != GFNT_OK) {
+      continue;
+    }
+    if (gfnt_face_load(blob, 0, nullptr, failing.get(), &face, &error)
+        != GFNT_OK) {
+      gfnt_blob_destroy(blob);
+      continue;
+    }
+    GFNT_BitmapGlyph glyph{};
+    const GFNT_Result result =
+        gfnt_face_glyph_bitmap(face, 1, 0, &glyph, &error);
+    EXPECT_TRUE(result == GFNT_OK || result == GFNT_ERR_OOM)
+        << "request " << at << ": " << error.message;
+    if (result != GFNT_OK) {
+      ++refused;
+    }
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+    EXPECT_EQ(failing.live(), 0u) << "request " << at;
+  }
+  // The denominator: a sweep where no allocation was ever refused would pass
+  // without entering a single error arm.
+  EXPECT_GT(refused, 0u) << "no allocation was refused, so this proved nothing";
 }
 
 TEST(Eblc, AnEblcWithNoEbdtIsStrikesNobodyCanRead) {
@@ -1079,84 +2263,6 @@ TEST(Eblc, AnEblcThatListsNoStrikesIsZeroRatherThanARefusal) {
   EXPECT_EQ(gfnt_face_strike_at(crafted.face, 0, &strike, nullptr),
       GFNT_ERR_INVALID);
 }
-
-/**
- * An sfnt whose `EBLC` is these bytes, with an `EBDT` beside it.
- *
- * The pair is what makes the strike list readable at all, so a test about the
- * *list* needs an `EBDT` it never looks at - four bytes of version is enough, and
- * the one test about the missing half builds the font without this helper.
- */
-std::string eblc_font(const std::vector<uint8_t> & eblc) {
-  std::vector<gfnttest::Table> tables;
-  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
-  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'), eblc});
-  tables.push_back({GFNT_TAG('E', 'B', 'D', 'T'),
-      std::vector<uint8_t>{0, 2, 0, 0}});
-  const std::vector<uint8_t> bytes =
-      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
-  return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
-}
-
-/**
- * One `bitmapSizeTable`, every field a parameter so a test can spoil one.
- *
- * Written here rather than copied from the generator because what these tests
- * need is a field at a time *wrong*, and a generator that could produce those
- * would be a generator with no opinion about what a font is.
- */
-std::vector<uint8_t> size_table(uint32_t index_offset, uint32_t index_size,
-    uint32_t subtables, uint16_t first, uint16_t last, uint8_t ppem_x,
-    uint8_t ppem_y, uint8_t depth, int8_t flags, int8_t ascender = 6,
-    int8_t descender = -1) {
-  std::vector<uint8_t> out;
-  gfnttest::put_u32(out, index_offset);
-  gfnttest::put_u32(out, index_size);
-  gfnttest::put_u32(out, subtables);
-  gfnttest::put_u32(out, 0); // colorRef
-  for (int direction = 0; direction < 2; ++direction) {
-    // Horizontal first, then vertical. The vertical pair is zeros, which is what
-    // the population states and what makes a reader taking the wrong one visible.
-    const int8_t asc = direction == 0 ? ascender : 0;
-    const int8_t desc = direction == 0 ? descender : 0;
-    gfnttest::put_u8(out, (uint8_t)asc);
-    gfnttest::put_u8(out, (uint8_t)desc);
-    for (int i = 0; i < 10; ++i) {
-      gfnttest::put_u8(out, 0);
-    }
-  }
-  gfnttest::put_u16(out, first);
-  gfnttest::put_u16(out, last);
-  gfnttest::put_u8(out, ppem_x);
-  gfnttest::put_u8(out, ppem_y);
-  gfnttest::put_u8(out, depth);
-  gfnttest::put_u8(out, (uint8_t)flags);
-  return out;
-}
-
-/**
- * An `EBLC` header, @p count size tables, then an index region.
- *
- * The region is eight bytes of nothing and exists only so that a size table's
- * `indexSubTableArrayOffset` can point *inside* the table. Nothing in this commit
- * reads it - but every strike has to clear the one check that is made on the
- * offset, or a test aimed at some other field is refused for this one instead,
- * and would pass while asserting the wrong sentence.
- */
-std::vector<uint8_t> eblc_header(uint32_t version, uint32_t count,
-    const std::vector<uint8_t> & body = {}) {
-  std::vector<uint8_t> out;
-  gfnttest::put_u32(out, version);
-  gfnttest::put_u32(out, count);
-  out.insert(out.end(), body.begin(), body.end());
-  for (int i = 0; i < 8; ++i) {
-    gfnttest::put_u8(out, 0);
-  }
-  return out;
-}
-
-/** The offset a one-strike EBLC's index region starts at: header plus one table. */
-constexpr uint32_t kOneStrikeIndexBase = 8 + 48;
 
 TEST(Eblc, EveryWayAStrikeTableCanContradictItselfIsRefused) {
   // One field wrong at a time, each with the arm it is supposed to reach. Nine
@@ -1261,6 +2367,29 @@ TEST(Eblc, AStrikeTableCutShortIsRefusedWhereverItRanOut) {
   }
   EXPECT_EQ(refused, whole.size()) << "every length from nothing to one byte "
       "short, and a bitmapSizeTable is 48 bytes";
+}
+
+TEST(Eblc, AGreyStrikeIsListedAndItsGlyphsAreRefused) {
+  // The strike *list* reports a grey strike honestly, because that is what the
+  // table says it is. Its glyph data is refused by name, because every row in this
+  // library is one bit per pixel - and the two answers have to be different, or a
+  // caller gets pixels that mean something other than coverage.
+  Crafted crafted(eblc_font(eblc_header(0x00020000, 1,
+      size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 12, 12, 4, 1))));
+  ASSERT_EQ(crafted.result, GFNT_OK);
+
+  GFNT_Strike strike{};
+  ASSERT_EQ(gfnt_face_strike_at(crafted.face, 0, &strike, nullptr), GFNT_OK);
+  EXPECT_EQ(strike.bit_depth, 4);
+  EXPECT_EQ(strike.kind, GFNT_GLYPH_BITMAP_GRAY);
+
+  GFNT_BitmapGlyph glyph{};
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &glyph, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(error.table, GFNT_TAG('E', 'B', 'D', 'T'));
+  EXPECT_NE(std::string(error.message).find("one bit per pixel"),
+      std::string::npos) << error.message;
 }
 
 TEST(Eblc, GreyDepthsAreGreyGlyphsAndOneBitIsMono) {
@@ -1472,76 +2601,6 @@ TEST(Eblc, ADirectoryEntryThatLeavesTheFileFailsTheLoadAndNotTheParse) {
   EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT);
   EXPECT_EQ(crafted.face, nullptr);
 }
-
-/**
- * An allocator that counts, safely, from several threads at once.
- *
- * `gfnttest::FailingAllocator` counts with plain `size_t` members, which is right
- * for every other sweep in this suite and wrong here: eight threads incrementing
- * it lose updates, and the first version of the race test below read a live count
- * of **-1** with the code correct and a live count of 7 with it broken, both from
- * the same unsynchronised counter. Neither number meant anything.
- */
-class ThreadSafeCounter {
-public:
-  ThreadSafeCounter() {
-    allocator_.ctx = this;
-    allocator_.malloc_fn = &ThreadSafeCounter::malloc_fn;
-    allocator_.calloc_fn = &ThreadSafeCounter::calloc_fn;
-    allocator_.realloc_fn = &ThreadSafeCounter::realloc_fn;
-    allocator_.free_fn = &ThreadSafeCounter::free_fn;
-  }
-
-  const GFNT_Allocator * get() const { return &allocator_; }
-
-  /** Blocks allocated and not yet freed. Zero at the end, or something leaked. */
-  long live() const { return live_.load(); }
-  /** How many allocations were served, for a denominator. */
-  long requests() const { return requests_.load(); }
-
-private:
-  static void * malloc_fn(void * ctx, size_t size) {
-    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
-    void * block = malloc(size);
-    if (block) {
-      ++self->requests_;
-      ++self->live_;
-    }
-    return block;
-  }
-
-  static void * calloc_fn(void * ctx, size_t count, size_t size) {
-    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
-    void * block = calloc(count, size);
-    if (block) {
-      ++self->requests_;
-      ++self->live_;
-    }
-    return block;
-  }
-
-  static void * realloc_fn(void * ctx, void * block, size_t size) {
-    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
-    void * grown = realloc(block, size);
-    if (grown && !block) {
-      ++self->requests_;
-      ++self->live_;
-    }
-    return grown;
-  }
-
-  static void free_fn(void * ctx, void * block) {
-    ThreadSafeCounter * self = static_cast<ThreadSafeCounter *>(ctx);
-    if (block) {
-      --self->live_;
-    }
-    free(block);
-  }
-
-  GFNT_Allocator allocator_{};
-  std::atomic<long> live_{0};
-  std::atomic<long> requests_{0};
-};
 
 TEST(Eblc, RacingThreadsLeakNothingWhenOneLosesThePublication) {
   // The EBLC memo is the first one in this library that is **both** parsed lazily

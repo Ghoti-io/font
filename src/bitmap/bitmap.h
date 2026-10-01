@@ -57,6 +57,7 @@
 #include <ghoti.io/font/bitmap.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
+#include <stdbool.h>
 #include "../reader/reader.h"
 
 #ifdef __cplusplus
@@ -94,6 +95,32 @@ extern "C" {
 #define GFNT_BITMAP_NO_STRING ((size_t)-1)
 
 /**
+ * Whether a strike carries a glyph, and whether its bytes made sense.
+ *
+ * Three states and not two, because M11 is a policy of this library: per-glyph
+ * corruption is per glyph, so one unreadable glyph must not condemn the strike it
+ * is in - a face with one bad `loca` entry loads and answers for every other
+ * glyph, and a strike works the same way.
+ *
+ * Zero is ::GFNT_BITMAP_ABSENT so that a zeroed record is an absent one, which is
+ * what ::gfnt_bitmap_build_absent() relies on.
+ *
+ * A standalone container has no absent glyphs - the file *is* the glyph list - and
+ * no corrupt ones either: it refuses the whole file rather than one glyph of it,
+ * because its glyph count comes from the same bytes as its glyphs. Both of the
+ * other states belong to `EBLC`, where a strike is sparse over a glyph count that
+ * came from `maxp`.
+ */
+typedef enum {
+  /** This strike has no bitmap for the glyph. Not an error; another may.    */
+  GFNT_BITMAP_ABSENT = 0,
+  /** The glyph is here and was read.                                        */
+  GFNT_BITMAP_PRESENT,
+  /** The strike claims the glyph and its bytes do not make sense (M11).     */
+  GFNT_BITMAP_CORRUPT
+} GFNT_BitmapPresence;
+
+/**
  * One glyph: where its rows are, how big its box is, and where the box sits.
  *
  * `offset` indexes ::GFNT_BitmapFont::pixels, which holds every glyph's rows
@@ -110,6 +137,17 @@ typedef struct GFNT_BitmapRecord {
   int32_t bearing_y;  ///< Top row's edge above the baseline, y-up.
   int32_t advance;    ///< Pen movement, pixels.
   size_t name;        ///< Offset into `text`, or ::GFNT_BITMAP_NO_STRING.
+  GFNT_BitmapPresence presence; ///< Whether this strike has the glyph, and readably.
+  /**
+   * Why a ::GFNT_BITMAP_CORRUPT glyph is corrupt, or NULL.
+   *
+   * Every diagnostic in this library is a string literal, so keeping one per glyph
+   * costs a pointer and no allocation - and without it a per-glyph refusal would
+   * report "something was wrong with this glyph" where the parse knew exactly
+   * what. The first version lost that, and the test table that asserts nine
+   * different sentences collapsed to nine copies of one.
+   */
+  const char * reason;
 } GFNT_BitmapRecord;
 
 /** One codepoint the font maps, and the glyph it maps to. */
@@ -301,6 +339,59 @@ GFNT_Result gfnt_bitmap_build_glyph(GFNT_BitmapBuild * build,
     GFNT_Error * error);
 
 /**
+ * Add a glyph this strike does not carry.
+ *
+ * Only an `EBLC` strike has these: it is sparse over the face's glyph count, and
+ * the records are indexed by the face's glyph id so that a lookup needs no
+ * translation. The record is zeroed with ::GFNT_BitmapRecord::present false.
+ */
+GFNT_Result gfnt_bitmap_build_absent(GFNT_BitmapBuild * build,
+    GFNT_Error * error);
+
+/**
+ * Add a glyph the strike claims and whose bytes do not make sense.
+ *
+ * M11: the refusal is recorded against *that glyph* and the rest of the strike
+ * still answers. ::gfnt_face_glyph_bitmap() returns ::GFNT_ERR_CORRUPT for it.
+ */
+GFNT_Result gfnt_bitmap_build_corrupt(GFNT_BitmapBuild * build,
+    const char * reason, GFNT_Error * error);
+
+/**
+ * Unpack bit-aligned rows into byte-aligned ones.
+ *
+ * `EBDT`'s image formats split on exactly this: 2, 5, 7 and 9 pack the next row
+ * at the next *bit*, where 1, 6 and 8 start each row on a byte. Everything above
+ * this file wants byte-aligned rows (`bitmap.h` promises them), and
+ * ::gfnt_bitmap_build_glyph() takes them, so the bit-aligned formats are widened
+ * here first and then go through the same path as every other container.
+ *
+ * @param out Receives `height * ((width + 7) / 8)` bytes, padding bits zero.
+ * @param source The packed bits, MSB-first, starting at the first pixel.
+ * @param available How many bytes of @p source may be read.
+ * @param width Pixels per row.
+ * @param height Rows.
+ * @return false when @p available does not hold `width * height` bits.
+ */
+bool gfnt_bitmap_widen_rows(uint8_t * out, const uint8_t * source,
+    size_t available, uint32_t width, uint32_t height);
+
+/**
+ * Borrow the builder's scratch row buffer, grown to @p bytes.
+ *
+ * The builder already keeps one for the normalisation, sized to the widest source
+ * row it has seen. `EBDT`'s bit-aligned formats need a whole glyph's worth rather
+ * than a row's, and they need it *before* calling
+ * ::gfnt_bitmap_build_glyph() - so the buffer is shared rather than allocated per
+ * glyph, which for a 27,000-glyph strike is 27,000 allocations saved.
+ *
+ * The pointer is valid until the next call to this or to
+ * ::gfnt_bitmap_build_glyph(), both of which may grow it.
+ */
+GFNT_Result gfnt_bitmap_build_rows(GFNT_BitmapBuild * build, size_t bytes,
+    uint8_t ** out_rows, GFNT_Error * error);
+
+/**
  * Map @p codepoint to @p glyph.
  *
  * Order does not matter; the map is sorted when the build finishes.
@@ -397,18 +488,22 @@ GFNT_Result gfnt_bitmap_string_for(const GFNT_Face * face,
 bool gfnt_pcf_looks_like(const GFNT_Reader * blob);
 GFNT_Result gfnt_pcf_directory(GFNT_Face * face, GFNT_Error * error);
 GFNT_Result gfnt_pcf_parse(const GFNT_Face * face, void * out_font,
+    void * context,
     GFNT_Error * error);
 
 bool gfnt_psf_looks_like(const GFNT_Reader * blob);
 GFNT_Result gfnt_psf_parse(const GFNT_Face * face, void * out_font,
+    void * context,
     GFNT_Error * error);
 
 bool gfnt_bdf_looks_like(const GFNT_Reader * blob);
 GFNT_Result gfnt_bdf_parse(const GFNT_Face * face, void * out_font,
+    void * context,
     GFNT_Error * error);
 
 bool gfnt_hex_looks_like(const GFNT_Reader * blob);
 GFNT_Result gfnt_hex_parse(const GFNT_Face * face, void * out_font,
+    void * context,
     GFNT_Error * error);
 
 #ifdef __cplusplus

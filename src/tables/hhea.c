@@ -32,7 +32,11 @@
 #include "tables.h"
 
 GFNT_Result gfnt_hhea_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   static const GFNT_Tag tag = GFNT_TAG('h', 'h', 'e', 'a');
   GFNT_Hhea * hhea = out;
   GFNT_Reader reader;

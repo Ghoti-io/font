@@ -44,10 +44,16 @@ extern "C" {
  *
  * @param face The face, whose limits and blob the parser reads.
  * @param out Where the parsed table goes; each parser knows its own type.
+ * @param context Whatever the caller passed, or NULL. One table per face needs
+ *   nothing here and every parser but one ignores it; an `EBLC` strike's glyphs
+ *   are **one memo per strike**, and the parser has to be told which. Passing it
+ *   through is what keeps that from being a second copy of the lock dance below,
+ *   or a value smuggled in through @p out that the memo contract does not
+ *   describe.
  * @param error Receives a diagnostic on failure, or NULL.
  */
 typedef GFNT_Result (*GFNT_TableParse)(const GFNT_Face * face, void * out,
-    GFNT_Error * error);
+    void * context, GFNT_Error * error);
 
 /**
  * Release what a parse allocated into @p table.
@@ -96,6 +102,7 @@ typedef void (*GFNT_TableRelease)(const GFNT_Allocator * allocator,
  *   any knowledge of the types it copies.
  * @param size `sizeof` that type.
  * @param parse The parser to run on the first call.
+ * @param context Handed to @p parse unchanged; NULL for a table there is one of.
  * @param release How to free what a parse allocated, or NULL for a memo that
  *   owns nothing. **Not optional for a memo that does**: see
  *   ::GFNT_TableRelease. The duplicate parse two threads can perform is
@@ -106,19 +113,23 @@ typedef void (*GFNT_TableRelease)(const GFNT_Allocator * allocator,
  */
 GFNT_Result gfnt_table_cached(const GFNT_Face * face, GFNT_Cached * state,
     void * storage, void * scratch, size_t size, GFNT_TableParse parse,
-    GFNT_TableRelease release, GFNT_Error * error);
+    void * context, GFNT_TableRelease release, GFNT_Error * error);
 
 /** The `head` parser, for ::gfnt_table_cached(). */
 GFNT_Result gfnt_head_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error);
 /** The `hhea` parser, for ::gfnt_table_cached(). */
 GFNT_Result gfnt_hhea_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error);
 /** The `OS/2` parser, for ::gfnt_table_cached(). */
 GFNT_Result gfnt_os2_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error);
 /** The `post` parser, for ::gfnt_table_cached(). */
 GFNT_Result gfnt_post_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error);
 
 /**

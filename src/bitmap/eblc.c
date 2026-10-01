@@ -32,6 +32,7 @@
 
 #include <ghoti.io/font/macros.h>
 #include <inttypes.h>
+#include <ghoti.io/cutil/safemath.h>
 #include <string.h>
 #include "../tables/tables.h"
 #include "eblc.h"
@@ -179,7 +180,11 @@ static GFNT_Result gfnt_eblc_read_strike(const GFNT_Face * face,
 }
 
 GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   GFNT_Eblc * eblc = out;
   GFNT_Reader reader;
   GFNT_Result result;
@@ -228,7 +233,13 @@ GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
 
   eblc->strikes = face->allocator->calloc_fn(face->allocator->ctx, count,
       sizeof *eblc->strikes);
-  if (!eblc->strikes) {
+  eblc->strike_states = face->allocator->calloc_fn(face->allocator->ctx, count,
+      sizeof *eblc->strike_states);
+  eblc->strike_glyphs = face->allocator->calloc_fn(face->allocator->ctx, count,
+      sizeof *eblc->strike_glyphs);
+  if (!eblc->strikes || !eblc->strike_states || !eblc->strike_glyphs) {
+    // strike_count stays zero until all three are there, so a release of this
+    // half-built struct frees the arrays and walks no glyph memo.
     return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_EBLC, 0,
         GFNT_GLYPH_NONE, "no memory for the EBLC strike list");
   }
@@ -250,8 +261,18 @@ void gfnt_eblc_release(const GFNT_Allocator * allocator, void * table) {
   if (!allocator || !eblc) {
     return;
   }
+  // Each strike's glyphs are a bitmap font of their own, with arenas of their
+  // own, parsed only if something asked for that strike - so most of these are
+  // zeroed structs and the release of one is a no-op.
+  for (size_t i = 0; i < eblc->strike_count; ++i) {
+    gfnt_bitmap_release(allocator, &eblc->strike_glyphs[i]);
+  }
+  allocator->free_fn(allocator->ctx, eblc->strike_glyphs);
+  allocator->free_fn(allocator->ctx, eblc->strike_states);
   allocator->free_fn(allocator->ctx, eblc->strikes);
   eblc->strikes = NULL;
+  eblc->strike_states = NULL;
+  eblc->strike_glyphs = NULL;
   eblc->strike_count = 0;
 }
 
@@ -279,12 +300,327 @@ GFNT_Result gfnt_face_eblc(const GFNT_Face * face, const GFNT_Eblc ** out_eblc,
         "the face has no EBLC with an EBDT to go with it");
   }
   result = gfnt_table_cached(face, &((GFNT_Face *)face)->eblc_state,
-      &((GFNT_Face *)face)->eblc, &scratch, sizeof scratch, gfnt_eblc_parse,
+      &((GFNT_Face *)face)->eblc, &scratch, sizeof scratch, gfnt_eblc_parse, NULL,
       gfnt_eblc_release, error);
   if (result != GFNT_OK) {
     return result;
   }
   *out_eblc = &face->eblc;
+  return GFNT_OK;
+}
+
+/** Bytes in an `indexSubTableArray` entry: two glyph ids and an offset. */
+#define GFNT_EBLC_ARRAY_ENTRY_BYTES 8u
+
+/** Bytes in an `indexSubHeader`: two formats and an `EBDT` offset. */
+#define GFNT_EBLC_SUBHEADER_BYTES 8u
+
+/** Bytes in a `BigGlyphMetrics`. `SmallGlyphMetrics` is its first five. */
+#define GFNT_EBLC_BIG_METRICS_BYTES 8u
+
+/**
+ * Read a `BigGlyphMetrics`, keeping the horizontal five.
+ *
+ * The three vertical bytes are skipped rather than stored, for the reason
+ * ::GFNT_EblcMetrics gives: nothing reads a vertical advance, and a field parsed
+ * but unread is one a differential can compare without either side meaning it.
+ */
+static GFNT_Result gfnt_eblc_read_big_metrics(GFNT_Reader * reader,
+    GFNT_EblcMetrics * out) {
+  if (gfnt_read_u8(reader, &out->height) != GFNT_OK
+      || gfnt_read_u8(reader, &out->width) != GFNT_OK
+      || gfnt_read_s8(reader, &out->bearing_x) != GFNT_OK
+      || gfnt_read_s8(reader, &out->bearing_y) != GFNT_OK
+      || gfnt_read_u8(reader, &out->advance) != GFNT_OK
+      || gfnt_reader_skip(reader, 3) != GFNT_OK) {
+    return GFNT_ERR_CORRUPT;
+  }
+  return GFNT_OK;
+}
+
+/** Whether this library reads glyph data in this image format. */
+static bool gfnt_ebdt_format_known(uint16_t format) {
+  switch (format) {
+    case 1: // small metrics, byte-aligned
+    case 2: // small metrics, bit-aligned
+    case 5: // metrics in EBLC, bit-aligned
+    case 6: // big metrics, byte-aligned
+    case 7: // big metrics, bit-aligned
+      return true;
+    default:
+      // 3 and 4 the specification itself calls obsolete - 4 is a compressed form
+      // nothing has written for decades - and 8 and 9 are the composites, which
+      // reference other glyphs and are their own piece of work. None of them is
+      // corrupt, and each is a font this library declines rather than misreads.
+      return false;
+  }
+}
+
+/**
+ * Whether an image format takes its metrics from the index rather than the data.
+ *
+ * Format 5 only, and it is the **reason index formats 2 and 5 exist**: they state
+ * one `BigGlyphMetrics` for every glyph they cover, so the glyph data is nothing
+ * but rows. A format 5 subtable indexed by any other format states metrics
+ * nowhere, which is a font that cannot be read rather than one that is corrupt.
+ */
+static bool gfnt_ebdt_metrics_from_index(uint16_t image_format) {
+  return image_format == 5;
+}
+
+/** Whether an index format states a constant size and metrics. */
+static bool gfnt_eblc_index_is_constant(uint16_t index_format) {
+  return index_format == 2 || index_format == 5;
+}
+
+GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
+    const GFNT_EblcStrike * strike, GFNT_EblcSubtable ** out_subtables,
+    size_t * out_count, GFNT_Error * error) {
+  GFNT_Reader table;
+  GFNT_EblcSubtable * subtables = NULL;
+  GFNT_Result result;
+  size_t count = strike->index_subtable_count;
+
+  *out_subtables = NULL;
+  *out_count = 0;
+
+  result = gfnt_face_table_reader(face, GFNT_TAG_EBLC, &table, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (count == 0) {
+    // A strike that lists no index subtables carries no glyphs. Well formed, and
+    // the glyph parse below simply marks every glyph absent.
+    return GFNT_OK;
+  }
+  // The same ceiling the glyph count gets: a subtable per glyph is the most a
+  // well-formed strike can need, and a strike claiming more is claiming subtables
+  // that cannot each cover a glyph.
+  if (count > face->limits.max_glyphs) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_EBLC, 0,
+        GFNT_GLYPH_NONE,
+        "more EBLC index subtables than GFNT_Limits::max_glyphs");
+  }
+
+  subtables = face->allocator->calloc_fn(face->allocator->ctx, count,
+      sizeof *subtables);
+  if (!subtables) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_EBLC, 0,
+        GFNT_GLYPH_NONE, "no memory for an EBLC strike's index");
+  }
+
+  for (size_t i = 0; i < count; ++i) {
+    GFNT_EblcSubtable * entry = &subtables[i];
+    GFNT_Reader at = table;
+    uint32_t additional = 0;
+    size_t array_at;
+
+    // indexSubTableArrayOffset is from the start of EBLC, and
+    // additionalOffsetToIndexSubtable is from the start of *that array* - not from
+    // EBLC and not from the entry. Two bases, one of which is itself an offset.
+    if (!gcu_safe_mul_size(i, GFNT_EBLC_ARRAY_ENTRY_BYTES, &array_at)
+        || !gcu_safe_add_size(array_at, strike->index_array_offset, &array_at)) {
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, 0,
+          GFNT_GLYPH_NONE, "an EBLC index array that does not fit a size_t");
+      goto failed;
+    }
+    if (gfnt_reader_seek(&at, array_at) != GFNT_OK
+        || gfnt_read_u16(&at, &entry->first_glyph) != GFNT_OK
+        || gfnt_read_u16(&at, &entry->last_glyph) != GFNT_OK
+        || gfnt_read_u32(&at, &additional) != GFNT_OK) {
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, array_at,
+          GFNT_GLYPH_NONE,
+          "an EBLC indexSubTableArray entry past the end of the table");
+      goto failed;
+    }
+    if (entry->last_glyph < entry->first_glyph) {
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, array_at,
+          GFNT_GLYPH_NONE,
+          "an EBLC index subtable whose glyph range runs backwards");
+      goto failed;
+    }
+
+    if (!gcu_safe_add_size(strike->index_array_offset, additional,
+            &entry->body_offset)) {
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, array_at,
+          GFNT_GLYPH_NONE, "an EBLC subtable offset that does not fit a size_t");
+      goto failed;
+    }
+    if (gfnt_reader_seek(&at, entry->body_offset) != GFNT_OK
+        || gfnt_read_u16(&at, &entry->index_format) != GFNT_OK
+        || gfnt_read_u16(&at, &entry->image_format) != GFNT_OK
+        || gfnt_read_u32(&at, &entry->image_data_offset) != GFNT_OK) {
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC,
+          entry->body_offset, GFNT_GLYPH_NONE,
+          "an EBLC indexSubHeader past the end of the table");
+      goto failed;
+    }
+    entry->body_offset += GFNT_EBLC_SUBHEADER_BYTES;
+
+    if (entry->index_format < 1 || entry->index_format > 5) {
+      result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBLC,
+          entry->body_offset, GFNT_GLYPH_NONE,
+          "an EBLC index subtable format the specification does not define");
+      goto failed;
+    }
+    if (!gfnt_ebdt_format_known(entry->image_format)) {
+      result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBDT,
+          entry->body_offset, GFNT_GLYPH_NONE,
+          "an EBDT image format this library does not read - 3 and 4 the "
+          "specification calls obsolete, and 8 and 9 are the composites");
+      goto failed;
+    }
+    if (gfnt_ebdt_metrics_from_index(entry->image_format)
+        && !gfnt_eblc_index_is_constant(entry->index_format)) {
+      // Image format 5 states no metrics of its own, so the index has to - and
+      // only formats 2 and 5 do. This pairing is the one cross-check between the
+      // two tables that a font can fail while both halves look well formed on
+      // their own.
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC,
+          entry->body_offset, GFNT_GLYPH_NONE,
+          "an EBDT image format 5, whose metrics are the index's, under an index "
+          "format that states none");
+      goto failed;
+    }
+
+    if (gfnt_eblc_index_is_constant(entry->index_format)) {
+      if (gfnt_read_u32(&at, &entry->image_size) != GFNT_OK
+          || gfnt_eblc_read_big_metrics(&at, &entry->metrics) != GFNT_OK) {
+        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC,
+            entry->body_offset, GFNT_GLYPH_NONE,
+            "an EBLC index subtable too short for its constant metrics");
+        goto failed;
+      }
+    }
+    if (entry->index_format == 4 || entry->index_format == 5) {
+      if (gfnt_read_u32(&at, &entry->sparse_count) != GFNT_OK) {
+        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC,
+            entry->body_offset, GFNT_GLYPH_NONE,
+            "an EBLC sparse index subtable with no glyph count");
+        goto failed;
+      }
+      if (entry->sparse_count > face->limits.max_glyphs) {
+        result = gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_EBLC,
+            entry->body_offset, GFNT_GLYPH_NONE,
+            "an EBLC index subtable listing more glyphs than "
+            "GFNT_Limits::max_glyphs");
+        goto failed;
+      }
+    }
+  }
+
+  *out_subtables = subtables;
+  *out_count = count;
+  return GFNT_OK;
+
+failed:
+  face->allocator->free_fn(face->allocator->ctx, subtables);
+  return result;
+}
+
+/** The context ::gfnt_eblc_strike_parse() is handed: which strike to read. */
+typedef struct GFNT_EblcStrikeRequest {
+  size_t index;
+} GFNT_EblcStrikeRequest;
+
+static GFNT_Result gfnt_eblc_strike_parse(const GFNT_Face * face, void * out,
+    void * context, GFNT_Error * error) {
+  const GFNT_EblcStrikeRequest * request = context;
+  GFNT_BitmapFont * font = out;
+  const GFNT_Eblc * eblc = NULL;
+  const GFNT_EblcStrike * strike;
+  GFNT_EblcSubtable * subtables = NULL;
+  size_t subtable_count = 0;
+  GFNT_BitmapBuild * build = NULL;
+  GFNT_Result result;
+  size_t glyphs = 0;
+
+  // Zeroed before anything can return: gfnt_table_cached() copies this scratch
+  // into the memo whatever comes back, and the memo is what the face frees.
+  memset(font, 0, sizeof *font);
+
+  result = gfnt_face_eblc(face, &eblc, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (request->index >= eblc->strike_count) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_TAG_EBLC, 0,
+        GFNT_GLYPH_NONE, "a strike index the face does not have");
+  }
+  strike = &eblc->strikes[request->index];
+
+  if (strike->bit_depth != 1) {
+    // Checked here rather than in ebdt.c, and before anything else, so that a grey
+    // strike costs nothing: not the glyph count, not the index, not an arena.
+    //
+    // The strike *list* reports such a strike honestly - its depth and
+    // ::GFNT_GLYPH_BITMAP_GRAY - because that is what the table says it is. Its
+    // glyph data is another matter: every row in this library is one bit per
+    // pixel, from ::GFNT_BitmapRecord::stride through gfnt_bitmap_widen_rows() to
+    // gfnt_coverage_from_bitmap(), so two or four bits per pixel is a change to
+    // all of them rather than an arm in the reader. Refused by name, so that a
+    // caller is not handed a glyph whose pixels mean something other than
+    // coverage.
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBDT, 0,
+        GFNT_GLYPH_NONE,
+        "a grey EBDT strike, whose glyph data this library does not unpack - "
+        "every row it handles is one bit per pixel");
+  }
+
+  result = gfnt_face_num_glyphs(face, &glyphs, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+
+  result = gfnt_eblc_strike_index(face, strike, &subtables, &subtable_count,
+      error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+
+  result = gfnt_bitmap_build_start(&build, face, GFNT_TAG_EBDT, glyphs, error);
+  if (result != GFNT_OK) {
+    face->allocator->free_fn(face->allocator->ctx, subtables);
+    return result;
+  }
+  *gfnt_bitmap_build_strike(build) = strike->strike;
+
+  result = gfnt_ebdt_read_strike(face, strike, subtables, subtable_count, build,
+      error);
+  face->allocator->free_fn(face->allocator->ctx, subtables);
+  gfnt_bitmap_build_finish(build, font, result == GFNT_OK);
+  return result;
+}
+
+GFNT_Result gfnt_eblc_strike_glyphs(const GFNT_Face * face, size_t strike,
+    const GFNT_BitmapFont ** out_font, GFNT_Error * error) {
+  GFNT_Face * owner = (GFNT_Face *)face;
+  const GFNT_Eblc * eblc = NULL;
+  GFNT_EblcStrikeRequest request;
+  GFNT_BitmapFont scratch;
+  GFNT_Result result;
+
+  if (!face || !out_font) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no face, or nowhere to put the strike");
+  }
+  result = gfnt_face_eblc(face, &eblc, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (strike >= eblc->strike_count) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_TAG_EBLC, 0,
+        GFNT_GLYPH_NONE, "a strike index the face does not have");
+  }
+
+  request.index = strike;
+  result = gfnt_table_cached(face, &owner->eblc.strike_states[strike],
+      &owner->eblc.strike_glyphs[strike], &scratch, sizeof scratch,
+      gfnt_eblc_strike_parse, &request, gfnt_bitmap_release, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  *out_font = &owner->eblc.strike_glyphs[strike];
   return GFNT_OK;
 }
 

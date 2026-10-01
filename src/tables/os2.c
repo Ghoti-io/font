@@ -47,7 +47,11 @@
 static const size_t gfnt_os2_lengths[] = {78, 86, 96, 96, 96, 100};
 
 GFNT_Result gfnt_os2_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   static const GFNT_Tag tag = GFNT_TAG('O', 'S', '/', '2');
   GFNT_Os2 * os2 = out;
   GFNT_Reader reader;

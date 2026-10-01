@@ -57,6 +57,9 @@ struct Expected {
   /** The reason, for a line that records a refusal. */
   std::string refused;
 
+  /** Whether this line is a strike's pixels, from the file's own section. */
+  bool strike = false;
+
   std::string where() const {
     return fixture + " glyph " + std::to_string(glyph) + " at "
         + std::to_string(ppem) + "ppem, origin " + std::to_string(origin_x)
@@ -73,12 +76,23 @@ std::vector<Expected> golden() {
     return out;
   }
   char line[512];
+  bool strikes = false;
   while (fgets(line, sizeof line, handle)) {
     if (line[0] == '#' || line[0] == '\n') {
+      // The file's own section marker, which is what says whether a line is a
+      // rasterised outline or a strike's pixels. It used to be guessed from the
+      // fixture's extension - right while every strike was a `.pcf`, `.bdf`,
+      // `.psf` or `.hex`, and wrong the moment an sfnt with `EBLC` strikes had its
+      // pixels committed: a `.ttf` went down the outline path and the test
+      // compared a rasterised glyph against a strike's hash.
+      if (strncmp(line, "# And the bitmap containers", 27) == 0) {
+        strikes = true;
+      }
       continue;
     }
     std::istringstream reading(line);
     Expected entry;
+    entry.strike = strikes;
     std::string sixth;
     if (!(reading >> entry.fixture >> entry.glyph >> entry.ppem
             >> entry.origin_x >> entry.origin_y >> sixth)) {
@@ -158,19 +172,6 @@ TEST(Golden, TheCommittedFileIsThereAndHasRenderingsInIt) {
   EXPECT_LT(refusals, expected.size() / 2u);
 }
 
-/** Whether a fixture's glyphs are pixels rather than paths, by its format. */
-bool is_strike(const std::string & name) {
-  for (const char * extension : {".pcf", ".bdf", ".psf", ".hex"}) {
-    const size_t length = strlen(extension);
-
-    if (name.size() >= length
-        && name.compare(name.size() - length, length, extension) == 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
 TEST(Golden, EveryCommittedRenderingIsReproduced) {
   const std::vector<Expected> expected = golden();
   ASSERT_FALSE(expected.empty());
@@ -191,15 +192,42 @@ TEST(Golden, EveryCommittedRenderingIsReproduced) {
     options.origin_x = entry.origin_x;
     options.origin_y = entry.origin_y;
     // A strike's glyph is pixels, not a path, and reaches a coverage by the other
-    // route. Which route a line came from is decided by the fixture's format, as
-    // it is in tools/golden/check_golden.py, and for the same reason: the
-    // committed file is the contract and the extension is the format.
-    const bool strike = is_strike(entry.fixture);
+    // route. Which route a line came from is read out of the committed file's own
+    // section marker, as it is in tools/golden/check_golden.py and for the same
+    // reason: the file is the contract.
     GFNT_Result result;
-    if (strike) {
+    if (entry.strike) {
       GFNT_BitmapGlyph bitmap{};
+      // **Which strike** comes from the ppem column, which for a strike line is
+      // the strike's own size. A standalone container has one strike and this was
+      // `0`; an EBLC face has several, and taking strike 0 for all of them would
+      // compare 10-pixel pixels against a 16-pixel hash.
+      size_t strikes = 0;
+      size_t chosen = 0;
+      bool found = false;
 
-      result = gfnt_face_glyph_bitmap(font->face, entry.glyph, 0, &bitmap,
+      if (gfnt_face_strike_count(font->face, &strikes, nullptr) == GFNT_OK) {
+        for (size_t i = 0; i < strikes; ++i) {
+          GFNT_Strike candidate{};
+
+          if (gfnt_face_strike_at(font->face, i, &candidate, nullptr) == GFNT_OK
+              && candidate.ppem_y == entry.ppem) {
+            chosen = i;
+            found = true;
+            break;
+          }
+        }
+      }
+      // A refusal line has a ppem of 0 and matches no strike, which is right: the
+      // glyph is refused at strike 0 as readily as anywhere.
+      if (!found && !entry.refused.empty()) {
+        found = true;
+      }
+      ASSERT_TRUE(found) << entry.where()
+          << ": no strike of this fixture is that size, so the committed line "
+             "and the font disagree about what sizes it has";
+
+      result = gfnt_face_glyph_bitmap(font->face, entry.glyph, chosen, &bitmap,
           &error);
       if (result == GFNT_OK) {
         result = gfnt_coverage_from_bitmap(&bitmap, nullptr, &coverage, &error);

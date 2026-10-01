@@ -1085,7 +1085,11 @@ uint32_t gfnt_type1_glyph_for_name(const GFNT_Type1 * type1,
 }
 
 GFNT_Result gfnt_type1_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   GFNT_Type1 * type1 = out;
   GFNT_Type1Parse state;
   GFNT_Reader table;
@@ -1401,7 +1405,8 @@ GFNT_Result gfnt_face_type1(const GFNT_Face * face, const GFNT_Type1 ** out_type
     return GFNT_ERR_INVALID;
   }
   result = gfnt_table_cached(face, &owner->type1_state, &owner->type1, &scratch,
-      sizeof scratch, gfnt_type1_parse, gfnt_type1_release, error);
+      sizeof scratch, gfnt_type1_parse, NULL,
+      gfnt_type1_release, error);
   if (result == GFNT_OK) {
     *out_type1 = &owner->type1;
   }

@@ -37,7 +37,11 @@
 #define GFNT_HEAD_MAGIC 0x5F0F3CF5u
 
 GFNT_Result gfnt_head_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   static const GFNT_Tag tag = GFNT_TAG('h', 'e', 'a', 'd');
   GFNT_Head * head = out;
   GFNT_Reader reader;

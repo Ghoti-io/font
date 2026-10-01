@@ -125,7 +125,9 @@ WITH_OUTLINES = (
 # fixtures no two of these draw the same thing through the same code. The three
 # PCFs hold one design in three layouts, and that they agree is a unit test; that
 # each *reproduces* on a big-endian machine is this file.
-WITH_STRIKES = (
+# The standalone containers: a file that *is* a strike, and therefore has no
+# outlines at all.
+STANDALONE_STRIKES = (
     "bitmap.hex",
     "bitmap-wide.hex",
     "bitmap.psf",
@@ -135,6 +137,21 @@ WITH_STRIKES = (
     "bitmap.pcf",
     "bitmap-lsb.pcf",
     "bitmap-swap.pcf",
+)
+
+# Every fixture whose *pixels* are committed, which is the standalone containers
+# **and the sfnts with EBLC strikes**.
+#
+# Those two are why this is no longer the same tuple as NO_OUTLINES below. Until
+# `EBLC` landed, "has a strike" and "has no outlines" named the same set of
+# fixtures, and one tuple did both jobs. `strikes.ttf` has three strikes *and*
+# basic.ttf's five outlines; `strike-formats.ttf` has one strike and thirteen empty
+# ones. Collapsing the two meanings again would assert that a font with both draws
+# nothing, which is false, and the gate would fail for the right reason in a way
+# that reads as the wrong one.
+WITH_STRIKES = STANDALONE_STRIKES + (
+    "strikes.ttf",
+    "strike-formats.ttf",
 )
 
 # Fixtures that must render **nothing through the rasteriser**.
@@ -155,7 +172,7 @@ WITH_STRIKES = (
 # renderings would be `bitmap.pcf`'s under another name, and what needs saying about
 # it is about the gzip wrapper rather than about the pixels - which is
 # `test_bitmap.cpp`'s to say, as `bare.cff`'s equivalence is `test_cff.cpp`'s.
-NO_OUTLINES = ("bare-matrix.cff", "bitmap-gz.pcf.gz") + WITH_STRIKES
+NO_OUTLINES = ("bare-matrix.cff", "bitmap-gz.pcf.gz") + STANDALONE_STRIKES
 
 HEADER = """\
 # Every committed fixture's glyphs, rasterised.

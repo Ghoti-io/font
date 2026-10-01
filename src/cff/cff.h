@@ -202,6 +202,7 @@ const char * gfnt_cff_standard_encoding_name(uint8_t code);
  *   name; ::GFNT_ERR_CORRUPT; or ::GFNT_ERR_LIMIT.
  */
 GFNT_Result gfnt_cff_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error);
 
 /**

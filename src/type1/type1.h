@@ -189,6 +189,7 @@ GFNT_Result gfnt_type1_derive(GFNT_Face * face, GFNT_Error * error);
  *   ::GFNT_ERR_LIMIT or ::GFNT_ERR_OOM.
  */
 GFNT_Result gfnt_type1_parse(const GFNT_Face * face, void * out,
+    void * context,
     GFNT_Error * error);
 
 /** Release what a parse allocated. For the face's cache teardown. */

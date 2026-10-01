@@ -774,7 +774,11 @@ static GFNT_Result gfnt_pcf_glyph_names(const GFNT_Face * face,
 }
 
 GFNT_Result gfnt_pcf_parse(const GFNT_Face * face, void * out_font,
+    void * context,
     GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
   GFNT_BitmapFont * font = out_font;
   GFNT_BitmapBuild * build = NULL;
   GFNT_PcfMetric * metrics = NULL;

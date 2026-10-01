@@ -3062,7 +3062,199 @@ def build_strikes(out):
     fb.save(out)
 
 
+# The format cross-product. Index subtable format and image format are
+# independent axes - one says how to find a glyph's bytes, the other says what
+# those bytes are - and the real population exercises two cells of the grid out of
+# the thirty-five that exist. Every other cell's only evidence is here.
+
+STRIKE_FORMAT_ORDER = [".notdef"] + ["g%02d" % i for i in range(1, 13)]
+
+
+def eblc_small_metrics(height, width, bearing_x, bearing_y, advance):
+    """`SmallGlyphMetrics`: five bytes, no vertical pair."""
+    return struct.pack(">BBbbB", height, width, bearing_x, bearing_y, advance)
+
+
+def eblc_byte_rows(rows, width):
+    """Rows packed **byte-aligned**: each row starts on a byte."""
+    stride = (width + 7) // 8
+    out = bytearray()
+    for row in rows:
+        packed = bytearray(stride)
+        for column in range(width):
+            if column < len(row) and row[column] == "#":
+                packed[column // 8] |= 0x80 >> (column % 8)
+        out += packed
+    return bytes(out)
+
+
+def format_art(glyph, width, height):
+    """A glyph distinctive in both axes: a left edge, and a bar at row glyph % h."""
+    rows = []
+    for y in range(height):
+        if y == glyph % height:
+            rows.append("#" * width)
+        else:
+            rows.append("#" + "." * (width - 1))
+    return rows
+
+
+def build_strike_formats(out):
+    """One strike, six index/image format pairings, one subtable each.
+
+    Twelve glyphs in six pairs, so each cell of the grid owns a glyph range and a
+    test can name which pairing it is asserting. All six draw the **same design**
+    at the same size, which is the point: the bytes differ in every case and the
+    pixels must not, so a reader that gets an offset or an alignment wrong produces
+    a visible difference rather than a plausible one.
+
+    The pairings, and why each is here:
+
+      glyphs 1-2    index 1, image 1   4-byte offsets, small metrics, byte-aligned
+      glyphs 3-4    index 1, image 2   the same with **bit-aligned** rows
+      glyphs 5-6    index 3, image 6   2-byte offsets, big metrics, byte-aligned
+      glyphs 7-8    index 1, image 7   big metrics, bit-aligned
+      glyphs 9-10   index 4, image 2   a **sparse** glyph list, and glyph 10 absent
+      glyphs 11-12  index 5, image 5   sparse *and* constant metrics
+
+    Image format 6 is the one `mona.ttf` uses and fontTools cannot read; index
+    format 3 and the sparse formats appear nowhere in Debian at all.
+    """
+    # **Eleven by seven, and the width is the whole point.** At any width that is a
+    # multiple of eight, bit-aligned and byte-aligned rows are the *same bytes* - so
+    # a fixture of 8-pixel glyphs cannot tell a reader that routed image format 2 to
+    # the byte-aligned path from one that implemented the distinction. The first
+    # version of this fixture was 8 wide and a mutation swapping those two paths
+    # passed every test. Eleven bits a row means the second row starts mid-byte, and
+    # seven rows means the glyph does not end on one either.
+    width = 11
+    height = 7
+    advance = width + 2
+    # Its own cmap, over its own glyph names: unicode_cmap() names space, A and B,
+    # which this repertoire does not have.
+    mapping = {0x41 + i: name
+               for i, name in enumerate(STRIKE_FORMAT_ORDER[1:])}
+    fb = truetype("Strike Formats", [subtable(4, 3, 1, mapping)],
+                  order=STRIKE_FORMAT_ORDER,
+                  glyphs={name: raw_glyph([]) for name in STRIKE_FORMAT_ORDER},
+                  advances={name: 600 for name in STRIKE_FORMAT_ORDER})
+
+    ebdt = bytearray(struct.pack(">I", 0x00020000))
+    arrays = []
+    bodies = []
+
+    def art(glyph):
+        return format_art(glyph, width, height)
+
+    def small(glyph, aligned):
+        rows = (eblc_byte_rows(art(glyph), width) if aligned
+                else eblc_bit_rows(art(glyph), width))
+        return eblc_small_metrics(height, width, 1, height, advance) + rows
+
+    def big(glyph, aligned):
+        rows = (eblc_byte_rows(art(glyph), width) if aligned
+                else eblc_bit_rows(art(glyph), width))
+        return eblc_big_metrics(height, width, 1, height, advance) + rows
+
+    # --- glyphs 1-2: index 1, image 1. Offsets are from imageDataOffset, so the
+    # first is always 0 and the last is a sentinel past the final glyph.
+    data_at = len(ebdt)
+    offsets = [0]
+    for glyph in (1, 2):
+        ebdt += small(glyph, True)
+        offsets.append(len(ebdt) - data_at)
+    bodies.append((1, 2, struct.pack(">HHI", 1, 1, data_at)
+                   + b"".join(struct.pack(">I", o) for o in offsets)))
+
+    # --- glyphs 3-4: index 1, image 2. The same index format over bit-aligned
+    # rows, which is the pair that isolates the alignment axis.
+    data_at = len(ebdt)
+    offsets = [0]
+    for glyph in (3, 4):
+        ebdt += small(glyph, False)
+        offsets.append(len(ebdt) - data_at)
+    bodies.append((3, 4, struct.pack(">HHI", 1, 2, data_at)
+                   + b"".join(struct.pack(">I", o) for o in offsets)))
+
+    # --- glyphs 5-6: index 3, image 6. Offset16 rather than Offset32, and the
+    # array is padded to a long-word boundary when the count is odd.
+    data_at = len(ebdt)
+    offsets = [0]
+    for glyph in (5, 6):
+        ebdt += big(glyph, True)
+        offsets.append(len(ebdt) - data_at)
+    body = struct.pack(">HHI", 3, 6, data_at) + b"".join(
+        struct.pack(">H", o) for o in offsets)
+    if len(offsets) % 2:
+        body += b"\x00\x00"
+    bodies.append((5, 6, body))
+
+    # --- glyphs 7-8: index 1, image 7.
+    data_at = len(ebdt)
+    offsets = [0]
+    for glyph in (7, 8):
+        ebdt += big(glyph, False)
+        offsets.append(len(ebdt) - data_at)
+    bodies.append((7, 8, struct.pack(">HHI", 1, 7, data_at)
+                   + b"".join(struct.pack(">I", o) for o in offsets)))
+
+    # --- glyphs 9-10: index 4, image 2. The range covers both and the list names
+    # only glyph 9, so glyph 10 is **in range and absent** - the one state no
+    # non-sparse format can express, and the reason GFNT_BitmapRecord has a
+    # `present` field at all.
+    data_at = len(ebdt)
+    ebdt += small(9, False)
+    pairs = [(9, 0), (0xFFFF, len(ebdt) - data_at)]
+    bodies.append((9, 10, struct.pack(">HHI", 4, 2, data_at)
+                   + struct.pack(">I", 1)
+                   + b"".join(struct.pack(">HH", g, o) for g, o in pairs)))
+
+    # --- glyphs 11-12: index 5, image 5. Sparse *and* constant: the position in
+    # the glyph list multiplies imageSize, not the glyph's distance from
+    # firstGlyphIndex - which for a list that skips a glyph are different numbers.
+    data_at = len(ebdt)
+    image_size = (width * height + 7) // 8
+    for glyph in (11, 12):
+        packed = eblc_bit_rows(art(glyph), width)
+        assert len(packed) == image_size, (len(packed), image_size)
+        ebdt += packed
+    body = (struct.pack(">HHI", 5, 5, data_at)
+            + struct.pack(">I", image_size)
+            + eblc_big_metrics(height, width, 1, height, advance)
+            + struct.pack(">I", 2)
+            + struct.pack(">HH", 11, 12))
+    bodies.append((11, 12, body))
+
+    # The indexSubTableArray, then the bodies it points at. Every
+    # additionalOffsetToIndexSubtable is from the start of the array.
+    array_bytes = len(bodies) * 8
+    cursor = array_bytes
+    for first, last, body in bodies:
+        arrays.append(struct.pack(">HHI", first, last, cursor))
+        cursor += len(body)
+    region = b"".join(arrays) + b"".join(body for _, _, body in bodies)
+
+    base = 8 + 48
+    size_table = (struct.pack(">IIII", base, len(region), len(bodies), 0)
+                  + eblc_line_metrics(height, -1, advance)
+                  + eblc_line_metrics(0, 0, 0)
+                  + struct.pack(">HHBBBb", 1, 12, 12, 12, 1, 1))
+    eblc = struct.pack(">II", 0x00020000, 1) + size_table + region
+
+    set_raw_table(fb, "EBLC", eblc)
+    set_raw_table(fb, "EBDT", bytes(ebdt))
+    fb.save(out)
+
+
 FIXTURES = {
+    "strike-formats.ttf": (build_strike_formats,
+        "One EBLC strike whose six index subtables use six different index/image "
+        "format pairings - 4-byte and 2-byte offsets, sparse glyph lists, "
+        "constant metrics, small and big metrics, byte- and bit-aligned rows - all "
+        "drawing one design, so the bytes differ everywhere and the pixels must "
+        "not. Covers every cell of the grid the real population does not: image "
+        "format 6 appears only in files fontTools cannot read, and index formats "
+        "3, 4 and 5 appear nowhere in Debian"),
     "strikes.ttf": (build_strikes,
         "Three EBLC strikes - 10, 12 and 16 ppem - of four glyphs each, index "
         "subtable format 2 with image format 5, which is 97.8% of the index "

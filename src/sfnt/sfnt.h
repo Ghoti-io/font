@@ -42,6 +42,7 @@
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/metrics.h>
 #include "../bitmap/bitmap.h"
+#include "../bitmap/eblc.h"
 #include "../cff/cff.h"
 #include "../type1/type1.h"
 #include "../reader/reader.h"
@@ -155,6 +156,8 @@ struct GFNT_Face {
   GFNT_Type1 type1;
   GFNT_Cached bitmap_state;         ///< The strike of a standalone bitmap font.
   GFNT_BitmapFont bitmap;
+  GFNT_Cached eblc_state;           ///< `EBLC`'s strike list, parsed on first use.
+  GFNT_Eblc eblc;
 };
 
 /**

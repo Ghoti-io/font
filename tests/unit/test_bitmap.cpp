@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -47,6 +48,7 @@
 #include "sfnt_builder.h"
 
 #include "../../src/bitmap/bitmap.h"
+#include "../../src/bitmap/eblc.h"
 #include "../../src/blob/gzip.h"
 
 namespace {
@@ -858,6 +860,647 @@ TEST(Bitmap, StrikePoliciesResolveAgainstTheOneStrike) {
       GFNT_ERR_INVALID);
   EXPECT_NE(std::string(error.message).find("exactly one strike"),
       std::string::npos) << error.message;
+}
+
+// ---------------------------------------------------------------------------
+// EBLC: strikes inside an sfnt, and the first face with more than one.
+//
+// Everything above this line is a container that *is* a strike, so a strike index
+// was always 0 and "the nearest strike" was always the only strike. strikes.ttf
+// has three - 10, 12 and 16 ppem - and these are the tests that could not be
+// written before it existed.
+
+/** strikes.ttf, from tools/fixtures/make_fixtures.py. */
+constexpr uint32_t kStrikePpems[] = {10, 12, 16};
+constexpr size_t kStrikeCount = 3;
+
+TEST(Eblc, TheStrikeListIsEveryBitmapSizeTable) {
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  size_t count = 0;
+  ASSERT_EQ(gfnt_face_strike_count(fixture.face, &count, &fixture.error),
+      GFNT_OK) << fixture.error.message;
+  ASSERT_EQ(count, kStrikeCount);
+
+  for (size_t i = 0; i < kStrikeCount; ++i) {
+    GFNT_Strike strike{};
+
+    ASSERT_EQ(gfnt_face_strike_at(fixture.face, i, &strike, &fixture.error),
+        GFNT_OK) << "strike " << i << ": " << fixture.error.message;
+    EXPECT_EQ(strike.index, i);
+    EXPECT_EQ(strike.ppem_x, kStrikePpems[i]);
+    EXPECT_EQ(strike.ppem_y, kStrikePpems[i]);
+    EXPECT_EQ(strike.bit_depth, 1);
+    EXPECT_EQ(strike.kind, GFNT_GLYPH_BITMAP_MONO);
+    // The strike's own baseline, from its sbitLineMetrics and not from `hhea`:
+    // the generator writes the box's height as the ascent and -1 as the descent,
+    // so the numbers differ per strike and a reader taking them from the face
+    // would report the same pair three times.
+    EXPECT_EQ(strike.ascent, (int32_t)kStrikePpems[i] - 4);
+    EXPECT_EQ(strike.descent, -1);
+  }
+  EXPECT_EQ(gfnt_face_strike_at(fixture.face, kStrikeCount, nullptr, nullptr),
+      GFNT_ERR_INVALID);
+}
+
+TEST(Eblc, NearestChoosesAmongSeveralStrikes) {
+  // The test this whole fixture exists for. GFNT_STRIKE_NEAREST has been in the
+  // API and documented since phase 0, and until strikes.ttf every face that had
+  // a strike had exactly one - so the search was `strike_at(face, 0)` and no
+  // input could tell a nearest-strike implementation from a first-strike one.
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  struct Want {
+    uint32_t ppem;
+    uint32_t expected;
+    const char * why;
+  };
+  // 11 is the case that matters most: it is one away from 10 and one away from
+  // 12, so the answer is a stated rule rather than whichever came first in the
+  // table. Larger wins, because the alternative throws pixels away.
+  const Want wants[] = {
+    {1, 10, "far below every strike"},
+    {9, 10, "just below the smallest"},
+    {10, 10, "exactly the smallest"},
+    {11, 12, "a tie between 10 and 12, broken upwards"},
+    {12, 12, "exactly the middle"},
+    {13, 12, "nearer 12 than 16"},
+    {14, 16, "a tie between 12 and 16, broken upwards"},
+    {15, 16, "nearer 16"},
+    {16, 16, "exactly the largest"},
+    {64, 16, "far above every strike"},
+  };
+
+  for (const Want & want : wants) {
+    for (GFNT_StrikePolicy policy : {GFNT_STRIKE_NEAREST,
+        GFNT_STRIKE_PREFER_STRIKE}) {
+      GFNT_Strike strike{};
+      bool from_outlines = true;
+
+      ASSERT_EQ(gfnt_face_select_strike(fixture.face, want.ppem, policy,
+          &strike, &from_outlines, &fixture.error), GFNT_OK)
+          << want.ppem << ": " << fixture.error.message;
+      EXPECT_FALSE(from_outlines) << want.why;
+      EXPECT_EQ(strike.ppem_y, want.expected)
+          << "at " << want.ppem << " ppem, policy " << policy << ": "
+          << want.why;
+    }
+  }
+}
+
+TEST(Eblc, NearestAndPreferStrikeAgreeBecauseNothingScales) {
+  // Deliberately recorded rather than left as an accident. The two policies
+  // differ in whether the library may *scale* the strike it picked, and nothing
+  // in this library scales a strike (raster.h says so). So they select
+  // identically, and will keep doing so until something does - at which point
+  // this test is the one that has to change, which is the point of it.
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  for (uint32_t ppem = 1; ppem <= 40; ++ppem) {
+    GFNT_Strike nearest{};
+    GFNT_Strike prefer{};
+
+    ASSERT_EQ(gfnt_face_select_strike(fixture.face, ppem, GFNT_STRIKE_NEAREST,
+        &nearest, nullptr, nullptr), GFNT_OK) << ppem;
+    ASSERT_EQ(gfnt_face_select_strike(fixture.face, ppem,
+        GFNT_STRIKE_PREFER_STRIKE, &prefer, nullptr, nullptr), GFNT_OK) << ppem;
+    EXPECT_EQ(nearest.index, prefer.index) << "at " << ppem << " ppem";
+  }
+}
+
+TEST(Eblc, ExactTakesTheOutlinesWhenNoStrikeMatches) {
+  // A face with strikes *and* outlines, which no fixture had before: every
+  // standalone container has no outlines at all, so EXACT's fallback has only
+  // ever been exercised in its failing direction.
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+  ASSERT_TRUE(gfnt_face_has_outlines(fixture.face));
+
+  for (uint32_t ppem : {10u, 12u, 16u}) {
+    GFNT_Strike strike{};
+    bool from_outlines = true;
+
+    ASSERT_EQ(gfnt_face_select_strike(fixture.face, ppem, GFNT_STRIKE_EXACT,
+        &strike, &from_outlines, &fixture.error), GFNT_OK)
+        << ppem << ": " << fixture.error.message;
+    EXPECT_FALSE(from_outlines);
+    EXPECT_EQ(strike.ppem_y, ppem);
+  }
+  for (uint32_t ppem : {9u, 11u, 13u, 17u}) {
+    GFNT_Strike strike{};
+    bool from_outlines = false;
+
+    ASSERT_EQ(gfnt_face_select_strike(fixture.face, ppem, GFNT_STRIKE_EXACT,
+        &strike, &from_outlines, &fixture.error), GFNT_OK)
+        << ppem << ": " << fixture.error.message;
+    EXPECT_TRUE(from_outlines) << "no strike at " << ppem << " and outlines "
+        "are there to scale";
+  }
+
+  // And OUTLINES_ONLY ignores the strikes entirely, which on this face succeeds
+  // where on a PCF it has to fail.
+  GFNT_Strike strike{};
+  bool from_outlines = false;
+  ASSERT_EQ(gfnt_face_select_strike(fixture.face, 12, GFNT_STRIKE_OUTLINES_ONLY,
+      &strike, &from_outlines, nullptr), GFNT_OK);
+  EXPECT_TRUE(from_outlines);
+}
+
+TEST(Eblc, TheStrikesAreListedAndTheirPixelsAreNotReadYet) {
+  // Three answers live on one path and the whole value of the path is that they
+  // stay apart: a face with no strikes, a face whose strike table this library
+  // cannot read, and - new here - a face whose strikes are listed and whose
+  // glyph data is still out of reach.
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  GFNT_BitmapGlyph glyph{};
+  EXPECT_EQ(gfnt_face_glyph_bitmap(fixture.face, 2, 0, &glyph, &fixture.error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(fixture.error.table, GFNT_TAG('E', 'B', 'D', 'T'));
+  EXPECT_NE(std::string(fixture.error.message).find("not read yet"),
+      std::string::npos) << fixture.error.message;
+}
+
+TEST(Eblc, AnEblcWithNoEbdtIsStrikesNobodyCanRead) {
+  // The pair rule, and the reason it is a pair: a strike list pointing at glyph
+  // data the file does not contain is not a font with no bitmaps, and it is not
+  // a font whose bitmaps this library can offer either. The same shape as `glyf`
+  // without `loca`.
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  // A well-formed EBLC - version 2.0, no strikes - so that what the refusal is
+  // about is the missing EBDT and not bytes that would fail to parse anyway.
+  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'),
+      std::vector<uint8_t>{0, 2, 0, 0, 0, 0, 0, 0}});
+  const std::vector<uint8_t> bytes =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  Crafted crafted(std::string(reinterpret_cast<const char *>(bytes.data()),
+      bytes.size()));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 99;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_strike_count(crafted.face, &count, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(count, 99u) << "nothing is written on failure";
+  EXPECT_EQ(error.table, GFNT_TAG('E', 'B', 'L', 'C'));
+}
+
+TEST(Eblc, AnEblcThatListsNoStrikesIsZeroRatherThanARefusal) {
+  // The pair is there and the list is empty, which is a well-formed table saying
+  // the font has no bitmaps. That is a count of zero and not a refusal - the one
+  // place in this file where zero is the honest answer for a face that has the
+  // table.
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'),
+      std::vector<uint8_t>{0, 2, 0, 0, 0, 0, 0, 0}});
+  tables.push_back({GFNT_TAG('E', 'B', 'D', 'T'),
+      std::vector<uint8_t>{0, 2, 0, 0}});
+  const std::vector<uint8_t> bytes =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  Crafted crafted(std::string(reinterpret_cast<const char *>(bytes.data()),
+      bytes.size()));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 99;
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_strike_count(crafted.face, &count, &error), GFNT_OK)
+      << error.message;
+  EXPECT_EQ(count, 0u);
+  GFNT_Strike strike{};
+  EXPECT_EQ(gfnt_face_strike_at(crafted.face, 0, &strike, nullptr),
+      GFNT_ERR_INVALID);
+}
+
+/**
+ * An sfnt whose `EBLC` is these bytes, with an `EBDT` beside it.
+ *
+ * The pair is what makes the strike list readable at all, so a test about the
+ * *list* needs an `EBDT` it never looks at - four bytes of version is enough, and
+ * the one test about the missing half builds the font without this helper.
+ */
+std::string eblc_font(const std::vector<uint8_t> & eblc) {
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'), eblc});
+  tables.push_back({GFNT_TAG('E', 'B', 'D', 'T'),
+      std::vector<uint8_t>{0, 2, 0, 0}});
+  const std::vector<uint8_t> bytes =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+}
+
+/**
+ * One `bitmapSizeTable`, every field a parameter so a test can spoil one.
+ *
+ * Written here rather than copied from the generator because what these tests
+ * need is a field at a time *wrong*, and a generator that could produce those
+ * would be a generator with no opinion about what a font is.
+ */
+std::vector<uint8_t> size_table(uint32_t index_offset, uint32_t index_size,
+    uint32_t subtables, uint16_t first, uint16_t last, uint8_t ppem_x,
+    uint8_t ppem_y, uint8_t depth, int8_t flags, int8_t ascender = 6,
+    int8_t descender = -1) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u32(out, index_offset);
+  gfnttest::put_u32(out, index_size);
+  gfnttest::put_u32(out, subtables);
+  gfnttest::put_u32(out, 0); // colorRef
+  for (int direction = 0; direction < 2; ++direction) {
+    // Horizontal first, then vertical. The vertical pair is zeros, which is what
+    // the population states and what makes a reader taking the wrong one visible.
+    const int8_t asc = direction == 0 ? ascender : 0;
+    const int8_t desc = direction == 0 ? descender : 0;
+    gfnttest::put_u8(out, (uint8_t)asc);
+    gfnttest::put_u8(out, (uint8_t)desc);
+    for (int i = 0; i < 10; ++i) {
+      gfnttest::put_u8(out, 0);
+    }
+  }
+  gfnttest::put_u16(out, first);
+  gfnttest::put_u16(out, last);
+  gfnttest::put_u8(out, ppem_x);
+  gfnttest::put_u8(out, ppem_y);
+  gfnttest::put_u8(out, depth);
+  gfnttest::put_u8(out, (uint8_t)flags);
+  return out;
+}
+
+/**
+ * An `EBLC` header, @p count size tables, then an index region.
+ *
+ * The region is eight bytes of nothing and exists only so that a size table's
+ * `indexSubTableArrayOffset` can point *inside* the table. Nothing in this commit
+ * reads it - but every strike has to clear the one check that is made on the
+ * offset, or a test aimed at some other field is refused for this one instead,
+ * and would pass while asserting the wrong sentence.
+ */
+std::vector<uint8_t> eblc_header(uint32_t version, uint32_t count,
+    const std::vector<uint8_t> & body = {}) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u32(out, version);
+  gfnttest::put_u32(out, count);
+  out.insert(out.end(), body.begin(), body.end());
+  for (int i = 0; i < 8; ++i) {
+    gfnttest::put_u8(out, 0);
+  }
+  return out;
+}
+
+/** The offset a one-strike EBLC's index region starts at: header plus one table. */
+constexpr uint32_t kOneStrikeIndexBase = 8 + 48;
+
+TEST(Eblc, EveryWayAStrikeTableCanContradictItselfIsRefused) {
+  // One field wrong at a time, each with the arm it is supposed to reach. Nine
+  // refusals, and the point of the table is that each is a *different* sentence:
+  // a reader that collapsed them into "corrupt EBLC" would pass a test that only
+  // checked the code.
+  struct Case {
+    const char * why;
+    std::vector<uint8_t> eblc;
+    GFNT_Result result;
+    const char * phrase;
+  };
+  const uint8_t ok_index[] = {0, 1, 0, 1, 0, 0, 0, 8};
+  std::vector<uint8_t> one_strike = size_table(kOneStrikeIndexBase,
+      sizeof ok_index, 1, 1, 1, 12, 12, 1, 1);
+
+  const Case cases[] = {
+    {"a table shorter than its own header",
+     std::vector<uint8_t>{0, 2, 0, 0, 0, 0},
+     GFNT_ERR_CORRUPT, "shorter than its own header"},
+    {"a version this library has not been written against",
+     eblc_header(0x00030000, 0),
+     GFNT_ERR_UNSUPPORTED, "version this library does not read"},
+    {"more strikes than the table has room for",
+     eblc_header(0x00020000, 4, one_strike),
+     GFNT_ERR_CORRUPT, "ends past the table"},
+    {"a pixel size of zero across",
+     eblc_header(0x00020000, 1,
+         size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 0, 12, 1, 1)),
+     GFNT_ERR_CORRUPT, "pixel size of zero"},
+    {"a pixel size of zero down",
+     eblc_header(0x00020000, 1,
+         size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 12, 0, 1, 1)),
+     GFNT_ERR_CORRUPT, "pixel size of zero"},
+    {"a bit depth that is not a power of two the format defines",
+     eblc_header(0x00020000, 1,
+         size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 12, 12, 3, 1)),
+     GFNT_ERR_CORRUPT, "bit depth"},
+    {"a colour bit depth, which is CBLC's and not this table's",
+     eblc_header(0x00020000, 1,
+         size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 12, 12, 32, 1)),
+     GFNT_ERR_CORRUPT, "bit depth"},
+    {"a glyph range that runs backwards",
+     eblc_header(0x00020000, 1,
+         size_table(kOneStrikeIndexBase, 8, 1, 9, 2, 12, 12, 1, 1)),
+     GFNT_ERR_CORRUPT, "runs backwards"},
+    {"neither direction's line metrics claimed",
+     eblc_header(0x00020000, 1,
+         size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 12, 12, 1, 0)),
+     GFNT_ERR_CORRUPT, "neither horizontal nor vertical"},
+    {"an index array that starts past the end of the table",
+     eblc_header(0x00020000, 1,
+         size_table(0x7FFFFFFF, 8, 1, 1, 1, 12, 12, 1, 1)),
+     GFNT_ERR_CORRUPT, "past the table"},
+  };
+
+  for (const Case & test : cases) {
+    Crafted crafted(eblc_font(test.eblc));
+    ASSERT_EQ(crafted.result, GFNT_OK) << test.why;
+
+    size_t count = 99;
+    GFNT_Error error{};
+    EXPECT_EQ(gfnt_face_strike_count(crafted.face, &count, &error),
+        test.result) << test.why;
+    EXPECT_EQ(count, 99u) << test.why << ": nothing is written on failure";
+    EXPECT_NE(std::string(error.message ? error.message : "").find(test.phrase),
+        std::string::npos) << test.why << ": got " << error.message;
+    EXPECT_EQ(error.table, GFNT_TAG('E', 'B', 'L', 'C')) << test.why;
+  }
+}
+
+TEST(Eblc, AStrikeTableCutShortIsRefusedWhereverItRanOut) {
+  // Every length a size table can be cut to, so that each of the twelve field
+  // reads is the one that fails for some input - including the two
+  // sbitLineMetrics, whose own failure arm no single truncation reaches.
+  //
+  // This is also what says there is no second guard: the first draft checked
+  // count * 48 bytes up front, which refused all of these before a field was
+  // read and left the read's own arm unreachable.
+  const std::vector<uint8_t> whole = size_table(kOneStrikeIndexBase, 8, 1, 1, 1,
+      12, 12, 1, 1);
+  size_t refused = 0;
+
+  for (size_t keep = 0; keep < whole.size(); ++keep) {
+    std::vector<uint8_t> body(whole.begin(), whole.begin() + (long)keep);
+    std::vector<uint8_t> eblc;
+    gfnttest::put_u32(eblc, 0x00020000);
+    gfnttest::put_u32(eblc, 1);
+    eblc.insert(eblc.end(), body.begin(), body.end());
+
+    Crafted crafted(eblc_font(eblc));
+    ASSERT_EQ(crafted.result, GFNT_OK) << keep;
+    size_t count = 99;
+    GFNT_Error error{};
+    EXPECT_EQ(gfnt_face_strike_count(crafted.face, &count, &error),
+        GFNT_ERR_CORRUPT) << "cut to " << keep << " bytes";
+    EXPECT_EQ(count, 99u) << keep;
+    EXPECT_NE(std::string(error.message ? error.message : "").find(
+                  "ends past the table"),
+        std::string::npos) << "cut to " << keep << ": " << error.message;
+    ++refused;
+  }
+  EXPECT_EQ(refused, whole.size()) << "every length from nothing to one byte "
+      "short, and a bitmapSizeTable is 48 bytes";
+}
+
+TEST(Eblc, GreyDepthsAreGreyGlyphsAndOneBitIsMono) {
+  // The kind a strike reports follows from its depth, and the four depths the
+  // format defines split two ways. Nothing in the population has a depth but 1,
+  // so these three are the only evidence the grey arm exists.
+  struct Case {
+    uint8_t depth;
+    GFNT_GlyphKind kind;
+  };
+  const Case cases[] = {
+    {1, GFNT_GLYPH_BITMAP_MONO},
+    {2, GFNT_GLYPH_BITMAP_GRAY},
+    {4, GFNT_GLYPH_BITMAP_GRAY},
+    {8, GFNT_GLYPH_BITMAP_GRAY},
+  };
+
+  for (const Case & test : cases) {
+    Crafted crafted(eblc_font(eblc_header(0x00020000, 1,
+        size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 12, 12, test.depth, 1))));
+    ASSERT_EQ(crafted.result, GFNT_OK) << (unsigned)test.depth;
+
+    GFNT_Strike strike{};
+    ASSERT_EQ(gfnt_face_strike_at(crafted.face, 0, &strike, nullptr), GFNT_OK)
+        << (unsigned)test.depth;
+    EXPECT_EQ(strike.bit_depth, test.depth);
+    EXPECT_EQ(strike.kind, test.kind) << "depth " << (unsigned)test.depth;
+  }
+}
+
+TEST(Eblc, AVerticalOnlyStrikeReportsTheVerticalBaseline) {
+  // flags bit 1 and not bit 0. The only input where the vertical sbitLineMetrics
+  // is the one that answers, and the control for the horizontal case: the
+  // generator writes the vertical pair as zeros in every fixture, so a reader
+  // taking the wrong one reports 0/0 there and the right one here.
+  Crafted crafted(eblc_font(eblc_header(0x00020000, 1,
+      size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 12, 12, 1, 2, 7, -3))));
+  ASSERT_EQ(crafted.result, GFNT_OK);
+
+  GFNT_Strike strike{};
+  ASSERT_EQ(gfnt_face_strike_at(crafted.face, 0, &strike, nullptr), GFNT_OK);
+  // size_table() writes the ascender it is given into the *horizontal* pair and
+  // zeros into the vertical, so a vertical-only strike reports zero - which is
+  // what this table states and is the point: the flags choose, and the choice is
+  // visible.
+  EXPECT_EQ(strike.ascent, 0);
+  EXPECT_EQ(strike.descent, 0);
+}
+
+TEST(Eblc, MoreStrikesThanTheLimitAllowsIsALimit) {
+  // Counted before anything is allocated, so a font claiming four billion strikes
+  // costs the header and not the arithmetic. LIMIT and not CORRUPT: the table may
+  // be perfectly well formed and simply larger than this caller allowed.
+  GFNT_Limits limits;
+  gfnt_limits_default(&limits);
+  limits.max_strikes = 2;
+
+  std::vector<uint8_t> body;
+  for (int i = 0; i < 3; ++i) {
+    const std::vector<uint8_t> one = size_table(8 + 48 * 3, 8, 1, 1, 1,
+        (uint8_t)(10 + i), (uint8_t)(10 + i), 1, 1);
+    body.insert(body.end(), one.begin(), one.end());
+  }
+  const std::string bytes = eblc_font(eblc_header(0x00020000, 3, body));
+
+  // Three strikes read fine at the default ceiling, which is the control: the
+  // refusal below has to be the limit and not the bytes.
+  Crafted allowed(bytes);
+  ASSERT_EQ(allowed.result, GFNT_OK);
+  size_t count = 0;
+  ASSERT_EQ(gfnt_face_strike_count(allowed.face, &count, nullptr), GFNT_OK);
+  EXPECT_EQ(count, 3u);
+
+  Crafted crafted(bytes, &limits);
+  ASSERT_EQ(crafted.result, GFNT_OK);
+  GFNT_Error error{};
+  count = 99;
+  EXPECT_EQ(gfnt_face_strike_count(crafted.face, &count, &error),
+      GFNT_ERR_LIMIT);
+  EXPECT_EQ(count, 99u);
+  EXPECT_NE(std::string(error.message).find("max_strikes"), std::string::npos)
+      << error.message;
+}
+
+TEST(Eblc, TheStrikeListSurvivesEveryRefusedAllocation) {
+  // One allocation, so one request to refuse - and the sweep is written as a
+  // sweep anyway, because a parse that grows an array later must not quietly stop
+  // being covered here.
+  const std::string bytes = read_fixture("strikes.ttf");
+  ASSERT_FALSE(bytes.empty());
+
+  for (size_t at = 0; at < 64; ++at) {
+    gfnttest::FailingAllocator failing(at);
+    GFNT_Blob * blob = nullptr;
+    GFNT_Face * face = nullptr;
+    GFNT_Error error{};
+
+    if (gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_COPY,
+            nullptr, failing.get(), &blob, &error) != GFNT_OK) {
+      continue;
+    }
+    if (gfnt_face_load(blob, 0, nullptr, failing.get(), &face, &error)
+        != GFNT_OK) {
+      gfnt_blob_destroy(blob);
+      continue;
+    }
+    size_t count = 0;
+    const GFNT_Result result =
+        gfnt_face_strike_count(face, &count, &error);
+    EXPECT_TRUE(result == GFNT_OK || result == GFNT_ERR_OOM)
+        << "request " << at << ": " << error.message;
+    if (result == GFNT_OK) {
+      EXPECT_EQ(count, kStrikeCount) << "request " << at;
+    }
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+    EXPECT_EQ(failing.live(), 0u) << "request " << at;
+  }
+}
+
+TEST(Eblc, TheDumpNamesEveryStrikeAndCarriesAWriteFailureOut) {
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  const GFNT_Eblc * eblc = nullptr;
+  ASSERT_EQ(gfnt_face_eblc(fixture.face, &eblc, &fixture.error), GFNT_OK)
+      << fixture.error.message;
+
+  char buffer[2048] = {0};
+  std::unique_ptr<FILE, int (*)(FILE *)> out(
+      fmemopen(buffer, sizeof buffer, "w"), fclose);
+  ASSERT_NE(out.get(), nullptr);
+  ASSERT_EQ(gfnt_eblc_dump(eblc, out.get()), GFNT_OK);
+  out.reset();
+
+  const std::string text(buffer);
+  EXPECT_NE(text.find("3 strikes"), std::string::npos) << text;
+  for (uint32_t ppem : kStrikePpems) {
+    EXPECT_NE(text.find("ppem " + std::to_string(ppem) + "x"
+                  + std::to_string(ppem)),
+        std::string::npos) << text;
+  }
+
+  EXPECT_EQ(gfnt_eblc_dump(nullptr, stdout), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_eblc_dump(eblc, nullptr), GFNT_ERR_INVALID);
+
+  // Two fprintf arms, one before the loop and one inside it, and a sink that
+  // refuses the nth write is what reaches each. Counted, because a sweep that
+  // never ran out of budget would report zero failures and pass.
+  size_t failures = 0;
+  for (size_t allow = 0; allow < 6; ++allow) {
+    gfnttest::FailingSink sink(allow);
+    ASSERT_NE(sink.get(), nullptr);
+    if (gfnt_eblc_dump(eblc, sink.get()) == GFNT_ERR_IO) {
+      ++failures;
+    }
+  }
+  // Four writes: the header and three strike lines. So budgets 0 through 3 fail
+  // and 4 and 5 do not, which pins *where* the arms are and not just that they
+  // exist.
+  EXPECT_EQ(failures, 4u);
+}
+
+TEST(Eblc, ADirectoryEntryThatLeavesTheFileFailsTheLoadAndNotTheParse) {
+  // Written to reach `gfnt_face_table_reader()`'s failure arm inside the EBLC
+  // parse, and it cannot: the **face load** validates every entry's extent, so a
+  // font whose EBLC runs past the end never produces a face to ask. That arm is
+  // therefore unreachable by construction, exactly as the identical line in every
+  // other table parser is, and this test is what says so rather than leaving the
+  // line looking merely untested.
+  //
+  // It also pins the boundary the EBLC parse relies on: section 7.8's "each table
+  // is validated on first use" is about a table's *contents*. Its extent is the
+  // directory's business and is settled at load, which is why `indexTablesSize` -
+  // a length stated *inside* EBLC - is the one length this parser has to bound
+  // itself.
+  std::string bytes = eblc_font(eblc_header(0x00020000, 1,
+      size_table(kOneStrikeIndexBase, 8, 1, 1, 1, 12, 12, 1, 1)));
+
+  // Arithmetic on the directory rather than a literal offset, for the reason
+  // build_outline_broken_loca gives: a hard-coded offset patches the wrong table
+  // the first time anything else about the font changes.
+  const size_t count = ((unsigned char)bytes[4] << 8) | (unsigned char)bytes[5];
+  size_t entry = 0;
+  for (size_t i = 0; i < count; ++i) {
+    const size_t at = 12 + 16 * i;
+    if (memcmp(bytes.data() + at, "EBLC", 4) == 0) {
+      entry = at;
+      break;
+    }
+  }
+  ASSERT_NE(entry, 0u) << "the directory has to name EBLC for this to mean "
+      "anything";
+
+  // The control: untouched, this font loads and lists its one strike. So the
+  // refusal below is the overstated length and not anything else about the bytes.
+  {
+    Crafted control(bytes);
+    ASSERT_EQ(control.result, GFNT_OK) << control.error.message;
+    size_t strikes = 0;
+    ASSERT_EQ(gfnt_face_strike_count(control.face, &strikes, nullptr), GFNT_OK);
+    EXPECT_EQ(strikes, 1u);
+  }
+
+  for (size_t i = 0; i < 4; ++i) {
+    bytes[entry + 12 + i] = (char)0x7F;
+  }
+  Crafted crafted(bytes);
+  EXPECT_EQ(crafted.result, GFNT_ERR_CORRUPT);
+  EXPECT_EQ(crafted.face, nullptr);
+}
+
+TEST(Eblc, ReleasingNothingIsHarmless) {
+  // Called from gfnt_face_free() with a real allocator and a real table on every
+  // other path, so the guards are reachable from here and nowhere else - and they
+  // have to be right, because the memo contract in tables.h makes this function
+  // run on a struct a refused parse left zeroed.
+  GFNT_Eblc eblc{};
+  gfnt_eblc_release(nullptr, &eblc);
+  gfnt_eblc_release(gfnt_allocator_default(), nullptr);
+  gfnt_eblc_release(gfnt_allocator_default(), &eblc);
+  EXPECT_EQ(eblc.strikes, nullptr);
+  EXPECT_EQ(eblc.strike_count, 0u);
+}
+
+TEST(Eblc, NullArgumentsAreRefusedByName) {
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  const GFNT_Eblc * eblc = nullptr;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_eblc(nullptr, &eblc, &error), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_eblc(fixture.face, nullptr, &error), GFNT_ERR_INVALID);
+  EXPECT_FALSE(gfnt_face_has_eblc(nullptr));
+
+  // A face with no EBLC at all refuses by name rather than answering an empty
+  // table, which is the distinction gfnt_face_strike_count() reports as zero.
+  Fixture plain("basic.ttf");
+  ASSERT_EQ(plain.result, GFNT_OK);
+  EXPECT_FALSE(gfnt_face_has_eblc(plain.face));
+  EXPECT_EQ(gfnt_face_eblc(plain.face, &eblc, &error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::string(error.message).find("no EBLC"), std::string::npos)
+      << error.message;
 }
 
 TEST(Bitmap, AnOutlineFaceHasNoBitmapsAndSaysSo) {

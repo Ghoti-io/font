@@ -187,6 +187,11 @@ const std::vector<Entry> & every_fixture() {
       {"outline-loca-long.ttf", kOutlineGlyphs},
       {"outline-simple.ttf", kOutlineGlyphs},
       {"post-v1.ttf", 258},
+      // The first fixture with more than one strike. An ordinary TrueType face -
+      // five glyphs, an em, a `name` - with three EBLC strikes beside its
+      // outlines, so it is the one fixture here that is both, and `states_em`
+      // stays true because the *face* has one even though its strikes do not.
+      {"strikes.ttf", kNumGlyphs},
       {"post-v2.ttf", kNumGlyphs + 1},
       {"post-v3.ttf", kNumGlyphs},
   };
@@ -670,19 +675,25 @@ TEST(Fixtures, TheMacRomanRecordsDecodeToTheSameTextAsTheirWindowsTwins) {
       << "0xAA in Mac Roman is U+2122, which is E2 84 A2 in UTF-8";
 }
 
-TEST(Fixtures, AFixtureHasOneStrikeOrNoneAndNeverAnUnreadableTable) {
+TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
   // **This asserted zero for every fixture until phase 1b**, and it was right
-  // then: no container this library read carried a strike. It is kept and split
-  // rather than deleted, for the reason `CffIsTheOttoFlavourWithNoGlyf` gives
-  // about the same shape - an assertion that a feature is absent goes on passing
-  // after the feature lands and stops saying anything.
+  // then: no container this library read carried a strike. It was then "one or
+  // none", which was right until `strikes.ttf` - and the rename is the history:
+  // an assertion about a shape the fixture set has outgrown goes on passing and
+  // stops saying anything, which is what `CffIsTheOttoFlavourWithNoGlyf` records
+  // about the same hazard.
   //
   // What it says now: a standalone bitmap container has exactly one strike,
-  // because the file *is* a strike; every other fixture has none; and no fixture
+  // because the file *is* a strike; a face with an `EBLC` and an `EBDT` has as
+  // many as the table lists; every other fixture has none; and no fixture
   // reports ::GFNT_ERR_UNSUPPORTED, which would mean it carried strikes in a
   // table this library cannot enumerate. That last answer is the one M9 needs
-  // kept apart from zero, and there is still no fixture that produces it - the
-  // `EBLC` fixtures arrive with phase 6.
+  // kept apart from zero, and there is still no *fixture* that produces it -
+  // `bloc`, `CBLC` and `sbix` are hand-built cases in test_bitmap.cpp, because a
+  // fixture is a font this library reads and those are fonts it does not.
+  size_t with_strikes = 0;
+  size_t with_many = 0;
+
   for (const Entry & entry : every_fixture()) {
     const std::string name = entry.name;
     Fixture fixture(name);
@@ -691,15 +702,37 @@ TEST(Fixtures, AFixtureHasOneStrikeOrNoneAndNeverAnUnreadableTable) {
     const GFNT_Result result =
         gfnt_face_strike_count(fixture.face, &strikes, nullptr);
     EXPECT_EQ(result, GFNT_OK) << name;
-    // Which answer to expect comes from the flavour and not from a field: the
-    // fact "this container is a strike" is the flavour's, and a field here would
-    // be a second place to state it that could drift from the first.
+    // Which answer to expect comes from the flavour and the directory, not from
+    // a field: both facts are the font's own, and a field here would be a second
+    // place to state them that could drift from the first.
     const GFNT_Tag flavour = gfnt_face_flavour(fixture.face);
     const bool is_strike = flavour == GFNT_FLAVOUR_PCF
         || flavour == GFNT_FLAVOUR_BDF || flavour == GFNT_FLAVOUR_PSF
         || flavour == GFNT_FLAVOUR_HEX;
-    EXPECT_EQ(strikes, is_strike ? 1u : 0u) << name;
+    const bool has_eblc = gfnt_face_has_table(fixture.face,
+                              GFNT_TAG('E', 'B', 'L', 'C'))
+        && gfnt_face_has_table(fixture.face, GFNT_TAG('E', 'B', 'D', 'T'));
+
+    if (is_strike) {
+      EXPECT_EQ(strikes, 1u) << name;
+    } else if (has_eblc) {
+      EXPECT_GT(strikes, 1u) << name << ": the one EBLC fixture there is has "
+          "three, and a fixture with one would not exercise a choice";
+    } else {
+      EXPECT_EQ(strikes, 0u) << name;
+    }
+    if (strikes > 0) {
+      ++with_strikes;
+    }
+    if (strikes > 1) {
+      ++with_many;
+    }
   }
+  // Counted, because the three branches above are only worth anything if the
+  // fixture set reaches all of them: a sweep over a set that had lost its
+  // multi-strike font would pass every assertion and check nothing new.
+  EXPECT_EQ(with_strikes, 11u) << "ten standalone containers and strikes.ttf";
+  EXPECT_EQ(with_many, 1u) << "strikes.ttf is the only fixture with a choice";
 }
 
 } // namespace

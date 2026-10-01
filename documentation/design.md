@@ -597,6 +597,22 @@ way and each of which is refused rather than guessed:
 `EBLC`/`EBDT` (and Apple's `bloc`/`bdat` spellings): the `bitmapSizeTable`s,
 index subtable formats 1-5, glyph bitmap formats 1-9 including the composite
 formats 8 and 9 and the metrics-in-data forms; `EBSC` scaled references.
+
+**The strike list is one memo and each strike's index is another.** `uming.ttc`
+- four of the six faces in Debian that carry this table at all - has six strikes
+of 27,123 glyphs with 2,305 index subtables each, so parsing the indexes to open
+a face would cost 55,000 subtable headers before a caller asked for anything, and
+§5.3 promises that opening a 30 MB collection to ask for one glyph costs one
+glyph. `EBLC`'s header and its `bitmapSizeTable`s are therefore parsed together
+and a strike's index when a glyph from that strike is first wanted.
+
+**`indexTablesSize` is not to be trusted and the table's own extent is.** A
+directory entry whose extent leaves the file fails the *load*, so every table a
+parser is handed is inside the blob; a length stated *inside* `EBLC` has no such
+guarantee, and `mona.ttf` - one of the two files in Debian with this table -
+states three that overlap their neighbours by eight bytes each. fontTools refuses
+the font for it and every renderer displays it, because no renderer reads the
+field. So a subtable is bounded by the table and by what its own format needs.
 `CBLC`/`CBDT` formats 17-19 carry PNG, and `sbix` carries PNG, JPEG or TIFF
 per strike with `dupe` records; both come back as `GFNT_GLYPH_BITMAP_PNG` with
 the bytes, and the raster bridge decodes them through `image` when it is
@@ -1949,8 +1965,47 @@ shaped the way it is:
   repository's licence, and `testFixtures` asserts the refusal rather than skipping
   them.
 
-**Not built:** `CFF2` (§16); the sfnt bitmap strikes - `EBDT`/`EBLC`, `CBDT` and
-`sbix` (§7.5); colour
+**`EBLC`'s strike list is built, as of 2026-10-01**: the `bitmapSizeTable`s
+behind `gfnt_face_strike_count()` and `gfnt_face_strike_at()`, and
+`gfnt_face_select_strike()`'s policies **choosing** rather than confirming. Until
+this, every face that had a strike had exactly one - the file *was* the strike -
+so `GFNT_STRIKE_NEAREST` had been documented and tested for three phases without
+any input able to tell it from "the first strike", and the selection read
+`gfnt_face_strike_at(face, 0)`. `strikes.ttf` has three, one pair of which is
+equidistant from 11 ppem, so the tie rule is a rule. What that cost in findings:
+
+- **A fixture set can make a policy untestable, and nothing says so.** The hole
+  was not a defect in the selection - it was that no font this library could load
+  had two strikes, so the search over a list was a search over one element. It is
+  the `single-record-never-grows-array` shape at the level of a format: the
+  population a gate samples has to contain the input that discriminates, and
+  "every strike container is one strike" made that impossible rather than merely
+  absent.
+- **Nothing on this machine has the table, and one font in the 327-font corpus
+  does.** That one is `NotoColorEmoji.ttf`, which is `CBLC` - the same layout with
+  PNG payloads - so the corpus could not check a single `EBDT` glyph. Two Debian
+  packages carry the real thing (`fonts-arphic-uming`, `fonts-mona`), found by
+  installing candidates in a throwaway container rather than by reasoning about
+  which fonts ought to have bitmaps: `fonts-wqy-zenhei` was the obvious guess and
+  does not.
+- **`(index 2, image 5)` is 54,136 of 55,356 index subtables in that
+  population - 97.8%.** A reader that implemented only that pair would read almost
+  every real glyph. Image formats 1, 2, 8 and 9 and index formats 3, 4 and 5 occur
+  nowhere in it at all, and image format 6 only in the two files fontTools cannot
+  read, so for most of this format the fixtures are the whole of the evidence.
+- **Two guards answering one question left the second unreachable.** The parse
+  checked that `numSizes * 48` bytes were present *and* checked each field read,
+  and the first refused exactly the inputs the second would have - so the
+  per-strike arm could never be seen to work. The bulk check is gone; what bounds
+  the allocation is `max_strikes`, which is the cap that matters, and the sweep
+  now cuts a `bitmapSizeTable` to all 48 of its lengths.
+- **`GFNT_Limits::max_strikes` had never been read.** It was declared in phase 0
+  with a value of 256 and nothing consulted it, which is the
+  `unread-table-constants` shape in a field rather than a table.
+
+**Not built:** `CFF2` (§16); `EBDT`'s glyph data, and `CBDT` and `sbix`
+(§7.5) - an `EBLC` face lists its strikes and refuses their pixels, naming
+`EBDT`; colour
 (§7.6);
 variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`

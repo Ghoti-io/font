@@ -35,6 +35,7 @@
 #include "../sfnt/sfnt.h"
 #include "../tables/tables.h"
 #include "bitmap.h"
+#include "eblc.h"
 
 /** How many glyph records or mappings the first allocation holds. */
 #define GFNT_BITMAP_INITIAL 64u
@@ -611,6 +612,17 @@ GFNT_Result gfnt_face_glyph_bitmap(const GFNT_Face * face, uint32_t glyph,
           *error = strikes;
         }
         return GFNT_ERR_UNSUPPORTED;
+      }
+      if (count > 0) {
+        // An EBLC face: the strikes are listed, with their sizes and their
+        // baselines, and the glyph data in EBDT is not read yet. Three answers
+        // live on this path now and the whole value of the path is that they
+        // stay apart - no strikes, strikes nobody can enumerate, and strikes
+        // enumerated whose pixels are still out of reach.
+        return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBDT, 0,
+            glyph,
+            "the face's strikes are listed from EBLC, and their glyph data in "
+            "EBDT is not read yet");
       }
       return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, face->flavour, 0,
           glyph, "a face with no bitmap strikes at all");

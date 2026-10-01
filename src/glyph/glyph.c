@@ -23,16 +23,21 @@
  *
  * The glyph-kind names, and which strike answers a pixel size.
  *
- * documentation/design.md sections 5.3 and 5.4. No glyph data is read here -
- * the outline producers arrive in phase 1 and the strike parsers in phase 1b -
- * but the shape of the question is decided now, because adding a strike list
- * to a released API is a break across all of it.
+ * documentation/design.md sections 5.3 and 5.4. No glyph data is read here: the
+ * strike *list* comes from `EBLC` or from a standalone container's one strike,
+ * and the pixels behind it are `bitmap.h`'s.
  *
  * The one thing this file refuses to do is answer "no strikes" for a face that
- * has them. A face carrying `EBLC`, `CBLC` or `sbix` gets
- * ::GFNT_ERR_UNSUPPORTED, which says "this library cannot enumerate them yet";
- * a count of zero would say "this bitmap font has no bitmaps", and a caller
- * cannot tell that from the truth.
+ * has them. A face carrying `bloc`, `CBLC` or `sbix` - or an `EBLC` with no
+ * `EBDT` to go with it - gets ::GFNT_ERR_UNSUPPORTED, which says "this library
+ * cannot enumerate them"; a count of zero would say "this bitmap font has no
+ * bitmaps", and a caller cannot tell that from the truth.
+ *
+ * **The selection is here and the strikes come from elsewhere**, which is what
+ * lets one policy serve a PCF's single strike and an `EBLC`'s six: this file
+ * asks ::gfnt_face_strike_count() and ::gfnt_face_strike_at() like any caller
+ * would, so there is one implementation of "nearest" and no format can have an
+ * idea of its own about it.
  */
 
 #include <ghoti.io/font/glyph.h>
@@ -40,10 +45,18 @@
 #include "../bitmap/bitmap.h"
 #include "../sfnt/sfnt.h"
 
-/** The tables a strike list can live in, none of which is parsed yet. */
+/**
+ * The tables a strike list can live in.
+ *
+ * `EBLC` is in the list and is also the one that is read: a face reaches
+ * ::gfnt_face_strike_table() only after ::gfnt_face_has_eblc() has said no, so
+ * an `EBLC` named here is one with no `EBDT` behind it - a strike list pointing
+ * at glyph data the file does not contain, which is not strikes this library can
+ * offer and must not be reported as none.
+ */
 static const GFNT_Tag gfnt_strike_tables[] = {
-  GFNT_TAG('E', 'B', 'L', 'C'), // embedded monochrome and grey strikes
-  GFNT_TAG('b', 'l', 'o', 'c'), // Apple's spelling of the same
+  GFNT_TAG('E', 'B', 'L', 'C'), // read, when an EBDT is there too
+  GFNT_TAG('b', 'l', 'o', 'c'), // Apple's spelling of the same; not read
   GFNT_TAG('C', 'B', 'L', 'C'), // colour strikes, PNG payloads
   GFNT_TAG('s', 'b', 'i', 'x'), // Apple's colour strikes
 };
@@ -118,6 +131,19 @@ GFNT_Result gfnt_face_strike_count(const GFNT_Face * face, size_t * out_count,
     *out_count = 1;
     return GFNT_OK;
   }
+  // An sfnt's strikes are a list, and a refused EBLC is a refusal: a table that
+  // contradicts itself must not read as a font with no bitmaps, which is the
+  // same rule the unparsed tables below follow.
+  if (gfnt_face_has_eblc(face)) {
+    const GFNT_Eblc * eblc = NULL;
+    GFNT_Result result = gfnt_face_eblc(face, &eblc, error);
+
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_count = eblc->strike_count;
+    return GFNT_OK;
+  }
 
   table = gfnt_face_strike_table(face);
   if (table != 0) {
@@ -151,6 +177,16 @@ GFNT_Result gfnt_face_strike_at(const GFNT_Face * face, size_t index,
       return result;
     }
     *out_strike = font->strike;
+    return GFNT_OK;
+  }
+  if (index < count && gfnt_face_has_eblc(face)) {
+    const GFNT_Eblc * eblc = NULL;
+
+    result = gfnt_face_eblc(face, &eblc, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_strike = eblc->strikes[index].strike;
     return GFNT_OK;
   }
   // For every other face the count is zero, so every index is out of range -
@@ -194,37 +230,71 @@ GFNT_Result gfnt_face_select_strike(const GFNT_Face * face, uint32_t ppem,
     }
   }
 
-  // A face with one strike and no outlines: every policy but OUTLINES_ONLY is
-  // answered by that strike, and OUTLINES_ONLY has to fail - a caller who asked
-  // for outlines and would be handed pixels is M9 with the policy inverted.
+  // Every policy but OUTLINES_ONLY is answered by a strike when the face has
+  // any, and OUTLINES_ONLY has to fail on a face with no outlines - a caller who
+  // asked for outlines and would be handed pixels is M9 with the policy
+  // inverted.
   if (count > 0) {
-    GFNT_Strike strike;
+    GFNT_Strike chosen;
+    bool found = false;
 
-    result = gfnt_face_strike_at(face, 0, &strike, error);
-    if (result != GFNT_OK) {
-      return result;
-    }
-    if (out_strike) {
-      *out_strike = strike;
-    }
-    if (out_from_outlines) {
-      *out_from_outlines = false;
-    }
-    // EXACT is the one policy that can refuse a strike this face has: a font
-    // drawn at 16 pixels cannot answer for 13, and saying so is the whole point
-    // of the policy existing beside NEAREST.
-    if (policy == GFNT_STRIKE_EXACT && strike.ppem_y != ppem) {
-      if (gfnt_face_has_outlines(face)) {
-        if (out_from_outlines) {
-          *out_from_outlines = true;
-        }
-        return GFNT_OK;
+    // The nearest strike, and a tie goes to the larger. A tie is real - 13
+    // pixels between strikes at 12 and 14 - and the rule has to be *stated*
+    // rather than left to the order the strikes happen to be listed in, because
+    // a caller reporting "this text looks wrong at 13" needs the answer to be
+    // the same twice. Larger, because the alternative throws pixels away.
+    for (size_t i = 0; i < count; ++i) {
+      GFNT_Strike strike;
+      uint32_t distance;
+      uint32_t best;
+
+      result = gfnt_face_strike_at(face, i, &strike, error);
+      if (result != GFNT_OK) {
+        return result;
       }
-      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
-          "the face has no strike at exactly that pixel size, and no outlines "
-          "to scale instead");
+      if (policy == GFNT_STRIKE_EXACT) {
+        if (strike.ppem_y == ppem) {
+          chosen = strike;
+          found = true;
+          break;
+        }
+        continue;
+      }
+      distance = strike.ppem_y > ppem ? strike.ppem_y - ppem
+                                      : ppem - strike.ppem_y;
+      best = !found ? 0
+          : (chosen.ppem_y > ppem ? chosen.ppem_y - ppem
+                                  : ppem - chosen.ppem_y);
+      if (!found || distance < best
+          || (distance == best && strike.ppem_y > chosen.ppem_y)) {
+        chosen = strike;
+        found = true;
+      }
     }
-    return GFNT_OK;
+
+    if (found) {
+      if (out_strike) {
+        *out_strike = chosen;
+      }
+      if (out_from_outlines) {
+        *out_from_outlines = false;
+      }
+      return GFNT_OK;
+    }
+    // Only EXACT reaches here with strikes in the face: NEAREST and
+    // PREFER_STRIKE always find one, because every strike is some distance from
+    // every size. EXACT is the one policy that can refuse a strike a face has,
+    // which is the whole point of it existing beside NEAREST - a font drawn at
+    // sixteen pixels cannot answer for thirteen.
+    if (gfnt_face_has_outlines(face)) {
+      if (out_from_outlines) {
+        *out_from_outlines = true;
+      }
+      return GFNT_OK;
+    }
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
+        "the face has no strike at exactly that pixel size, and no outlines "
+        "to scale instead");
   }
 
   // With no strikes, every policy resolves the same way, and the only question

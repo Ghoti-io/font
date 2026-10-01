@@ -29,6 +29,12 @@
  * cannot composite it, and a strike list that arrives in phase 3 is a break
  * across the whole API. So the enums and the strike accessors are here now.
  *
+ * The strike list has more than one entry as of `EBLC` (section 7.5), which is
+ * when ::gfnt_face_select_strike()'s policies started choosing rather than
+ * confirming: every standalone container is one strike, so until an sfnt's
+ * strikes were readable no input could tell "the nearest strike" from "the first
+ * one".
+ *
  * What is **not** here is any glyph data: the bitmap parsers arrive in phase
  * 1b and outlines in phase 1. The accessors below are honest about that in the
  * one way that matters - a face carrying `EBLC`, `CBLC` or `sbix` reports
@@ -90,9 +96,23 @@ typedef enum {
   GFNT_STRIKE_OUTLINES_ONLY = 0,
   /** A strike at exactly this ppem, else outlines. */
   GFNT_STRIKE_EXACT,
-  /** The nearest strike, used unscaled, else outlines. */
+  /**
+   * The nearest strike, used unscaled, else outlines.
+   *
+   * Nearest in vertical pixels per em, and **a tie goes to the larger strike** -
+   * 11 ppem against strikes at 10 and 16 picks 10, against strikes at 10 and 12
+   * picks 12. The rule is stated because a caller reporting that text looks wrong
+   * at one size needs the same answer twice, and because the alternative throws
+   * pixels away.
+   */
   GFNT_STRIKE_NEAREST,
-  /** The nearest strike, scaled if it has to be; the last resort. */
+  /**
+   * The nearest strike, scaled if it has to be; the last resort.
+   *
+   * Selects exactly as ::GFNT_STRIKE_NEAREST does today, because nothing in this
+   * library scales a strike (`raster.h`). The two are separate so that the
+   * distinction does not have to be added to the API later.
+   */
   GFNT_STRIKE_PREFER_STRIKE
 } GFNT_StrikePolicy;
 
@@ -142,9 +162,12 @@ GFNT_API bool gfnt_face_has_outlines(const GFNT_Face * face);
  * @param out_count Receives the count. Written only on success.
  * @param error Receives a diagnostic on failure, or NULL.
  * @return ::GFNT_OK with a count of 0 for a face with no bitmap tables at all,
- *   ::GFNT_ERR_INVALID, or ::GFNT_ERR_UNSUPPORTED for a face whose strikes are
- *   in a table this library does not parse yet - which is not the same answer
- *   as zero, and must not be.
+ *   or with an `EBLC` that lists none; the number of `bitmapSizeTable`s for a
+ *   face with an `EBLC` and the `EBDT` it indexes into; 1 for a standalone bitmap
+ *   container, where the file is a strike; ::GFNT_ERR_INVALID; or
+ *   ::GFNT_ERR_UNSUPPORTED for a face whose strikes are in a table this library
+ *   does not parse - `bloc`, `CBLC`, `sbix`, or an `EBLC` whose `EBDT` is missing
+ *   - which is not the same answer as zero, and must not be.
  */
 GFNT_API GFNT_Result gfnt_face_strike_count(const GFNT_Face * face,
     size_t * out_count, GFNT_Error * error);

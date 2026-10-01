@@ -1545,9 +1545,7 @@ def cff_otf(label, order, cff_bytes, advances, mapping=None):
         {name: T2CharStringPen(advances.get(name, 600), None).getCharString()
          for name in order},
         {})
-    replacement = DefaultTable("CFF ")
-    replacement.data = cff_bytes
-    fb.font["CFF "] = replacement
+    set_raw_table(fb, "CFF ", cff_bytes)
     # `head`'s own compiler reads the CFF Top DICT's FontBBox for xMin..yMax,
     # and a table it cannot parse is one it cannot read that from. So the box is
     # written here instead, from the same constant the table states, and the
@@ -2914,7 +2912,164 @@ def build_type1_gz_pfb(out):
     with open(out, "wb") as handle:
         handle.write(gzip_bytes(plain))
 
+def set_raw_table(fb, tag, data):
+    """Put bytes in the font under @p tag, parsed by nobody.
+
+    fontTools has an object model for every table it knows, and a fixture whose
+    subject is the *bytes* needs them to reach the file unexamined - so the table
+    is a ::DefaultTable, whose compile() hands back what it was given. The bare
+    CFF fixture does the same thing for the same reason.
+    """
+    table = DefaultTable(tag)
+    table.data = data
+    fb.font[tag] = table
+
+
+# ---------------------------------------------------------------------------
+# EBLC and EBDT: bitmap strikes inside an sfnt (design.md section 7.5).
+#
+# Written byte by byte rather than through fontTools, for the reason the PCF
+# builder gives: what these fixtures exercise is the *cross-product* of index
+# subtable format and image format, and a writer picks one cell of it. fontTools
+# then reads the result back, which is what makes the bytes checkable without
+# this file being the only opinion about them.
+#
+# Every offset in EBLC is from the start of EBLC, and every offset in EBLC's
+# subtable headers is into EBDT. Keeping those two straight is the whole of the
+# bookkeeping here, and the helpers below take the base they are relative to as
+# an argument so that a caller cannot forget which it meant.
+
+# The strikes of strikes.ttf, in ppem. Ten, twelve and sixteen so that a
+# nearest-strike search has work to do: 13 is unambiguously 12's, 20 is 16's, and
+# **11 is a tie** between 10 and 12, which is the case that makes the tie rule a
+# rule rather than an accident of list order.
+STRIKE_PPEMS = (10, 12, 16)
+
+
+def eblc_line_metrics(ascender, descender, width_max):
+    """One `sbitLineMetrics`: twelve bytes, the last two reserved."""
+    return struct.pack(">bbBbbbbbbbbb", ascender, descender, width_max,
+                       1, 0, 0,     # caret slope 1/0, offset 0: upright
+                       0, 0,        # minOriginSB, minAdvanceSB
+                       ascender, descender,  # maxBeforeBL, minAfterBL
+                       0, 0)        # the two reserved bytes
+
+
+def eblc_big_metrics(height, width, bearing_x, bearing_y, advance):
+    """`BigGlyphMetrics`: eight bytes, horizontal then vertical.
+
+    The vertical three are written as zero rather than invented. Nothing in the
+    population states them for a horizontal strike, and a fixture that made them
+    up would be the only evidence for whatever a reader did with them.
+    """
+    return struct.pack(">BBbbBbbB", height, width, bearing_x, bearing_y,
+                       advance, 0, 0, 0)
+
+
+def eblc_bit_rows(rows, width):
+    """Rows packed **bit-aligned**: the next row starts at the next bit.
+
+    Image formats 2, 5, 7 and 9 are laid out this way and 1, 6 and 8 are
+    byte-aligned, which is the single axis that makes two otherwise identical
+    glyph records different bytes. A w x h glyph is ceil(w*h/8) bytes here and
+    h*ceil(w/8) there.
+    """
+    bits = []
+    for row in rows:
+        for column in range(width):
+            bits.append(1 if column < len(row) and row[column] == "#" else 0)
+    out = bytearray((len(bits) + 7) // 8)
+    for index, bit in enumerate(bits):
+        if bit:
+            out[index // 8] |= 0x80 >> (index % 8)
+    return bytes(out)
+
+
+def strike_art(ppem, glyph):
+    """One glyph's pixels at one strike, as text.
+
+    A box with a bar across it, and the bar's row is the glyph index - so no two
+    glyphs of a strike are the same pixels, and no two strikes of a glyph are
+    either, which is what lets a test say *which* strike answered rather than
+    only that one did.
+    """
+    width = ppem - 4
+    height = ppem - 4
+    rows = []
+    for y in range(height):
+        if y == 0 or y == height - 1:
+            rows.append("#" * width)
+        elif y == 1 + (glyph % max(1, height - 2)):
+            rows.append("#" * width)
+        else:
+            rows.append("#" + "." * (width - 2) + "#")
+    return rows
+
+
+def build_strikes(out):
+    """Three strikes of four glyphs, index format 2 with image format 5.
+
+    **This pair is 97.8% of the real population** - 54,136 of the 55,356 index
+    subtables in the two Debian packages that carry this table at all - so it is
+    the one a fixture owes first. It is also the cheapest: constant metrics in
+    EBLC, bit-aligned rows in EBDT, and no per-glyph offsets anywhere.
+
+    Glyph 0 is **left out of every strike**. A strike is sparse over the face's
+    glyph count - unlike a standalone container, where the file is the glyph list
+    - and a glyph absent from a strike is absent rather than empty. Starting at
+    glyph 1 is what makes that case exist in a fixture.
+    """
+    fb = truetype("Strikes", unicode_cmap())
+    first, last = 1, len(GLYPH_ORDER) - 1
+
+    ebdt = bytearray(struct.pack(">I", 0x00020000))
+    size_tables = bytearray()
+    index_regions = bytearray()
+    # Where the first indexSubTableArray goes: after the header and the three
+    # bitmapSizeTables, which is a position this loop has to know before it has
+    # written them.
+    base = 8 + 48 * len(STRIKE_PPEMS)
+
+    for ppem in STRIKE_PPEMS:
+        width = height = ppem - 4
+        image_size = (width * height + 7) // 8
+        data_offset = len(ebdt)
+        for glyph in range(first, last + 1):
+            packed = eblc_bit_rows(strike_art(ppem, glyph), width)
+            assert len(packed) == image_size, (len(packed), image_size)
+            ebdt += packed
+
+        # One index subtable covering the whole range: array entry first, then
+        # the subtable it points at.
+        array = struct.pack(">HHI", first, last, 8)
+        subtable = (struct.pack(">HHI", 2, 5, data_offset)
+                    + struct.pack(">I", image_size)
+                    + eblc_big_metrics(height, width, 1, height, width + 2))
+        region = array + subtable
+
+        size_tables += (struct.pack(">IIII",
+                            base + len(index_regions), len(region), 1, 0)
+                        + eblc_line_metrics(height, -1, width + 2)
+                        + eblc_line_metrics(0, 0, 0)
+                        + struct.pack(">HHBBBb", first, last, ppem, ppem, 1, 1))
+        index_regions += region
+
+    eblc = (struct.pack(">II", 0x00020000, len(STRIKE_PPEMS))
+            + bytes(size_tables) + bytes(index_regions))
+
+    set_raw_table(fb, "EBLC", eblc)
+    set_raw_table(fb, "EBDT", bytes(ebdt))
+    fb.save(out)
+
+
 FIXTURES = {
+    "strikes.ttf": (build_strikes,
+        "Three EBLC strikes - 10, 12 and 16 ppem - of four glyphs each, index "
+        "subtable format 2 with image format 5, which is 97.8% of the index "
+        "subtables in the only two Debian packages that carry this table. The "
+        "first fixture in this library with more than one strike, so the first "
+        "input where GFNT_STRIKE_NEAREST has to choose; 11 ppem is a tie between "
+        "two of them, and glyph 0 is in none of them"),
     "bitmap-gz.pcf.gz": (build_bitmap_gz_pcf,
         "The same PCF as bitmap.pcf inside gzip, which is how every PCF in the "
         "world ships: it must read to identical glyphs, because the wrapper "

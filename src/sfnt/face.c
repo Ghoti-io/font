@@ -438,6 +438,9 @@ void gfnt_face_free(GFNT_Face * face) {
   // A bitmap container's arenas are the same kind of thing: sized from the file
   // rather than pointing into it, because the rows are normalised on the way in.
   gfnt_bitmap_release(allocator, &face->bitmap);
+  // EBLC's strike list, for the same reason: one record per bitmapSizeTable,
+  // copied out so that a strike survives being handed to a caller.
+  gfnt_eblc_release(allocator, &face->eblc);
   allocator->free_fn(allocator->ctx, face->tables);
   // The caller's blob is left alone - every other face of a collection is still
   // using it - and a blob this face derived for itself is destroyed, because

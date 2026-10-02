@@ -50,6 +50,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus
 import oracle_env
+import unskippable
 
 ROOT = oracle_env.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
@@ -71,7 +72,16 @@ TOTAL = 60
 
 
 class Skip(Exception):
-    """This font cannot be compared, with a reason worth printing."""
+    """This font cannot be compared, with a reason worth printing.
+
+    `expected` separates a font that was never going to be compared here - no
+    `cmap` subtable to read - from a driver or a reference that failed, which for
+    an sfnt is what tools/oracle/unskippable.py fails the run over.
+    """
+
+    def __init__(self, why, expected=False):
+        super().__init__(why)
+        self.expected = expected
 
 
 def ours_header(path, face):
@@ -84,7 +94,7 @@ def ours_header(path, face):
         if line.startswith("# subtable "):
             platform, encoding, fmt = (int(x) for x in line.split()[2:5])
             return platform, encoding, fmt
-    raise Skip("the driver named no subtable")
+    raise Skip("the driver named no subtable", expected=True)
 
 
 def ours(path, face, codepoints):
@@ -221,7 +231,7 @@ def main(argv):
             asked, differed, mapped, symbol = compare(path, 0, exhaustive,
                 stride, report)
         except Skip as why:
-            skipped.append((path, str(why)))
+            skipped.append((path, str(why), why.expected))
             continue
         compared += asked
         disagreements += differed
@@ -240,8 +250,16 @@ def main(argv):
         print("cmap_diff: %d font(s) read through the Windows symbol range, "
               "which this differential applies to the reference too"
               % symbol_fonts)
-    for path, why in skipped:
+    for path, why, _ in skipped:
         print("cmap_diff: skipped %s: %s" % (os.path.basename(path), why))
+
+    # The gate: see tools/oracle/unskippable.py. Nothing trips it here today,
+    # which is the one state a gate cannot distinguish from not being wired up -
+    # so it is checked by planting, not by reading this line.
+    dropped = unskippable.check("cmap_diff",
+        [(path, why) for path, why, expected in skipped if not expected])
+    if dropped:
+        return 1
 
     # The denominators, so that a differential which has stopped comparing
     # cannot report a clean run. A corpus that fails to materialise, a driver

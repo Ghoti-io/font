@@ -51,6 +51,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus
 import oracle_env
+import unskippable
 
 ROOT = oracle_env.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
@@ -83,7 +84,19 @@ ONE_PIXEL = 64
 
 
 class Skip(Exception):
-    """This font cannot be compared, with a reason worth printing."""
+    """This font cannot be compared, with a reason worth printing.
+
+    `expected` separates two events that wear one word. A font with no `glyf`, or
+    one both readers agree carries no indexable outline, was never going to be
+    compared here and is counted. Anything else is a font this differential
+    *meant* to compare and could not - and tools/oracle/unskippable.py fails the
+    run when such a font is an sfnt, because that is the one event a clean total
+    cannot be told apart from agreement.
+    """
+
+    def __init__(self, why, expected=False):
+        super().__init__(why)
+        self.expected = expected
 
 
 def fixtures():
@@ -394,7 +407,7 @@ def compare(path, face, stride, report, allowance):
     theirs = reference(path, face, stride, 0)
 
     if theirs.get("outlines") == "no glyf":
-        raise Skip("no glyf table")
+        raise Skip("no glyf table", expected=True)
 
     if theirs.get("outlines", "").startswith("no indexed glyf"):
         # The bitmap-only sfnt: `glyf` of zero bytes under a `loca` of two, which
@@ -427,7 +440,7 @@ def compare(path, face, stride, report, allowance):
             return (0, 1, 0, 0, 0)
         BITMAP_ONLY[0] += 1
         raise Skip("no outline a loca indexes - bitmap-only, and both readers "
-                   "say so")
+                   "say so", expected=True)
 
     # Glyphs this library declined. Their other keys are not compared: a glyph
     # it refused to read has no points to disagree about, and counting each of
@@ -541,7 +554,7 @@ def main(argv):
             fields, differed, seen, imprecise, refused = compare(path, 0,
                 1 if path in synthetic_paths else stride, report, allowance)
         except Skip as why:
-            skipped.append((path, str(why)))
+            skipped.append((path, str(why), why.expected))
             continue
         compared += fields
         disagreements += differed
@@ -582,11 +595,19 @@ def main(argv):
           "two. Not a comparison and not a crash either: for each, this library "
           "was checked to refuse the whole face rather than read an outline the "
           "reference says is not indexed" % BITMAP_ONLY[0])
-    for path, why in skipped:
+    for path, why, _ in skipped:
         print("glyf_diff: skipped %s: %s" % (os.path.basename(path), why))
+
+    # The gate: a file the corpus selector calls an sfnt may not leave the
+    # denominator because something failed. See tools/oracle/unskippable.py - this
+    # differential is where that clause was caught hiding five real fonts.
+    dropped = unskippable.check("glyf_diff",
+        [(path, why) for path, why, expected in skipped if not expected])
 
     # The denominators, so that a differential which has stopped comparing
     # cannot report a clean run.
+    if dropped:
+        return 1
     if not compared:
         sys.stderr.write("glyf_diff: nothing was compared\n")
         return 1

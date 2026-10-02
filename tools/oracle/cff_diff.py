@@ -53,6 +53,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus
 import glyf_diff
 import oracle_env
+import unskippable
 
 ROOT = oracle_env.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
@@ -536,6 +537,15 @@ def main(argv):
     for path, why, _ in absent:
         if not quiet:
             print("cff_diff: skipped %s: %s" % (os.path.basename(path), why))
+
+    # The gate: see tools/oracle/unskippable.py. The eleven unexplained skips here
+    # are all fixtures that are not sfnts at all - the PCF, BDF, PSF, `.hex`, Type
+    # 1 and bare-CFF files, which reach this differential because a fixture joins
+    # it by existing - so none of them is an sfnt and none trips this.
+    dropped = unskippable.check("cff_diff", [(item[0], item[1])
+        for item in unexplained])
+    if dropped:
+        return 1
 
     # The denominators, so that a differential which has stopped comparing
     # cannot report a clean run. A CFF corpus is small - 35 of the image's 327

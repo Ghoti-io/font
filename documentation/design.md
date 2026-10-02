@@ -2518,6 +2518,60 @@ The five fonts are the `.otb` faces, and they paid for the change immediately:
   `check-fixtures` and `check-vectors` are identical, which is what a corpus change
   that admitted exactly five files should do.
 
+**The blanket skip is a gate now, as of 2026-10-02.** `tools/oracle/unskippable.py`:
+**a file the corpus selector calls an sfnt may not leave a differential's
+denominator because something failed.** It is one rule in one place, called by
+`ttx_diff`, `cmap_diff`, `cff_diff` and `glyf_diff`, and it took a second finding
+to write.
+
+Each of those caught a `Skip` per font, printed it, and carried on. That is right
+for a *stated* reason - no `CFF `, no `glyf` - and it is how a font disappears when
+the reason is "the reference exited non-zero": the font leaves the denominator, one
+line joins thirty-five others, and the total is exactly as clean as if the font had
+agreed. The clause had never once been wrong, because every font it had excluded
+was a fixture that is not an sfnt at all.
+
+- **`ttx_diff` was dropping `mona.ttf` whole.** Its `OS/2` states version 2 in 86
+  bytes, which is a version 1 length, and fontTools raises `struct.error` reading
+  the version 2 addition. Because `lazy=True` decodes a table where it is first
+  touched, that one short table ended the adapter - so **every** field of that
+  font, 7,300 of them, had been out of this gate since the gate existed.
+  `fonttools_tables.readable()` now reports `unreadable.<table>` and carries on,
+  which puts the failure where it belongs: on one *table*, not on the font.
+- **And the agreement about that table is asserted, not assumed.** This library
+  refuses a short `OS/2` as corrupt and reads the rest; if it had read a table the
+  reference cannot, that is a field with one reader, which is counted and named
+  rather than left looking like agreement.
+- **Comparing `mona.ttf` then found 7,225 disagreements, and they were the
+  reference generating names.** Its `post` is format 1.0 - "the glyph set is the
+  standard Macintosh ordering", 258 names - over 7,225 glyphs, so the table
+  contradicts itself. fontTools discards it and derives a name per glyph from the
+  `cmap`, announcing that on its own stderr; this library reports the standard
+  order for the 258 the format names and nothing past them, which is also
+  `tt_face_get_ps_name`'s reading. Captured from the warning, like the `head` date
+  above, so the allowance expires when the warning does.
+
+The gate's shape, and each part of it was paid for:
+
+- **The corpus selector decides what an sfnt is**, not this file. A real font is one
+  because `fonttools-corpus` put it in a corpus; a fixture is one because that same
+  program, run over `tests/data/fonts`, says so. No second magic test to drift from
+  the one in the image - which is the mistake that produced two disagreeing corpus
+  lists to begin with (§14.5).
+- **A declaration is an assertion in both directions.** `outline-broken-loca.ttf` is
+  the one entry: `loca` names a glyph past the end of `glyf`, which is the whole
+  point of the fixture. If it ever stops being skipped the gate fails too and says
+  to remove the entry, because an exemption that cannot expire is how a gate goes
+  quiet.
+- **Planted in all four, and each was seen to fail.** Making the adapter re-raise
+  puts `mona.ttf` back in the skip list and `ttx_diff` exits 1 naming it; removing
+  the declaration fails `glyf_diff` in both directions at once; a planted reference
+  failure on one real font fails `cmap_diff` and `cff_diff`, neither of which has
+  anything to fire on in the population today. The negative control is that a
+  non-sfnt skip - `bare.cff` and the PCF, BDF, PSF and `.hex` fixtures, which reach
+  every differential because a fixture joins one by existing - does not fail any of
+  them.
+
 **`EBSC` is read, as of 2026-10-01**: ::gfnt_face_scaled_strike_count() and
 ::gfnt_face_scaled_strike_at(), over the eleven Debian faces that have one. §7.5
 has the three reasons nothing here scales a pixel; what the gate adds is that the

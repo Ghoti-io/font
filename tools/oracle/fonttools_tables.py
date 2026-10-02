@@ -192,6 +192,21 @@ def render(key, value):
 # every decode.
 SANITISED = re.compile(r"'(?P<field>\w+)' timestamp seems very low")
 
+# fontTools' own warning when it throws a `post` table's answer away and makes the
+# names up instead. `mona.ttf` states `post` **format 1.0** - "the glyph set is the
+# standard Macintosh ordering", which is 258 names - and then carries 7,225 glyphs,
+# so the table contradicts itself. fontTools discards the standard order entirely
+# and derives a name for every glyph from the `cmap`, giving `space` at index 1
+# where the standard order has `.null` and `uni6687` at 1000 where the table says
+# nothing at all. This library reports the standard order for the 258 the format
+# does name and `unreadable` past them, which is also what FreeType's
+# `tt_face_get_ps_name` does.
+#
+# Generated names are not a reading of the font, so they are not compared - and the
+# reference announces it, once per font, which is what makes this an allowance that
+# expires with the warning rather than a list of fonts to remember.
+GENERATED_NAMES = re.compile(r"Not enough names found in the 'post' table")
+
 
 class Sanitisations(logging.Handler):
     """Record which `head` fields fontTools rewrote rather than read.
@@ -207,11 +222,39 @@ class Sanitisations(logging.Handler):
     def __init__(self):
         super().__init__()
         self.fields = set()
+        self.generated_names = False
 
     def emit(self, record):
-        found = SANITISED.match(record.getMessage())
+        message = record.getMessage()
+        found = SANITISED.match(message)
         if found:
             self.fields.add(found.group("field"))
+        if GENERATED_NAMES.match(message):
+            self.generated_names = True
+
+
+def readable(font, table, out):
+    """`font[table]`, or None and an `unreadable.` line if it cannot be decoded.
+
+    **A table fontTools cannot decompile must not take the whole font with it.**
+    `lazy=True` means a table is decoded where it is first touched, and an
+    exception there propagates out of this program, which the differential reads
+    as "the reference refused this font" - so every other table of it goes
+    uncompared, silently, behind a clean total. `mona.ttf` is the case: its `OS/2`
+    says version 2 and is 86 bytes, the length of a version 1 table, and fontTools
+    raises `struct.error` reading the version 2 addition. Every one of that font's
+    other tables was dropped from this gate because of it.
+
+    The exception's type is printed rather than swallowed. It is the reference's
+    own statement that it cannot read the table, which is a fact the differential
+    can compare against this library's refusal of the same table - and unlike a
+    skip, it is a fact about one *table*.
+    """
+    try:
+        return font[table]
+    except Exception as why:  # noqa: BLE001 - the reason is the output
+        out.write("unreadable.%s\t%s\n" % (table, type(why).__name__))
+        return None
 
 
 def main(argv):
@@ -237,7 +280,9 @@ def main(argv):
         if table not in font:
             out.write("absent.%s\t1\n" % table)
             continue
-        parsed = font[table]
+        parsed = readable(font, table, out)
+        if parsed is None:
+            continue
         for key, candidates in fields.items():
             for candidate in candidates:
                 if hasattr(parsed, candidate):
@@ -252,7 +297,8 @@ def main(argv):
                 out.write("missing.%s.%s\t1\n" % (table, key))
 
     if "cmap" in font:
-        for index, subtable in enumerate(font["cmap"].tables):
+        cmap = readable(font, "cmap", out)
+        for index, subtable in enumerate(cmap.tables if cmap else ()):
             out.write("cmap.subtable.%d\t%d %d %d\n"
                       % (index, subtable.platformID, subtable.platEncID,
                          subtable.format))
@@ -269,8 +315,10 @@ def main(argv):
     # was itself reading, and 42 of them came out as disagreements.
     top = None
     if "CFF " in font:
-        cff = font["CFF "].cff
-        top = cff[cff.fontNames[0]]
+        table = readable(font, "CFF ", out)
+        if table is not None:
+            cff = table.cff
+            top = cff[cff.fontNames[0]]
     if top is not None and hasattr(top, "ROS"):
         # A CID-keyed font's charset holds CIDs, and a CID is not a name:
         # fontTools invents `cidNNNNN` for them. The one name the format does give
@@ -278,16 +326,23 @@ def main(argv):
         # nothing.
         out.write("glyphname.0\t.notdef\n")
         out.write("glyphnames.absent\t1\n")
-    elif top is not None or ("post" in font
-            and font["post"].formatType in (1.0, 2.0)):
-        order = font.getGlyphOrder()
-        for index, name in enumerate(order):
-            out.write("glyphname.%d\t%s\n" % (index, escape(name)))
-    elif "post" in font:
-        out.write("glyphnames.absent\t1\n")
+    else:
+        # `post` through readable() for the same reason as every other table: a
+        # `post` fontTools cannot decompile would otherwise end the program here,
+        # after the fields above had already been printed, and a differential
+        # reading a truncated dump compares what it got.
+        post = readable(font, "post", out) if "post" in font else None
+        if top is not None or (post is not None
+                and post.formatType in (1.0, 2.0)):
+            order = font.getGlyphOrder()
+            for index, name in enumerate(order):
+                out.write("glyphname.%d\t%s\n" % (index, escape(name)))
+        elif post is not None:
+            out.write("glyphnames.absent\t1\n")
 
-    if "name" in font:
-        for record in font["name"].names:
+    name_table = readable(font, "name", out) if "name" in font else None
+    if name_table is not None:
+        for record in name_table.names:
             key = "name.%d.%d.%d.%d" % (record.platformID, record.platEncID,
                                         record.langID, record.nameID)
             try:
@@ -305,6 +360,8 @@ def main(argv):
     # these and counts them.
     for field in sorted(sanitised.fields):
         out.write("sanitised.head.%s\t1\n" % field)
+    if sanitised.generated_names:
+        out.write("generated.glyphnames\t1\n")
     return 0
 
 

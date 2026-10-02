@@ -56,6 +56,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus
 import oracle_env
+import unskippable
 
 ROOT = oracle_env.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
@@ -69,6 +70,11 @@ TOTAL = 60
 PATTERNS = [
     (r"^table '(.{1,4})': offset (\d+), length (\d+), checksum 0x([0-9A-F]+)$",
      "directory"),
+    # The dump's own per-table refusal, read rather than inferred from the absence
+    # of that table's fields. The result's name distinguishes "the font has no
+    # such table" from "it has one and this library would not read it", and the
+    # second is the half that has to line up with the reference's `unreadable.`.
+    (r"^(head|hhea|OS/2|post): absent \((.*)\)$", "declined"),
     (r"^head: version \d+\.\d+, revision 0x([0-9A-F]+), unitsPerEm (\d+), "
      r"flags 0x([0-9A-F]+)$",
      ["head.fontRevision", "head.unitsPerEm", "head.flags"]),
@@ -154,9 +160,11 @@ def sanitise(tag):
 
 
 def parse_ours(text):
-    """Our dump, as {key: value} plus the keys it declined to decode."""
+    """Our dump, as {key: value}, the keys it would not decode, and the tables it
+    would not read at all (by the result it reported for each)."""
     values = {}
     undecodable = set()
+    declined = {}
     for line in text.splitlines():
         for pattern, keys in PATTERNS:
             found = pattern.match(line)
@@ -177,6 +185,9 @@ def parse_ours(text):
             elif keys == "glyphname":
                 index, value = found.groups()
                 values["glyphname.%d" % int(index)] = value
+            elif keys == "declined":
+                table, why = found.groups()
+                declined[table] = why
             elif keys == "glyphnames-absent":
                 values["glyphnames.absent"] = "1"
             elif keys == "name-undecodable":
@@ -188,7 +199,7 @@ def parse_ours(text):
                 for key, value in zip(keys, found.groups()):
                     values[key] = value
             break
-    return values, undecodable
+    return values, undecodable, declined
 
 
 def parse_reference(text):
@@ -201,17 +212,27 @@ def parse_reference(text):
     # though it had been a Unix timestamp, which is a sanitisation and not a
     # reading of the font.
     sanitised = set()
+    # Tables the reference says it could not decompile, by the exception it raised.
+    # One table and not the whole font: see readable() in the adapter.
+    unreadable = {}
+    # Whether the reference announced that it *generated* the glyph names rather
+    # than reading them, which it does when `post` does not name every glyph.
+    generated_names = False
     for line in text.splitlines():
         key, _, value = line.partition("\t")
         if key.startswith("missing.") or key.startswith("absent."):
             absent.add(key.split(".", 1)[1])
         elif key.startswith("undecodable."):
             undecodable += 1
+        elif key == "generated.glyphnames":
+            generated_names = True
+        elif key.startswith("unreadable."):
+            unreadable[key.split(".", 1)[1]] = value
         elif key.startswith("sanitised."):
             sanitised.add(key.split(".", 1)[1])
         else:
             values[key] = value
-    return values, absent, undecodable, sanitised
+    return values, absent, undecodable, sanitised, unreadable, generated_names
 
 
 def agree(key, ours, theirs):
@@ -352,7 +373,19 @@ def refusal_is_documented(key):
 
 
 class Skip(Exception):
-    """This font cannot be compared, with a reason worth printing."""
+    """This font cannot be compared, with a reason worth printing.
+
+    `expected` is carried for the same reason as in the other differentials, and
+    here it is always false: every skip this gate can raise is a driver or a
+    reference that failed, which is exactly what tools/oracle/unskippable.py
+    refuses to let an sfnt leave the denominator for. `mona.ttf` used to be one of
+    them, over a short `OS/2`, and that cost the gate every other field of that
+    font until the adapter learned to fail per table.
+    """
+
+    def __init__(self, why, expected=False):
+        super().__init__(why)
+        self.expected = expected
 
 
 def compare(path, face, report):
@@ -361,7 +394,7 @@ def compare(path, face, report):
         text=True)
     if finished.returncode != 0:
         raise Skip(finished.stderr.strip() or "the driver refused the font")
-    ours, our_undecodable = parse_ours(finished.stdout)
+    ours, our_undecodable, our_declined = parse_ours(finished.stdout)
 
     argv = oracle_env.command("fonttools",
         ["python3", REFERENCE, path, str(face)])
@@ -369,8 +402,8 @@ def compare(path, face, report):
     if answered.returncode != 0:
         tail = answered.stderr.strip().splitlines()
         raise Skip("fontTools: %s" % (tail[-1] if tail else "refused"))
-    theirs, absent, their_undecodable, sanitised = parse_reference(
-        answered.stdout)
+    (theirs, absent, their_undecodable, sanitised, unreadable,
+        generated_names) = parse_reference(answered.stdout)
 
     compared = 0
     disagreements = 0
@@ -378,8 +411,48 @@ def compare(path, face, report):
     shown = 0
     uniquified = 0
     rewritten = 0
+    one_sided = 0
+    invented = 0
     mac_pairs = set()
+
+    # A table the reference could not decompile. **The agreement is asserted, not
+    # assumed**: this library must have declined the same table, and declined it as
+    # corrupt rather than as absent, because the table is in the directory. If it
+    # read one the reference cannot, that is not a disagreement - our reading may
+    # be the right one - but it is a field with a single reader, so it is counted
+    # and named rather than left to look like agreement.
+    #
+    # `mona.ttf` is the whole of this category today: its `OS/2` states version 2
+    # in 86 bytes, which is a version 1 length. fontTools raises reading the
+    # version 2 addition; this library refuses the table and reads the rest of the
+    # font. Until the adapter failed per table, that one short table took every
+    # other table of this font out of the gate.
+    for table, why in sorted(unreadable.items()):
+        if table in our_declined:
+            if "Corrupt" not in our_declined[table]:
+                disagreements += 1
+                sys.stderr.write(
+                    "  %s: the reference could not decompile %s (%s) and this "
+                    "library called it %r rather than corrupt\n"
+                    % (os.path.basename(path), table, why, our_declined[table]))
+            continue
+        one_sided += 1
+        if shown < PER_FONT and report[0] < TOTAL:
+            sys.stderr.write(
+                "  %s: %s has one reader - the reference raised %s and this "
+                "library read the table\n"
+                % (os.path.basename(path), table, why))
+            shown += 1
+            report[0] += 1
+
     for key, value in sorted(theirs.items()):
+        if generated_names and key.startswith("glyphname."):
+            # The reference said, on its own stderr, that it made these up from the
+            # `cmap` because `post` does not name every glyph. A generated name is
+            # not a reading of the font. Counted, and the count is printed, so a
+            # run that rests on this says how much it rests on it.
+            invented += 1
+            continue
         if key not in ours:
             if key in our_undecodable and refusal_is_documented(key):
                 declined += 1
@@ -455,7 +528,7 @@ def compare(path, face, report):
                 shape.setdefault("Macintosh name (encoding, language)", None)
                 mac_pairs.add("(%s,%s)" % (parts[2], parts[3]))
     return compared, disagreements, declined, their_undecodable, shape, \
-        mac_pairs, uniquified, rewritten
+        mac_pairs, uniquified, rewritten, one_sided, invented
 
 
 FIXTURES = os.path.join(oracle_env.ROOT, "tests", "data", "fonts")
@@ -548,19 +621,23 @@ def main(argv):
     coverage = {"OS/2 version": {}, "post version": {}}
     mac_coverage = {}
     sanitised_fields = 0
+    single_reader = 0
+    generated_names = 0
 
     for path, face in fonts:
         try:
             (keys, differed, refused, theirs, shape, pairs, renamed,
-                rewritten) = compare(path, face, report)
+                rewritten, lonely, made_up) = compare(path, face, report)
         except Skip as why:
-            skipped.append((path, str(why)))
+            skipped.append((path, str(why), why.expected))
             continue
         compared += keys
         disagreements += differed
         declined += refused
         uniquified_names += renamed
         sanitised_fields += rewritten
+        single_reader += lonely
+        generated_names += made_up
         theirs_declined += theirs
         for axis, value in shape.items():
             if value is not None:
@@ -616,8 +693,27 @@ def main(argv):
         print("ttx_diff: no fixtures in this run, so OS/2 versions 0, 2 and 5, "
               "post format 1.0 and every non-Roman Macintosh encoding went "
               "uncompared; the unit tests are their only cover")
-    for path, why in skipped:
+    for path, why, _ in skipped:
         print("ttx_diff: skipped %s: %s" % (os.path.basename(path), why))
+    print("ttx_diff: %d glyph name(s) the reference generated from the `cmap` "
+          "rather than reading, and said so on its own stderr while doing it - a "
+          "`post` of format 1.0 names the 258 standard Macintosh glyphs and "
+          "mona.ttf has 7,225, so fontTools discards the table and derives a name "
+          "per glyph. This library reports the standard order for the 258 the "
+          "format does name and nothing past them, which is FreeType's reading "
+          "too. Not compared, because a generated name is not a reading"
+          % generated_names)
+    print("ttx_diff: %d table(s) with a single reader - the reference could not "
+          "decompile them and this library read them, or the reverse, which is "
+          "counted per *table* so that one short table does not take a font's "
+          "other fields out of the gate with it" % single_reader)
+
+    # The gate: see tools/oracle/unskippable.py. `mona.ttf` was leaving this
+    # differential entirely on a short `OS/2`, which is what it is for.
+    dropped = unskippable.check("ttx_diff",
+        [(path, why) for path, why, expected in skipped if not expected])
+    if dropped:
+        return 1
 
     if not compared:
         sys.stderr.write("ttx_diff: nothing was compared\n")

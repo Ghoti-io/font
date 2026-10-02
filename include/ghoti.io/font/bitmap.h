@@ -48,9 +48,20 @@
  *
  * `bloc`, `CBDT` and `sbix` are not read at all and refuse at the strike list,
  * which is a different answer again - `glyph.h` exists to keep them apart. So are
- * `EBDT`'s composite image formats and its grey depths: a grey strike is *listed*,
- * with its depth, and its glyph data declined, because every row here is one bit
- * per pixel.
+ * `EBDT`'s grey depths: a grey strike is *listed*, with its depth, and its glyph
+ * data declined, because every row here is one bit per pixel.
+ *
+ * `EBDT`'s **composite** image formats 8 and 9 *are* read, and nothing about them
+ * reaches this interface: a composite is a list of other glyphs of the same
+ * strike, each OR-ed in at a signed pixel offset, and what comes back is the
+ * composed pixels in the box the composite states. A caller cannot tell one from
+ * a glyph that stored its rows directly, which is the point. Two of them are
+ * refusals rather than compositions, and both are per glyph (M11): a component
+ * the strike does not carry, and a component that falls outside the composite's
+ * own box, are ::GFNT_ERR_CORRUPT; a composite that reaches itself, through any
+ * number of other glyphs, is ::GFNT_ERR_CORRUPT named as a cycle rather than left
+ * to exhaust ::GFNT_Limits::max_composite_depth, which is what refuses an acyclic
+ * chain nested deeper than the caller allows and reports ::GFNT_ERR_LIMIT.
  *
  * Two things are normalised on the way out, and both are deliberate:
  *

@@ -150,7 +150,7 @@ typedef struct GFNT_EblcSubtable {
   uint16_t first_glyph;       ///< `firstGlyphIndex`, inclusive.
   uint16_t last_glyph;        ///< `lastGlyphIndex`, inclusive.
   uint16_t index_format;      ///< 1-5.
-  uint16_t image_format;      ///< 1, 2, 5, 6 or 7; 8 and 9 are composites.
+  uint16_t image_format;      ///< 1, 2, 5, 6, 7, or 8 and 9, the composites.
   uint32_t image_data_offset; ///< Into `EBDT`.
   size_t body_offset;         ///< Into `EBLC`, past the `indexSubHeader`.
   uint32_t image_size;        ///< Index formats 2 and 5: bytes per glyph.

@@ -39,7 +39,32 @@
  * ones go straight there, because `EBDT` is MSB-first with no scan unit, which is
  * exactly that function's identity case.
  *
- * Reference: OpenType Specification 1.9, "EBDT - Embedded Bitmap Data Table".
+ * **And a third kind: image formats 8 and 9 have no rows at all**, but a list of
+ * other glyphs of the same strike, each OR-ed into the composite's own box at a
+ * signed pixel offset. Those offsets are the *only* thing that positions a
+ * component - not its own bearings - and y runs down from the top row.
+ *
+ * The specification does not say any of that. `EbdtComponent`'s fields are
+ * documented as "Position of component left" and "Position of component top",
+ * which names neither the space nor the direction nor what happens to a component
+ * that does not fit, and all three change the pixels. What settles it is
+ * FreeType's `src/sfnt/ttsbit.c`: `tt_sbit_decoder_load_compound()` recurses with
+ * `x_pos + dx, y_pos + dy`, the loaders compute `line += y_pos * pitch +
+ * (x_pos >> 3)` and `|=` into it, a component past the canvas is refused, and the
+ * component's own bearings are saved and restored around the recursion so they
+ * never place it. That is the de facto reference for this format and it is cited
+ * here because no second reader of these pixels exists at all: nothing in Debian
+ * has a composite, and fontTools parses the component list without composing an
+ * image.
+ *
+ * One thing here is deliberately *more* than FreeType does: a cycle is walked for
+ * and named. FreeType has only `recurse_count > 100`, which answers a depth limit
+ * for a glyph that reaches itself - true, and useless to a caller who can act on a
+ * limit by raising it.
+ *
+ * Reference: OpenType Specification 1.9, "EBDT - Embedded Bitmap Data Table";
+ * FreeType 2.13.3, `src/sfnt/ttsbit.c`, for the composite placement the
+ * specification leaves unstated.
  */
 
 #include <ghoti.io/cutil/safemath.h>
@@ -88,8 +113,27 @@ static GFNT_Result gfnt_ebdt_read_metrics(GFNT_Reader * reader,
       }
       *out_consumed = GFNT_EBDT_SMALL_METRICS_BYTES;
       return GFNT_OK;
+    case 8:
+      // SmallGlyphMetrics and then **a pad byte**, which is the whole difference
+      // between formats 8 and 9's headers and the one thing a reader of this
+      // format gets wrong: skip it and `numComponents` is read from the high half
+      // of the count, so every component id is garbage and the glyph refuses for
+      // a reason that says nothing about the real mistake.
+      if (gfnt_read_u8(reader, &out->height) != GFNT_OK
+          || gfnt_read_u8(reader, &out->width) != GFNT_OK
+          || gfnt_read_s8(reader, &out->bearing_x) != GFNT_OK
+          || gfnt_read_s8(reader, &out->bearing_y) != GFNT_OK
+          || gfnt_read_u8(reader, &out->advance) != GFNT_OK
+          || gfnt_reader_skip(reader, 1) != GFNT_OK) {
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT,
+            gfnt_reader_tell(reader), GFNT_GLYPH_NONE,
+            "an EBDT composite too short for its metrics and pad byte");
+      }
+      *out_consumed = GFNT_EBDT_SMALL_METRICS_BYTES + 1u;
+      return GFNT_OK;
     case 6:
     case 7:
+    case 9:
       if (gfnt_read_u8(reader, &out->height) != GFNT_OK
           || gfnt_read_u8(reader, &out->width) != GFNT_OK
           || gfnt_read_s8(reader, &out->bearing_x) != GFNT_OK
@@ -287,16 +331,319 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
   return GFNT_OK;
 }
 
-/** Read one glyph's metrics and rows, and hand them to the builder. */
-static GFNT_Result gfnt_ebdt_read_glyph(const GFNT_EblcSubtable * subtable,
-    const GFNT_Reader * data, size_t offset, size_t length,
-    GFNT_BitmapBuild * build, GFNT_Error * error) {
-  GFNT_Reader at = *data;
+/** The subtable covering @p glyph, or NULL. */
+static const GFNT_EblcSubtable * gfnt_ebdt_subtable_for(
+    const GFNT_EblcSubtable * subtables, size_t count, uint32_t glyph) {
+  for (size_t i = 0; i < count; ++i) {
+    if (glyph >= subtables[i].first_glyph && glyph <= subtables[i].last_glyph) {
+      return &subtables[i];
+    }
+  }
+  return NULL;
+}
+
+/**
+ * What a glyph read needs beyond its own bytes.
+ *
+ * Only the composites need any of it, and they need all of it: a component is
+ * found through the strike's index exactly as a top-level glyph is, so painting
+ * one means having the index, the table and the face that bounds them.
+ */
+typedef struct GFNT_EbdtRead {
+  const GFNT_Face * face;
+  const GFNT_EblcStrike * strike;
+  const GFNT_EblcSubtable * subtables;
+  size_t subtable_count;
+  const GFNT_Reader * data;     ///< `EBDT` from its start, including the version.
+  GFNT_BitmapBuild * build;
+} GFNT_EbdtRead;
+
+/**
+ * The chain of glyphs currently being painted, innermost last.
+ *
+ * A linked list of stack frames rather than an array, because the depth a caller
+ * allows is ::GFNT_Limits::max_composite_depth and a fixed array would either cap
+ * that a second time or need allocating. Each level's node lives in its own
+ * frame, so the walk costs nothing and there is nothing to free.
+ *
+ * It exists to **name a cycle rather than hit the depth cap with it**. The depth
+ * budget alone would refuse `A -> B -> A` after sixteen levels and report a limit,
+ * which is a true sentence about a font that is simply wrong - and the same thing
+ * `glyf`'s composite reader does for an indirect cycle today, where it names only
+ * the direct one. Here both are named.
+ */
+typedef struct GFNT_EbdtChain {
+  const struct GFNT_EbdtChain * parent;
+  uint32_t glyph;
+} GFNT_EbdtChain;
+
+/** Whether this glyph is already being painted, at any level. */
+static bool gfnt_ebdt_chain_has(const GFNT_EbdtChain * chain, uint32_t glyph) {
+  for (; chain; chain = chain->parent) {
+    if (chain->glyph == glyph) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether an image format's data is a list of other glyphs rather than rows. */
+static bool gfnt_ebdt_is_composite(uint16_t image_format) {
+  // 8 carries SmallGlyphMetrics and a pad byte, 9 BigGlyphMetrics and no pad;
+  // past the metrics both are a uint16 count and four bytes per component.
+  return image_format == 8 || image_format == 9;
+}
+
+/**
+ * One leaf glyph's rows, byte-aligned and MSB-first whatever the format stored.
+ *
+ * Split out of ::gfnt_ebdt_read_glyph() because a composite's component needs
+ * exactly this and then a blit, where a top-level glyph needs exactly this and
+ * then the builder. Two copies of it would be two places for the
+ * bit-aligned widening to be wrong.
+ *
+ * @param out_rows Receives them. **Borrowed**: from the blob for a byte-aligned
+ *   format and from the builder's scratch row buffer for a bit-aligned one, so
+ *   the pointer lasts only until the next call for another glyph. Every caller
+ *   consumes it before asking again, and a caller that did not would see one
+ *   component's pixels where another's belong.
+ */
+static GFNT_Result gfnt_ebdt_leaf_rows(GFNT_BitmapBuild * build,
+    uint16_t image_format, GFNT_Reader * at, size_t offset,
+    size_t rows_available, const GFNT_EblcMetrics * metrics,
+    const uint8_t ** out_rows, size_t * out_stride, GFNT_Error * error) {
+  size_t stride = ((size_t)metrics->width + 7u) / 8u;
+  const uint8_t * rows = NULL;
+  size_t wanted;
+
+  if (!gcu_safe_mul_size(stride, metrics->height, &wanted)) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
+        GFNT_GLYPH_NONE, "an EBDT glyph whose rows do not fit a size_t");
+  }
+  *out_stride = stride;
+
+  if (gfnt_ebdt_byte_aligned(image_format)) {
+    if (wanted > rows_available
+        || gfnt_read_bytes(at, wanted, &rows) != GFNT_OK) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
+          GFNT_GLYPH_NONE, "an EBDT glyph with fewer rows than its box");
+    }
+    *out_rows = rows;
+    return GFNT_OK;
+  }
+
+  {
+    uint8_t * widened = NULL;
+    GFNT_Result result;
+
+    if (gfnt_read_bytes(at, rows_available, &rows) != GFNT_OK) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
+          GFNT_GLYPH_NONE, "an EBDT glyph shorter than the length it states");
+    }
+    result = gfnt_bitmap_build_rows(build, wanted, &widened, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    if (!gfnt_bitmap_widen_rows(widened, rows, rows_available, metrics->width,
+            metrics->height)) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
+          GFNT_GLYPH_NONE,
+          "an EBDT bit-aligned glyph with fewer bits than its box");
+    }
+    *out_rows = widened;
+    return GFNT_OK;
+  }
+}
+
+/**
+ * OR one component's pixels into a composite's canvas at (@p x, @p y).
+ *
+ * @p y counts **down from the top row**, which is the convention `EBDT`'s rows
+ * are stored in and the one ::GFNT_BitmapGlyph hands out, so a component's
+ * `yOffset` needs no sign change. The component's own bearings do not come into
+ * it at all: the specification positions a component by these two offsets alone,
+ * and `strike-composite.ttf` gives its three leaves three *different* bearings so
+ * that a reader which used them would draw a different glyph.
+ *
+ * Bit by bit rather than byte by byte with a shift. The shifted form is where the
+ * off-by-one in a blit lives, and this format has no population at all to make
+ * the speed worth it - `uming.ttc` and `mona.ttf` between them have no composite.
+ *
+ * @return false when the component does not fit, which is a composite whose own
+ *   box contradicts its components rather than something to clip.
+ */
+static bool gfnt_ebdt_blit(uint8_t * canvas, size_t canvas_stride,
+    uint32_t canvas_width, uint32_t canvas_height, const uint8_t * rows,
+    size_t row_stride, uint32_t width, uint32_t height, int32_t x, int32_t y) {
+  if (x < 0 || y < 0
+      || (int64_t)x + width > (int64_t)canvas_width
+      || (int64_t)y + height > (int64_t)canvas_height) {
+    return false;
+  }
+  for (uint32_t row = 0; row < height; ++row) {
+    const uint8_t * source = rows + (size_t)row * row_stride;
+    uint8_t * target = canvas + ((size_t)y + row) * canvas_stride;
+
+    for (uint32_t column = 0; column < width; ++column) {
+      if (source[column >> 3] & (uint8_t)(0x80u >> (column & 7u))) {
+        size_t at = (size_t)x + column;
+
+        target[at >> 3] |= (uint8_t)(0x80u >> (at & 7u));
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Paint @p glyph into @p canvas at (@p x, @p y), recursing for a composite.
+ *
+ * One canvas for the whole tree, which is how FreeType does it and the only way
+ * that is correct: a nested composite contributes nothing but its components'
+ * offsets added to its own, so there is no intermediate image to hold. Its own
+ * metrics are read and discarded, exactly as `tt_sbit_decoder_load_compound()`
+ * saves and restores the composite's.
+ */
+static GFNT_Result gfnt_ebdt_paint(const GFNT_EbdtRead * read, uint32_t glyph,
+    int32_t x, int32_t y, uint8_t * canvas, size_t canvas_stride,
+    uint32_t canvas_width, uint32_t canvas_height,
+    const GFNT_EbdtChain * chain, size_t depth, GFNT_Error * error) {
+  const GFNT_EblcSubtable * subtable;
+  GFNT_EbdtChain here;
+  GFNT_Reader at = *read->data;
+  GFNT_EblcMetrics metrics;
+  size_t offset = 0;
+  size_t length = 0;
+  size_t consumed = 0;
+  bool found = false;
+  uint16_t components = 0;
+  GFNT_Result result;
+
+  if (depth > read->face->limits.max_composite_depth) {
+    // A limit rather than a corruption, and the distinction is the point: the
+    // cycle check above has already refused every font that reaches itself, so
+    // what is left here is a font nesting legitimately deeper than this caller
+    // allowed. ::GFNT_ERR_LIMIT is what `gfnt_glyf_load()` answers for the same
+    // question, and a caller can act on it by raising the budget where a
+    // "corrupt" they cannot act on would be a lie.
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_EBDT, 0, glyph,
+        "EBDT composite glyphs nest deeper than max_composite_depth allows");
+  }
+  if (glyph < read->strike->start_glyph || glyph > read->strike->end_glyph) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, 0, glyph,
+        "an EBDT composite whose component is outside the strike's glyph range");
+  }
+  subtable = gfnt_ebdt_subtable_for(read->subtables, read->subtable_count,
+      glyph);
+  if (!subtable) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, 0, glyph,
+        "an EBDT composite whose component no index subtable covers");
+  }
+  result = gfnt_ebdt_locate(read->face, subtable, glyph, &offset, &length,
+      &found, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (!found) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, 0, glyph,
+        "an EBDT composite whose component this strike does not carry");
+  }
+  if (length == 0) {
+    // A component with no bitmap draws nothing, as a space does. Not an error:
+    // the strike lists it and states that it has no pixels.
+    return GFNT_OK;
+  }
+  if (gfnt_reader_seek(&at, offset) != GFNT_OK) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset, glyph,
+        "an EBDT component that starts past the end of the table");
+  }
+  metrics = subtable->metrics;
+  result = gfnt_ebdt_read_metrics(&at, subtable->image_format, &metrics,
+      &consumed, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (consumed > length) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset, glyph,
+        "an EBDT glyph whose stated length does not reach past its metrics");
+  }
+
+  if (!gfnt_ebdt_is_composite(subtable->image_format)) {
+    const uint8_t * rows = NULL;
+    size_t stride = 0;
+
+    if (metrics.width == 0 || metrics.height == 0) {
+      return GFNT_OK;
+    }
+    result = gfnt_ebdt_leaf_rows(read->build, subtable->image_format, &at,
+        offset, length - consumed, &metrics, &rows, &stride, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    if (!gfnt_ebdt_blit(canvas, canvas_stride, canvas_width, canvas_height,
+            rows, stride, metrics.width, metrics.height, x, y)) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
+          glyph, "an EBDT composite whose component falls outside its own box");
+    }
+    return GFNT_OK;
+  }
+
+  // A composite, nested or not. Its own metrics are already read and are not
+  // used: what it contributes is its components, at its own offsets plus theirs.
+  if (gfnt_read_u16(&at, &components) != GFNT_OK) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset, glyph,
+        "an EBDT composite with no component count");
+  }
+  if ((size_t)components * 4u + consumed + 2u > length) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset, glyph,
+        "an EBDT composite claiming more components than its length holds");
+  }
+
+  here.parent = chain;
+  here.glyph = glyph;
+  for (uint16_t index = 0; index < components; ++index) {
+    uint16_t component = 0;
+    int8_t dx = 0;
+    int8_t dy = 0;
+
+    if (gfnt_read_u16(&at, &component) != GFNT_OK
+        || gfnt_read_s8(&at, &dx) != GFNT_OK
+        || gfnt_read_s8(&at, &dy) != GFNT_OK) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
+          glyph, "an EBDT composite component past the end of the table");
+    }
+    if (gfnt_ebdt_chain_has(&here, component)) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
+          glyph,
+          "an EBDT composite that includes itself, directly or through another "
+          "glyph");
+    }
+    result = gfnt_ebdt_paint(read, component, x + dx, y + dy, canvas,
+        canvas_stride, canvas_width, canvas_height, &here, depth + 1, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+  }
+  return GFNT_OK;
+}
+
+/**
+ * Read one glyph's metrics and pixels, and hand them to the builder.
+ *
+ * Three shapes, and the dispatch between them is the image format's: rows that
+ * start on byte boundaries, rows that start at the next bit, and - formats 8 and
+ * 9 - no rows at all but a list of other glyphs to draw.
+ */
+static GFNT_Result gfnt_ebdt_read_glyph(const GFNT_EbdtRead * read,
+    const GFNT_EblcSubtable * subtable, uint32_t glyph, size_t offset,
+    size_t length, GFNT_Error * error) {
+  GFNT_Reader at = *read->data;
   GFNT_EblcMetrics metrics = subtable->metrics;
+  GFNT_BitmapBuild * build = read->build;
   GFNT_BitmapRecord record;
   size_t consumed = 0;
   size_t rows_available;
-  size_t wanted;
+  size_t stride;
   const uint8_t * rows = NULL;
   GFNT_Result result;
 
@@ -337,68 +684,51 @@ static GFNT_Result gfnt_ebdt_read_glyph(const GFNT_EblcSubtable * subtable,
         GFNT_ORDER_MSB_FIRST, 1, &record, NULL, 0, error);
   }
 
-  if (gfnt_ebdt_byte_aligned(subtable->image_format)) {
-    size_t stride = ((size_t)metrics.width + 7u) / 8u;
+  if (gfnt_ebdt_is_composite(subtable->image_format)) {
+    // The composite's **own** metrics give the canvas, which is what makes a
+    // component falling outside it a contradiction rather than something to clip:
+    // the font states the box and then states what goes in it.
+    uint8_t * canvas = NULL;
+    size_t wanted;
 
+    stride = ((size_t)metrics.width + 7u) / 8u;
     if (!gcu_safe_mul_size(stride, metrics.height, &wanted)) {
       return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
-          GFNT_GLYPH_NONE, "an EBDT glyph whose rows do not fit a size_t");
+          glyph, "an EBDT composite whose box does not fit a size_t");
     }
-    if (wanted > rows_available
-        || gfnt_read_bytes(&at, wanted, &rows) != GFNT_OK) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
-          GFNT_GLYPH_NONE, "an EBDT glyph with fewer rows than its box");
-    }
-    // MSB-first, no scan unit, rows already on byte boundaries: the builder's
-    // identity case, which is why nothing here reimplements the normalisation.
-    return gfnt_bitmap_build_glyph(build, rows, stride, GFNT_ORDER_MSB_FIRST,
-        GFNT_ORDER_MSB_FIRST, 1, &record, NULL, 0, error);
-  }
-
-  // Bit-aligned: widen into the builder's own scratch row buffer, which is sized
-  // for a whole glyph by gfnt_bitmap_build_rows().
-  {
-    uint8_t * widened = NULL;
-    size_t stride = ((size_t)metrics.width + 7u) / 8u;
-
-    if (!gcu_safe_mul_size(stride, metrics.height, &wanted)) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
-          GFNT_GLYPH_NONE, "an EBDT glyph whose rows do not fit a size_t");
-    }
-    if (gfnt_read_bytes(&at, rows_available, &rows) != GFNT_OK) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
-          GFNT_GLYPH_NONE, "an EBDT glyph shorter than the length it states");
-    }
-    result = gfnt_bitmap_build_rows(build, wanted, &widened, error);
+    result = gfnt_bitmap_build_canvas(build, wanted, &canvas, error);
     if (result != GFNT_OK) {
       return result;
     }
-    if (!gfnt_bitmap_widen_rows(widened, rows, rows_available, metrics.width,
-            metrics.height)) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
-          GFNT_GLYPH_NONE,
-          "an EBDT bit-aligned glyph with fewer bits than its box");
+    // Painted from the glyph itself rather than from its component list, so that
+    // a top-level composite and a nested one take the same path - and so that the
+    // chain the cycle check walks starts where the recursion does.
+    result = gfnt_ebdt_paint(read, glyph, 0, 0, canvas, stride, metrics.width,
+        metrics.height, NULL, 0, error);
+    if (result != GFNT_OK) {
+      return result;
     }
-    return gfnt_bitmap_build_glyph(build, widened, stride,
-        GFNT_ORDER_MSB_FIRST, GFNT_ORDER_MSB_FIRST, 1, &record, NULL, 0, error);
+    return gfnt_bitmap_build_glyph(build, canvas, stride, GFNT_ORDER_MSB_FIRST,
+        GFNT_ORDER_MSB_FIRST, 1, &record, NULL, 0, error);
   }
-}
 
-/** The subtable covering @p glyph, or NULL. */
-static const GFNT_EblcSubtable * gfnt_ebdt_subtable_for(
-    const GFNT_EblcSubtable * subtables, size_t count, uint32_t glyph) {
-  for (size_t i = 0; i < count; ++i) {
-    if (glyph >= subtables[i].first_glyph && glyph <= subtables[i].last_glyph) {
-      return &subtables[i];
-    }
+  result = gfnt_ebdt_leaf_rows(build, subtable->image_format, &at, offset,
+      rows_available, &metrics, &rows, &stride, error);
+  if (result != GFNT_OK) {
+    return result;
   }
-  return NULL;
+  // MSB-first, no scan unit, rows on byte boundaries by the time they get here:
+  // the builder's identity case, which is why nothing in this file reimplements
+  // the normalisation.
+  return gfnt_bitmap_build_glyph(build, rows, stride, GFNT_ORDER_MSB_FIRST,
+      GFNT_ORDER_MSB_FIRST, 1, &record, NULL, 0, error);
 }
 
 GFNT_Result gfnt_ebdt_read_strike(const GFNT_Face * face,
     const GFNT_EblcStrike * strike, const GFNT_EblcSubtable * subtables,
     size_t subtable_count, GFNT_BitmapBuild * build, GFNT_Error * error) {
   GFNT_Reader data;
+  GFNT_EbdtRead read;
   GFNT_Result result;
   GFNT_Error glyph_error;
   uint32_t version = 0;
@@ -424,6 +754,17 @@ GFNT_Result gfnt_ebdt_read_strike(const GFNT_Face * face,
   if (result != GFNT_OK) {
     return result;
   }
+
+  // Everything a composite needs to find its components, gathered once. A leaf
+  // glyph uses only `data` and `build` of it, which is why this is one struct
+  // rather than six more parameters on a function most glyphs take the short way
+  // through.
+  read.face = face;
+  read.strike = strike;
+  read.subtables = subtables;
+  read.subtable_count = subtable_count;
+  read.data = &data;
+  read.build = build;
 
   // Every glyph of the face gets a record, present or not, so that a lookup is an
   // index rather than a search - the strike is sparse over the face and the
@@ -486,8 +827,8 @@ GFNT_Result gfnt_ebdt_read_strike(const GFNT_Face * face,
       }
       continue;
     }
-    result = gfnt_ebdt_read_glyph(subtable, &data, offset, length, build,
-        &glyph_error);
+    result = gfnt_ebdt_read_glyph(&read, subtable, (uint32_t)glyph, offset,
+        length, &glyph_error);
     if (result == GFNT_ERR_OOM || result == GFNT_ERR_LIMIT) {
       // A limit is the caller's ceiling rather than the font's mistake, so it is
       // reported rather than recorded against one glyph.

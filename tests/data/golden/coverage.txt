@@ -6422,6 +6422,16 @@ bitmap.psf 4 16 0 0 8x16+0+16 4080 9DA3D3E4A606F65D
 bitmap.psf 5 16 0 0 8x16+0+16 4080 E248D245A4C0C45D
 bitmap.psf 6 16 0 0 8x16+0+16 8160 42BAE3F5AE7F7C7D
 bitmap.psf 7 16 0 0 8x16+0+16 16320 95B1D78B12AC175D
+strike-composite.ttf 0 0 0 0 refused Unsupported feature
+strike-composite.ttf 1 12 0 0 11x1+3+4 2805 3F108E4B0A35883B
+strike-composite.ttf 2 12 0 0 11x7+1+7 4335 07A25863B6F5426C
+strike-composite.ttf 3 12 0 0 11x7+1+7 5355 5E16C1B91D5E43D0
+strike-composite.ttf 4 12 0 0 1x7+-2+2 1785 09F477AC04C21293
+strike-composite.ttf 5 12 0 0 2x2+7+6 1020 FDA6171D72B10CA0
+strike-composite.ttf 6 12 0 0 11x7+1+7 4335 07A25863B6F5426C
+strike-composite.ttf 7 12 0 0 11x7+1+7 0 FCF69A9AB589DA5D
+strike-composite.ttf 8 12 0 0 11x7+1+7 4335 07A25863B6F5426C
+strike-composite.ttf 9 12 0 0 11x7+1+7 5355 5E16C1B91D5E43D0
 strike-formats.ttf 0 0 0 0 refused Unsupported feature
 strike-formats.ttf 1 12 0 0 11x7+1+7 4335 FDC4776343D6BC00
 strike-formats.ttf 2 12 0 0 11x7+1+7 4335 C04AD1557D162FA8

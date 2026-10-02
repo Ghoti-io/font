@@ -152,6 +152,7 @@ STANDALONE_STRIKES = (
 WITH_STRIKES = STANDALONE_STRIKES + (
     "strikes.ttf",
     "strike-formats.ttf",
+    "strike-composite.ttf",
 )
 
 # Fixtures that must render **nothing through the rasteriser**.

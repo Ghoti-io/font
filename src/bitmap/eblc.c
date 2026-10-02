@@ -346,12 +346,13 @@ static bool gfnt_ebdt_format_known(uint16_t format) {
     case 5: // metrics in EBLC, bit-aligned
     case 6: // big metrics, byte-aligned
     case 7: // big metrics, bit-aligned
+    case 8: // small metrics and a pad byte, then components
+    case 9: // big metrics, then components
       return true;
     default:
       // 3 and 4 the specification itself calls obsolete - 4 is a compressed form
-      // nothing has written for decades - and 8 and 9 are the composites, which
-      // reference other glyphs and are their own piece of work. None of them is
-      // corrupt, and each is a font this library declines rather than misreads.
+      // nothing has written for decades. Neither is corrupt, and a font with one
+      // is declined rather than misread.
       return false;
   }
 }
@@ -466,8 +467,8 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
     if (!gfnt_ebdt_format_known(entry->image_format)) {
       result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBDT,
           entry->body_offset, GFNT_GLYPH_NONE,
-          "an EBDT image format this library does not read - 3 and 4 the "
-          "specification calls obsolete, and 8 and 9 are the composites");
+          "an EBDT image format this library does not read - 3 and 4, which the "
+          "specification itself calls obsolete");
       goto failed;
     }
     if (gfnt_ebdt_metrics_from_index(entry->image_format)

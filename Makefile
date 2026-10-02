@@ -438,7 +438,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
-	check-reader
+	check-reader check-seeds
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -653,6 +653,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering check-stamps check-aliasing check-reader
+.PHONY: check-seeds
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -863,6 +864,23 @@ check-stamps: ## Fail if a compile rule names no flags stamp, or a stamp omits a
 # tools/check-stamps.py is the flag-stamp half of model's check-lists.py,
 # which is generic; the rest of that script is model's own lists.
 	@python3 tools/check-stamps.py
+
+check-seeds: ## Fail if a fuzz seed is named so that .gitignore swallows it
+# tests/fuzz/corpus/.gitignore excludes everything and re-admits `*.seed`, so
+# that libFuzzer's own findings - which it writes into the same directories -
+# are not committed while the seeds are. A seed named any other way is ignored
+# **silently**: it works for whoever wrote it, because it is in their working
+# tree, and does not exist for anybody else.
+#
+# That happened. Three EBLC seeds were added as `seed-<fixture>.ttf` over two
+# commits, a note recorded that half a million runs over them were clean, and
+# none of the three was ever in the repository - so a fresh clone fuzzed the
+# strike parser only by mutating a PCF into an sfnt, which is to say never.
+#
+# The predicate is the spelling, because the spelling is what was wrong: a file
+# under a corpus directory whose name begins with `seed` is a seed somebody
+# meant to commit and named so that it could not be.
+	@bad=$$(find tests/fuzz/corpus -type f -name 'seed*' 2>/dev/null); 	if [ -n "$$bad" ]; then 		printf "check-seeds: these are seeds named so that .gitignore hides them;\n"; 		printf "  the committed spelling is <name>.seed:\n"; 		printf "    %s\n" $$bad; 		exit 1; 	fi; 	tracked=$$(git ls-files 'tests/fuzz/corpus/*.seed' | wc -l); 	if [ "$$tracked" -lt 20 ]; then 		printf "check-seeds: only %s seed(s) are tracked, which is fewer than any\n" "$$tracked"; 		printf "  harness here has ever had - the corpus has lost its seeds.\n"; 		exit 1; 	fi; 	printf "check-seeds: %s committed seed(s), none named out of reach\n" "$$tracked"
 
 check-reader: ## Fail if anything under src/ reads font bytes around the reader
 # documentation/design.md section 6: every read of file data goes through

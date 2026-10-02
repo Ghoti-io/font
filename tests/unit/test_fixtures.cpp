@@ -187,6 +187,10 @@ const std::vector<Entry> & every_fixture() {
       {"outline-loca-long.ttf", kOutlineGlyphs},
       {"outline-simple.ttf", kOutlineGlyphs},
       {"post-v1.ttf", 258},
+      // One strike whose composites each have a non-composite twin. Ten glyphs:
+      // three leaves, two direct twins, four composites, and .notdef, which no
+      // subtable covers.
+      {"strike-composite.ttf", 10},
       // One strike, six index/image format pairings. Thirteen glyphs because each
       // pairing owns a range of them, so a test can name which cell of the grid it
       // is asserting.
@@ -739,10 +743,10 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
   // Counted, because the three branches above are only worth anything if the
   // fixture set reaches all of them: a sweep over a set that had lost its
   // multi-strike font would pass every assertion and check nothing new.
-  EXPECT_EQ(with_strikes, 12u) << "ten standalone containers, strikes.ttf and "
-      "strike-formats.ttf";
+  EXPECT_EQ(with_strikes, 13u) << "ten standalone containers, strikes.ttf, "
+      "strike-formats.ttf and strike-composite.ttf";
   EXPECT_EQ(with_many, 1u) << "strikes.ttf is the only fixture with a choice of "
-      "strike; strike-formats.ttf has one strike and six ways of indexing it";
+      "strike; the other two have one strike each and vary how it is laid out";
 }
 
 } // namespace

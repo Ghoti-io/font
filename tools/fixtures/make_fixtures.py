@@ -3246,7 +3246,194 @@ def build_strike_formats(out):
     fb.save(out)
 
 
+STRIKE_COMPOSITE_ORDER = [".notdef"] + ["g%02d" % i for i in range(1, 10)]
+
+
+def eblc_components(parts):
+    """`numComponents` and an `EbdtComponent` each: glyph id, then two offsets.
+
+    The offsets are **destination pixel coordinates** - a column from the left
+    edge of the composite's own box and a row down from its top - and not the
+    component's bearings, which the specification does not use to place it. That
+    is the one semantic choice in this format, and `build_strike_composite()`
+    below gives its three leaves three different bearings so that a reader which
+    used them draws a visibly different glyph.
+    """
+    out = struct.pack(">H", len(parts))
+    for glyph, dx, dy in parts:
+        out += struct.pack(">Hbb", glyph, dx, dy)
+    return out
+
+
+def composite_art(width, height, parts, leaves):
+    """What a composite's pixels must come out as, drawn here independently.
+
+    The generator's own arithmetic, so that the *direct* glyph this fixture pairs
+    each composite with is not a copy of what the composite says but a second
+    statement of what it means. If this and the library disagree the fixture fails
+    to build, and if both were wrong the same way the direct glyph and the
+    composite would still differ from each other.
+    """
+    grid = [["."] * width for _ in range(height)]
+    for glyph, dx, dy in parts:
+        rows = leaves[glyph]
+        for y, row in enumerate(rows):
+            for x, cell in enumerate(row):
+                if cell == "#":
+                    grid[dy + y][dx + x] = "#"
+    return ["".join(row) for row in grid]
+
+
+def build_strike_composite(out):
+    """One strike whose composite glyphs each have a non-composite twin.
+
+    Image formats **8 and 9** are the composites: a list of other glyphs of the
+    same strike, each placed at a signed pixel offset and OR-ed into the
+    composite's own box. Nothing in Debian has one - `uming.ttc` and `mona.ttf`
+    between them carry none - and fontTools reads the component list but does not
+    compose the image, so **no second reader anywhere produces these pixels**.
+
+    What stands in for one is an identity, which is the same device the four
+    bitmap containers and the six format pairings use: every composite here draws
+    exactly what a plain glyph of the same strike draws.
+
+      glyphs 1-3    index 1, image 1   the bar, and the two direct twins
+      glyph  4      index 1, image 7   the upright, big metrics and bit-aligned
+      glyph  5      index 1, image 2   the dot, small metrics and bit-aligned
+      glyphs 6-7    index 1, image 8   small metrics **and a pad byte**
+      glyphs 8-9    index 1, image 9   big metrics, no pad
+
+      glyph 6 (format 8) == glyph 8 (format 9) == glyph 2, drawn directly
+      glyph 9, a composite **of a composite**, == glyph 3
+      glyph 7 has zero components: its box, and no pixels
+
+    Three things are deliberate beyond the identity:
+
+      * **The leaves' bearings all differ from the composites'** - (3,4), (-2,2)
+        and (7,6) against (1,7) - so a reader that positioned a component by its
+        own bearings rather than by the component record's offsets would draw
+        something else. One of them is negative, which is also the signed read.
+      * **The components land at offsets that are not multiples of eight.** The
+        upright goes to column 5 and the dot to column 9, so the blit crosses a
+        byte boundary in one case and starts mid-byte in the other; a blit that
+        only ever shifted by whole bytes would pass a fixture whose components all
+        sat at column 0.
+      * **The components' own image formats differ from the composite's**, and
+        from each other: a component is found through the index like any glyph, so
+        a format 8 composite drawing a byte-aligned leaf and a bit-aligned one is
+        the case that says the two axes stay independent inside a composite.
+    """
+    width = 11
+    height = 7
+    advance = width + 2
+    mapping = {0x41 + i: name
+               for i, name in enumerate(STRIKE_COMPOSITE_ORDER[1:])}
+    fb = truetype("Strike Composite", [subtable(4, 3, 1, mapping)],
+                  order=STRIKE_COMPOSITE_ORDER,
+                  glyphs={name: raw_glyph([])
+                          for name in STRIKE_COMPOSITE_ORDER},
+                  advances={name: 600 for name in STRIKE_COMPOSITE_ORDER})
+
+    # The leaves, and the two placements every composite here uses.
+    leaves = {
+        1: ["#" * width],                      # the bar, 11 x 1
+        4: ["#"] * height,                     # the upright, 1 x 7
+        5: ["##", "##"],                       # the dot, 2 x 2
+    }
+    leaf_metrics = {1: (3, 4), 4: (-2, 2), 5: (7, 6)}
+    plus_parts = [(1, 0, 3), (4, 5, 0)]
+    plus = composite_art(width, height, plus_parts, leaves)
+    # The nested one draws the format 8 composite and then the dot, so its own
+    # component list names a *composite* and the recursion has somewhere to go.
+    dotted_parts = [(6, 0, 0), (5, 9, 5)]
+    dotted = composite_art(width, height, dotted_parts,
+                           {**leaves, 6: plus})
+
+    ebdt = bytearray(struct.pack(">I", 0x00020000))
+    bodies = []
+
+    def leaf(glyph, aligned, big):
+        rows = leaves[glyph]
+        packed = (eblc_byte_rows(rows, len(rows[0])) if aligned
+                  else eblc_bit_rows(rows, len(rows[0])))
+        bearing_x, bearing_y = leaf_metrics[glyph]
+        metrics = (eblc_big_metrics if big else eblc_small_metrics)(
+            len(rows), len(rows[0]), bearing_x, bearing_y, len(rows[0]) + 1)
+        return metrics + packed
+
+    def direct(rows):
+        return (eblc_small_metrics(height, width, 1, height, advance)
+                + eblc_byte_rows(rows, width))
+
+    def offsets_body(index_format, image_format, data_at, records):
+        """A format 1 subtable over @p records, appended to EBDT in order."""
+        offsets = [0]
+        for record in records:
+            ebdt.extend(record)
+            offsets.append(len(ebdt) - data_at)
+        return (struct.pack(">HHI", index_format, image_format, data_at)
+                + b"".join(struct.pack(">I", o) for o in offsets))
+
+    # --- glyphs 1-3: the bar and the two direct twins, image format 1.
+    data_at = len(ebdt)
+    bodies.append((1, 3, offsets_body(1, 1, data_at,
+        [leaf(1, True, False), direct(plus), direct(dotted)])))
+
+    # --- glyph 4: the upright, image format 7 - big metrics, bit-aligned.
+    data_at = len(ebdt)
+    bodies.append((4, 4, offsets_body(1, 7, data_at, [leaf(4, False, True)])))
+
+    # --- glyph 5: the dot, image format 2 - small metrics, bit-aligned.
+    data_at = len(ebdt)
+    bodies.append((5, 5, offsets_body(1, 2, data_at, [leaf(5, False, False)])))
+
+    # --- glyphs 6-7: image format 8. SmallGlyphMetrics, then one pad byte, then
+    # the components. Glyph 7 states none, which is a box and no pixels.
+    data_at = len(ebdt)
+    header = eblc_small_metrics(height, width, 1, height, advance) + b"\x00"
+    bodies.append((6, 7, offsets_body(1, 8, data_at,
+        [header + eblc_components(plus_parts),
+         header + eblc_components([])])))
+
+    # --- glyphs 8-9: image format 9. BigGlyphMetrics and **no** pad byte, which
+    # is the whole difference between the two headers.
+    data_at = len(ebdt)
+    big = eblc_big_metrics(height, width, 1, height, advance)
+    bodies.append((8, 9, offsets_body(1, 9, data_at,
+        [big + eblc_components(plus_parts),
+         big + eblc_components(dotted_parts)])))
+
+    array_bytes = len(bodies) * 8
+    cursor = array_bytes
+    arrays = []
+    for first, last, body in bodies:
+        arrays.append(struct.pack(">HHI", first, last, cursor))
+        cursor += len(body)
+    region = b"".join(arrays) + b"".join(body for _, _, body in bodies)
+
+    base = 8 + 48
+    size_table = (struct.pack(">IIII", base, len(region), len(bodies), 0)
+                  + eblc_line_metrics(height, -1, advance)
+                  + eblc_line_metrics(0, 0, 0)
+                  + struct.pack(">HHBBBb", 1, 9, 12, 12, 1, 1))
+    eblc = struct.pack(">II", 0x00020000, 1) + size_table + region
+
+    set_raw_table(fb, "EBLC", eblc)
+    set_raw_table(fb, "EBDT", bytes(ebdt))
+    fb.save(out)
+
+
 FIXTURES = {
+    "strike-composite.ttf": (build_strike_composite,
+        "EBDT image formats 8 and 9: composite glyphs, each paired with a "
+        "non-composite twin of the same strike that draws the same pixels - "
+        "nothing in Debian has a composite and fontTools reads the component "
+        "list without composing it, so the identity is the only check there is. "
+        "A format 8 header with its pad byte and a format 9 one without, a "
+        "composite of a composite, a composite with zero components, leaf "
+        "bearings that all differ from the composites' so that using them would "
+        "show, and components at columns 5 and 9 so the blit is not "
+        "byte-aligned"),
     "strike-formats.ttf": (build_strike_formats,
         "One EBLC strike whose six index subtables use six different index/image "
         "format pairings - 4-byte and 2-byte offsets, sparse glyph lists, "

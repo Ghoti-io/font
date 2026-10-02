@@ -59,6 +59,16 @@ struct GFNT_BitmapBuild {
   /** One row, in the container's own layout, while it is being normalised. */
   uint8_t * row;
   size_t row_capacity;
+
+  /**
+   * One composite glyph's destination, while its components are OR-ed into it.
+   *
+   * Separate from `row` because a component's own rows go *through* `row` on the
+   * way in, so one buffer for both would have each component overwrite the
+   * composite it is being drawn into.
+   */
+  uint8_t * canvas;
+  size_t canvas_capacity;
 };
 
 // ------------------------------------------------------------ the arenas
@@ -345,6 +355,26 @@ GFNT_Result gfnt_bitmap_build_glyph(GFNT_BitmapBuild * build,
   return GFNT_OK;
 }
 
+GFNT_Result gfnt_bitmap_build_canvas(GFNT_BitmapBuild * build, size_t bytes,
+    uint8_t ** out_canvas, GFNT_Error * error) {
+  if (bytes > build->canvas_capacity) {
+    uint8_t * grown = build->allocator->realloc_fn(build->allocator->ctx,
+        build->canvas, bytes);
+
+    if (!grown) {
+      return gfnt_error_set(error, GFNT_ERR_OOM, build->font.container, 0,
+          (uint32_t)build->record_count, "a canvas for a composite glyph");
+    }
+    build->canvas = grown;
+    build->canvas_capacity = bytes;
+  }
+  // Every time, not only when it grew: the buffer outlives one glyph, and a
+  // composite OR-s into it rather than filling it.
+  memset(build->canvas, 0, bytes);
+  *out_canvas = build->canvas;
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_bitmap_build_rows(GFNT_BitmapBuild * build, size_t bytes,
     uint8_t ** out_rows, GFNT_Error * error) {
   if (bytes > build->row_capacity) {
@@ -485,6 +515,7 @@ void gfnt_bitmap_build_finish(GFNT_BitmapBuild * build,
     gfnt_buffer_free(&build->text);
   }
   allocator->free_fn(allocator->ctx, build->row);
+  allocator->free_fn(allocator->ctx, build->canvas);
   allocator->free_fn(allocator->ctx, build);
 }
 

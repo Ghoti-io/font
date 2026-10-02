@@ -377,6 +377,26 @@ bool gfnt_bitmap_widen_rows(uint8_t * out, const uint8_t * source,
     size_t available, uint32_t width, uint32_t height);
 
 /**
+ * Borrow the builder's scratch **canvas**, grown to @p bytes and **zeroed**.
+ *
+ * A second buffer, and it has to be: `EBDT`'s composite image formats 8 and 9
+ * build a glyph by OR-ing their components into one destination, and each
+ * component's own rows are normalised through
+ * ::gfnt_bitmap_build_rows()'s buffer on the way in. One buffer for both would
+ * have each component clobber the composite it is being drawn into - and would do
+ * it invisibly, because the first component of a composite would still look
+ * right.
+ *
+ * Zeroed, because a composite *accumulates*: the buffer outlives one glyph and a
+ * composite that did not clear it would inherit the previous glyph's pixels
+ * wherever its own components did not reach.
+ *
+ * The pointer is valid until the next call to this.
+ */
+GFNT_Result gfnt_bitmap_build_canvas(GFNT_BitmapBuild * build, size_t bytes,
+    uint8_t ** out_canvas, GFNT_Error * error);
+
+/**
  * Borrow the builder's scratch row buffer, grown to @p bytes.
  *
  * The builder already keeps one for the normalisation, sized to the widest source

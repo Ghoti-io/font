@@ -351,14 +351,21 @@ def main(argv):
     pairs = {}
     flags = {}
     depths = {}
+    composites = 0
+    components = 0
+    nested = 0
     for line, times in sorted(census.items()):
         tokens = line.split(" ")
         if tokens[0] == "pair":
             key = (int(tokens[1]), int(tokens[2]))
             pairs[key] = pairs.get(key, 0) + int(tokens[4]) * times
-        elif tokens[0] == "strike":
+        elif tokens[0] == "sizetable":
             flags[int(tokens[3])] = flags.get(int(tokens[3]), 0) + times
             depths[int(tokens[5])] = depths.get(int(tokens[5]), 0) + times
+        elif tokens[0] == "composite":
+            composites += int(tokens[3]) * times
+            components += int(tokens[5]) * times
+            nested += int(tokens[7]) * times
 
     print("eblc_diff: %d face(s) of %d font(s), %d glyph(s), %d field(s) "
           "compared, %d disagreement(s)"
@@ -374,6 +381,13 @@ def main(argv):
              or "none",
              ", ".join("%d x%d" % pair for pair in sorted(depths.items()))
              or "none"))
+    print("eblc_diff: %d composite glyph(s) of %d component(s), %d of them "
+          "drawing another composite - image formats 8 and 9, which appear in no "
+          "Debian font at all. fontTools reads a component list and does not "
+          "compose it, so the placement arithmetic is this repository's on both "
+          "sides here: what checks the rule itself is strike-composite.ttf, where "
+          "each composite has a non-composite twin drawn by the generator's own "
+          "arithmetic" % (composites, components, nested))
     print("eblc_diff: %d face(s) over %d distinct table extent(s) - a "
           "collection whose faces share one EBLC and one EBDT, as uming.ttc's "
           "four do, re-checks the collection path rather than the format, and "

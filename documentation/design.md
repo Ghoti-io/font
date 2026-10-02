@@ -605,6 +605,33 @@ way and each of which is refused rather than guessed:
 index subtable formats 1-5, glyph bitmap formats 1-9 including the composite
 formats 8 and 9 and the metrics-in-data forms; `EBSC` scaled references.
 
+**A composite's components are placed by their offsets and by nothing else.**
+Image formats 8 and 9 carry no rows: past the metrics - and, for format 8, past a
+**pad byte** that format 9 does not have - they are a `uint16` count and four
+bytes per component, which are a glyph id and two signed offsets. Those offsets
+are **destination pixel coordinates in the composite's own box**, x from its left
+edge and y *down* from its top row, and the component's own bearings play no part
+in positioning it. Components are OR-ed in, one canvas for the whole tree: a
+nested composite contributes its components at its offsets plus theirs and has no
+intermediate image, which is both what FreeType's
+`tt_sbit_decoder_load_compound()` does and the only arrangement that is correct,
+since a composite's box is its own and not the union of what lands in it.
+
+Two consequences this library takes deliberately:
+
+- **A component that falls outside the composite's box is refused**, not clipped.
+  The font states the box and then states what goes in it; the two disagreeing is
+  the font contradicting itself, and FreeType refuses the same case.
+- **A cycle is named, and the depth budget is what is left.** A glyph that
+  reaches itself - directly or through another glyph - is `ERR_CORRUPT` with that
+  sentence, found by walking the chain of glyphs currently being painted rather
+  than by recursing until the cap stops it. What `max_composite_depth` then
+  refuses is an *acyclic* chain nested deeper than the caller allowed, which is
+  `ERR_LIMIT` - the answer `gfnt_glyf_load()` gives for the same question, and one
+  a caller can act on by raising the budget. `glyf`'s composite reader still names
+  only the direct cycle and leaves the indirect one to its depth cap; the two
+  should agree and this is the half that is right.
+
 **The strike list is one memo and each strike's index is another.** `uming.ttc`
 - four of the six faces in Debian that carry this table at all - has six strikes
 of 27,123 glyphs with 2,305 index subtables each, so parsing the indexes to open
@@ -2198,7 +2225,71 @@ re-measured the same day and all are clean:
 beside the three tables of it the reference cannot read: the font is short in
 several places and sound everywhere else.
 
-**Not built:** `CFF2` (§16); `EBDT`'s composite image formats 8 and 9, `EBSC`,
+**`EBDT`'s composites are built, as of 2026-10-01**: image formats 8 and 9, so
+every image format the specification defines except the two it calls obsolete is
+read. A composite is a list of other glyphs of the same strike, each OR-ed into
+the composite's own box at a signed pixel offset; nothing about that reaches the
+public interface, because what comes back is composed pixels and a caller cannot
+tell one from a glyph that stored its rows.
+
+- **There is no second reader of these pixels anywhere.** Nothing in Debian has a
+  composite - `uming.ttc` and `mona.ttf` between them carry none - and fontTools
+  parses the component list without composing the image. So the gate is an
+  identity: `strike-composite.ttf` pairs every composite with a plain glyph of the
+  same strike that draws the same pixels, drawn from the generator's own
+  arithmetic, and a transcription slip shows as two glyphs of one strike
+  disagreeing. What fontTools *does* check is real and is the half that matters
+  most: the component lists and their offsets come back identical, which is what
+  pins **format 8's pad byte** - skip it and `numComponents` is read from the high
+  half of the count.
+- **The semantics came from FreeType's source, not from the specification's
+  wording.** "Position of component left" does not say in what space or which way
+  y runs. `tt_sbit_decoder_load_compound()` settles it: destination pixels, y
+  down, OR-ed, the component's own bearings unused - so the three leaves of the
+  fixture have bearings of (3,4), (-2,2) and (7,6) against the composites' (1,7),
+  and a reader that positioned by them draws a different glyph.
+- **A cycle is named rather than left to the depth cap**, by walking the chain of
+  glyphs currently being painted. The cap alone would answer `ERR_LIMIT` after
+  sixteen levels for `A -> B -> A`, which is true and useless: a caller can act on
+  a limit by raising it and would raise it forever. `glyf` still names only the
+  direct cycle, which is the same defect in the other composite reader and is
+  recorded here rather than fixed in passing.
+- **The canvas is a second scratch buffer, and it had to be.** A composite OR-s
+  into one destination while each component's rows are normalised through the
+  builder's existing row buffer on the way in; one buffer for both would have each
+  component overwrite the composite it is being drawn into, and would do it
+  invisibly, because the *first* component would still look right.
+
+What that cost in findings:
+
+- **A mutation that loosened a bounds check by one byte passed the whole suite.**
+  Setting format 8's consumed-byte count to five instead of six leaves the
+  *reading* correct - the reader has advanced past the pad either way - and only
+  slackens the length check. Every refusal case in the composite table was a
+  format 9 composite, so nothing exercised format 8's bound at all. The table has
+  a format 8 case now, one byte short of its component.
+- **A census line's keyword collided with another's.** `eblc_diff`'s report
+  parses the reference's census by first word, and a new `census strike …
+  composites …` line was read as the `census strike … flags …` line - so the
+  report said a strike had `flags 4` and a bit depth of 6, which were the
+  composite counts wearing those names. The numbers were nonsense and the table
+  they printed still looked like a table.
+- **Three fuzz seeds from the two commits before this one were never in the
+  repository.** `tests/fuzz/corpus/.gitignore` excludes everything and re-admits
+  `*.seed`, so that libFuzzer's findings stay out while the seeds go in; the EBLC
+  seeds were named `seed-<fixture>.ttf`, which that pattern hides silently. They
+  worked for whoever wrote them and did not exist for anybody else, and a figure
+  recording half a million clean runs over one of them was a figure about a file
+  no clone had. `make check-seeds` is now in `TEST_GATES` and fails on a file under
+  the corpus whose name begins with `seed`, which is the spelling that was wrong.
+- **`hasattr` on a fontTools bitmap glyph damages it.** Probing for
+  `componentArray` to decide whether a glyph is a composite made a *format 1*
+  glyph's metrics unreadable afterwards, and the failure surfaced on a different
+  line than the probe: `BitmapGlyph.__getattr__` decompiles on a miss and consumes
+  `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
+  which is a fact about the font rather than about the object model.
+
+**Not built:** `CFF2` (§16); `EBSC`,
 and `CBDT` and `sbix` (§7.5); colour
 (§7.6);
 variations (§7.7); shaping, layout, discovery and the writer; the multi-byte

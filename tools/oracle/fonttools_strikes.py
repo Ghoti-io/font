@@ -55,18 +55,28 @@ import sys
 from fontTools.ttLib import TTCollection, TTFont
 
 
+# The image formats whose data is a list of other glyphs rather than rows.
+COMPOSITE_FORMATS = (8, 9)
+
+# The image formats that carry their own metrics in front of the data. Format 5
+# is the one that does not: its metrics are the index subtable's, which is the
+# reason index formats 2 and 5 exist.
+OWN_METRICS_FORMATS = (1, 2, 6, 7, 8, 9)
+
+
 def metrics_of(glyph, subtable):
     """The glyph's own metrics, or the constant ones its subtable states.
 
-    Index formats 2 and 5 state one `BigGlyphMetrics` for every glyph they cover
-    and the pixels carry none; every other format puts a `SmallGlyphMetrics` or a
-    `BigGlyphMetrics` in front of the pixels. fontTools models that difference by
-    leaving `metrics` off the glyph, so an adapter that only ever read one of the
-    two would report a box of zeros for 97.8% of the real population.
+    Decided from the **image format**, not by probing the object. fontTools'
+    `BitmapGlyph.__getattr__` decompiles on a miss and consumes `self.data` doing
+    it, so an attribute that is absent leaves the object unable to answer the next
+    question - a `hasattr` for `componentArray` on a format 1 glyph made its
+    metrics unreadable afterwards, and the failure surfaced on a *different* line
+    than the probe. The format is a fact about the font and asking it costs
+    nothing.
     """
-    own = getattr(glyph, "metrics", None)
-    if own is not None:
-        return own
+    if subtable is not None and subtable.imageFormat in OWN_METRICS_FORMATS:
+        return glyph.metrics
     return getattr(subtable, "metrics", None)
 
 
@@ -91,6 +101,59 @@ def box(metrics):
                 metrics.horiBearingY, metrics.horiAdvance)
     return (metrics.width, metrics.height, metrics.BearingX, metrics.BearingY,
             metrics.Advance)
+
+
+def is_composite(subtable):
+    """Whether this subtable's glyphs are composites: image format 8 or 9."""
+    return subtable is not None and subtable.imageFormat in COMPOSITE_FORMATS
+
+
+def paint(data, owner, name, x, y, grid, depth, depth_cap=16):
+    """OR one glyph's pixels into @p grid at (@p x, @p y), recursing for a composite.
+
+    **This is the one piece of the differential that is not a second reading.**
+    fontTools parses a composite's component list - which is a real check, and the
+    check that catches image format 8's pad byte, because a reader that skipped it
+    reads garbage glyph ids - but it does not compose the image, so the three lines
+    of placement arithmetic below are this repository's on *both* sides of the
+    comparison. Agreement here therefore says the components, their offsets, their
+    own pixels and the composite's box all match, and says nothing about whether
+    the placement rule itself is right.
+
+    What says that: FreeType's `tt_sbit_decoder_load_compound()`, which places a
+    component at `x_pos + dx` and `y_pos + dy` in destination pixels with y running
+    down, OR-s it in, and uses none of the component's own bearings; and
+    `strike-composite.ttf`, where every composite has a non-composite twin drawn
+    from the generator's own arithmetic, so a transcription slip in one place shows
+    as two glyphs of one strike differing.
+    """
+    if depth > depth_cap:
+        raise SystemExit("composite nesting deeper than %d" % depth_cap)
+    glyph = data.get(name)
+    if glyph is None:
+        raise SystemExit("a composite component the strike does not carry: %s"
+                         % name)
+    subtable = owner.get(name)
+    metrics = metrics_of(glyph, subtable)
+    if is_composite(subtable):
+        for component in glyph.componentArray:
+            paint(data, owner, component.name, x + component.xOffset,
+                  y + component.yOffset, grid, depth + 1, depth_cap)
+        return
+    width, height, _, _, _ = box(metrics)
+    for row, bits in enumerate(art(glyph, metrics, 1)):
+        for column, cell in enumerate(bits):
+            if cell == "#":
+                grid[y + row][x + column] = "#"
+    del width, height
+
+
+def composed(data, owner, name, metrics):
+    """A composite's rows, as art, in its own box."""
+    width, height, _, _, _ = box(metrics)
+    grid = [["."] * width for _ in range(height)]
+    paint(data, owner, name, 0, 0, grid, 0)
+    return ["".join(row) for row in grid]
 
 
 def art(glyph, metrics, depth):
@@ -155,7 +218,13 @@ def report(path, index, stride, out):
                   % (tag, entry.offset, entry.length))
     for number, strike in enumerate(eblc.strikes):
         size = strike.bitmapSizeTable
-        out.write("census strike %d flags %d depth %d subtables %d\n"
+        # Each census line's first word is its own, because the differential
+        # parses them by keyword: a second kind of line that also began "strike"
+        # was read as this one and reported a strike with `flags 4` and a bit
+        # depth of 6, which are the composite counts wearing these names. The
+        # numbers were nonsense and the table they printed still looked like a
+        # table.
+        out.write("census sizetable %d flags %d depth %d subtables %d\n"
                   % (number, size.flags, size.bitDepth,
                      len(strike.indexSubTables)))
         pairs = {}
@@ -165,6 +234,26 @@ def report(path, index, stride, out):
         for (index_format, image_format), count in sorted(pairs.items()):
             out.write("census pair %d %d count %d\n"
                       % (index_format, image_format, count))
+        # How many composites, and how many components between them. Printed
+        # rather than compared, like every census line: what it answers is "did
+        # this run visit a composite at all", which for a format with no
+        # population is the question the total cannot answer.
+        strike_data = ebdt.strikeData[number]
+        where = {}
+        for subtable in strike.indexSubTables:
+            for member in subtable.names:
+                where[member] = subtable
+        composites = [glyph_name for glyph_name in strike_data
+                      if is_composite(where.get(glyph_name))]
+        parts = sum(len(strike_data[glyph_name].componentArray)
+                    for glyph_name in composites)
+        nested = sum(1 for glyph_name in composites
+                     if any(is_composite(where.get(component.name))
+                            for component
+                            in strike_data[glyph_name].componentArray))
+        composites = len(composites)
+        out.write("census composite %d count %d components %d nested %d\n"
+                  % (number, composites, parts, nested))
 
     for number, strike in enumerate(eblc.strikes):
         size = strike.bitmapSizeTable
@@ -216,7 +305,10 @@ def report(path, index, stride, out):
             out.write("g %d %d box %d %d %d %d %d %d\n"
                       % (glyph, number, width, height, bearing_x, bearing_y,
                          advance, size.bitDepth))
-            for y, row in enumerate(art(bitmap, metrics, size.bitDepth)):
+            rows = (composed(data, owner, name, metrics)
+                    if is_composite(owner.get(name))
+                    else art(bitmap, metrics, size.bitDepth))
+            for y, row in enumerate(rows):
                 out.write("g %d %d row %d %s\n" % (glyph, number, y, row))
 
 

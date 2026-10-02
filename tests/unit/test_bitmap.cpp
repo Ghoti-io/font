@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <atomic>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <thread>
 #include <vector>
@@ -1717,9 +1718,13 @@ TEST(Ebdt, EveryWayAnIndexSubtableCanContradictItselfIsRefused) {
     {"an image format the specification calls obsolete",
      index1(4, kEbdtHeader, {0, 9}),
      GFNT_ERR_UNSUPPORTED, "image format"},
-    {"a composite image format, which is its own piece of work",
+    // Image formats 8 and 9 are read now, so what was a refusal here is a
+    // composite whose component list does not fit the length its index states -
+    // nine bytes reach past a format 8 header's metrics and pad byte but not past
+    // the count and a component.
+    {"a composite claiming more components than its length holds",
      index1(8, kEbdtHeader, {0, 9}),
-     GFNT_ERR_UNSUPPORTED, "image format"},
+     GFNT_ERR_CORRUPT, "more components than its length holds"},
     {"image format 5, whose metrics are the index's, under an index that states "
      "none",
      index1(5, kEbdtHeader, {0, 4}),
@@ -4227,6 +4232,488 @@ TEST(Bitmap, NullArgumentsAreCallerErrors) {
   bitmap.bit_depth = 4;
   EXPECT_EQ(gfnt_coverage_from_bitmap(&bitmap, nullptr, &coverage, nullptr),
       GFNT_ERR_UNSUPPORTED);
+}
+
+// ------------------------------------------------- EBDT composites (8 and 9)
+
+/** `numComponents` and one `EbdtComponent` per part: id, then two offsets. */
+std::vector<uint8_t> components(
+    const std::vector<std::tuple<uint16_t, int8_t, int8_t>> & parts) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u16(out, (uint16_t)parts.size());
+  for (const std::tuple<uint16_t, int8_t, int8_t> & part : parts) {
+    gfnttest::put_u16(out, std::get<0>(part));
+    out.push_back((uint8_t)std::get<1>(part));
+    out.push_back((uint8_t)std::get<2>(part));
+  }
+  return out;
+}
+
+/**
+ * A format 8 composite's glyph data: SmallGlyphMetrics, **a pad byte**, parts.
+ *
+ * The pad byte is the only difference between the two composite headers and it is
+ * the one a reader forgets: skip it and `numComponents` is read from the high half
+ * of the count, so a one-component composite reads as a 256-component one.
+ */
+std::vector<uint8_t> composite8(uint8_t height, uint8_t width, int8_t bearing_x,
+    int8_t bearing_y, uint8_t advance,
+    const std::vector<std::tuple<uint16_t, int8_t, int8_t>> & parts) {
+  std::vector<uint8_t> out =
+      small_metrics(height, width, bearing_x, bearing_y, advance);
+  out.push_back(0);
+  const std::vector<uint8_t> list = components(parts);
+  out.insert(out.end(), list.begin(), list.end());
+  return out;
+}
+
+/** A format 9 composite's glyph data: BigGlyphMetrics and **no** pad byte. */
+std::vector<uint8_t> composite9(uint8_t height, uint8_t width, int8_t bearing_x,
+    int8_t bearing_y, uint8_t advance,
+    const std::vector<std::tuple<uint16_t, int8_t, int8_t>> & parts) {
+  std::vector<uint8_t> out =
+      big_metrics(height, width, bearing_x, bearing_y, advance);
+  const std::vector<uint8_t> list = components(parts);
+  out.insert(out.end(), list.begin(), list.end());
+  return out;
+}
+
+/**
+ * An `indexSubTableArray` of two entries, which a composite needs.
+ *
+ * A component is found through the index like any other glyph, so a composite and
+ * the leaf it draws cannot share a subtable: the subtable states one image format
+ * for every glyph it covers, and the leaf's is not 8 or 9. Two entries is the
+ * smallest strike that can hold a composite at all.
+ */
+std::vector<uint8_t> two_subtables(uint16_t first_a, uint16_t last_a,
+    const std::vector<uint8_t> & body_a, uint16_t first_b, uint16_t last_b,
+    const std::vector<uint8_t> & body_b) {
+  std::vector<uint8_t> out;
+  const uint32_t array = 2 * 8;
+  gfnttest::put_u16(out, first_a);
+  gfnttest::put_u16(out, last_a);
+  gfnttest::put_u32(out, array);
+  gfnttest::put_u16(out, first_b);
+  gfnttest::put_u16(out, last_b);
+  gfnttest::put_u32(out, array + (uint32_t)body_a.size());
+  out.insert(out.end(), body_a.begin(), body_a.end());
+  out.insert(out.end(), body_b.begin(), body_b.end());
+  return out;
+}
+
+TEST(Ebdt, ACompositeDrawsExactlyWhatItsNonCompositeTwinDraws) {
+  // The identity this fixture exists for, and the only check on the placement
+  // rule there is: **nothing in Debian has a composite**, and fontTools reads a
+  // component list without composing it, so no second reader anywhere produces
+  // these pixels. What stands in for one is that each composite has a plain glyph
+  // of the same strike drawn from the generator's own arithmetic - so a
+  // transcription slip in the library shows as two glyphs of one strike
+  // disagreeing, which no single wrong reading can produce.
+  Fixture fixture("strike-composite.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+
+  struct Pair {
+    uint32_t composite;
+    uint32_t twin;
+    const char * why;
+  };
+  const Pair pairs[] = {
+    {6, 2, "image format 8, with its pad byte"},
+    {8, 2, "image format 9, with big metrics and no pad byte"},
+    {9, 3, "a composite whose own component is a composite"},
+  };
+
+  for (const Pair & pair : pairs) {
+    GFNT_BitmapGlyph made{};
+    GFNT_BitmapGlyph twin{};
+
+    ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, pair.composite, 0, &made,
+        &fixture.error), GFNT_OK) << pair.why << ": " << fixture.error.message;
+    ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, pair.twin, 0, &twin,
+        nullptr), GFNT_OK) << pair.why;
+    EXPECT_EQ(art(made), art(twin)) << pair.why;
+    // The box as well as the pixels: a composite states its own metrics and they
+    // have to be the ones that come out, not something recomputed from where its
+    // components landed.
+    EXPECT_EQ(made.width, twin.width) << pair.why;
+    EXPECT_EQ(made.height, twin.height) << pair.why;
+    EXPECT_EQ(made.bearing_x, twin.bearing_x) << pair.why;
+    EXPECT_EQ(made.bearing_y, twin.bearing_y) << pair.why;
+    EXPECT_EQ(made.advance, twin.advance) << pair.why;
+  }
+
+  // The pixels themselves, once, so that "the two agree" is not satisfied by both
+  // being blank. Transcribed from what the pinned fontTools reads out of this
+  // fixture's component lists, not from what the generator meant to write.
+  GFNT_BitmapGlyph plus{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 6, 0, &plus, nullptr), GFNT_OK);
+  EXPECT_EQ(art(plus), (std::vector<std::string>{
+      ".....#.....",
+      ".....#.....",
+      ".....#.....",
+      "###########",
+      ".....#.....",
+      ".....#.....",
+      ".....#.....",
+  }));
+
+  // And the component's own bearings are **not** where it goes. The bar is
+  // (3,4), the upright (-2,2) and the dot (7,6), none of them the composite's
+  // (1,7): a reader that placed a component by its bearings would draw something
+  // else, and the art above is what says it did not.
+  GFNT_BitmapGlyph bar{};
+  GFNT_BitmapGlyph upright{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 1, 0, &bar, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 4, 0, &upright, nullptr),
+      GFNT_OK);
+  EXPECT_EQ(bar.bearing_x, 3);
+  EXPECT_EQ(bar.bearing_y, 4);
+  EXPECT_EQ(upright.bearing_x, -2);
+  EXPECT_EQ(upright.bearing_y, 2);
+  EXPECT_NE(bar.bearing_y, plus.bearing_y);
+  EXPECT_NE(upright.bearing_y, plus.bearing_y);
+
+  // A composite with no components at all: its box, and nothing in it. Legal, and
+  // the arm that says the canvas starts clear - a buffer reused between glyphs
+  // that was not zeroed would show the previous composite's pixels here.
+  GFNT_BitmapGlyph empty{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(fixture.face, 7, 0, &empty, &fixture.error),
+      GFNT_OK) << fixture.error.message;
+  EXPECT_EQ(empty.width, plus.width);
+  EXPECT_EQ(empty.height, plus.height);
+  for (const std::string & row : art(empty)) {
+    EXPECT_EQ(row, "...........")
+        << "a composite stating zero components has no pixels";
+  }
+}
+
+TEST(Ebdt, ACompositeComponentLandsAtItsOffsetAndNowhereElse) {
+  // Crafted rather than taken from the fixture, because what this is about is the
+  // offsets *individually*: the fixture's composite would still read correctly if
+  // x and y were swapped, since its two components differ in both. Here one
+  // component moves one axis at a time.
+  //
+  // The canvas is 11 x 5 and the component is a single pixel, so the composed art
+  // names the exact cell it landed in. Eleven wide for the reason the format
+  // fixture is: a blit that only ever shifted by whole bytes passes every test
+  // whose components sit at column 0.
+  const std::vector<uint8_t> dot = [] {
+    std::vector<uint8_t> out = small_metrics(1, 1, 0, 1, 2);
+    out.push_back(0x80);
+    return out;
+  }();
+
+  struct Case {
+    int8_t dx;
+    int8_t dy;
+    const char * expect;   // the row that differs, and which row it is
+    uint32_t row;
+  };
+  const Case cases[] = {
+    {0, 0, "#..........", 0},
+    {1, 0, ".#.........", 0},
+    {7, 0, ".......#...", 0},
+    {8, 0, "........#..", 0},   // the next byte of the canvas
+    {10, 0, "..........#", 0},  // the last column, exactly
+    {0, 4, "#..........", 4},   // the last row, exactly
+    {9, 3, ".........#.", 3},
+  };
+
+  for (const Case & test : cases) {
+    // Fourteen bytes: BigGlyphMetrics' eight, the two-byte count, and four per
+    // component. Written as the size of what the helper built rather than as a
+    // literal, because the first draft said ten and every case refused for a
+    // length that did not hold its own components.
+    std::vector<uint8_t> ebdt =
+        composite9(5, 11, 1, 5, 13, {{2, test.dx, test.dy}});
+    const uint32_t composite_bytes = (uint32_t)ebdt.size();
+    const std::vector<uint8_t> region = two_subtables(
+        1, 1, index1(9, kEbdtHeader, {0, composite_bytes}),
+        2, 2, index1(1, kEbdtHeader + composite_bytes, {0, 6}));
+    ebdt.insert(ebdt.end(), dot.begin(), dot.end());
+
+    const std::string bytes = strike_font(region, ebdt, 4, 2, 1, 2);
+    Crafted crafted(bytes);
+    ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+    GFNT_BitmapGlyph made{};
+    GFNT_Error error{};
+    ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &made, &error),
+        GFNT_OK) << (int)test.dx << "," << (int)test.dy << ": " << error.message;
+
+    const std::vector<std::string> rows = art(made);
+    ASSERT_EQ(rows.size(), 5u);
+    for (uint32_t y = 0; y < rows.size(); ++y) {
+      const std::string want = y == test.row ? test.expect : "...........";
+      EXPECT_EQ(rows[y], want) << "component at " << (int)test.dx << ","
+          << (int)test.dy << " row " << y;
+    }
+  }
+}
+
+TEST(Ebdt, EveryWayACompositeCanContradictItselfIsRefused) {
+  // One wrong field at a time, each reaching its own arm, and all of them per
+  // glyph: a composite that contradicts itself is one bad glyph and not a bad
+  // strike (M11), so the control at the end has to still read the leaf.
+  const std::vector<uint8_t> dot = [] {
+    std::vector<uint8_t> out = small_metrics(1, 1, 0, 1, 2);
+    out.push_back(0x80);
+    return out;
+  }();
+
+  const uint32_t whole = (uint32_t)composite9(5, 11, 1, 5, 13,
+      {{2, 0, 0}}).size();
+
+  struct Case {
+    const char * why;
+    std::vector<uint8_t> glyph;
+    uint32_t length;    // what the index says the glyph is, which may be a lie
+    size_t cut;         // trim EBDT to this many bytes, or 0 to leave it whole
+    GFNT_Result result;
+    const char * phrase;
+    std::vector<uint8_t> leaf;  // the component's own subtable, or empty for a
+                                // sound one. Every arm a component reaches
+                                // *through* the index rather than in the
+                                // composite's own bytes needs one of these.
+  };
+  const Case cases[] = {
+    {"a component the strike's own glyph range does not reach",
+     composite9(5, 11, 1, 5, 13, {{3, 0, 0}}), whole, 0,
+     GFNT_ERR_CORRUPT, "outside the strike's glyph range", {}},
+    {"a component no index subtable covers",
+     composite9(5, 11, 1, 5, 13, {{2, 0, 0}}), whole, 0,
+     GFNT_ERR_CORRUPT, "no index subtable covers", {}},
+    {"a component that falls off the right edge of the composite's own box",
+     composite9(5, 11, 1, 5, 13, {{2, 11, 0}}), whole, 0,
+     GFNT_ERR_CORRUPT, "outside its own box", {}},
+    {"a component that falls off the bottom",
+     composite9(5, 11, 1, 5, 13, {{2, 0, 5}}), whole, 0,
+     GFNT_ERR_CORRUPT, "outside its own box", {}},
+    {"a component at a negative offset",
+     composite9(5, 11, 1, 5, 13, {{2, -1, 0}}), whole, 0,
+     GFNT_ERR_CORRUPT, "outside its own box", {}},
+    {"a count the stated length does not hold - one byte short of a component",
+     composite9(5, 11, 1, 5, 13, {{2, 0, 0}}), whole - 1, 0,
+     GFNT_ERR_CORRUPT, "more components than its length holds", {}},
+    // The count itself off the end of the **table**, not merely off the end of
+    // the length: a different arm, and the only way to reach it is to truncate
+    // EBDT rather than to lie about a length.
+    {"a table that ends before the component count",
+     composite9(5, 11, 1, 5, 13, {{2, 0, 0}}), whole, 8,
+     GFNT_ERR_CORRUPT, "no component count", {}},
+    // **Format 8, and the length bound is the point.** A format 8 header is one
+    // byte longer than its metrics because of the pad byte, so a length that
+    // holds a component for format 9 is one byte short for format 8. Nothing
+    // pinned that until a mutation setting format 8's consumed count to five
+    // passed the whole suite: the composite still read correctly, because the
+    // reader had advanced past the pad either way, and all this test's other
+    // cases are format 9.
+    {"a format 8 composite one byte short of its component, pad byte counted",
+     composite8(5, 11, 1, 5, 13, {{2, 0, 0}}),
+     (uint32_t)composite8(5, 11, 1, 5, 13, {{2, 0, 0}}).size() - 1, 0,
+     GFNT_ERR_CORRUPT, "more components than its length holds", {}},
+    // The last three are faults in the *component's* index entry rather than in
+    // the composite's own bytes: the same arms a top-level glyph has, reached
+    // through a different caller, and each one is a sentence about a composite
+    // rather than about a glyph so that a diagnostic says which it was.
+    {"a component a sparse index lists a range for and does not carry",
+     composite9(5, 11, 1, 5, 13, {{2, 0, 0}}), whole, 0,
+     GFNT_ERR_CORRUPT, "does not carry",
+     index4(1, kEbdtHeader + whole, 0, {{0xFFFF, 6}})},
+    {"a component whose data starts past the end of EBDT",
+     composite9(5, 11, 1, 5, 13, {{2, 0, 0}}), whole, 0,
+     GFNT_ERR_CORRUPT, "starts past the end of the table",
+     index1(1, 0xFFFF, {0, 6})},
+    {"a component whose length does not reach past its own metrics",
+     composite9(5, 11, 1, 5, 13, {{2, 0, 0}}), whole, 0,
+     GFNT_ERR_CORRUPT, "does not reach past its metrics",
+     index1(1, kEbdtHeader + whole, {0, 3})},
+  };
+
+  for (const Case & test : cases) {
+    // The second subtable covers glyph 2 only, so a component of 3 is outside the
+    // strike and a component of 2 is covered - except in the case that is about
+    // *not* being covered, which gives the leaf subtable glyph 1's range.
+    const bool uncovered =
+        std::string(test.why).find("no index subtable") != std::string::npos;
+    // The image format is the glyph's own size away from format 9's, because one
+    // case is a format 8 composite; so the leaf's data offset comes from what
+    // this case actually wrote rather than from `whole`.
+    const bool eight = test.glyph.size() != whole;
+    const std::vector<uint8_t> leaf = test.leaf.empty()
+        ? index1(1, kEbdtHeader + (uint32_t)test.glyph.size(), {0, 6})
+        : test.leaf;
+    const std::vector<uint8_t> region = two_subtables(
+        1, 1, index1(eight ? 8 : 9, kEbdtHeader, {0, test.length}),
+        uncovered ? 1 : 2, uncovered ? 1 : 2, leaf);
+    std::vector<uint8_t> ebdt = test.glyph;
+    ebdt.insert(ebdt.end(), dot.begin(), dot.end());
+    if (test.cut) {
+      ebdt.resize(test.cut);
+    }
+
+    GFNT_Error error{};
+    const std::string bytes = strike_font(region, ebdt, 4, 2, 1, 2);
+    EXPECT_EQ(ask(bytes, 1, &error), test.result) << test.why;
+    EXPECT_NE(std::string(error.message ? error.message : "").find(test.phrase),
+        std::string::npos) << test.why << ": got "
+        << (error.message ? error.message : "(nothing)");
+  }
+
+  // The control: the same shape with nothing wrong composes, and the leaf it
+  // draws still reads on its own. Without it every case above could be passing
+  // for a reason none of them names.
+  const std::vector<uint8_t> region = two_subtables(
+      1, 1, index1(9, kEbdtHeader, {0, whole}),
+      2, 2, index1(1, kEbdtHeader + whole, {0, 6}));
+  std::vector<uint8_t> ebdt = composite9(5, 11, 1, 5, 13, {{2, 3, 2}});
+  ebdt.insert(ebdt.end(), dot.begin(), dot.end());
+  GFNT_Error error{};
+  const std::string good = strike_font(region, ebdt, 4, 2, 1, 2);
+  EXPECT_EQ(ask(good, 1, &error), GFNT_OK) << error.message;
+  EXPECT_EQ(ask(good, 2, &error), GFNT_OK) << error.message;
+}
+
+TEST(Ebdt, AComponentWithNothingToDrawDrawsNothingRatherThanRefusing) {
+  // Two ways a component legitimately contributes no pixels, and both have to be
+  // the composite still reading: the strike *lists* the glyph and says it has
+  // none. A reader that treated either as a fault would refuse a composite that a
+  // font meant, and one that treated them as pixels would read the next glyph's
+  // bytes.
+  const uint32_t whole = (uint32_t)composite9(5, 11, 1, 5, 13,
+      {{2, 0, 0}}).size();
+
+  struct Case {
+    const char * why;
+    std::vector<uint8_t> leaf_data;
+    std::vector<uint8_t> leaf_index;
+  };
+  const Case cases[] = {
+    {"a component whose index gives it a length of zero",
+     small_metrics(1, 1, 0, 1, 2),
+     index1(1, kEbdtHeader + whole, {0, 0})},
+    {"a component whose own metrics state an empty box",
+     small_metrics(0, 0, 0, 0, 2),
+     index1(1, kEbdtHeader + whole, {0, 5})},
+  };
+
+  for (const Case & test : cases) {
+    std::vector<uint8_t> ebdt = composite9(5, 11, 1, 5, 13, {{2, 0, 0}});
+    ebdt.insert(ebdt.end(), test.leaf_data.begin(), test.leaf_data.end());
+    const std::vector<uint8_t> region = two_subtables(
+        1, 1, index1(9, kEbdtHeader, {0, whole}), 2, 2, test.leaf_index);
+
+    const std::string bytes = strike_font(region, ebdt, 4, 2, 1, 2);
+    Crafted crafted(bytes);
+    ASSERT_EQ(crafted.result, GFNT_OK) << test.why << ": "
+        << crafted.error.message;
+    GFNT_BitmapGlyph made{};
+    GFNT_Error error{};
+    ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &made, &error),
+        GFNT_OK) << test.why << ": "
+        << (error.message ? error.message : "(nothing)");
+    // The composite's own box, and nothing in it.
+    EXPECT_EQ(made.width, 11u) << test.why;
+    EXPECT_EQ(made.height, 5u) << test.why;
+    for (const std::string & row : art(made)) {
+      EXPECT_EQ(row, "...........") << test.why;
+    }
+  }
+}
+
+TEST(Ebdt, ACycleIsNamedRatherThanLeftToTheDepthCap) {
+  // The depth budget alone would refuse a cycle - after sixteen levels, as a
+  // limit. That is a true sentence about a font that is simply wrong, and it is
+  // what `glyf`'s composite reader still answers for an *indirect* cycle, where it
+  // names only the direct one. Both are named here, and the distinction matters
+  // because a caller can act on a limit by raising it and would be raising it
+  // forever.
+  struct Case {
+    const char * why;
+    uint16_t first_component;   // glyph 1 draws this
+    uint16_t second_component;  // glyph 2 draws this
+  };
+  const Case cases[] = {
+    {"a composite that includes itself", 1, 2},
+    {"a cycle through another glyph", 2, 1},
+  };
+
+  for (const Case & test : cases) {
+    // Both composites, so that the cycle has somewhere to go: one format 9
+    // subtable over glyphs 1 and 2.
+    std::vector<uint8_t> first =
+        composite9(5, 11, 1, 5, 13, {{test.first_component, 0, 0}});
+    std::vector<uint8_t> second =
+        composite9(5, 11, 1, 5, 13, {{test.second_component, 0, 0}});
+    const uint32_t split = (uint32_t)first.size();
+    std::vector<uint8_t> ebdt = first;
+    ebdt.insert(ebdt.end(), second.begin(), second.end());
+
+    const std::vector<uint8_t> region = one_subtable(1, 2,
+        index1(9, kEbdtHeader, {0, split, split * 2}));
+    GFNT_Error error{};
+    const std::string bytes = strike_font(region, ebdt, 4, 1, 1, 2);
+    EXPECT_EQ(ask(bytes, 1, &error), GFNT_ERR_CORRUPT) << test.why;
+    EXPECT_NE(std::string(error.message ? error.message : "").find(
+        "includes itself"), std::string::npos) << test.why << ": got "
+        << (error.message ? error.message : "(nothing)");
+  }
+}
+
+TEST(Ebdt, CompositeNestingStopsAtMaxCompositeDepth) {
+  // An acyclic chain deeper than the caller allows, which is the one case the
+  // cycle check above cannot catch and the reason the depth budget is still here.
+  // ::GFNT_ERR_LIMIT and not corrupt: the font may be perfectly well formed and
+  // the ceiling is the caller's, so it is the answer `gfnt_glyf_load()` gives for
+  // the same question and one a caller can act on.
+  //
+  // Four composites in a chain and a leaf at the end, with the budget set to two.
+  const std::vector<uint8_t> dot = [] {
+    std::vector<uint8_t> out = small_metrics(1, 1, 0, 1, 2);
+    out.push_back(0x80);
+    return out;
+  }();
+  std::vector<uint8_t> ebdt;
+  std::vector<uint32_t> offsets = {0};
+  for (uint16_t glyph = 1; glyph <= 4; ++glyph) {
+    const std::vector<uint8_t> one =
+        composite9(5, 11, 1, 5, 13, {{(uint16_t)(glyph + 1), 0, 0}});
+    ebdt.insert(ebdt.end(), one.begin(), one.end());
+    offsets.push_back((uint32_t)ebdt.size());
+  }
+  const uint32_t leaf_at = (uint32_t)ebdt.size();
+  ebdt.insert(ebdt.end(), dot.begin(), dot.end());
+
+  const std::vector<uint8_t> region = two_subtables(
+      1, 4, index1(9, kEbdtHeader, offsets),
+      5, 5, index1(1, kEbdtHeader + leaf_at, {0, 6}));
+  const std::string bytes = strike_font(region, ebdt, 6, 2, 1, 5);
+
+  GFNT_Limits limits;
+  gfnt_limits_default(&limits);
+  limits.max_composite_depth = 2;
+  Crafted crafted(bytes, &limits);
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  GFNT_BitmapGlyph made{};
+  GFNT_Error error{};
+  // Glyph 1 is four levels above the leaf, so it exceeds a budget of two.
+  EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &made, &error),
+      GFNT_ERR_LIMIT);
+  EXPECT_NE(std::string(error.message ? error.message : "").find(
+      "max_composite_depth"), std::string::npos)
+      << (error.message ? error.message : "(nothing)");
+
+  // And the control: the same font at the default budget reads every one of them,
+  // so the refusal above is the limit and not the chain being malformed.
+  Crafted roomy(bytes);
+  ASSERT_EQ(roomy.result, GFNT_OK) << roomy.error.message;
+  for (uint32_t glyph = 1; glyph <= 5; ++glyph) {
+    GFNT_BitmapGlyph each{};
+    EXPECT_EQ(gfnt_face_glyph_bitmap(roomy.face, glyph, 0, &each, &error),
+        GFNT_OK) << "glyph " << glyph << ": "
+        << (error.message ? error.message : "");
+  }
 }
 
 }  // namespace

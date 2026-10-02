@@ -1099,6 +1099,46 @@ std::string strike_font(const std::vector<uint8_t> & region,
   return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
 }
 
+/**
+ * One `BitmapScale` record: two `sbitLineMetrics`, then the four sizes.
+ *
+ * `min_after_bl` is a parameter for the reason `size_table()`'s is: it is what
+ * decides what a *positive* descender means, and only a crafted record can state
+ * the pairing that tests the narrow half of that rule.
+ */
+std::vector<uint8_t> bitmap_scale(uint8_t ppem_x, uint8_t ppem_y,
+    uint8_t sub_ppem_x, uint8_t sub_ppem_y, int8_t ascender = 6,
+    int8_t descender = -1, int8_t min_after_bl = 0) {
+  std::vector<uint8_t> out;
+  for (int direction = 0; direction < 2; ++direction) {
+    const int8_t asc = direction == 0 ? ascender : 0;
+    const int8_t desc = direction == 0 ? descender : 0;
+    gfnttest::put_u8(out, (uint8_t)asc);
+    gfnttest::put_u8(out, (uint8_t)desc);
+    for (int i = 0; i < 7; ++i) {
+      gfnttest::put_u8(out, 0);
+    }
+    gfnttest::put_u8(out, (uint8_t)(direction == 0 ? min_after_bl : 0));
+    gfnttest::put_u8(out, 0);
+    gfnttest::put_u8(out, 0);
+  }
+  gfnttest::put_u8(out, ppem_x);
+  gfnttest::put_u8(out, ppem_y);
+  gfnttest::put_u8(out, sub_ppem_x);
+  gfnttest::put_u8(out, sub_ppem_y);
+  return out;
+}
+
+/** An `EBSC` table: a version, a count, then @p body. */
+std::vector<uint8_t> ebsc_table(uint32_t version, uint32_t count,
+    const std::vector<uint8_t> & body) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u32(out, version);
+  gfnttest::put_u32(out, count);
+  out.insert(out.end(), body.begin(), body.end());
+  return out;
+}
+
 /** An `indexSubTableArray` of one entry pointing at @p body. */
 std::vector<uint8_t> one_subtable(uint16_t first, uint16_t last,
     const std::vector<uint8_t> & body) {
@@ -1203,6 +1243,363 @@ std::vector<uint8_t> index1(uint16_t image_format, uint32_t data_offset,
     gfnttest::put_u32(out, offset);
   }
   return out;
+}
+
+/**
+ * A whole font with one strike **and** an `EBSC`.
+ *
+ * The strike is the 12 ppem one `strike_font()` builds, so a scale record that
+ * substitutes 12x12 resolves and one that substitutes anything else does not -
+ * which is the condition most of these tests turn on.
+ */
+std::string ebsc_font(const std::vector<uint8_t> & ebsc,
+    bool with_strikes = true) {
+  std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+  const std::vector<uint8_t> region =
+      one_subtable(1, 1, index1(1, kEbdtHeader, {0, 9}));
+
+  std::vector<uint8_t> eblc;
+  gfnttest::put_u32(eblc, 0x00020000);
+  gfnttest::put_u32(eblc, 1);
+  const std::vector<uint8_t> size = size_table(8 + 48,
+      (uint32_t)region.size(), 1, 1, 1, 12, 12, 1, 1);
+  eblc.insert(eblc.end(), size.begin(), size.end());
+  eblc.insert(eblc.end(), region.begin(), region.end());
+
+  std::vector<uint8_t> data;
+  gfnttest::put_u32(data, 0x00020000);
+  data.insert(data.end(), glyph_data.begin(), glyph_data.end());
+
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  tables.push_back({GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(4)});
+  if (with_strikes) {
+    tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'), eblc});
+    tables.push_back({GFNT_TAG('E', 'B', 'D', 'T'), data});
+  }
+  tables.push_back({GFNT_TAG('E', 'B', 'S', 'C'), ebsc});
+  const std::vector<uint8_t> bytes =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  return std::string(reinterpret_cast<const char *>(bytes.data()),
+      bytes.size());
+}
+
+TEST(Ebsc, EveryScaleRecordIsReportedWithItsSubstituteResolved) {
+  // `EBSC` is the sizes a face offers by **scaling** another size's bitmaps. This
+  // library reads the records and scales nothing: the specification names the
+  // substitute strike and says nothing about how to use it, FreeType does not read
+  // the table at all, and fontTools parses the records without composing a pixel -
+  // so there is no second reader of a scaled pixel anywhere to contradict a guess.
+  // What is reported is what the table states, which is checkable.
+  std::vector<uint8_t> body = bitmap_scale(8, 8, 12, 12, 7, -2);
+  const std::vector<uint8_t> second = bitmap_scale(9, 9, 12, 12, 8, -3);
+  body.insert(body.end(), second.begin(), second.end());
+  Crafted crafted(ebsc_font(ebsc_table(0x00020000, 2, body)));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 0;
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_scaled_strike_count(crafted.face, &count, &error),
+      GFNT_OK) << (error.message ? error.message : "(nothing)");
+  EXPECT_EQ(count, 2u);
+
+  GFNT_ScaledStrike first{};
+  ASSERT_EQ(gfnt_face_scaled_strike_at(crafted.face, 0, &first, &error),
+      GFNT_OK) << (error.message ? error.message : "(nothing)");
+  EXPECT_EQ(first.index, 0u);
+  EXPECT_EQ(first.ppem_x, 8u);
+  EXPECT_EQ(first.ppem_y, 8u);
+  EXPECT_EQ(first.substitute_ppem_x, 12u);
+  EXPECT_EQ(first.substitute_ppem_y, 12u);
+  // Resolved from the ppem pair to the strike that has it, which is the one piece
+  // of work this library does that the table does not state.
+  EXPECT_EQ(first.substitute_index, 0u);
+  // The record's **own** baseline, not the substitute strike's: scaling a 12-pixel
+  // strike to 8 does not scale its ascent to anything the font would have chosen.
+  EXPECT_EQ(first.ascent, 7);
+  EXPECT_EQ(first.descent, -2);
+
+  GFNT_ScaledStrike next{};
+  ASSERT_EQ(gfnt_face_scaled_strike_at(crafted.face, 1, &next, &error), GFNT_OK)
+      << (error.message ? error.message : "(nothing)");
+  EXPECT_EQ(next.index, 1u);
+  EXPECT_EQ(next.ppem_y, 9u);
+  EXPECT_EQ(next.ascent, 8);
+  EXPECT_EQ(next.descent, -3);
+
+  // And the strike list is untouched by any of it: a scaled size is not a strike,
+  // and ::GFNT_Strike never comes from this table.
+  size_t strikes = 0;
+  ASSERT_EQ(gfnt_face_strike_count(crafted.face, &strikes, &error), GFNT_OK);
+  EXPECT_EQ(strikes, 1u);
+}
+
+TEST(Ebsc, AScaleRecordsDescenderIsResolvedTheSameWayAStrikesIs) {
+  // The same records, the same unstated sign, and so the same rule - Anonymous
+  // Pro writes a positive descender in its `EBSC` exactly as it does in its
+  // strikes. Two copies of the rule would let the two answers for one font
+  // disagree, which is why it is one predicate in eblc.h.
+  const std::vector<uint8_t> body = bitmap_scale(8, 8, 12, 12, 7, 2, -2);
+  Crafted crafted(ebsc_font(ebsc_table(0x00020000, 1, body)));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  GFNT_ScaledStrike record{};
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_scaled_strike_at(crafted.face, 0, &record, &error),
+      GFNT_OK) << (error.message ? error.message : "(nothing)");
+  EXPECT_EQ(record.descent, -2);
+}
+
+TEST(Ebsc, EveryWayAScaleRecordCanContradictItselfIsRefused) {
+  struct Case {
+    const char * why;
+    std::vector<uint8_t> table;
+    GFNT_Result want;
+    const char * says;
+  };
+  const Case cases[] = {
+    {"a version this library does not read",
+     ebsc_table(0x00030000, 1, bitmap_scale(8, 8, 12, 12)),
+     GFNT_ERR_UNSUPPORTED, "version"},
+    {"a header with no count in it",
+     {0x00, 0x02, 0x00, 0x00},
+     GFNT_ERR_CORRUPT, "shorter than its own header"},
+    {"a record that ends past the table",
+     ebsc_table(0x00020000, 1, {0, 0, 0}),
+     GFNT_ERR_CORRUPT, "ends past the table"},
+    {"a count of two with one record behind it",
+     ebsc_table(0x00020000, 2, bitmap_scale(8, 8, 12, 12)),
+     GFNT_ERR_CORRUPT, "ends past the table"},
+    {"a record offering a pixel size of zero",
+     ebsc_table(0x00020000, 1, bitmap_scale(0, 8, 12, 12)),
+     GFNT_ERR_CORRUPT, "pixel size of zero"},
+    {"a record offering zero vertical pixels",
+     ebsc_table(0x00020000, 1, bitmap_scale(8, 0, 12, 12)),
+     GFNT_ERR_CORRUPT, "pixel size of zero"},
+    {"a record deferring to a size no strike has",
+     ebsc_table(0x00020000, 1, bitmap_scale(8, 8, 14, 14)),
+     GFNT_ERR_CORRUPT, "no EBLC strike has"},
+    {"a record deferring to a size that matches only one axis",
+     ebsc_table(0x00020000, 1, bitmap_scale(8, 8, 12, 14)),
+     GFNT_ERR_CORRUPT, "no EBLC strike has"},
+    {"a record deferring to its own size",
+     ebsc_table(0x00020000, 1, bitmap_scale(12, 12, 12, 12)),
+     GFNT_ERR_CORRUPT, "its own pixel size"},
+  };
+
+  for (const Case & test : cases) {
+    Crafted crafted(ebsc_font(test.table));
+    // The face loads: `EBSC` is read on demand like `EBLC`, so a broken one is a
+    // refused accessor rather than a font that cannot be opened. That is the whole
+    // point of the memo, and a test that asserted the load failed would be
+    // asserting the opposite design.
+    ASSERT_EQ(crafted.result, GFNT_OK) << test.why << ": "
+        << crafted.error.message;
+
+    size_t count = 0;
+    GFNT_Error error{};
+    EXPECT_EQ(gfnt_face_scaled_strike_count(crafted.face, &count, &error),
+        test.want) << test.why;
+    ASSERT_NE(error.message, nullptr) << test.why;
+    EXPECT_NE(std::string(error.message).find(test.says), std::string::npos)
+        << test.why << ": " << error.message;
+  }
+}
+
+TEST(Ebsc, MoreRecordsThanTheLimitAllowsIsALimitAndNotCorruption) {
+  // The same cap as the strike list's, because these are sizes in the same sense:
+  // a caller that bounded one meant to bound both. Wine's system.ttf states 21
+  // records against two real strikes, so the ratio is not hypothetical.
+  std::vector<uint8_t> body;
+  for (uint8_t ppem = 2; ppem <= 5; ++ppem) {
+    const std::vector<uint8_t> one = bitmap_scale(ppem, ppem, 12, 12);
+    body.insert(body.end(), one.begin(), one.end());
+  }
+  const std::string bytes = ebsc_font(ebsc_table(0x00020000, 4, body));
+
+  GFNT_Limits limits;
+  gfnt_limits_default(&limits);
+  limits.max_strikes = 3;
+  Crafted crafted(bytes, &limits);
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 0;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_scaled_strike_count(crafted.face, &count, &error),
+      GFNT_ERR_LIMIT);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_NE(std::string(error.message).find("max_strikes"), std::string::npos)
+      << error.message;
+
+  // And four records pass when four are allowed, so the refusal above is the cap
+  // and not the records.
+  limits.max_strikes = 4;
+  Crafted roomier(bytes, &limits);
+  ASSERT_EQ(roomier.result, GFNT_OK) << roomier.error.message;
+  ASSERT_EQ(gfnt_face_scaled_strike_count(roomier.face, &count, &error),
+      GFNT_OK) << (error.message ? error.message : "(nothing)");
+  EXPECT_EQ(count, 4u);
+}
+
+TEST(Ebsc, AnEbscWithNoStrikeListToDeferToIsRefusedRatherThanEmpty) {
+  // A scaled size that defers to a strike list nobody can read is not a size, so
+  // this must not read as "no scaled sizes" - the shape where a missing table and
+  // a refused one give the same answer. gfnt_face_strike_count() refuses the same
+  // way for a strike list in a table this library will not parse.
+  Crafted crafted(ebsc_font(ebsc_table(0x00020000, 1,
+      bitmap_scale(8, 8, 12, 12)), false));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 0;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_scaled_strike_count(crafted.face, &count, &error),
+      GFNT_ERR_UNSUPPORTED);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_NE(std::string(error.message).find("defer to"), std::string::npos)
+      << error.message;
+}
+
+TEST(Ebsc, AnEbscListingNoRecordsIsZeroScaledSizesAndNotARefusal) {
+  // Well formed, and says the face offers no scaled sizes - the same answer
+  // `gfnt_eblc_parse()` gives an EBLC that lists no strikes, and for the same
+  // reason: the table contradicts nothing, it just states none.
+  Crafted crafted(ebsc_font(ebsc_table(0x00020000, 0, {})));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 99;
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_scaled_strike_count(crafted.face, &count, &error),
+      GFNT_OK) << (error.message ? error.message : "(nothing)");
+  EXPECT_EQ(count, 0u);
+}
+
+TEST(Ebsc, AnEbscBesideACorruptEblcReportsTheEblcsFailure) {
+  // The *corrupt* form of "a scaled size that defers to a strike list nobody can
+  // read", where AnEbscWithNoStrikeListToDeferToIsRefusedRatherThanEmpty is the
+  // missing form. Both have to come back as a failure rather than as a count,
+  // and they are different code: one is the has-table check, the other is the
+  // EBLC parse failing inside the EBSC parse.
+  //
+  // The strike states a pixel size of zero, which `gfnt_eblc_read_strike()`
+  // refuses by name - so the message a caller sees is about the EBLC, which is
+  // where the fault is.
+  std::vector<uint8_t> eblc;
+  gfnttest::put_u32(eblc, 0x00020000);
+  gfnttest::put_u32(eblc, 1);
+  const std::vector<uint8_t> size = size_table(8 + 48, 8, 1, 1, 1, 0, 12, 1, 1);
+  eblc.insert(eblc.end(), size.begin(), size.end());
+  for (int i = 0; i < 8; ++i) {
+    gfnttest::put_u8(eblc, 0);
+  }
+  std::vector<uint8_t> data;
+  gfnttest::put_u32(data, 0x00020000);
+
+  std::vector<gfnttest::Table> tables;
+  tables.push_back({GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head()});
+  tables.push_back({GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(4)});
+  tables.push_back({GFNT_TAG('E', 'B', 'L', 'C'), eblc});
+  tables.push_back({GFNT_TAG('E', 'B', 'D', 'T'), data});
+  tables.push_back({GFNT_TAG('E', 'B', 'S', 'C'),
+      ebsc_table(0x00020000, 1, bitmap_scale(8, 8, 12, 12))});
+  const std::vector<uint8_t> raw =
+      gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+  Crafted crafted(std::string(reinterpret_cast<const char *>(raw.data()),
+      raw.size()));
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  size_t count = 99;
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_scaled_strike_count(crafted.face, &count, &error),
+      GFNT_ERR_CORRUPT);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_NE(std::string(error.message).find("pixel size of zero"),
+      std::string::npos) << error.message;
+}
+
+TEST(Ebsc, TheScaleParseSurvivesEveryRefusedAllocation) {
+  std::vector<uint8_t> body;
+  for (uint8_t ppem = 6; ppem <= 9; ++ppem) {
+    const std::vector<uint8_t> one = bitmap_scale(ppem, ppem, 12, 12);
+    body.insert(body.end(), one.begin(), one.end());
+  }
+  const std::string bytes = ebsc_font(ebsc_table(0x00020000, 4, body));
+  size_t refused = 0;
+
+  for (size_t at = 0; at < 64; ++at) {
+    gfnttest::FailingAllocator failing(at);
+    GFNT_Blob * blob = nullptr;
+    GFNT_Face * face = nullptr;
+    GFNT_Error error{};
+
+    if (gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_COPY,
+            nullptr, failing.get(), &blob, &error) != GFNT_OK) {
+      continue;
+    }
+    if (gfnt_face_load(blob, 0, nullptr, failing.get(), &face, &error)
+        != GFNT_OK) {
+      gfnt_blob_destroy(blob);
+      continue;
+    }
+    size_t count = 0;
+    const GFNT_Result result =
+        gfnt_face_scaled_strike_count(face, &count, &error);
+    EXPECT_TRUE(result == GFNT_OK || result == GFNT_ERR_OOM)
+        << "request " << at << ": "
+        << (error.message ? error.message : "(nothing)");
+    if (result != GFNT_OK) {
+      ++refused;
+    }
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+    EXPECT_EQ(failing.live(), 0u) << "request " << at;
+  }
+  // The denominator: a sweep where no allocation was ever refused would pass
+  // without entering a single error arm.
+  EXPECT_GT(refused, 0u) << "no allocation was refused, so this proved nothing";
+}
+
+TEST(Ebsc, AFaceWithNoEbscOffersNoScaledSizesAndSaysSoWithZero) {
+  // Zero rather than a refusal, for every face without the table: a standalone
+  // bitmap container has no such concept and an sfnt without an `EBSC` states
+  // nothing. The distinction from the test above is the whole point - "the face
+  // offers none" and "the face offers some and they cannot be read" must not be
+  // the same answer.
+  Fixture strikes("strikes.ttf");
+  ASSERT_EQ(strikes.result, GFNT_OK);
+  size_t count = 99;
+  ASSERT_EQ(gfnt_face_scaled_strike_count(strikes.face, &count,
+      &strikes.error), GFNT_OK) << strikes.error.message;
+  EXPECT_EQ(count, 0u);
+  // And an index into an empty list is INVALID rather than anything softer.
+  GFNT_ScaledStrike record{};
+  EXPECT_EQ(gfnt_face_scaled_strike_at(strikes.face, 0, &record,
+      &strikes.error), GFNT_ERR_INVALID);
+
+  Fixture pcf("bitmap.pcf");
+  ASSERT_EQ(pcf.result, GFNT_OK);
+  count = 99;
+  ASSERT_EQ(gfnt_face_scaled_strike_count(pcf.face, &count, &pcf.error),
+      GFNT_OK) << pcf.error.message;
+  EXPECT_EQ(count, 0u);
+}
+
+TEST(Ebsc, TheAccessorsRefuseWhatEveryAccessorHereRefuses) {
+  size_t count = 0;
+  GFNT_ScaledStrike record{};
+  GFNT_Error error{};
+
+  EXPECT_EQ(gfnt_face_scaled_strike_count(nullptr, &count, &error),
+      GFNT_ERR_INVALID);
+  Fixture fixture("strikes.ttf");
+  ASSERT_EQ(fixture.result, GFNT_OK);
+  EXPECT_EQ(gfnt_face_scaled_strike_count(fixture.face, nullptr, &error),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_scaled_strike_at(nullptr, 0, &record, &error),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_scaled_strike_at(fixture.face, 0, nullptr, &error),
+      GFNT_ERR_INVALID);
 }
 
 TEST(Eblc, TheStrikeListIsEveryBitmapSizeTable) {

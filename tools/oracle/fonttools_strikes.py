@@ -210,6 +210,12 @@ def report(path, index, stride, out):
         out.write("faces %d\n" % len(found))
         out.write("glyphs %d\n" % glyphs)
         out.write("strikes 0\n")
+        # And no scaled sizes either, which has to be *said* rather than left out:
+        # this library reports zero for such a face, and an early return that
+        # printed nothing made the two disagree about `scaled` on wqy-zenhei's two
+        # strikeless faces. A key one side omits is a disagreement, which is the
+        # right default - so the fix is to answer, not to make the key optional.
+        out.write("scaled 0\n")
         return
 
     # EBLC first and on its own line of code, because when it raises - mona.ttf
@@ -223,6 +229,43 @@ def report(path, index, stride, out):
     out.write("faces %d\n" % len(found))
     out.write("glyphs %d\n" % glyphs)
     out.write("strikes %d\n" % len(eblc.strikes))
+
+    # `EBSC`: the sizes the face offers by scaling another size's bitmaps. Eleven
+    # faces in Debian have one - Anonymous Pro's four and seven of Wine's.
+    #
+    # The substitute is resolved to a strike index **here**, from this reference's
+    # own reading of the strike list, which is what makes comparing it worth
+    # anything: the record states a ppem pair, and the two sides agreeing on which
+    # strike that is means they agree on the pair *and* on every strike's ppem.
+    scales = (font["EBSC"].bitmapScaleTables
+              if "EBSC" in font.reader.tables else [])
+    out.write("scaled %d\n" % len(scales))
+    for number, scale in enumerate(scales):
+        where = len(eblc.strikes)
+        for at, strike in enumerate(eblc.strikes):
+            size = strike.bitmapSizeTable
+            if (size.ppemX == scale.substitutePpemX
+                    and size.ppemY == scale.substitutePpemY):
+                where = at
+                break
+        out.write("scale %d ppem_x %d\n" % (number, scale.ppemX))
+        out.write("scale %d ppem_y %d\n" % (number, scale.ppemY))
+        out.write("scale %d sub_ppem_x %d\n" % (number, scale.substitutePpemX))
+        out.write("scale %d sub_ppem_y %d\n" % (number, scale.substitutePpemY))
+        out.write("scale %d sub_index %d\n" % (number, where))
+        # A BitmapScale states no `flags`, so which of its two sbitLineMetrics
+        # applies comes from the substitute strike - the only statement of the
+        # direction anywhere near these bytes. Both sides apply that, because it is
+        # the only reading the format allows rather than a choice either made.
+        line = scale.hori
+        if where < len(eblc.strikes):
+            size = eblc.strikes[where].bitmapSizeTable
+            line = scale.hori if size.flags & 1 else scale.vert
+        out.write("scale %d ascent %d\n" % (number, line.ascender))
+        # The raw bytes, for the same reason the strike's descent is a census line:
+        # see `resolved_descent()` in eblc_diff.py.
+        out.write("census scaledescent %d stated %d min_after_bl %d\n"
+                  % (number, line.descender, line.minAfterBL))
 
     # The census: facts only the reference reports, which `eblc_diff.py` prints
     # as what the run covered rather than comparing. This library has no public

@@ -210,6 +210,18 @@ static int report(const char * path, int index, int stride) {
   printf("census unanswered strike corrupt\n");
   printf("census coarse state\n");
   printf("census fills zero-advance\n");
+  // `EBSC` is read by nothing here: FreeType has no support for the table, so a
+  // face whose scaled sizes live there reports only the strikes `EBLC` states.
+  // Declared rather than silently absent, so that the differential skips a stated
+  // list - and so that a FreeType which grows EBSC support is compared on it.
+  printf("census unanswered scaled\n");
+  printf("census unanswered scale ppem_x\n");
+  printf("census unanswered scale ppem_y\n");
+  printf("census unanswered scale sub_ppem_x\n");
+  printf("census unanswered scale sub_ppem_y\n");
+  printf("census unanswered scale sub_index\n");
+  printf("census unanswered scale ascent\n");
+  printf("census unanswered scale descent\n");
   /* Whether the baseline below means the strike or the outline. See the file
    * comment; this is the fact the next two lines depend on, so it is printed. */
   printf("census outlines %d\n", FT_IS_SCALABLE(face) ? 1 : 0);

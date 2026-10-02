@@ -234,6 +234,40 @@ static int all_strikes(const char * path, size_t index, size_t stride) {
   printf("faces %zu\n", faces);
   printf("glyphs %zu\n", glyphs);
   printf("strikes %zu\n", count);
+
+  // The scaled sizes an `EBSC` offers, before the strikes - they are a property
+  // of the face like the strike count is, and a differential comparing them
+  // wants them whether or not it walks a glyph.
+  {
+    size_t scaled = 0;
+
+    if (gfnt_face_scaled_strike_count(face, &scaled, &error) != GFNT_OK) {
+      gfnt_error_dump(&error, stderr);
+      gfnt_face_free(face);
+      gfnt_blob_destroy(blob);
+      return 1;
+    }
+    printf("scaled %zu\n", scaled);
+    for (size_t i = 0; i < scaled; ++i) {
+      GFNT_ScaledStrike record;
+
+      if (gfnt_face_scaled_strike_at(face, i, &record, &error) != GFNT_OK) {
+        gfnt_error_dump(&error, stderr);
+        gfnt_face_free(face);
+        gfnt_blob_destroy(blob);
+        return 1;
+      }
+      printf("scale %zu ppem_x %u\n", i, (unsigned)record.ppem_x);
+      printf("scale %zu ppem_y %u\n", i, (unsigned)record.ppem_y);
+      printf("scale %zu sub_ppem_x %u\n", i,
+          (unsigned)record.substitute_ppem_x);
+      printf("scale %zu sub_ppem_y %u\n", i,
+          (unsigned)record.substitute_ppem_y);
+      printf("scale %zu sub_index %zu\n", i, record.substitute_index);
+      printf("scale %zu ascent %d\n", i, (int)record.ascent);
+      printf("scale %zu descent %d\n", i, (int)record.descent);
+    }
+  }
   for (size_t i = 0; i < count; ++i) {
     GFNT_Strike strike;
     size_t present = 0;

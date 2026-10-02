@@ -140,6 +140,80 @@ typedef struct GFNT_Strike {
 } GFNT_Strike;
 
 /**
+ * @brief One pixel size a face offers by **scaling** another size's bitmaps.
+ *
+ * `EBSC`, and only `EBSC`: documentation/design.md section 7.5. A face states
+ * these beside its real strikes to say "I have no 8-pixel bitmaps, but make them
+ * from the 10-pixel ones".
+ *
+ * **This library does not scale them, and that is deliberate.** The specification
+ * names the substitute strike and says nothing about how to use it - no filter, no
+ * rounding, nothing about what becomes of a bearing - so any pixels produced here
+ * would be this library's invention wearing the font's name. FreeType does not
+ * read the table at all and fontTools parses the records without scaling them, so
+ * there is no second reader of a scaled pixel anywhere to contradict a guess.
+ *
+ * What is decidable is reported: the size offered, the size to make it from, and
+ * which strike that is. A caller that wants the pixels has ::GFNT_Strike for the
+ * substitute and its own choice of filter, which is a rendering decision rather
+ * than a font-reading one.
+ */
+typedef struct GFNT_ScaledStrike {
+  size_t index;                 ///< Which record of the face this is.
+  uint32_t ppem_x;              ///< Horizontal pixels per em offered.
+  uint32_t ppem_y;              ///< Vertical pixels per em offered.
+  uint32_t substitute_ppem_x;   ///< The strike's horizontal size to scale from.
+  uint32_t substitute_ppem_y;   ///< The strike's vertical size to scale from.
+  /**
+   * Which strike that is, as ::GFNT_Strike::index.
+   *
+   * Resolved when the table is read, so every caller gets the same answer and a
+   * record naming a size no strike has is refused rather than handed over. It is
+   * therefore always a strike this face has.
+   */
+  size_t substitute_index;
+  /**
+   * The baseline this record states, which is **its own** and not the
+   * substitute's.
+   *
+   * A scaled size has its own `sbitLineMetrics`, because scaling a 10-pixel
+   * strike to 8 does not scale its ascent to anything the font would have chosen.
+   * M18's sign convention holds: ascent up, descent down.
+   */
+  int32_t ascent;
+  int32_t descent;              ///< Pixels below the baseline, **negative**.
+} GFNT_ScaledStrike;
+
+/**
+ * @brief How many scaled sizes the face offers.
+ *
+ * @param face The face.
+ * @param out_count Receives the count. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK with a count of 0 for a face with no `EBSC`, or one whose
+ *   `EBSC` lists no records - and for every standalone bitmap container, which
+ *   has no such concept; the number of `BitmapScale` records otherwise; or what
+ *   reading the table returned. A face with an `EBSC` but no readable `EBLC`
+ *   reports the `EBLC`'s failure, because a scaled size that defers to a strike
+ *   list nobody can read is not a size.
+ */
+GFNT_API GFNT_Result gfnt_face_scaled_strike_count(const GFNT_Face * face,
+    size_t * out_count, GFNT_Error * error);
+
+/**
+ * @brief The nth scaled size.
+ *
+ * @param face The face.
+ * @param index Which one, from 0.
+ * @param out_scaled Receives it. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID for an index the face does not have, or
+ *   what reading the table returned.
+ */
+GFNT_API GFNT_Result gfnt_face_scaled_strike_at(const GFNT_Face * face,
+    size_t index, GFNT_ScaledStrike * out_scaled, GFNT_Error * error);
+
+/**
  * @brief Whether the face carries outline glyph data this library reads.
  *
  * `glyf` with `loca` - both, since neither indexes glyphs without the other.

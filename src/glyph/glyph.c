@@ -196,6 +196,81 @@ GFNT_Result gfnt_face_strike_at(const GFNT_Face * face, size_t index,
       "the face has no strike at that index");
 }
 
+GFNT_Result gfnt_face_scaled_strike_count(const GFNT_Face * face,
+    size_t * out_count, GFNT_Error * error) {
+  if (!face || !out_count) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no face, or nowhere to put the count");
+  }
+  // Only an sfnt with an EBSC has these. A standalone bitmap container is one
+  // strike and states no scaled sizes at all, which is zero rather than a
+  // refusal: the concept does not exist in those formats, so there is nothing
+  // unsupported about them.
+  if (gfnt_face_has_ebsc(face)) {
+    const GFNT_Ebsc * ebsc = NULL;
+    GFNT_Result result = gfnt_face_ebsc(face, &ebsc, error);
+
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_count = ebsc->scale_count;
+    return GFNT_OK;
+  }
+  // A face carrying an EBSC with no readable EBLC behind it reports the EBLC's
+  // failure rather than zero. `gfnt_face_has_ebsc()` is false for it, so without
+  // this the answer would be "no scaled sizes" for a font that states several -
+  // the shape where a missing table and a refused one read the same, which is
+  // what gfnt_face_strike_count() refuses to do for the strike list.
+  if (gfnt_face_has_table(face, GFNT_TAG_EBSC)) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBSC, 0,
+        GFNT_GLYPH_NONE,
+        "the face states scaled bitmap sizes but has no EBLC and EBDT for them "
+        "to defer to");
+  }
+  *out_count = 0;
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_face_scaled_strike_at(const GFNT_Face * face, size_t index,
+    GFNT_ScaledStrike * out_scaled, GFNT_Error * error) {
+  const GFNT_Ebsc * ebsc = NULL;
+  const GFNT_EbscScale * scale = NULL;
+  size_t count = 0;
+  GFNT_Result result;
+
+  if (!face || !out_scaled) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no face, or nowhere to put the scaled size");
+  }
+  result = gfnt_face_scaled_strike_count(face, &count, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (index >= count) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_TAG_EBSC, 0,
+        GFNT_GLYPH_NONE, "the face has no scaled size at that index");
+  }
+  result = gfnt_face_ebsc(face, &ebsc, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  scale = &ebsc->scales[index];
+  *out_scaled = (GFNT_ScaledStrike) {
+    .index = index,
+    .ppem_x = scale->ppem_x,
+    .ppem_y = scale->ppem_y,
+    .substitute_ppem_x = scale->substitute_ppem_x,
+    .substitute_ppem_y = scale->substitute_ppem_y,
+    .substitute_index = scale->substitute_index,
+    // The record's own line metrics, in the direction the **substitute strike's**
+    // flags state - resolved when the table was read, because that is where the
+    // substitute strike was in hand. See GFNT_EbscScale.
+    .ascent = scale->ascent,
+    .descent = scale->descent,
+  };
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_face_select_strike(const GFNT_Face * face, uint32_t ppem,
     GFNT_StrikePolicy policy, GFNT_Strike * out_strike,
     bool * out_from_outlines, GFNT_Error * error) {

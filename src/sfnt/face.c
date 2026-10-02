@@ -441,6 +441,10 @@ void gfnt_face_free(GFNT_Face * face) {
   // EBLC's strike list, for the same reason: one record per bitmapSizeTable,
   // copied out so that a strike survives being handed to a caller.
   gfnt_eblc_release(allocator, &face->eblc);
+  // After the EBLC, because an EBSC record's substitute index refers into that
+  // strike list - nothing here points at it, but the order keeps the
+  // dependency readable in one direction.
+  gfnt_ebsc_release(allocator, &face->ebsc);
   allocator->free_fn(allocator->ctx, face->tables);
   // The caller's blob is left alone - every other face of a collection is still
   // using it - and a blob this face derived for itself is destroyed, because

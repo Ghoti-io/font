@@ -43,6 +43,7 @@
 #include <ghoti.io/font/metrics.h>
 #include "../bitmap/bitmap.h"
 #include "../bitmap/eblc.h"
+#include "../bitmap/ebsc.h"
 #include "../cff/cff.h"
 #include "../type1/type1.h"
 #include "../reader/reader.h"
@@ -158,6 +159,8 @@ struct GFNT_Face {
   GFNT_BitmapFont bitmap;
   GFNT_Cached eblc_state;           ///< `EBLC`'s strike list, parsed on first use.
   GFNT_Eblc eblc;
+  GFNT_Cached ebsc_state;           ///< `EBSC`'s scale records, likewise.
+  GFNT_Ebsc ebsc;
 };
 
 /**

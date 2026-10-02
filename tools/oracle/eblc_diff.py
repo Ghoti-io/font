@@ -173,6 +173,7 @@ def parse(text):
     """
     scalars = {}
     strikes = {}
+    scales = {}
     glyphs = {}
     census = []
     # What this reference says it cannot answer, and whether its per-glyph state
@@ -209,20 +210,27 @@ def parse(text):
             strikes.setdefault(int(tokens[1]), {})[tokens[2]] = \
                 " ".join(tokens[3:])
             continue
+        if tokens[0] == "scale":
+            scales.setdefault(int(tokens[1]), {})[tokens[2]] = \
+                " ".join(tokens[3:])
+            continue
         if len(tokens) == 2:
             scalars[tokens[0]] = tokens[1]
             continue
         raise ValueError("a line neither side's protocol has: %r" % line)
-    return Answer(scalars, strikes, glyphs, census, unanswered, coarse, fills)
+    return Answer(scalars, strikes, scales, glyphs, census, unanswered, coarse,
+        fills)
 
 
 class Answer:
     """One reader's whole answer for one face."""
 
-    def __init__(self, scalars, strikes, glyphs, census, unanswered, coarse,
-                 fills):
+    def __init__(self, scalars, strikes, scales, glyphs, census, unanswered,
+                 coarse, fills):
         self.scalars = scalars
         self.strikes = strikes
+        # `EBSC`'s records, keyed by index.
+        self.scales = scales
         self.glyphs = glyphs
         self.census = census
         # What the reference says it cannot answer, what it answers only coarsely,
@@ -361,10 +369,17 @@ def compare(name, path, face, stride, mine_answer, counts, report, answered):
     # resolved descent has its `descent` derived here - see `resolved_descent()`.
     # A reference that resolves it itself, as FreeType does, publishes `descent`
     # and no census line, and is compared on it directly.
+    their_scales = answer.scales
     for line in census:
         tokens = line.split(" ")
         if tokens[0] == "descent" and len(tokens) == 6:
             their_strikes.setdefault(int(tokens[1]), {})["descent"] = str(
+                resolved_descent(int(tokens[3]), int(tokens[5])))
+        elif tokens[0] == "scaledescent" and len(tokens) == 6:
+            # An `EBSC` record's sbitLineMetrics has the same unstated sign as a
+            # strike's, so it is resolved the same way and from the reference's own
+            # bytes for the same reason.
+            their_scales.setdefault(int(tokens[1]), {})["descent"] = str(
                 resolved_descent(int(tokens[3]), int(tokens[5])))
     coarsen = carried if "state" in answer.coarse else (lambda state: state)
     # On a bitmap-only face this reference reports absence as an empty glyph, so
@@ -391,6 +406,9 @@ def compare(name, path, face, stride, mine_answer, counts, report, answered):
         return False
 
     for key in sorted(set(my_scalars) | set(their_scalars)):
+        if key in unanswered:
+            counts["unanswered"] += 1
+            continue
         says(key, my_scalars.get(key), their_scalars.get(key))
     for number in sorted(set(my_strikes) | set(their_strikes)):
         mine = my_strikes.get(number, {})
@@ -404,6 +422,20 @@ def compare(name, path, face, stride, mine_answer, counts, report, answered):
             # guard below can say when one of them stopped being answered at all.
             answered.add("%s %s" % (name, key))
             says("strike %d %s" % (number, key), mine.get(key),
+                 reference.get(key))
+
+    # `EBSC`'s records: what the face offers by scaling, and which strike it
+    # defers to. No pixels, because this library does not scale and the
+    # specification does not say how - see include/ghoti.io/font/glyph.h.
+    for number in sorted(set(mine_answer.scales) | set(their_scales)):
+        mine = mine_answer.scales.get(number, {})
+        reference = their_scales.get(number, {})
+        for key in sorted(set(mine) | set(reference)):
+            if ("scale %s" % key) in unanswered:
+                counts["unanswered"] += 1
+                continue
+            answered.add("%s scale %s" % (name, key))
+            says("scale %d %s" % (number, key), mine.get(key),
                  reference.get(key))
 
     for key in sorted(set(my_glyphs) | set(their_glyphs)):

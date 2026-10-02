@@ -64,6 +64,23 @@ extern "C" {
 #define GFNT_TAG_EBDT GFNT_TAG('E', 'B', 'D', 'T')
 
 /**
+ * @brief The one version the specification defines for `EBLC`, and the only one
+ *   in the wild.
+ *
+ * `EBSC` states the same number and reads it with the same constant, because the
+ * two tables version together in the specification.
+ */
+#define GFNT_EBLC_VERSION 0x00020000u
+
+/** @brief Bytes in the `EBLC` header before the first `bitmapSizeTable`. */
+#define GFNT_EBLC_HEADER_BYTES 8u
+
+/** @brief `flags` bit 0: the strike states horizontal line metrics. */
+#define GFNT_EBLC_HORIZONTAL 0x01
+/** @brief `flags` bit 1: the strike states vertical line metrics. */
+#define GFNT_EBLC_VERTICAL 0x02
+
+/**
  * @brief Bytes in a `BigGlyphMetrics`, which index formats 2 and 5 carry.
  *
  * Eight: the horizontal five and a vertical three. ::GFNT_EblcMetrics keeps only
@@ -188,6 +205,22 @@ typedef struct GFNT_Eblc {
   struct GFNT_Cached * strike_states;
   GFNT_BitmapFont * strike_glyphs;
 } GFNT_Eblc;
+
+/**
+ * Read one `sbitLineMetrics`.
+ *
+ * Twelve bytes, the last two of which the specification reserves and no file
+ * uses. They are skipped rather than stored: a reserved byte nothing reads is the
+ * `unread-table-constants` shape, and a dump that printed them would invite a
+ * differential to compare them.
+ *
+ * Shared with `ebsc.c` rather than copied into it: a `BitmapScale` carries two of
+ * these and a `bitmapSizeTable` carries two, and one reader of a twelve-byte
+ * record with two reserved bytes at the end is better than two that can drift
+ * apart at the skip.
+ */
+GFNT_Result gfnt_eblc_read_line_metrics(GFNT_Reader * reader,
+    GFNT_EblcLineMetrics * out);
 
 /**
  * The descent a caller sees, from one `sbitLineMetrics`.

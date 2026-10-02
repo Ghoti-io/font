@@ -37,29 +37,10 @@
 #include "../tables/tables.h"
 #include "eblc.h"
 
-/** The one version the specification defines, and the only one in the wild. */
-#define GFNT_EBLC_VERSION 0x00020000u
-
 /** Bytes per `bitmapSizeTable`. */
 #define GFNT_EBLC_SIZE_TABLE_BYTES 48u
 
-/** Bytes in the `EBLC` header before the first `bitmapSizeTable`. */
-#define GFNT_EBLC_HEADER_BYTES 8u
-
-/** `flags` bit 0: the strike states horizontal line metrics. */
-#define GFNT_EBLC_HORIZONTAL 0x01
-/** `flags` bit 1: the strike states vertical line metrics. */
-#define GFNT_EBLC_VERTICAL 0x02
-
-/**
- * Read one `sbitLineMetrics`.
- *
- * Twelve bytes, the last two of which the specification reserves and no file
- * uses. They are skipped rather than stored: a reserved byte nothing reads is
- * the `unread-table-constants` shape, and a dump that printed them would invite
- * a differential to compare them.
- */
-static GFNT_Result gfnt_eblc_read_line_metrics(GFNT_Reader * reader,
+GFNT_Result gfnt_eblc_read_line_metrics(GFNT_Reader * reader,
     GFNT_EblcLineMetrics * out) {
   if (gfnt_read_s8(reader, &out->ascender) != GFNT_OK
       || gfnt_read_s8(reader, &out->descender) != GFNT_OK

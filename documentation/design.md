@@ -603,17 +603,63 @@ way and each of which is refused rather than guessed:
 
 `EBLC`/`EBDT` (and Apple's `bloc`/`bdat` spellings): the `bitmapSizeTable`s,
 index subtable formats 1-5, glyph bitmap formats 1-9 including the composite
-formats 8 and 9 and the metrics-in-data forms; `EBSC` scaled references.
+formats 8 and 9 and the metrics-in-data forms; `EBSC`'s scaled references, as
+records rather than as pixels.
 
-**`EBSC` has a population now and did not when this was written.** Eleven files
-in Debian carry one - Anonymous Pro's four and seven of Wine's core bitmap faces -
-and what they state is a list of 28-byte `BitmapScale` records, each naming a ppem
-that is to be drawn by *scaling* another ppem's `EBLC` strike. Anonymous Pro asks
-for 7, 8 and 9 ppem from its 10 ppem strike; Wine's `system.ttf` names 21 of them,
-8 through 40, drawn from its 16 and 18 ppem strikes. **FreeType does not read the
-table at all**, so fontTools is the only reference for its fields and there is no
-second reader of a scaled pixel anywhere - and the scaling rule itself is not in
-the specification, which says only that the substitute strike is to be used.
+**`EBSC` is read as records and not as pixels**, and that is the design decision
+rather than an omission. Eleven files in Debian carry one - Anonymous Pro's four
+and seven of Wine's core bitmap faces - and what they state is a list of 28-byte
+`BitmapScale` records, each naming a ppem to be drawn by *scaling* another ppem's
+`EBLC` strike. Anonymous Pro asks for 7, 8 and 9 ppem from its 10 ppem strike;
+Wine's `system.ttf` names 21 of them, 8 through 40, from its 16 and 18 ppem
+strikes.
+
+Three reasons not to scale, in the order they decide it:
+
+- **The specification names the substitute strike and not how to use it.** No
+  filter, no rounding rule, nothing about what becomes of a bearing. Any pixels
+  this library produced would be its own invention wearing the font's name.
+- **There is no second reader of a scaled pixel anywhere.** FreeType does not read
+  `EBSC` at all and fontTools parses the records without scaling them - so this is
+  not a gap in the gates but a gap in the world, and §14 does not allow a format to
+  be implemented with nothing able to contradict it.
+- **What a caller needs is decidable without scaling**: *this face offers 8 ppem,
+  and says to make it from the 10 ppem strike*. That is in the table, it is
+  checkable against fontTools, and a caller that wants the pixels has
+  ::GFNT_Strike for the substitute and its own choice of filter - a rendering
+  decision rather than a font-reading one.
+
+So ::gfnt_face_scaled_strike_count() and ::gfnt_face_scaled_strike_at() report
+::GFNT_ScaledStrike, and ::GFNT_Strike never comes from this table.
+
+Two things this library does that the table does not state, both because a caller
+should not have to:
+
+- **The substitute is resolved to a strike index** at parse time. The record names
+  a ppem *pair*, so every caller would otherwise search the strike list - and a
+  record naming a pair no strike has is a record that contradicts itself, which is
+  a refusal this library can make and a caller holding a bare pair cannot. Both
+  axes must match; matching only one is a mutation the suite catches.
+- **The direction of the baseline comes from the substitute strike.** A
+  `BitmapScale` carries two `sbitLineMetrics` and, unlike a `bitmapSizeTable`,
+  states **no `flags`** - so nothing in the record says which applies. The
+  substitute strike's flags are the only statement of it anywhere near those bytes,
+  and it is the strike whose pixels the record defers to. The first draft picked a
+  direction by testing whether the horizontal metrics were non-zero, which is not a
+  rule the format has and would have answered "vertical" for a horizontal strike
+  whose ascent and descent are legitimately zero.
+
+A record is refused for offering a pixel size of zero, for deferring to a size no
+strike has, and for deferring to **its own** size - a loop with nothing at the end
+of it, where a caller following the record arrives where it started. Nothing in the
+population does any of those, so all three are unit tests, and each was planted and
+seen to fire.
+
+**What is still open**: ::gfnt_face_select_strike() does not consult this table.
+Its contract is "a strike, or the outlines", and a third answer - "that strike,
+scaled" - would change what every existing caller is told. A caller asking for 8
+ppem of Anonymous Pro is told "outlines" today, where the font has an opinion. That
+is a deliberate hold rather than an oversight, and it is the next decision here.
 
 **A composite's components are placed by their offsets and by nothing else.**
 Image formats 8 and 9 carry no rows: past the metrics - and, for format 8, past a
@@ -1127,6 +1173,7 @@ memory.** Fonts have three excellent oracles and one of them can also
 | paragraph layout | **Pango** `pango-view --output` positions for a paragraph corpus, with the line-breaking differences that come from Pango's ICU tailorings recorded as known | `tools/oracle/pango_diff.py` | `pango`, built here: `pango-view` from the pinned apt package, `C.UTF-8` pinned in the image |
 | bitmap formats | **Pillow**'s `PcfFontFile` and `BdfFontFile`, every pixel of every glyph; a *second* reading of PCF and the only reading of PSF and `.hex` would need `bdftopcf` and `psftools` | `tools/oracle/bitmap_diff.py`, `make check-oracle-bitmap` | `fonttools` (Pillow is pinned in it); the `xfonts` image is not built |
 | **embedded** bitmap strikes are read identically | **fontTools**' `EBLC`/`EBDT`: every strike's ppem both ways, depth and baseline, each strike's present/absent/corrupt glyph counts over *every* glyph, and every sampled glyph's box, bearings, advance and pixels | `tools/oracle/eblc_diff.py`, `make check-oracle-eblc` | `fonttools`; the image carries the **whole** Debian population of the table - 33 fonts, from a scan of all 589 font packages |
+| an **`EBSC`** record says the same thing | **fontTools**' `bitmapScaleTables`: each record's ppem, its substitute's ppem, which strike that resolves to, and its baseline. The **only** reference for this table - FreeType does not read it - so this row is one reader deep, which is why nothing here scales a pixel | `tools/oracle/eblc_diff.py`, `make check-oracle-eblc` | `fonttools`; 11 of the 33 corpus fonts carry one |
 | a **composite** strike glyph is composed the same way, and `mona.ttf` is read at all | **FreeType**'s `ttsbit.c` through a driver compiled in its own image: the same line protocol, so the same comparison. The only second reader of a composite's pixels - fontTools parses a component list and does not compose one - and the only reader of `mona.ttf` besides this library | `tools/oracle/eblc_diff.py`, `make check-oracle-eblc` | `freetype`; carries no fonts of its own, reading the corpus `corpus.py` materialised for both |
 | Type 1 | FreeType again, over fixtures converted from OFL fonts | `ft_outline.c` | `freetype` |
 
@@ -2381,6 +2428,30 @@ Each of those three allowances was planted and seen to fire. One clause did not:
 the invented-name check also requires the reference's ordinal to be *this* glyph's
 index, and making that unconditional changes no number in the gate, so it is a
 precaution rather than a tested one. Said in the docstring rather than implied.
+
+**`EBSC` is read, as of 2026-10-01**: ::gfnt_face_scaled_strike_count() and
+::gfnt_face_scaled_strike_at(), over the eleven Debian faces that have one. §7.5
+has the three reasons nothing here scales a pixel; what the gate adds is that the
+records themselves are compared - 22 fields per face that fontTools reads
+independently, including which strike each substitute ppem resolves to, so
+agreement there says the two sides agree about the record *and* about every
+strike's ppem.
+
+- **It is one reader deep and the report says so.** FreeType reads no `EBSC`, so
+  its driver prints `census unanswered` for all seven keys and the count, and that
+  arm compares nothing here. A table with one reference is exactly the situation in
+  which implementing the *unspecified* half would be unfalsifiable, which is what
+  decided the shape.
+- **Every refusal is a unit test, because the population has none of them.** A
+  record offering zero pixels, one deferring to a size no strike has, one matching
+  a substitute on one axis only, and one deferring to its own size. Eight mutations
+  planted in `ebsc.c`, all eight caught by name.
+- **The direction of the baseline was a bug in the first draft**, and a plausible
+  one: a `BitmapScale` states no `flags`, so the draft chose between its two
+  `sbitLineMetrics` by testing whether the horizontal pair was non-zero. That is
+  not a rule the format has, and it answers "vertical" for a horizontal strike
+  whose ascent and descent are legitimately zero. The substitute strike's flags are
+  the only statement of the direction there is.
 
 **A positive `descender` is resolved against `minAfterBL`, as of 2026-10-01.**
 The specification does not state the sign of `sbitLineMetrics.descender`, and the

@@ -5209,11 +5209,11 @@ TEST(Ebdt, ACompositeWhoseComponentHasNoBytesIsRefused) {
 
 TEST(Ebdt, ACycleIsNamedRatherThanLeftToTheDepthCap) {
   // The depth budget alone would refuse a cycle - after sixteen levels, as a
-  // limit. That is a true sentence about a font that is simply wrong, and it is
-  // what `glyf`'s composite reader still answers for an *indirect* cycle, where it
-  // names only the direct one. Both are named here, and the distinction matters
-  // because a caller can act on a limit by raising it and would be raising it
-  // forever.
+  // limit. That is a true sentence about a font that is simply wrong, and the
+  // distinction matters because a caller can act on a limit by raising it and
+  // would be raising it forever. `glyf`'s composite reader answered exactly that
+  // for an *indirect* cycle until it was given this same walk; the glyf test of
+  // the same name is the other user of src/core/chain.h.
   struct Case {
     const char * why;
     uint16_t first_component;   // glyph 1 draws this
@@ -5244,6 +5244,45 @@ TEST(Ebdt, ACycleIsNamedRatherThanLeftToTheDepthCap) {
         "includes itself"), std::string::npos) << test.why << ": got "
         << (error.message ? error.message : "(nothing)");
   }
+}
+
+TEST(Ebdt, TheSameComponentTwiceIsNotACycle) {
+  // The control the cycle check above needs, and the regression it is one line
+  // away from: src/core/chain.h walks the glyphs currently *open*, which is not
+  // the set of glyphs already *drawn*. A visited set would refuse this, and would
+  // still pass every case above - so without this the two readings are
+  // indistinguishable, and the wrong one refuses the composites real fonts build
+  // (a diacritic drawn twice, the same stem in two places).
+  //
+  // Glyph 1 draws glyph 2 and the leaf; glyph 2 draws the leaf as well. So the
+  // leaf is reached down two paths of different lengths and neither contains the
+  // other, which is exactly the case the two readings disagree about.
+  const std::vector<uint8_t> dot = [] {
+    std::vector<uint8_t> out = small_metrics(1, 1, 0, 1, 2);
+    out.push_back(0x80);
+    return out;
+  }();
+  const std::vector<uint8_t> outer =
+      composite9(5, 11, 1, 5, 13, {{2, 0, 0}, {3, 4, 2}});
+  const std::vector<uint8_t> inner = composite9(5, 11, 1, 5, 13, {{3, 3, 2}});
+  std::vector<uint8_t> ebdt = outer;
+  const uint32_t split = (uint32_t)outer.size();
+  ebdt.insert(ebdt.end(), inner.begin(), inner.end());
+  const uint32_t leaf_at = (uint32_t)ebdt.size();
+  ebdt.insert(ebdt.end(), dot.begin(), dot.end());
+
+  const std::vector<uint8_t> region = two_subtables(
+      1, 2, index1(9, kEbdtHeader, {0, split, leaf_at}),
+      3, 3, index1(1, kEbdtHeader + leaf_at, {0, (uint32_t)dot.size()}));
+  GFNT_Error error{};
+  const std::string bytes = strike_font(region, ebdt, 4, 2, 1, 3);
+
+  // Both of them: the nested composite on its own, and the one that reaches the
+  // leaf twice.
+  EXPECT_EQ(ask(bytes, 2, &error), GFNT_OK)
+      << (error.message ? error.message : "");
+  EXPECT_EQ(ask(bytes, 1, &error), GFNT_OK)
+      << (error.message ? error.message : "");
 }
 
 TEST(Ebdt, CompositeNestingStopsAtMaxCompositeDepth) {

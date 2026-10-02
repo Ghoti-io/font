@@ -39,6 +39,7 @@
 #include <ghoti.io/font/outline.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "../core/chain.h"
 #include "../core/fixed.h"
 #include "../outline/outline.h"
 #include "../reader/reader.h"
@@ -597,17 +598,25 @@ static void gfnt_glyf_offset(const GFNT_Component * component,
   *out_offset = offset;
 }
 
-GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph, size_t depth,
+/**
+ * ::gfnt_glyf_load() with the recursion's state, which is what recurses.
+ *
+ * @p chain is every glyph this walk already has open, innermost last, and @p
+ * depth is how many of them there are. Both, rather than deriving the depth from
+ * the chain's length, because the chain is walked per *component* and the depth
+ * is compared per *call*: counting frames would make the cheaper of the two
+ * checks the more expensive one.
+ */
+static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
+    uint32_t glyph, size_t depth, const GFNT_GlyphChain * chain,
     GFNT_Outline * outline, GFNT_Error * error) {
   GFNT_Reader reader;
+  GFNT_GlyphChain here;
   bool empty = false;
   int16_t contours = 0;
   size_t composite_base = 0;
   GFNT_Result result;
 
-  if (!face || !outline) {
-    return GFNT_ERR_INVALID;
-  }
   if (depth > face->limits.max_composite_depth) {
     return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_GLYF, 0, glyph,
         "composite glyphs nest deeper than max_composite_depth allows");
@@ -644,6 +653,8 @@ GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph, size_t depth,
   // subtraction is zero in every font this library has met, and it is here
   // because the correctness of point matching should not rest on that.
   composite_base = gfnt_outline_point_count(outline);
+  here.parent = chain;
+  here.glyph = glyph;
   result = gfnt_reader_seek(&reader, GFNT_GLYF_HEADER_BYTES);
   if (result != GFNT_OK) {
     return result;
@@ -657,20 +668,27 @@ GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph, size_t depth,
     if (result != GFNT_OK) {
       return result;
     }
-    if (component.glyph == glyph) {
-      // A component that is its own composite would recurse to the depth cap
-      // and report a limit, which is a true statement about a font that is
-      // simply broken. Named for what it is instead.
+    if (gfnt_glyph_chain_has(&here, component.glyph)) {
+      // A glyph that reaches itself would recurse to the depth cap and report a
+      // limit, which is a true statement about a font that is not deep but
+      // circular - and one a caller acts on by raising a budget that will never
+      // be enough. Named for what it is instead.
+      //
+      // Against the whole chain and not just this composite: `A -> B -> A` is a
+      // cycle too, and was the case this reader used to walk to the cap while
+      // `ebdt.c` named it. src/core/chain.h is now the one place either asks.
       return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_GLYF,
           gfnt_reader_tell(&reader), glyph,
-          "a composite glyph includes itself as a component");
+          "a composite glyph includes itself as a component, directly or "
+          "through another glyph");
     }
     result = gfnt_outline_create(face->allocator, &part, error);
     if (result != GFNT_OK) {
       return result;
     }
     gfnt_outline_set_limits(part, &face->limits);
-    result = gfnt_glyf_load(face, component.glyph, depth + 1, part, error);
+    result = gfnt_glyf_load_chained(face, component.glyph, depth + 1, &here,
+        part, error);
     if (result != GFNT_OK) {
       gfnt_outline_destroy(part);
       return result;
@@ -719,6 +737,19 @@ GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph, size_t depth,
     }
   }
   return GFNT_OK;
+}
+
+GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
+    GFNT_Outline * outline, GFNT_Error * error) {
+  if (!face || !outline) {
+    return GFNT_ERR_INVALID;
+  }
+  // Depth zero and an empty chain: this is the top of a walk by construction,
+  // which is why there is no parameter for either. A caller that could claim to
+  // be partway down one could claim a depth without the chain that goes with it,
+  // and the cycle check would then be missing exactly the frames that prove the
+  // cycle.
+  return gfnt_glyf_load_chained(face, glyph, 0, NULL, outline, error);
 }
 
 GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,

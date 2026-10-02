@@ -208,6 +208,15 @@ GFNT_API void gfnt_outline_clear(GFNT_Outline * outline);
  * usually - succeeds with an outline of zero points, because "this glyph draws
  * nothing" is an answer and not a failure.
  *
+ * A composite that reaches itself, through any number of other glyphs, is
+ * ::GFNT_ERR_CORRUPT named as a cycle rather than left to exhaust
+ * ::GFNT_Limits::max_composite_depth, which is then what refuses an *acyclic*
+ * chain nested deeper than the caller allows and reports ::GFNT_ERR_LIMIT. The
+ * distinction is the one a caller can act on: a limit is answered by raising the
+ * budget, and for a circular font no budget is ever enough. A glyph used twice in
+ * one composite is not a cycle and is not refused, which is what every font with
+ * a doubled diacritic needs.
+ *
  * @param face The face.
  * @param glyph The glyph index.
  * @param variation Variation coordinates, or NULL for the default instance.

@@ -92,7 +92,7 @@ GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
   gfnt_outline_set_limits(outline, &face->limits);
   switch (gfnt_sfnt_producer(face)) {
     case GFNT_PRODUCER_GLYF:
-      result = gfnt_glyf_load(face, glyph, 0, outline, error);
+      result = gfnt_glyf_load(face, glyph, outline, error);
       break;
     case GFNT_PRODUCER_CFF:
       result = gfnt_cff_load(face, glyph, outline, NULL, error);

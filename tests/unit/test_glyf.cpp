@@ -1342,19 +1342,120 @@ TEST(Glyf, ACompositeCutToEveryLengthIsRefusedRatherThanMisread) {
   EXPECT_EQ(refusals, whole.size() - 5);
 }
 
-TEST(Glyf, ACompositeThatIncludesItselfIsNamedRatherThanCallEdTooDeep) {
-  // Left to the depth cap this would report a limit, which is true and useless:
-  // the font is not deep, it is circular. No writer emits one, so the bytes are
-  // built here.
-  const std::vector<uint8_t> selfish = gfnttest::build_glyf_composite({
-      {1, 0x0003, 0, 0},
-  });
-  const Outcome outcome(font_with(selfish), 1);
+TEST(Glyf, ACycleIsNamedRatherThanLeftToTheDepthCap) {
+  // Left to the depth cap any of these reports a limit, which is true and
+  // useless: the font is not deep, it is circular - and a caller acting on a
+  // limit raises the budget and gets the same answer forever. No writer emits
+  // one, so the bytes are built here.
+  //
+  // The three-glyph case is the one that decides the shape of the check: a
+  // component compared only against the composite it sits in, or only against
+  // the one that opened the chain, refuses the first two and walks the third to
+  // the cap. The chain of every glyph currently open is what catches all three.
+  struct Case {
+    const char * why;
+    std::vector<uint16_t> targets;   // glyph i + 1 draws targets[i]
+  };
+  const Case cases[] = {
+    {"a composite that includes itself", {1}},
+    {"a cycle through another glyph", {2, 1}},
+    {"a cycle that closes two glyphs later", {2, 3, 1}},
+  };
 
-  EXPECT_EQ(outcome.result, GFNT_ERR_CORRUPT);
-  ASSERT_NE(outcome.message, nullptr);
-  EXPECT_NE(std::string(outcome.message).find("includes itself"),
-      std::string::npos) << outcome.message;
+  for (const Case & test : cases) {
+    std::vector<std::vector<uint8_t>> glyphs = {{}};
+
+    for (uint16_t target : test.targets) {
+      glyphs.push_back(gfnttest::build_glyf_composite({
+          {target, 0x0003, 0, 0},
+      }));
+    }
+    const Outcome outcome(font_over(glyphs), 1);
+
+    EXPECT_EQ(outcome.result, GFNT_ERR_CORRUPT) << test.why;
+    EXPECT_NE(std::string(outcome.message ? outcome.message : "").find(
+        "includes itself"), std::string::npos) << test.why << ": got "
+        << (outcome.message ? outcome.message : "(nothing)");
+  }
+}
+
+TEST(Glyf, TheSameComponentTwiceIsNotACycle) {
+  // The other half of the cycle check, and the regression it is one line away
+  // from: a *visited set* would refuse this, because the chain and a visited set
+  // differ only on a glyph reached twice without either reach containing the
+  // other. Every diacritic font does it - "ä" is `a` and two copies of one dot -
+  // so refusing it would refuse real fonts while still passing the cycle tests.
+  //
+  // Siblings and a diamond both, because they fail differently: a set cleared
+  // per component would still refuse the diamond.
+  const std::vector<uint8_t> simple = gfnttest::build_glyf_glyph(
+      {{{0, 0, true}, {100, 0, true}, {100, 100, true}}});
+  // Glyph 2 draws glyph 1 twice; glyph 3 draws glyph 2 and glyph 1, so glyph 1
+  // is reached down two different paths.
+  const std::vector<uint8_t> siblings = gfnttest::build_glyf_composite({
+      {1, 0x0003, 0, 0},
+      {1, 0x0003, 200, 0},
+  });
+  const std::vector<uint8_t> diamond = gfnttest::build_glyf_composite({
+      {2, 0x0003, 0, 0},
+      {1, 0x0003, 0, 300},
+  });
+
+  const Outcome twice(font_over({{}, simple, siblings, diamond}), 2);
+  EXPECT_EQ(twice.result, GFNT_OK) << (twice.message ? twice.message : "");
+  EXPECT_EQ(twice.points, 6u) << "three points, drawn twice";
+  EXPECT_EQ(twice.contours, 2u);
+
+  const Outcome both(font_over({{}, simple, siblings, diamond}), 3);
+  EXPECT_EQ(both.result, GFNT_OK) << (both.message ? both.message : "");
+  EXPECT_EQ(both.points, 9u) << "glyph 2's two copies, and a third beside them";
+  EXPECT_EQ(both.contours, 3u);
+}
+
+TEST(Glyf, AnAcyclicChainDeeperThanTheBudgetIsStillALimit) {
+  // What is left for `max_composite_depth` once a cycle is named: a font that is
+  // deep rather than circular, which is ::GFNT_ERR_LIMIT and not corrupt because
+  // the ceiling is the caller's and raising it is an action they can take. The
+  // cap test above sets the budget to zero, which a cycle check cannot be
+  // confused with; this one nests below a budget of two and is the case that
+  // separates the two refusals.
+  GFNT_Limits limits{};
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Outline * outline = nullptr;
+  GFNT_Error error{};
+  // Glyph 1 is the leaf; glyphs 2..5 each draw the one below, so glyph 5 is four
+  // composite levels above it - and every glyph index is distinct, so nothing
+  // here repeats, let alone cycles.
+  std::vector<std::vector<uint8_t>> glyphs = {{}, gfnttest::build_glyf_glyph(
+      {{{0, 0, true}, {100, 0, true}, {100, 100, true}}})};
+  for (uint16_t glyph = 1; glyph <= 4; ++glyph) {
+    glyphs.push_back(gfnttest::build_glyf_composite({
+        {glyph, 0x0003, 0, 0},
+    }));
+  }
+  const std::vector<uint8_t> bytes = font_over(glyphs);
+
+  gfnt_limits_default(&limits);
+  limits.max_composite_depth = 2;
+  ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+      GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_load(blob, 0, &limits, nullptr, &face, &error), GFNT_OK);
+
+  // Two levels is inside the budget and three is not, which is both halves: a
+  // cap that refuses the shallow chain as well would not be measuring depth.
+  EXPECT_EQ(gfnt_face_glyph_outline(face, 3, nullptr, nullptr, &outline,
+      &error), GFNT_OK) << (error.message ? error.message : "");
+  gfnt_outline_destroy(outline);
+  outline = nullptr;
+  EXPECT_EQ(gfnt_face_glyph_outline(face, 5, nullptr, nullptr, &outline,
+      &error), GFNT_ERR_LIMIT);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_NE(std::string(error.message).find("nest deeper"), std::string::npos)
+      << error.message;
+  gfnt_outline_destroy(outline);
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
 }
 
 TEST(Glyf, AComponentMatchingAPointNeitherGlyphHasIsRefused) {

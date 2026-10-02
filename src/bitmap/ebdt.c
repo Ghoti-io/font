@@ -70,6 +70,7 @@
 #include <ghoti.io/cutil/safemath.h>
 #include <ghoti.io/font/macros.h>
 #include <string.h>
+#include "../core/chain.h"
 #include "../tables/tables.h"
 #include "eblc.h"
 
@@ -389,35 +390,6 @@ typedef struct GFNT_EbdtRead {
   GFNT_BitmapBuild * build;
 } GFNT_EbdtRead;
 
-/**
- * The chain of glyphs currently being painted, innermost last.
- *
- * A linked list of stack frames rather than an array, because the depth a caller
- * allows is ::GFNT_Limits::max_composite_depth and a fixed array would either cap
- * that a second time or need allocating. Each level's node lives in its own
- * frame, so the walk costs nothing and there is nothing to free.
- *
- * It exists to **name a cycle rather than hit the depth cap with it**. The depth
- * budget alone would refuse `A -> B -> A` after sixteen levels and report a limit,
- * which is a true sentence about a font that is simply wrong - and the same thing
- * `glyf`'s composite reader does for an indirect cycle today, where it names only
- * the direct one. Here both are named.
- */
-typedef struct GFNT_EbdtChain {
-  const struct GFNT_EbdtChain * parent;
-  uint32_t glyph;
-} GFNT_EbdtChain;
-
-/** Whether this glyph is already being painted, at any level. */
-static bool gfnt_ebdt_chain_has(const GFNT_EbdtChain * chain, uint32_t glyph) {
-  for (; chain; chain = chain->parent) {
-    if (chain->glyph == glyph) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Whether an image format's data is a list of other glyphs rather than rows. */
 static bool gfnt_ebdt_is_composite(uint16_t image_format) {
   // 8 carries SmallGlyphMetrics and a pad byte, 9 BigGlyphMetrics and no pad;
@@ -538,9 +510,9 @@ static bool gfnt_ebdt_blit(uint8_t * canvas, size_t canvas_stride,
 static GFNT_Result gfnt_ebdt_paint(const GFNT_EbdtRead * read, uint32_t glyph,
     int32_t x, int32_t y, uint8_t * canvas, size_t canvas_stride,
     uint32_t canvas_width, uint32_t canvas_height,
-    const GFNT_EbdtChain * chain, size_t depth, GFNT_Error * error) {
+    const GFNT_GlyphChain * chain, size_t depth, GFNT_Error * error) {
   const GFNT_EblcSubtable * subtable;
-  GFNT_EbdtChain here;
+  GFNT_GlyphChain here;
   GFNT_Reader at = *read->data;
   GFNT_EblcMetrics metrics;
   size_t offset = 0;
@@ -646,7 +618,7 @@ static GFNT_Result gfnt_ebdt_paint(const GFNT_EbdtRead * read, uint32_t glyph,
       return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
           glyph, "an EBDT composite component past the end of the table");
     }
-    if (gfnt_ebdt_chain_has(&here, component)) {
+    if (gfnt_glyph_chain_has(&here, component)) {
       return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, offset,
           glyph,
           "an EBDT composite that includes itself, directly or through another "

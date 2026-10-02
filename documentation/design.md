@@ -496,6 +496,19 @@ depth of §6.2. Phantom points are computed for variation support. Instructions
 are skipped by length. A `loca` entry running backwards or past `glyf` makes
 *that glyph* `ERR_CORRUPT` (M11).
 
+**A composite that reaches itself is named as a cycle, and the depth budget is
+what is left.** Directly or through any number of other glyphs, it is
+`ERR_CORRUPT` with that sentence, found by walking the chain of glyphs the load
+currently has open rather than by recursing until `max_composite_depth` stops it.
+What the budget then refuses is an *acyclic* chain nested deeper than the caller
+allowed, which is `ERR_LIMIT` and a thing a caller can act on; for a circular
+font no budget is ever enough, so reporting one is a true sentence that sends the
+caller nowhere. The chain is the glyphs *open*, not the glyphs *drawn*: a
+composite that uses one glyph twice - every doubled diacritic - is not a cycle.
+This is the rule §7.5 states for `EBDT`, and `src/core/chain.h` is the one walk
+both readers ask, because the two readers held two copies of it and drifted:
+`glyf` named only the direct cycle and left `A -> B -> A` to the cap.
+
 ### 7.4 Charstrings, independent of their container
 
 `charstring.h` is one module holding the **Type 2** interpreter (the operators,
@@ -684,9 +697,10 @@ Two consequences this library takes deliberately:
   than by recursing until the cap stops it. What `max_composite_depth` then
   refuses is an *acyclic* chain nested deeper than the caller allowed, which is
   `ERR_LIMIT` - the answer `gfnt_glyf_load()` gives for the same question, and one
-  a caller can act on by raising the budget. `glyf`'s composite reader still names
-  only the direct cycle and leaves the indirect one to its depth cap; the two
-  should agree and this is the half that is right.
+  a caller can act on by raising the budget. `glyf` answers both the same two
+  ways, over `src/core/chain.h`, which is the walk rather than a second copy of
+  it: the two readers did disagree, this was the half that was right, and §7.3
+  records what the other half cost.
 
 **The strike list is one memo and each strike's index is another.** `uming.ttc`
 - four of the six faces in Debian that carry this table at all - has six strikes
@@ -2516,9 +2530,13 @@ tell one from a glyph that stored its rows.
 - **A cycle is named rather than left to the depth cap**, by walking the chain of
   glyphs currently being painted. The cap alone would answer `ERR_LIMIT` after
   sixteen levels for `A -> B -> A`, which is true and useless: a caller can act on
-  a limit by raising it and would raise it forever. `glyf` still names only the
-  direct cycle, which is the same defect in the other composite reader and is
-  recorded here rather than fixed in passing.
+  a limit by raising it and would raise it forever. `glyf` named only the direct
+  cycle - the same defect in the other composite reader - and was recorded here
+  rather than fixed in passing; it has since been given this same walk, which both
+  readers now reach through `src/core/chain.h` (§7.3). The chain is the glyphs
+  *open* and not the glyphs *drawn*, and neither reader had a test that said so:
+  swapping either for a visited set would have refused a composite that draws one
+  glyph twice while passing every cycle test there was.
 - **The canvas is a second scratch buffer, and it had to be.** A composite OR-s
   into one destination while each component's rows are normalised through the
   builder's existing row buffer on the way in; one buffer for both would have each

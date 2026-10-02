@@ -56,19 +56,62 @@ RUN pip install --no-cache-dir --no-compile \
 #                            sequences, and CBDT/CBLC strikes for phase 6
 #   xfonts-terminus          PCF bitmap strikes, for phase 1b; nothing reads
 #                            them yet and they cost two megabytes
-#   fonts-arphic-uming       EBLC/EBDT strikes inside an sfnt: four faces over
-#                            one table, six strikes of 27,123 glyphs, index
-#                            formats 1 and 2 with image formats 5 and 7
-#   fonts-mona               the other half of that population, and the only
-#                            image format 6 in Debian - and a font whose EBLC
-#                            fontTools cannot parse at all (fonttools#317), so
-#                            it is the case where the two readers disagree about
-#                            whether the font is readable
 #
-# Those last two are **the whole population** of embedded bitmap strikes in
-# Debian: every other font in this image and on the host has none, which is why
-# a survey came before the parser (notes/font/EBLC.md). `fonts-wqy-zenhei` is the
-# obvious guess and does not have them.
+# The embedded-bitmap half of the list is below, and it is the whole Debian
+# population rather than a sample of it: **589 font packages scanned, 5,927
+# distinct sfnt files, 33 carrying EBLC/EBDT and 11 of those also EBSC**
+# (notes/font/EBLC.md records the sweep and the command that re-runs it).
+#
+# An earlier survey probed a handful of *candidate* packages chosen from the guess
+# that embedded strikes are a CJK thing, reported "two fonts in all of Debian",
+# and was wrong three ways at once: it globbed `*.tt[fc]`, so every `.otb` was
+# invisible; it swallowed a font fontTools cannot open in a bare
+# `except: continue`; and it only ever walked /usr/share/fonts inside an image
+# whose packages that same guess had chosen. Anonymous Pro is a programming font
+# and Computer Modern is a text face, and between them they carry the index
+# format and the two image formats that survey reported as appearing in no Debian
+# font at all.
+#
+#   fonts-arphic-uming       four faces over one EBLC/EBDT byte range, six
+#                            strikes of 27,123 glyphs; index formats 1 and 2
+#                            with image formats 5 and 7
+#   fonts-mona               the only image format 6 in Debian - and a font whose
+#                            EBLC fontTools cannot parse at all (fonttools#317),
+#                            so it is the case where the two readers disagree
+#                            about whether the font is readable. FreeType reads
+#                            it; that is what the freetype image is for
+#   fonts-anonymous-pro      **EBSC**, four faces of it: three scale tables each,
+#                            7, 8 and 9 ppem all deferring to the 10 ppem strike.
+#                            Also index format **3**
+#   fonts-wine               **EBSC** from an unrelated producer - Wine's
+#                            reimplementations of the Windows core bitmap faces,
+#                            seven files carrying one. Two independent producers
+#                            of a table is the difference between reading a
+#                            format and reading one vendor's habit
+#   fonts-terminus-otb       **bitmap-only sfnts**: no `glyf` at all. That is the
+#                            one shape in which FreeType reports a strike's own
+#                            `sbitLineMetrics` instead of a scaled outline's, so
+#                            these four files are the only place that oracle can
+#                            speak to a strike's baseline
+#   fonts-creep2             a second bitmap-only sfnt, from another producer
+#   fonts-cmu                Computer Modern: 115 and 367 index subtables of
+#                            image format **2**
+#   fonts-terminus           the same design as xfonts-terminus' PCF and as the
+#                            .otb above, in a scalable sfnt - one design in three
+#                            containers
+#   fonts-farsiweb           strikes at 62-66 and 94-96 ppem, and a ppem set with
+#                            gaps: the only font here that is not a run of small
+#                            consecutive sizes
+#   fonts-unikurdweb         strikes stored in **descending** ppem order, 16 then
+#                            15 then 13 - what a strike policy that assumed
+#                            sorted order gets wrong
+#   fonts-wqy-zenhei         EBLC on **face 2 only** of a three-face collection,
+#                            44,960 glyphs. The earlier survey named this package
+#                            as checked and not carrying the table, and that false
+#                            negative is what sent the whole population wrong
+#   fonts-konatu             fourteen strikes in one face, 8 to 21 ppem
+#   fonts-misaki             a single 8 ppem strike, the smallest here
+#   fonts-ukij-uyghur        two more faces of index format 1 with image format 2
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends \
       fonts-dejavu-core=2.37-8 \
@@ -79,7 +122,28 @@ RUN apt-get update -qq \
       xfonts-terminus=4.48-3.1 \
       fonts-arphic-uming=0.2.20080216.2-11 \
       fonts-mona=1:2.90-1.1 \
+      fonts-anonymous-pro=1.003-6 \
+      fonts-cmu=0.7.0-5 \
+      fonts-creep2=0.0~git20210325.69dc0de+ds-5 \
+      fonts-farsiweb=0.4.dfsg-13 \
+      fonts-konatu=20121218-11 \
+      fonts-misaki=20210505-1 \
+      fonts-terminus=1.2.0+ds2-4 \
+      fonts-terminus-otb=4.48-3.1 \
+      fonts-ukij-uyghur=20110217-4 \
+      fonts-unikurdweb=1.0-6 \
+      fonts-wine=10.0~repack-6 \
+      fonts-wqy-zenhei=0.9.45-8 \
     && rm -rf /var/lib/apt/lists/*
+
+# Wine puts its fonts in /usr/share/wine/fonts, which is not /usr/share/fonts, so
+# every corpus list program in this image walked past seven of the eleven EBSC
+# faces in Debian - including the sweep that found them, which is why the count
+# above came from a scan of unpacked .deb trees and not of this image. Moved
+# rather than copied or symlinked: a copy is a second set of bytes to keep in
+# step, and `find -type f` - which the corpus lists use deliberately, to drop
+# Debian's alternatives symlinks - skips a symlink too.
+RUN mv /usr/share/wine/fonts /usr/share/fonts/truetype/wine
 
 # The four scripts an oracle driver runs, copied in rather than written with
 # printf inside a RUN. The first draft did use printf, and its \x27 escapes

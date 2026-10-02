@@ -21,6 +21,16 @@ Two things this does *not* do, and both are deliberate:
     there is one and every count downstream is wrong by one. `find -type f`
     already drops a symlink, and the realpath dedupe below is the check that
     says so rather than the assumption that it does.
+
+  * **It does not select by file extension**, which it used to and which cost
+    five fonts. The list matched `*.ttf`, `*.otf`, `*.ttc` and `*.otc`, and the
+    bitmap-only sfnts Debian ships are named `.otb` - so the one shape in the
+    population that is *nothing but* embedded strikes was the one shape this
+    list could not see. The same mistake, in the same spelling, is what made an
+    earlier survey of Debian report two fonts where there are thirty-three. An
+    sfnt says what it is in its first four bytes; a filename is a convention,
+    and the format is the thing being selected for, so `sfnt_magic()` below
+    reads the bytes and the extension decides nothing.
 """
 
 import os
@@ -29,6 +39,12 @@ import subprocess
 import sys
 
 WANTED = (b"EBLC", b"EBDT")
+
+# What an sfnt's first four bytes may be. `true` and `typ1` are Apple's, `ttcf`
+# is a collection, and `OTTO` carries CFF outlines - a `.otb` is 0x00010000 like
+# any other TrueType-flavoured sfnt, which is the point: nothing about the shape
+# announces itself in the name.
+MAGIC = (b"\x00\x01\x00\x00", b"true", b"typ1", b"OTTO", b"ttcf")
 
 
 def tags(data, offset):
@@ -55,6 +71,14 @@ def carries_strikes(path):
         with open(path, "rb") as handle:
             data = handle.read()
     except OSError:
+        return False
+    # The magic, before any offset in the file is believed. Without it this
+    # function reads a table count out of bytes 4 and 5 of *any* file it is
+    # handed - a PNG, a README - and collects whatever four-byte sequences
+    # follow, which can match a tag by accident. Now that the selection is by
+    # content rather than by name, every regular file under the roots arrives
+    # here, so this check carries weight it did not before.
+    if data[:4] not in MAGIC:
         return False
     if data[:4] == b"ttcf":
         if len(data) < 12:
@@ -83,11 +107,7 @@ def main(roots):
     that stops being a strike fixture - or a new one that starts - changes what
     that differential compares without anybody editing a second list.
     """
-    finished = subprocess.run(
-        ["find"] + list(roots) + ["-type", "f",
-         "-name", "*.ttf", "-o", "-type", "f", "-name", "*.otf",
-         "-o", "-type", "f", "-name", "*.ttc",
-         "-o", "-type", "f", "-name", "*.otc"],
+    finished = subprocess.run(["find"] + list(roots) + ["-type", "f"],
         capture_output=True, text=True, check=True)
     seen = set()
     found = []

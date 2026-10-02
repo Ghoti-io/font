@@ -1164,6 +1164,26 @@ std::vector<uint8_t> index5(uint16_t image_format, uint32_t data_offset,
   return out;
 }
 
+/**
+ * An index format 2 subtable body: one constant size and one set of metrics for
+ * every glyph in the range, and no offset array at all.
+ *
+ * Nothing built one of these by hand before: format 2 is 97.8% of the real
+ * population's index subtables and all of that coverage came from fixtures, so
+ * the one case a fixture cannot easily state - a constant size of **zero** -
+ * had nowhere to live.
+ */
+std::vector<uint8_t> index2(uint16_t image_format, uint32_t data_offset,
+    uint32_t image_size, const std::vector<uint8_t> & metrics) {
+  std::vector<uint8_t> out;
+  gfnttest::put_u16(out, 2);
+  gfnttest::put_u16(out, image_format);
+  gfnttest::put_u32(out, data_offset);
+  gfnttest::put_u32(out, image_size);
+  out.insert(out.end(), metrics.begin(), metrics.end());
+  return out;
+}
+
 /** An index format 1 subtable body: the header, then `count + 1` offsets. */
 std::vector<uint8_t> index1(uint16_t image_format, uint32_t data_offset,
     const std::vector<uint32_t> & offsets) {
@@ -1798,11 +1818,20 @@ TEST(Ebdt, OneBadGlyphCondemnsThatGlyphAndNotTheStrike) {
   EXPECT_EQ(strikes, 1u);
 }
 
-TEST(Ebdt, AGlyphOfZeroLengthIsASpaceAndKeepsItsAdvance) {
-  // Consecutive equal offsets: the strike lists the glyph and carries no bitmap
-  // for it. A space, which is a different fact from a glyph the strike does not
-  // have - and its advance still matters, which is the whole reason the record
-  // exists.
+TEST(Ebdt, AnOffsetFormatsZeroLengthGlyphIsOneTheStrikeDoesNotCarry) {
+  // Consecutive equal offsets. **This test asserted the opposite until the real
+  // population was surveyed**, and said so in a comment: that the strike lists the
+  // glyph and carries no bitmap for it, a space rather than an absence. The reading
+  // was wrong and the test is why it survived a differential - Konatu.ttf has
+  // 13,249 such glyphs in each of its fourteen strikes, so this library reported
+  // 15,570 of its 15,572 glyphs as carried where fontTools says 2,323. The
+  // specification says the difference between consecutive offsets is the data
+  // size, and FreeType's format 1 and 3 arms comment the same check
+  // "missing glyph".
+  //
+  // What makes it checkable rather than a matter of taste is that an offset
+  // format has no other way to say "not here": a sparse format omits the glyph
+  // from its list, and an offset format gives it no bytes. Both now answer absent.
   std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
   const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
   glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
@@ -1815,20 +1844,83 @@ TEST(Ebdt, AGlyphOfZeroLengthIsASpaceAndKeepsItsAdvance) {
 
   GFNT_BitmapGlyph empty{};
   GFNT_Error error{};
-  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &empty, &error), GFNT_OK)
-      << error.message;
-  EXPECT_EQ(empty.width, 0u);
-  EXPECT_EQ(empty.height, 0u);
-  EXPECT_EQ(empty.bits, nullptr);
-  // The index states no metrics for format 1, so there is no advance to report and
-  // zero is the honest answer rather than an invented one.
-  EXPECT_EQ(empty.advance, 0);
+  EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &empty, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::string(error.message).find("does not carry"),
+      std::string::npos) << error.message;
 
+  // And glyph 2 still reads, so the refusal above is about the one glyph with no
+  // bytes and not about the subtable that holds both.
   GFNT_BitmapGlyph drawn{};
   ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 2, 0, &drawn, &error), GFNT_OK)
       << error.message;
   EXPECT_EQ(drawn.width, 8u);
   EXPECT_EQ(drawn.advance, 10);
+}
+
+TEST(Ebdt, AFormatFourPairWithNoBytesIsAbsentLikeAnyOtherOffsetFormat) {
+  // Index format 4 stores (glyphID, Offset16) pairs with a sentinel, so a glyph it
+  // lists can still have **no bytes**: its offset and its successor's are equal.
+  // That is the same statement format 1 makes with the same arithmetic, and the
+  // same answer - the strike does not carry the glyph.
+  //
+  // This case exists because a mutation exempting format 4 from the rule escaped
+  // the whole suite. The other three formats each had a test and format 4's
+  // membership in the predicate rested on nothing: a sparse format already had a
+  // way to say "not here" by omitting the glyph, so the arm that says it with a
+  // zero difference was the one nobody had written down.
+  std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+  const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+  glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+
+  // Glyph 1 is listed at offset 0 and glyph 2 at offset 0 too, so glyph 1 spans
+  // nothing; glyph 2 spans the nine bytes up to the sentinel.
+  const std::string bytes = strike_font(
+      one_subtable(1, 2, index4(2, kEbdtHeader, 2,
+          {{1, 0}, {2, 0}, {0xFFFF, 9}})), glyph_data, 4, 1, 1, 2);
+  Crafted crafted(bytes);
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  GFNT_BitmapGlyph glyph{};
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &glyph, &error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::string(error.message).find("does not carry"),
+      std::string::npos) << error.message;
+
+  // Glyph 2, the pair after it, still reads - so the refusal is about the glyph
+  // with no bytes and not about the sparse list.
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 2, 0, &glyph, &error), GFNT_OK)
+      << error.message;
+  EXPECT_EQ(glyph.width, 8u);
+}
+
+TEST(Ebdt, AConstantSizeOfZeroIsEveryGlyphEmptyRatherThanEveryGlyphAbsent) {
+  // The other half of the rule above, and the reason it is written per index
+  // format rather than on the length. Formats 2 and 5 state **one** size for every
+  // glyph they cover, so a zero there is not a statement about one glyph: it says
+  // this subtable's glyphs are all empty, which is coherent with constant metrics
+  // of 0x0 and is what the advance in those metrics exists to carry. FreeType
+  // draws the line in the same place, checking for equal offsets only in the arms
+  // that read an offset array.
+  //
+  // Without this case the condition in `gfnt_ebdt_locate()` could be on the length
+  // alone and nothing would fail.
+  const std::string bytes = strike_font(
+      one_subtable(1, 1, index2(5, kEbdtHeader, 0, big_metrics(0, 0, 0, 0, 6))),
+      {}, 4, 1, 1, 1);
+  Crafted crafted(bytes);
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  GFNT_BitmapGlyph glyph{};
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &glyph, &error), GFNT_OK)
+      << (error.message ? error.message : "(nothing)");
+  EXPECT_EQ(glyph.width, 0u);
+  EXPECT_EQ(glyph.height, 0u);
+  EXPECT_EQ(glyph.bits, nullptr);
+  // The index's own metrics, which is where a constant-size subtable states them.
+  EXPECT_EQ(glyph.advance, 6);
 }
 
 TEST(Ebdt, AGlyphWithAZeroBoxIsEmptyRatherThanRefused) {
@@ -4575,11 +4667,19 @@ TEST(Ebdt, EveryWayACompositeCanContradictItselfIsRefused) {
 }
 
 TEST(Ebdt, AComponentWithNothingToDrawDrawsNothingRatherThanRefusing) {
-  // Two ways a component legitimately contributes no pixels, and both have to be
-  // the composite still reading: the strike *lists* the glyph and says it has
-  // none. A reader that treated either as a fault would refuse a composite that a
-  // font meant, and one that treated them as pixels would read the next glyph's
-  // bytes.
+  // A component that legitimately contributes no pixels, and the composite still
+  // reading: the strike lists the glyph and its own metrics state an empty box. A
+  // reader that treated that as a fault would refuse a composite that a font
+  // meant, and one that treated it as pixels would read the next glyph's bytes.
+  //
+  // **A component whose index gives it a length of zero used to be a second case
+  // here and is now the refusal below.** That is the same correction as
+  // AnOffsetFormatsZeroLengthGlyphIsOneTheStrikeDoesNotCarry: an offset format
+  // with no bytes for a glyph is a glyph the strike does not carry, and a
+  // composite naming one is naming a component that is not there. FreeType reaches
+  // the same `NoBitmap` label and, because `recurse_count` is non-zero, returns
+  // `Invalid_Composite` rather than an empty component - so the composite fails
+  // there too.
   const uint32_t whole = (uint32_t)composite9(5, 11, 1, 5, 13,
       {{2, 0, 0}}).size();
 
@@ -4589,12 +4689,12 @@ TEST(Ebdt, AComponentWithNothingToDrawDrawsNothingRatherThanRefusing) {
     std::vector<uint8_t> leaf_index;
   };
   const Case cases[] = {
-    {"a component whose index gives it a length of zero",
-     small_metrics(1, 1, 0, 1, 2),
-     index1(1, kEbdtHeader + whole, {0, 0})},
     {"a component whose own metrics state an empty box",
      small_metrics(0, 0, 0, 0, 2),
      index1(1, kEbdtHeader + whole, {0, 5})},
+    {"a component whose constant-size subtable states a size of zero",
+     {},
+     index2(1, kEbdtHeader + whole, 0, big_metrics(0, 0, 0, 0, 2))},
   };
 
   for (const Case & test : cases) {
@@ -4619,6 +4719,32 @@ TEST(Ebdt, AComponentWithNothingToDrawDrawsNothingRatherThanRefusing) {
       EXPECT_EQ(row, "...........") << test.why;
     }
   }
+}
+
+TEST(Ebdt, ACompositeWhoseComponentHasNoBytesIsRefused) {
+  // The case that moved out of the test above. An offset format giving a component
+  // no bytes says the strike does not carry it, so the composite names a glyph
+  // that is not there - which is the same refusal as a component outside every
+  // subtable, and reached by the same code now that one predicate answers both.
+  const uint32_t whole = (uint32_t)composite9(5, 11, 1, 5, 13,
+      {{2, 0, 0}}).size();
+  std::vector<uint8_t> ebdt = composite9(5, 11, 1, 5, 13, {{2, 0, 0}});
+  const std::vector<uint8_t> leaf = small_metrics(1, 1, 0, 1, 2);
+  ebdt.insert(ebdt.end(), leaf.begin(), leaf.end());
+  const std::vector<uint8_t> region = two_subtables(
+      1, 1, index1(9, kEbdtHeader, {0, whole}),
+      2, 2, index1(1, kEbdtHeader + whole, {0, 0}));
+
+  const std::string bytes = strike_font(region, ebdt, 4, 2, 1, 2);
+  Crafted crafted(bytes);
+  ASSERT_EQ(crafted.result, GFNT_OK) << crafted.error.message;
+
+  GFNT_BitmapGlyph made{};
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_face_glyph_bitmap(crafted.face, 1, 0, &made, &error),
+      GFNT_ERR_CORRUPT);
+  EXPECT_NE(std::string(error.message).find("does not carry"),
+      std::string::npos) << error.message;
 }
 
 TEST(Ebdt, ACycleIsNamedRatherThanLeftToTheDepthCap) {

@@ -196,15 +196,22 @@ def parse_reference(text):
     values = {}
     absent = set()
     undecodable = 0
+    # Fields the reference says it **rewrote rather than read**. See the adapter:
+    # fontTools decides a `head` date of zero is implausible and reports it as
+    # though it had been a Unix timestamp, which is a sanitisation and not a
+    # reading of the font.
+    sanitised = set()
     for line in text.splitlines():
         key, _, value = line.partition("\t")
         if key.startswith("missing.") or key.startswith("absent."):
             absent.add(key.split(".", 1)[1])
         elif key.startswith("undecodable."):
             undecodable += 1
+        elif key.startswith("sanitised."):
+            sanitised.add(key.split(".", 1)[1])
         else:
             values[key] = value
-    return values, absent, undecodable
+    return values, absent, undecodable, sanitised
 
 
 def agree(key, ours, theirs):
@@ -279,6 +286,45 @@ def uniquified_glyph_name(key, ours, mine, theirs):
     return False
 
 
+INVENTED_NAME = re.compile(r"^glyph(?P<ordinal>\d{5})$")
+
+
+def invented_glyph_name(key, mine, theirs):
+    """Whether the reference invented a name for a glyph the file leaves unnamed.
+
+    `UKIJMe.ttf` stores two **empty** Pascal strings in its `post` format 2.0 name
+    array - verified in the raw bytes: glyph 800's name index is 820, which is
+    stored name 562, whose length byte is zero. fontTools' glyph order has to be a
+    set of unique non-empty keys, so it substitutes `glyph00800`. This library
+    reports what the file says, which for "what is this glyph called" is the empty
+    answer the file gives.
+
+    **Narrowed rather than excused**, as `uniquified_glyph_name()` is: ours must be
+    empty *and* the reference's must match its five-digit `glyph` spelling, *and*
+    that ordinal must be
+    this glyph's index - so a reference name that is any other string stays a
+    disagreement.
+
+    Two things that narrowing does **not** establish, both stated because the
+    alternative is implying they are checked:
+
+      * The **index clause is exercised by nothing.** Making it unconditional
+        leaves every number in this gate identical, because no font in the corpus
+        has the reference answering a synthetic name at some other glyph's index.
+        It is a precaution, not a tested one; the clause that does the work here is
+        the empty-name one.
+      * A font that genuinely stores the literal name `glyph00800` for glyph 800
+        while this library reads it as empty would be excused. Separating that
+        needs the raw `post` bytes, which this function does not have.
+    """
+    if not key.startswith("glyphname.") or mine != "":
+        return False
+    found = INVENTED_NAME.match(theirs)
+    if not found:
+        return False
+    return int(found.group("ordinal")) == int(key.split(".", 1)[1])
+
+
 def refusal_is_documented(key):
     """Whether this library declining this record is a documented refusal.
 
@@ -323,13 +369,15 @@ def compare(path, face, report):
     if answered.returncode != 0:
         tail = answered.stderr.strip().splitlines()
         raise Skip("fontTools: %s" % (tail[-1] if tail else "refused"))
-    theirs, absent, their_undecodable = parse_reference(answered.stdout)
+    theirs, absent, their_undecodable, sanitised = parse_reference(
+        answered.stdout)
 
     compared = 0
     disagreements = 0
     declined = 0
     shown = 0
     uniquified = 0
+    rewritten = 0
     mac_pairs = set()
     for key, value in sorted(theirs.items()):
         if key not in ours:
@@ -352,6 +400,14 @@ def compare(path, face, report):
             continue
         if uniquified_glyph_name(key, ours, ours[key], value):
             uniquified += 1
+            continue
+        if invented_glyph_name(key, ours[key], value):
+            uniquified += 1
+            continue
+        if key in sanitised:
+            # The reference said, on its own stderr, that it rewrote this field.
+            # Not compared, and counted so the report says how many.
+            rewritten += 1
             continue
         disagreements += 1
         if shown < PER_FONT and report[0] < TOTAL:
@@ -399,7 +455,7 @@ def compare(path, face, report):
                 shape.setdefault("Macintosh name (encoding, language)", None)
                 mac_pairs.add("(%s,%s)" % (parts[2], parts[3]))
     return compared, disagreements, declined, their_undecodable, shape, \
-        mac_pairs, uniquified
+        mac_pairs, uniquified, rewritten
 
 
 FIXTURES = os.path.join(oracle_env.ROOT, "tests", "data", "fonts")
@@ -491,11 +547,12 @@ def main(argv):
     # corpus, because the four were all version 4.
     coverage = {"OS/2 version": {}, "post version": {}}
     mac_coverage = {}
+    sanitised_fields = 0
 
     for path, face in fonts:
         try:
-            keys, differed, refused, theirs, shape, pairs, renamed = compare(
-                path, face, report)
+            (keys, differed, refused, theirs, shape, pairs, renamed,
+                rewritten) = compare(path, face, report)
         except Skip as why:
             skipped.append((path, str(why)))
             continue
@@ -503,6 +560,7 @@ def main(argv):
         disagreements += differed
         declined += refused
         uniquified_names += renamed
+        sanitised_fields += rewritten
         theirs_declined += theirs
         for axis, value in shape.items():
             if value is not None:
@@ -522,10 +580,20 @@ def main(argv):
           % (len(fonts) - len(skipped), synthetic, len(fonts) - synthetic,
              compared, disagreements))
     if uniquified_names:
-        print("ttx_diff: %d glyph name(s) the reference renamed to keep its "
-              "glyph order unique, where the file repeats a name and this "
-              "library reports what the file says; checked against an earlier "
-              "glyph actually carrying the bare name" % uniquified_names)
+        print("ttx_diff: %d glyph name(s) the reference renamed or invented, "
+              "where the file repeats a name or stores an empty one and this "
+              "library reports what the file says; a rename is checked against an "
+              "earlier glyph actually carrying the bare name, and an invention "
+              "against the reference's own glyph%%05d spelling for that index"
+              % uniquified_names)
+    if sanitised_fields:
+        print("ttx_diff: %d field(s) the reference rewrote rather than read, and "
+              "said so on its own stderr while doing it - a `head` date of zero, "
+              "which fontTools reports as though it had been a Unix timestamp. "
+              "Not compared, because a sanitisation is not a reading; the "
+              "exemption comes from the reference's own warning rather than from a "
+              "list here, so it stops applying when the warning does"
+              % sanitised_fields)
     print("ttx_diff: %d record(s) this library declined and is documented to "
           "decline - the multi-byte Macintosh and Microsoft encodings only; "
           "%d record(s) fontTools itself could not decode"

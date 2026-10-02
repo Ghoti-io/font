@@ -24,13 +24,14 @@ still worth something: a stride samples pixels, and a strike's glyph *set* is
 what the whole index subtable walk decides, so a subtable read at the wrong
 offset moves a count that a sample could step over.
 
-**The population is two fonts, and that is the finding rather than a limitation
-of this file.** Nothing on the host has these tables and nothing else in the
-oracle image does either (`notes/font/EBLC.md` has the survey):
+**The population is 33 fonts, and it took two surveys to say so.** The first
+probed a shortlist chosen from the guess that embedded strikes are a CJK thing and
+reported two; scanning all 589 of Debian's font packages gives 33 files with these
+tables, 11 of them also carrying `EBSC` (`notes/font/EBLC.md` has both surveys and
+the three reasons the first was wrong). The shapes worth naming:
 
   * `uming.ttc`, four faces over **one** `EBLC`/`EBDT` byte range, six strikes of
-    27,123 glyphs. Index formats 1 and 2 with image formats 5 and 7, and 97.8% of
-    its index subtables are the one pairing `(2, 5)`. Both sides read it.
+    27,123 glyphs. 97.8% of its index subtables are the one pairing `(2, 5)`.
   * `mona.ttf`, three strikes of 7,225 glyphs in image format 6 - the only
     format 6 in Debian - which **fontTools cannot read at all**: its `EBLC` is
     four bytes short of the last entry of its last offset array
@@ -40,15 +41,22 @@ oracle image does either (`notes/font/EBLC.md` has the survey):
     `EXPECTED_DECLINED` below turns that into an assertion rather than a silent
     skip: if a future fontTools reads it, this gate fails and says to move the
     font to the both-sides list.
+  * `Konatu.ttf`, fourteen strikes with 13,249 **zero-length** glyphs in each -
+    the font that found this library reading a zero-length offset-array entry as a
+    glyph that is present with no pixels rather than one the strike does not carry.
+  * the four `.otb` files and `creep2.otb`, **bitmap-only sfnts** with no outlines
+    at all; `wqy-zenhei.ttc`, which carries `EBLC` on face 2 of three;
+    `Unikuweb.ttf`, whose strikes are stored in descending ppem order; and
+    `titr.ttf`, whose ppem set runs 11-16, 62-66 and 94-96.
 
-So the fixtures are not a supplement here, they are most of the evidence: index
-formats 3, 4 and 5 and image formats 1 and 2 appear **nowhere** in the
-population, and image format 6 appears only in the font the reference declines.
-`strike-formats.ttf` draws one design in six pairings and fontTools reads every
-one of them, which is what makes a fixture a measurement rather than a
-restatement of what this library did. The report prints the census of pairings
-each run actually visited, because a total that does not say which cells it
-covered reads the same whatever it covered.
+What the fixtures still cover alone is narrower than it was: index formats **4 and
+5** and image formats **8 and 9** appear nowhere in the population, and image
+format 6 only in the font the reference declines. Index format 3 and image formats
+1 and 2 are real now. `strike-formats.ttf` draws one design in six pairings and
+fontTools reads every one of them, which is what makes a fixture a measurement
+rather than a restatement of what this library did. The report prints the census of
+pairings each run actually visited, because a total that does not say which cells
+it covered reads the same whatever it covered.
 
 Usage:
     eblc_diff.py [--stride N] [--quiet] [font...]
@@ -396,10 +404,13 @@ def main(argv):
     print("eblc_diff: %d glyph(s) both sides agree this strike does not carry, "
           "and %d row(s) left uncompared behind a state disagreement"
           % (counts["absent-both"], counts["state-consequent"]))
-    print("eblc_diff: %d font(s) are the whole Debian population of this table; "
-          "index formats 3, 4 and 5 and image formats 1 and 2 appear in none of "
-          "them, so what covers those is strike-formats.ttf and nothing else"
-          % len(corpus.fonts("ebdt")))
+    print("eblc_diff: %d font(s) are the whole Debian population of this table - "
+          "589 font packages scanned, 5,927 distinct sfnt files, and these are the "
+          "ones that carry it (notes/font/EBLC.md). Index formats **4 and 5** are "
+          "what no font here uses, and strike-formats.ttf is their only cover; "
+          "index format 3 and image formats 1 and 2 are covered by real fonts, "
+          "which an earlier survey of a guessed shortlist reported as appearing "
+          "nowhere" % len(corpus.fonts("ebdt")))
     for path, why, expected, mine in skipped:
         print("  %-44s skipped: %s%s" % (path, why,
             "" if expected else "  <- not expected"))
@@ -441,8 +452,8 @@ def main(argv):
     # clean report of nothing reads exactly like a clean report of everything.
     if not faces:
         print("eblc_diff: no face was compared at all. The population is empty "
-              "or unreadable - check that the image carries fonts-arphic-uming "
-              "and fonts-mona (`make oracle-build`).")
+              "or unreadable - check that the image carries the fourteen font "
+              "packages that have these tables (`make oracle-build`).")
         failed = True
     elif not any(path in corpus.fonts("ebdt") for path in fonts):
         print("eblc_diff: every face compared was a fixture. The real "

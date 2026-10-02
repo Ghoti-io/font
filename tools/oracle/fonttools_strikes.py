@@ -193,6 +193,25 @@ def report(path, index, stride, out):
     glyphs = font["maxp"].numGlyphs
     order = font.getGlyphOrder()
 
+    # A face of a collection that simply has no strikes, reported rather than
+    # raised. wqy-zenhei.ttc carries EBLC on face 2 and not on faces 0 and 1, so
+    # asking for the table raised KeyError and the differential logged two
+    # "skipped" lines marked `<- not expected` for two faces about which both
+    # readers in fact agree completely. A face with no strikes is a comparison
+    # with the answer zero, and `strikes 0` from both sides is that comparison -
+    # which is worth more than a skip, because a reader that lost EBLC support
+    # would report zero here for every face and the differential's own
+    # "every face compared was a fixture" guard would then be what catches it.
+    #
+    # The membership test is of the table directory, not a parse, so mona.ttf -
+    # whose EBLC is present and unreadable - still raises below and is still an
+    # expected decline rather than a face with no strikes.
+    if "EBLC" not in font.reader.tables or "EBDT" not in font.reader.tables:
+        out.write("faces %d\n" % len(found))
+        out.write("glyphs %d\n" % glyphs)
+        out.write("strikes 0\n")
+        return
+
     # EBLC first and on its own line of code, because when it raises - mona.ttf
     # (fonttools#317) - the half-built table is already cached on the TTFont and
     # `EBDT` will then decompile against a locator that stopped early. A reader

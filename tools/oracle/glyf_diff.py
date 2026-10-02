@@ -304,15 +304,39 @@ def paths_agree(want, got, allowance):
     return True
 
 
+# How many zero-length `line` segments were dropped, over the whole run. Printed,
+# because a normalisation nobody counts is indistinguishable from one that is
+# quietly absorbing real differences.
+DEGENERATE = [0]
+
+
 def canonical(segments):
     """The path as a tuple of contours, each rotated to a canonical start.
 
-    A contour arrives as `move`, some segments, `close`. The closing segment is
-    made explicit first - a walk that ends where it started emits none, and one
-    that ends elsewhere leaves it to `close` - so that the two sides have the
-    same number of segments whichever rule they used to pick a starting vertex.
-    Then the cycle is rotated to its smallest rotation, which is a choice with no
-    meaning that both sides make the same way.
+    A contour arrives as `move`, some segments, `close`. Three normalisations, in
+    this order, and each is a choice with no meaning that the two sides make
+    differently:
+
+      1. **A zero-length `line` is dropped.** A `line` to the point the walk is
+         already standing on draws nothing, and whether a pen emits one is
+         decided by which of two *coincident* points it treats as the contour's
+         start. `UKIJTughra.ttf` has contours ending in two identical on-curve
+         points - glyph 462's contour 7 ends (516,505), (516,505) - and begins
+         off-curve, so the start is one of that pair and the two readers pick
+         different ones. fontTools then walks from one duplicate to the other and
+         emits a line of length zero; this library starts at the other and emits
+         none. The curves are identical; it is the segment count that differed, so
+         rotation alone could not reconcile them.
+      2. **The closing segment is made explicit** - a walk that ends where it
+         started emits none and one that ends elsewhere leaves it to `close` - so
+         that both sides have the same number of segments whichever rule picked
+         the starting vertex.
+      3. **The cycle is rotated to its smallest rotation**, since a closed contour
+         has no first vertex.
+
+    Dropping a degenerate line is shape-preserving in a way an exemption would not
+    be: it removes a segment that contributes no ink and moves no point, from both
+    sides, and the count is reported.
     """
     out = []
     contour = None
@@ -336,6 +360,11 @@ def canonical(segments):
             # A segment before any move, which no walk produces: kept as itself
             # so that a comparison sees it rather than dropping it.
             out.append((piece,))
+            continue
+        if piece[0] == "line" and tuple(piece[1:]) == tuple(current):
+            # Normalisation 1. Not appended, and `current` is unchanged because
+            # the segment did not move anything.
+            DEGENERATE[0] += 1
             continue
         contour.append(piece)
         current = piece[-2:]
@@ -497,6 +526,11 @@ def main(argv):
     # unit and applies only where the reference marked the value; both figures
     # are printed so that a run which rests heavily on it says so, and so that
     # the largest difference is a measurement rather than a claim.
+    print("glyf_diff: %d zero-length line segment(s) dropped from both sides - a "
+          "line to the point the walk already stands on, which is what two readers "
+          "emit differently when a contour ends in two coincident on-curve points "
+          "and so has two candidate starting vertices. Shape-preserving: no ink, "
+          "no point moved" % DEGENERATE[0])
     print("glyf_diff: %d coordinate(s) the reference could not hold in 26.6; "
           "%d comparison(s) rested on the one-64th allowance, largest "
           "difference %d/64 of a font unit"

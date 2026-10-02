@@ -157,13 +157,37 @@ static GFNT_Result gfnt_ebdt_read_metrics(GFNT_Reader * reader,
 /**
  * Where one glyph's data is, and how long it is.
  *
- * The index format's whole job. A length of zero means the strike lists the glyph
- * and carries no bitmap for it, which the specification states for formats 1 and 3
- * - consecutive equal offsets - and which is a glyph with no pixels rather than a
- * glyph the strike does not have.
+ * The index format's whole job.
  *
- * @return ::GFNT_OK with @p out_found false when this subtable does not cover
- *   @p glyph at all, which only the sparse formats can say.
+ * **Two equal consecutive offsets mean the strike does not carry the glyph**, in
+ * the three formats that store offsets: 1, 3 and 4. This library read them as a
+ * glyph that is present and has no pixels, and that was wrong. Konatu.ttf is
+ * where it showed: 13,249 of its 15,572 glyphs are zero-length in every one of
+ * its fourteen strikes, so this library reported each strike as carrying 15,570
+ * glyphs where fontTools says 2,323. What settles it besides the reference is the
+ * specification's wording for format 1 - the difference between consecutive
+ * offsets is the data size, and there is no data when it is zero - and FreeType,
+ * which spells the same comparison as `image_start == image_end` under the comment
+ * "missing glyph" in the format 1 and format 3 arms of
+ * `tt_sbit_decoder_load_image`.
+ *
+ * It also makes the two ways this format can say "nothing here" agree. A sparse
+ * format says it by leaving the glyph out of its list, and that already reported
+ * absent; an offset format says it with a zero difference, and that reported
+ * present. One predicate at the tail of this function now answers both, rather
+ * than three callers each deciding what a zero length meant.
+ *
+ * **Formats 2 and 5 are deliberately not included.** Their length is a constant
+ * the subtable states, so a zero there is not a per-glyph statement about one
+ * glyph but a strike-wide one, and it is coherent with constant metrics of 0x0 -
+ * every glyph empty. FreeType draws the same line, checking for equal offsets
+ * only in the arms that read an offset array. A difference between the formats is
+ * the thing being modelled, so the condition is per format rather than on the
+ * length alone.
+ *
+ * @return ::GFNT_OK with @p out_found false when this subtable has no bitmap for
+ *   @p glyph - either because a sparse list omits it, or because an offset array
+ *   gives it no bytes.
  */
 static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
     const GFNT_EblcSubtable * subtable, uint32_t glyph, size_t * out_offset,
@@ -321,6 +345,13 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
   if (end < start) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, 0,
         GFNT_GLYPH_NONE, "an EBLC glyph whose offsets run backwards");
+  }
+  if (end == start && gfnt_eblc_index_has_offsets(subtable->index_format)) {
+    // No bytes, from a format that states its sizes as differences: the strike
+    // does not carry this glyph. See the contract above for why this is not
+    // "present with no pixels", and why 2 and 5 are not here.
+    *out_found = false;
+    return GFNT_OK;
   }
   if (!gcu_safe_add_size(subtable->image_data_offset, start, out_offset)) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, 0,
@@ -549,8 +580,11 @@ static GFNT_Result gfnt_ebdt_paint(const GFNT_EbdtRead * read, uint32_t glyph,
         "an EBDT composite whose component this strike does not carry");
   }
   if (length == 0) {
-    // A component with no bitmap draws nothing, as a space does. Not an error:
-    // the strike lists it and states that it has no pixels.
+    // Reachable only for a constant-size subtable that states a size of zero: an
+    // offset format with no bytes for the glyph now comes back as `!found` and is
+    // refused above, which is what FreeType does to the same component. A
+    // constant-size zero is a strike-wide statement that every glyph is empty, so
+    // a component drawn from one contributes nothing and that is not an error.
     return GFNT_OK;
   }
   if (gfnt_reader_seek(&at, offset) != GFNT_OK) {
@@ -648,8 +682,10 @@ static GFNT_Result gfnt_ebdt_read_glyph(const GFNT_EbdtRead * read,
   GFNT_Result result;
 
   if (length == 0) {
-    // The strike lists the glyph and carries no bitmap for it. A space, and its
-    // advance is still the index's business where the index states one.
+    // Reachable only for a constant-size subtable stating a size of zero; an
+    // offset format's zero-length glyph is absent and never arrives here. The
+    // advance is still the index's business, because the index is where a
+    // constant-metrics subtable states one.
     memset(&record, 0, sizeof record);
     record.advance = metrics.advance;
     return gfnt_bitmap_build_glyph(build, NULL, 0, GFNT_ORDER_MSB_FIRST,

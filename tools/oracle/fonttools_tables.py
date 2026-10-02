@@ -26,6 +26,8 @@ fontTools upgrade that renames something fails loudly on a missing field rather
 than quietly comparing nothing.
 """
 
+import logging
+import re
 import sys
 
 from fontTools.ttLib import TTFont
@@ -180,11 +182,47 @@ def render(key, value):
     return str(value)
 
 
+# fontTools' own warning when it decides a stored `head` date is implausible.
+# `Konatu.ttf` stores a `created` and a `modified` of **zero**, and fontTools'
+# `_h_e_a_d` decode decides that is too low to be seconds since 1904 and rewrites
+# it as though it were a Unix timestamp, reporting 2082840000 where the eight
+# bytes in the file are all zero. That is a sanitisation and not a reading, so the
+# differential must not score it against this library - and the honest way to
+# exempt it is to let the reference say it happened, which it does, out loud, on
+# every decode.
+SANITISED = re.compile(r"'(?P<field>\w+)' timestamp seems very low")
+
+
+class Sanitisations(logging.Handler):
+    """Record which `head` fields fontTools rewrote rather than read.
+
+    A handler rather than a comparison of values here, for the same reason the
+    FreeType driver prints `census unanswered` lines instead of `eblc_diff`
+    keeping a list: an exemption that is derived from the reference's own
+    statement stops applying the moment the reference stops making it. A list of
+    "fields fontTools is known to fudge" would have to be remembered, and would go
+    on excusing a real disagreement after a fontTools release fixed the fudge.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.fields = set()
+
+    def emit(self, record):
+        found = SANITISED.match(record.getMessage())
+        if found:
+            self.fields.add(found.group("field"))
+
+
 def main(argv):
     if len(argv) != 3:
         sys.stderr.write("usage: fonttools_tables.py <font> <face-index>\n")
         return 2
     path, face = argv[1], int(argv[2])
+    # Installed before anything decompiles, because `lazy=True` means `head` is
+    # read inside the field loop below.
+    sanitised = Sanitisations()
+    logging.getLogger("fontTools").addHandler(sanitised)
     font = TTFont(path, fontNumber=face, lazy=True)
     out = sys.stdout
 
@@ -261,6 +299,12 @@ def main(argv):
                 out.write("undecodable.%s\t1\n" % key)
                 continue
             out.write("%s\t%s\n" % (key, escape(text)))
+
+    # Last, so that everything that could trigger one has been decoded. One line
+    # per field the reference rewrote rather than read; `ttx_diff.py` skips exactly
+    # these and counts them.
+    for field in sorted(sanitised.fields):
+        out.write("sanitised.head.%s\t1\n" % field)
     return 0
 
 

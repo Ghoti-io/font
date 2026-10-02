@@ -262,6 +262,30 @@ GFNT_Result gfnt_eblc_strike_glyphs(const GFNT_Face * face, size_t strike,
     const GFNT_BitmapFont ** out_font, GFNT_Error * error);
 
 /**
+ * Whether an index format stores its glyph sizes as differences between offsets.
+ *
+ * Formats 1, 3 and 4 do; formats 2 and 5 state one constant size instead. The
+ * distinction decides what a size of **zero** means, which is why it is a named
+ * predicate rather than a condition written out at the point of use: an offset
+ * array giving a glyph no bytes is the format saying this strike has no bitmap
+ * for that glyph, while a constant size of zero is a statement about every glyph
+ * the subtable covers. `ebdt.c` had the first rule wrong and reported 15,570 of
+ * Konatu.ttf's glyphs as carried where two other readers say 2,323.
+ *
+ * Together with ::gfnt_eblc_index_is_constant these partition the five index
+ * formats, and `gfnt_eblc_index_subtable_known()` is what keeps a sixth from
+ * reaching either.
+ */
+static inline bool gfnt_eblc_index_has_offsets(uint16_t index_format) {
+  return index_format == 1 || index_format == 3 || index_format == 4;
+}
+
+/** Whether an index format states a constant size and metrics. */
+static inline bool gfnt_eblc_index_is_constant(uint16_t index_format) {
+  return index_format == 2 || index_format == 5;
+}
+
+/**
  * Parse one strike's index subtable array into @p out.
  *
  * Split out of the glyph parse so that a test can read the subtable headers of a

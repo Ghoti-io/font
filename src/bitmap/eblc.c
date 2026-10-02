@@ -369,11 +369,6 @@ static bool gfnt_ebdt_metrics_from_index(uint16_t image_format) {
   return image_format == 5;
 }
 
-/** Whether an index format states a constant size and metrics. */
-static bool gfnt_eblc_index_is_constant(uint16_t index_format) {
-  return index_format == 2 || index_format == 5;
-}
-
 GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
     const GFNT_EblcStrike * strike, GFNT_EblcSubtable ** out_subtables,
     size_t * out_count, GFNT_Error * error) {

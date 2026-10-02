@@ -2382,6 +2382,43 @@ the invented-name check also requires the reference's ordinal to be *this* glyph
 index, and making that unconditional changes no number in the gate, so it is a
 precaution rather than a tested one. Said in the docstring rather than implied.
 
+**A positive `descender` is resolved against `minAfterBL`, as of 2026-10-01.**
+The specification does not state the sign of `sbitLineMetrics.descender`, and the
+population writes it both ways: 30 faces negative, **Anonymous Pro's four
+positive** with a `minAfterBL` of -2, and two zero. This library reported the byte,
+so for those four it answered a `descent` of **+2** - against ::GFNT_Strike's own
+documented convention, which says negative. A caller that trusted the
+documentation put the descenders above the baseline.
+
+`minAfterBL` is the same quantity measured a second way in the same record
+("largest ink extent below the baseline"), so where the two disagree about
+direction and it has committed to one, that is the statement to follow. FreeType
+does the same comparison in `tt_face_load_strike_metrics` and comments it "fuzzy
+wording in the EBLC documentation". The rule is deliberately narrow: a positive
+descender whose `minAfterBL` is **not** negative is left alone, because there is no
+second statement to prefer and flipping it would invent a direction.
+
+Three things about how this is checked, because the obvious versions of each are
+wrong:
+
+- **The adapter must not apply the rule.** fontTools reports the byte, and an
+  adapter that resolved it the way this library does would agree by construction
+  and check nothing. It emits the two bytes instead, as a census line, and
+  `eblc_diff` derives the expected descent from *those* - so the rule is checked
+  against values the reference read on its own.
+- **FreeType resolves it itself**, so for the faces where it reports a baseline at
+  all - the bitmap-only ones - `descent` is compared directly and the agreement is
+  real rather than arranged.
+- **The narrow clause needed a unit test**, because dropping it changes no number
+  in the whole population: nothing in Debian pairs a positive descender with a
+  `minAfterBL` that is not negative. That mutation escaped the suite until a case
+  was written, and the case cannot come from a real font. A third mutation -
+  `>= 0` instead of `> 0` - escapes and should: negating zero is zero, so it is an
+  equivalent mutant rather than a gap.
+
+This was found while writing `EBSC`, whose records carry the same
+`sbitLineMetrics` and inherited the same bug.
+
 **`EBDT`'s composites are built, as of 2026-10-01**: image formats 8 and 9, so
 every image format the specification defines except the two it calls obsolete is
 read. A composite is a list of other glyphs of the same strike, each OR-ed into

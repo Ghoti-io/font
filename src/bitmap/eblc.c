@@ -99,6 +99,34 @@ static bool gfnt_eblc_kind_for_depth(uint8_t depth, GFNT_GlyphKind * out_kind) {
   }
 }
 
+int8_t gfnt_eblc_descent_of(const GFNT_EblcLineMetrics * metrics) {
+  // The specification does not say which sign `descender` carries, and the
+  // population is split: 30 faces write it negative, 4 write the magnitude, and 2
+  // write zero. `minAfterBL` is the same quantity measured a second way in the
+  // same record - "largest ink extent below the baseline" - so where the two
+  // disagree about the direction and `minAfterBL` has committed to one, that is
+  // the statement to follow.
+  //
+  // Anonymous Pro is every one of the four: `descender` 2 and `minAfterBL` -2 at
+  // every strike. The font means two pixels below the baseline and wrote the
+  // magnitude, and this library reported `descent` of +2 - against its own
+  // documented convention, so a caller laying out a line from it put the
+  // descenders *above* the baseline. ::GFNT_Strike said "negative" and did not
+  // enforce it, which is the shape where a contract and its code can differ
+  // without anything failing.
+  //
+  // FreeType does the same comparison in `tt_face_load_strike_metrics` for the
+  // same reason, and comments it "fuzzy wording in the EBLC documentation".
+  //
+  // The narrowness matters. A positive `descender` with a `minAfterBL` that is
+  // **not** negative is left alone: there is no second statement to prefer, so
+  // flipping it would be inventing a direction rather than resolving a conflict.
+  if (metrics->descender > 0 && metrics->min_after_bl < 0) {
+    return (int8_t)-metrics->descender;
+  }
+  return metrics->descender;
+}
+
 /** Parse one `bitmapSizeTable` at the reader's cursor. */
 static GFNT_Result gfnt_eblc_read_strike(const GFNT_Face * face,
     GFNT_Reader * reader, size_t index, size_t table_length,
@@ -173,8 +201,8 @@ static GFNT_Result gfnt_eblc_read_strike(const GFNT_Face * face,
     // layout engine asks for and what every file in the population states.
     .ascent = (out->flags & GFNT_EBLC_HORIZONTAL) ? out->horizontal.ascender
                                                   : out->vertical.ascender,
-    .descent = (out->flags & GFNT_EBLC_HORIZONTAL) ? out->horizontal.descender
-                                                   : out->vertical.descender,
+    .descent = gfnt_eblc_descent_of((out->flags & GFNT_EBLC_HORIZONTAL)
+        ? &out->horizontal : &out->vertical),
   };
   return GFNT_OK;
 }

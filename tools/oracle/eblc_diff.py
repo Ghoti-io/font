@@ -275,6 +275,30 @@ def carried(state):
     return "present" if state == "present" else "uncarried"
 
 
+def resolved_descent(stated, min_after_bl):
+    """The descent this library must report, derived from the reference's bytes.
+
+    `descender` carries no stated sign in the specification and the population
+    writes it both ways - 30 faces negative, Anonymous Pro's four positive with a
+    `minAfterBL` of -2, two zero - so this library resolves it against
+    `minAfterBL`, which is the same quantity measured again in the same record.
+    fontTools reports the byte.
+
+    The rule is applied **here**, to the two values the reference read on its own,
+    rather than in the adapter: an adapter that applied the library's rule would
+    agree with the library by construction and check nothing. Applied to the
+    reference's bytes it is a real check - that this library took the right branch
+    for every strike in the population, against numbers it did not supply.
+
+    The narrowness is part of what is checked: a positive `descender` with a
+    `minAfterBL` that is not negative is left alone, because there is no second
+    statement to prefer and flipping it would invent a direction.
+    """
+    if stated > 0 and min_after_bl < 0:
+        return -stated
+    return stated
+
+
 def ours(path, face, stride):
     """This library's answer, through `font-bitmap --strikes`."""
     finished = subprocess.run(
@@ -333,6 +357,15 @@ def compare(name, path, face, stride, mine_answer, counts, report, answered):
         answer.strikes, answer.glyphs)
     census = answer.census
     unanswered = answer.unanswered
+    # A reference that publishes the raw `descender` and `minAfterBL` instead of a
+    # resolved descent has its `descent` derived here - see `resolved_descent()`.
+    # A reference that resolves it itself, as FreeType does, publishes `descent`
+    # and no census line, and is compared on it directly.
+    for line in census:
+        tokens = line.split(" ")
+        if tokens[0] == "descent" and len(tokens) == 6:
+            their_strikes.setdefault(int(tokens[1]), {})["descent"] = str(
+                resolved_descent(int(tokens[3]), int(tokens[5])))
     coarsen = carried if "state" in answer.coarse else (lambda state: state)
     # On a bitmap-only face this reference reports absence as an empty glyph, so
     # the two states are merged for that face - see `emptied()`.

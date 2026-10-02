@@ -978,7 +978,7 @@ std::string eblc_font(const std::vector<uint8_t> & eblc) {
 std::vector<uint8_t> size_table(uint32_t index_offset, uint32_t index_size,
     uint32_t subtables, uint16_t first, uint16_t last, uint8_t ppem_x,
     uint8_t ppem_y, uint8_t depth, int8_t flags, int8_t ascender = 6,
-    int8_t descender = -1) {
+    int8_t descender = -1, int8_t min_after_bl = 0) {
   std::vector<uint8_t> out;
   gfnttest::put_u32(out, index_offset);
   gfnttest::put_u32(out, index_size);
@@ -991,9 +991,15 @@ std::vector<uint8_t> size_table(uint32_t index_offset, uint32_t index_size,
     const int8_t desc = direction == 0 ? descender : 0;
     gfnttest::put_u8(out, (uint8_t)asc);
     gfnttest::put_u8(out, (uint8_t)desc);
-    for (int i = 0; i < 10; ++i) {
+    // Eight more bytes, then `minAfterBL`, then the two the specification
+    // reserves. It is a parameter because it is the field that decides what a
+    // *positive* descender means, and no fixture can state that pairing.
+    for (int i = 0; i < 7; ++i) {
       gfnttest::put_u8(out, 0);
     }
+    gfnttest::put_u8(out, (uint8_t)(direction == 0 ? min_after_bl : 0));
+    gfnttest::put_u8(out, 0);
+    gfnttest::put_u8(out, 0);
   }
   gfnttest::put_u16(out, first);
   gfnttest::put_u16(out, last);
@@ -1068,12 +1074,14 @@ std::vector<uint8_t> small_metrics(uint8_t height, uint8_t width,
 std::string strike_font(const std::vector<uint8_t> & region,
     const std::vector<uint8_t> & ebdt, uint16_t glyphs = 4,
     uint16_t subtables = 1, uint16_t first = 1, uint16_t last = 2,
-    uint8_t depth = 1) {
+    uint8_t depth = 1, int8_t ascender = 6, int8_t descender = -1,
+    int8_t min_after_bl = 0) {
   std::vector<uint8_t> eblc;
   gfnttest::put_u32(eblc, 0x00020000);
   gfnttest::put_u32(eblc, 1);
   const std::vector<uint8_t> size = size_table(8 + 48, (uint32_t)region.size(),
-      subtables, first, last, 12, 12, depth, 1);
+      subtables, first, last, 12, 12, depth, 1, ascender, descender,
+      min_after_bl);
   eblc.insert(eblc.end(), size.begin(), size.end());
   eblc.insert(eblc.end(), region.begin(), region.end());
 
@@ -1816,6 +1824,61 @@ TEST(Ebdt, OneBadGlyphCondemnsThatGlyphAndNotTheStrike) {
   size_t strikes = 0;
   ASSERT_EQ(gfnt_face_strike_count(crafted.face, &strikes, nullptr), GFNT_OK);
   EXPECT_EQ(strikes, 1u);
+}
+
+TEST(Eblc, APositiveDescenderIsResolvedAgainstMinAfterBLAndNotOtherwise) {
+  // `descender` carries no stated sign in the specification, and the population
+  // writes it both ways: 30 faces negative, Anonymous Pro's four **positive** with
+  // a `minAfterBL` of -2, and two zero. This library reported the byte, so for
+  // those four it answered `descent` of +2 against its own documented convention -
+  // a caller laying out a line from it put the descenders above the baseline.
+  //
+  // `minAfterBL` is the same quantity measured again in the same record, so where
+  // the two disagree about direction and it has committed to one, that is the
+  // statement to follow. FreeType does the same comparison for the same reason.
+  //
+  // **The third case is why this test exists rather than the differential alone.**
+  // Dropping the `minAfterBL` clause - negating any positive descender - changes
+  // no number in the whole population, because nothing in Debian pairs a positive
+  // descender with a `minAfterBL` that is not negative. That mutation escaped the
+  // suite until this case was written, and the case cannot come from a real font.
+  struct Case {
+    const char * why;
+    int8_t descender;
+    int8_t min_after_bl;
+    int32_t want;
+  };
+  const Case cases[] = {
+    {"a positive descender whose minAfterBL agrees it is below the baseline",
+     2, -2, -2},
+    {"a positive descender with nothing to contradict it, left alone",
+     3, 0, 3},
+    {"a positive descender whose minAfterBL is also positive, left alone",
+     3, 1, 3},
+    {"a descender already negative, unchanged", -4, -4, -4},
+    {"a descender of zero, unchanged", 0, -3, 0},
+  };
+
+  for (const Case & test : cases) {
+    std::vector<uint8_t> glyph_data = small_metrics(4, 8, 1, 4, 10);
+    const std::vector<uint8_t> rows = {0xFF, 0x81, 0x81, 0xFF};
+    glyph_data.insert(glyph_data.end(), rows.begin(), rows.end());
+    const std::string bytes = strike_font(
+        one_subtable(1, 1, index1(1, kEbdtHeader, {0, 9})), glyph_data,
+        4, 1, 1, 1, 1, 7, test.descender, test.min_after_bl);
+    Crafted crafted(bytes);
+    ASSERT_EQ(crafted.result, GFNT_OK) << test.why << ": "
+        << crafted.error.message;
+
+    GFNT_Strike strike{};
+    GFNT_Error error{};
+    ASSERT_EQ(gfnt_face_strike_at(crafted.face, 0, &strike, &error), GFNT_OK)
+        << test.why << ": " << (error.message ? error.message : "(nothing)");
+    EXPECT_EQ(strike.descent, test.want) << test.why;
+    // The ascent is never touched by any of this, and is checked so that a change
+    // which flipped both signs would fail here rather than look symmetric.
+    EXPECT_EQ(strike.ascent, 7) << test.why;
+  }
 }
 
 TEST(Ebdt, AnOffsetFormatsZeroLengthGlyphIsOneTheStrikeDoesNotCarry) {

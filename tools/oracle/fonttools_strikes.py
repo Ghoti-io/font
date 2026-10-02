@@ -293,7 +293,22 @@ def report(path, index, stride, out):
         out.write("strike %d ppem_y %d\n" % (number, size.ppemY))
         out.write("strike %d depth %d\n" % (number, size.bitDepth))
         out.write("strike %d ascent %d\n" % (number, line.ascender))
-        out.write("strike %d descent %d\n" % (number, line.descender))
+        # **The raw bytes, as a census line, not a compared `descent`.**
+        #
+        # `descender` has no stated sign in the specification and this population
+        # writes it both ways: 30 faces negative, Anonymous Pro's four positive
+        # with a `minAfterBL` of -2, two zero. This library resolves that against
+        # `minAfterBL` and reports a descent that is negative where the ink is
+        # below the baseline; fontTools reports the byte.
+        #
+        # So the two cannot be compared directly, and the wrong fix would be to
+        # apply the same rule here - an oracle that agrees by construction checks
+        # nothing. What is emitted instead is the two bytes the rule reads, and
+        # `eblc_diff.py` derives the expected descent from *these* and compares
+        # that. The rule is then checked against values this reference read on its
+        # own, which is the whole point of having one.
+        out.write("census descent %d stated %d min_after_bl %d\n"
+                  % (number, line.descender, line.minAfterBL))
         out.write("strike %d present %d\n" % (number, present))
         out.write("strike %d absent %d\n" % (number, glyphs - present))
         # Always zero, and compared anyway: this reference has no per-glyph

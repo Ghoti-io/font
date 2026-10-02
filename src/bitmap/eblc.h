@@ -189,6 +189,20 @@ typedef struct GFNT_Eblc {
   GFNT_BitmapFont * strike_glyphs;
 } GFNT_Eblc;
 
+/**
+ * The descent a caller sees, from one `sbitLineMetrics`.
+ *
+ * `descender` has no stated sign in the specification and the population writes it
+ * both ways, so this is where that is resolved - once, against `minAfterBL`, which
+ * is the same quantity measured again in the same record. See the implementation
+ * for why the rule is narrow and what it deliberately leaves alone.
+ *
+ * Exposed rather than static because `GFNT_Strike`'s descent and `EBSC`'s come
+ * from the same records and must be resolved the same way; two copies of a sign
+ * rule is exactly the shape that drifts.
+ */
+int8_t gfnt_eblc_descent_of(const GFNT_EblcLineMetrics * metrics);
+
 /** The `EBLC` parser, for ::gfnt_table_cached(). */
 GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
     void * context,

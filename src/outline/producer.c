@@ -57,10 +57,25 @@ static GFNT_Result gfnt_producer_refuse(const GFNT_Face * face, uint32_t glyph,
         "this face's outlines are CFF2 charstrings, which are a different "
         "format in a different table and are not read (design.md section 16)");
   }
-  if (gfnt_sfnt_find(face, GFNT_TAG_GLYF) || gfnt_sfnt_find(face, GFNT_TAG_LOCA)) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_GLYF, 0, glyph,
-        "this face has one of glyf and loca and not the other, so neither "
-        "indexes a glyph");
+  {
+    const GFNT_SfntTable * glyf = gfnt_sfnt_find(face, GFNT_TAG_GLYF);
+    const GFNT_SfntTable * loca = gfnt_sfnt_find(face, GFNT_TAG_LOCA);
+
+    // Before the "one and not the other" sentence, because for the bitmap-only
+    // `.otb` both are there and that sentence would be false. The right one is
+    // narrower and it is the fact: the table exists and is empty, so there are no
+    // outline bytes to index.
+    if (glyf && loca && loca->length < 4) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_LOCA, 0, glyph,
+          "this face's loca table is too short to name even one glyph's extent, "
+          "so no glyf entry can be indexed - which is how a bitmap-only sfnt is "
+          "written");
+    }
+    if (glyf || loca) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_GLYF, 0, glyph,
+          "this face has one of glyf and loca and not the other, so neither "
+          "indexes a glyph");
+    }
   }
   return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
       "this face has no outlines at all");

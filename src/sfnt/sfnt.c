@@ -265,9 +265,38 @@ GFNT_Producer gfnt_sfnt_producer(const GFNT_Face * face) {
   if (face->flavour == GFNT_FLAVOUR_TYPE1) {
     return GFNT_PRODUCER_TYPE1;
   }
-  if (gfnt_sfnt_find(face, GFNT_TAG('g', 'l', 'y', 'f'))
-      && gfnt_sfnt_find(face, GFNT_TAG('l', 'o', 'c', 'a'))) {
-    return GFNT_PRODUCER_GLYF;
+  {
+    const GFNT_SfntTable * loca = gfnt_sfnt_find(face,
+        GFNT_TAG('l', 'o', 'c', 'a'));
+
+    // **A `loca` too short to name even one glyph's extent indexes nothing**, and
+    // is therefore the same situation as a `loca` that is not there. One glyph
+    // needs two entries - its start and its end - which is four bytes in the short
+    // format and eight in the long one, so fewer than four bytes cannot name a
+    // glyph whichever format `head` states, and the format does not have to be
+    // read to know it.
+    //
+    // Debian ships five faces like this: four Terminus faces and Creep2, all
+    // `.otb`, all written by FontForge with a `glyf` of zero bytes and a `loca` of
+    // two. Read as a producer, every one of Terminus's 1,326 glyphs came back
+    // GFNT_ERR_CORRUPT and ::gfnt_face_has_outlines() said yes - true about the
+    // bytes, since one entry cannot name glyph 0's end, and the wrong answer to
+    // the question that predicate asks, which is whether asking for an outline
+    // can succeed. For these it cannot succeed for any glyph. FreeType agrees:
+    // `FT_IS_SCALABLE` is 0 for exactly these five of the 530 faces this library's
+    // corpus holds.
+    //
+    // Capacity and not `glyf`'s length is the line, and the difference is a real
+    // font either way. A `glyf` of zero bytes under a *complete* `loca` of zero
+    // offsets is a face whose every glyph is empty, which asking for an outline
+    // answers with an empty outline - the first draft of this check keyed on
+    // `glyf->length` and refused that face. And a `loca` long enough for some
+    // glyphs but not all is GFNT_ERR_CORRUPT for the glyph whose entry runs past
+    // the table (M11), not a fact about the face.
+    if (gfnt_sfnt_find(face, GFNT_TAG('g', 'l', 'y', 'f'))
+        && loca && loca->length >= 4) {
+      return GFNT_PRODUCER_GLYF;
+    }
   }
   if (gfnt_sfnt_find(face, GFNT_TAG_CFF)) {
     return GFNT_PRODUCER_CFF;

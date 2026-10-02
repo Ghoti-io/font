@@ -160,6 +160,18 @@ def main(argv):
         return 0
     glyf = font["glyf"]
     order = font.getGlyphOrder()
+    if order and not glyf.glyphs:
+        # fontTools fills `glyf.glyphs` from `loca`, and when `loca` is too short
+        # for `maxp`'s numGlyphs it warns on stderr - "corrupt 'loca' table, or
+        # wrong numGlyphs in 'maxp'" - and keeps the glyphs it could index, which
+        # for a bitmap-only `.otb` is none at all. Said rather than crashed into:
+        # `glyf[order[0]]` raises KeyError there, and a differential catching that
+        # records "the reference refused this font" where what happened is that
+        # the reference agrees there is nothing to index. Its own state, not this
+        # library's rule - a font whose `loca` does index glyphs reports them here
+        # exactly as before, which is what keeps this from being an exemption.
+        print("outlines: no indexed glyf, %d name(s) in the order" % len(order))
+        return 0
     print("outlines: %d glyph(s), stride %d from %d"
           % (len(order), stride, first))
 

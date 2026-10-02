@@ -382,6 +382,12 @@ def rotate(contour):
     return min(rotations)
 
 
+# How many fonts both readers agree carry no indexable outline, counted rather
+# than left in the skip list: a *stated* skip and a reference crash print the same
+# "skipped" line, and the five fonts this counts arrived in the corpus as a crash.
+BITMAP_ONLY = [0]
+
+
 def compare(path, face, stride, report, allowance):
     """One font. Returns (compared, disagreements, glyphs, inexact, declined)."""
     mine = ours(path, face, stride, 0)
@@ -389,6 +395,39 @@ def compare(path, face, stride, report, allowance):
 
     if theirs.get("outlines") == "no glyf":
         raise Skip("no glyf table")
+
+    if theirs.get("outlines", "").startswith("no indexed glyf"):
+        # The bitmap-only sfnt: `glyf` of zero bytes under a `loca` of two, which
+        # is five of this corpus's 490 fonts and 100% of that shape. Neither
+        # reader can index an outline in it, and both say so - fontTools by
+        # loading no glyphs at all and warning about `loca` while it does, this
+        # library by answering GFNT_ERR_UNSUPPORTED for the face.
+        #
+        # **Asserted and then skipped, in that order**, and the assertion is on
+        # the *kind* of refusal rather than on there being one. This library used
+        # to answer GFNT_ERR_CORRUPT for all 1,326 of Terminus's glyphs while
+        # gfnt_face_has_outlines() said yes - a refusal, so a check for "did it
+        # refuse" would have passed and let the defect back in. "Corrupt" here
+        # means this library read the `loca` as indexing something and found that
+        # something broken; what is true is that the table indexes nothing, which
+        # is a fact about the face and is GFNT_ERR_UNSUPPORTED. The driver prints
+        # the result's own name, so the two are distinguishable in the output both
+        # sides already produce and no field had to be invented to tell them apart.
+        shapes = [str(value) for key, value in mine.items()
+                  if key.endswith(".shape")]
+        wrong = [shape for shape in shapes
+                 if not shape.startswith("refused Unsupported")]
+        if not shapes or wrong:
+            report[0] += 1
+            print("  %s: the reference indexes no glyf here; this library "
+                  "answered %s for %d of %d sampled glyph(s) rather than "
+                  "refusing the face as unsupported"
+                  % (os.path.basename(path),
+                     wrong[0] if wrong else "nothing", len(wrong), len(shapes)))
+            return (0, 1, 0, 0, 0)
+        BITMAP_ONLY[0] += 1
+        raise Skip("no outline a loca indexes - bitmap-only, and both readers "
+                   "say so")
 
     # Glyphs this library declined. Their other keys are not compared: a glyph
     # it refused to read has no points to disagree about, and counting each of
@@ -538,6 +577,11 @@ def main(argv):
     if declined:
         print("glyf_diff: %d glyph(s) this library declined and is documented "
               "to decline" % declined)
+    print("glyf_diff: %d font(s) both readers agree carry no outline any `loca` "
+          "indexes - the bitmap-only sfnt, `glyf` of zero bytes under a `loca` of "
+          "two. Not a comparison and not a crash either: for each, this library "
+          "was checked to refuse the whole face rather than read an outline the "
+          "reference says is not indexed" % BITMAP_ONLY[0])
     for path, why in skipped:
         print("glyf_diff: skipped %s: %s" % (os.path.basename(path), why))
 

@@ -496,6 +496,33 @@ depth of §6.2. Phantom points are computed for variation support. Instructions
 are skipped by length. A `loca` entry running backwards or past `glyf` makes
 *that glyph* `ERR_CORRUPT` (M11).
 
+**A `loca` too short to name one glyph is a face with no outlines, and not a
+face whose every glyph is corrupt.** One glyph needs a start and an end - four
+bytes short, eight long - so a `loca` under four bytes names nothing in either
+format, which is the same situation as a `loca` that is absent and is therefore a
+fact about the *face*. `gfnt_sfnt_producer()` answers `NONE`,
+`gfnt_face_has_outlines()` answers false, and asking for a glyph is
+`ERR_UNSUPPORTED` with that sentence. FontForge writes exactly this shape for a
+bitmap-only `.otb` - `glyf` of zero bytes, `loca` of two - and Debian ships five:
+four Terminus faces and Creep2. Read as a producer they answered `ERR_CORRUPT`
+for every one of 1,326 glyphs while `has_outlines()` said yes, which is the wrong
+answer to the question that predicate documents itself as asking, namely whether
+asking for an outline can succeed. FreeType's `FT_IS_SCALABLE` is 0 for exactly
+these five of the 530 faces in this library's population.
+
+Two lines were candidates and the other one is wrong. Keying on **`glyf`'s
+length** being zero refuses a different real font: a `glyf` of zero bytes under a
+*complete* `loca` of zero offsets is a face whose every glyph is empty, and an
+empty glyph is an answer (M11's other half). Keying on `loca` covering
+**`numGlyphs`** is wrong the other way: a `loca` that names some glyphs and stops
+is `ERR_CORRUPT` for the glyph whose entry runs past the table, which is a fact
+about that glyph (M11) and loses the glyphs the table does describe. Capacity for
+one glyph is the only line that separates all three.
+
+These five fonts were invisible until the sfnt corpus stopped selecting by file
+extension (§14.5), which is the whole argument for that change: the defect was
+not found by reading this code.
+
 **A composite that reaches itself is named as a cycle, and the depth budget is
 what is left.** Directly or through any number of other glyphs, it is
 `ERR_CORRUPT` with that sentence, found by walking the chain of glyphs the load
@@ -1415,7 +1442,13 @@ driver**, so that "what did that run read" has one answer and adding a package i
 one edit. There are three: `fonttools-corpus` is every sfnt,
 `fonttools-corpus-bitmap` is the PCF strikes (234), and `fonttools-corpus-ebdt`
 is the fonts with embedded bitmap strikes (33 - the whole Debian population).
-Three things the third one does that the other two do not, and each was paid for:
+Two programs, not three: `fonttools-corpus` holds the walk, the sfnt magic test
+and the dedupe, and `fonttools-corpus-ebdt` is a one-line wrapper that passes
+`--require EBLC,EBDT`. It was three, and they disagreed - see the third point
+below. `fonttools-corpus-bitmap` stays a glob because PCF is not an sfnt and has
+no magic these share.
+
+Three things the selector does that a glob does not, and each was paid for:
 
 - **It reads a table directory with `struct` and opens nothing.** A population
   chosen by the reader under test lets a reader that lost a table compare nothing
@@ -1430,15 +1463,20 @@ Three things the third one does that the other two do not, and each was paid for
   `*.ttf`, `*.otf`, `*.ttc` and `*.otc`, and Debian's bitmap-only sfnts are named
   **`.otb`** - so the one shape in this population that is *nothing but* embedded
   strikes was the one shape the list could not see - and those five turn out to be
-  the only faces from which FreeType reports a strike's own baseline. The same mistake in the same
-  spelling is what made an earlier survey report two fonts where there are 33. An sfnt says what it is in its first four bytes; the
+  the only faces from which FreeType reports a strike's own baseline. The same
+  mistake in the same spelling is what made an earlier survey report two fonts
+  where there are 33. An sfnt says what it is in its first four bytes; the
   extension decides nothing, and every regular file under the roots is now offered
   to a magic check instead.
 
-  The other two lists still select by extension, and `fonttools-corpus` therefore
-  still cannot see an `.otb`. That is a known hole rather than a decision: fixing
-  it moves the denominator of four other differentials, so it belongs in a commit
-  that re-runs them.
+  **The sfnt list kept its glob for a while, and that is the part worth
+  remembering**: one corpus selected by content, the other by name, so for several
+  commits this image answered "what is an sfnt" differently depending on which
+  differential asked, and five fonts were in one corpus and invisible to the
+  other. Giving the sfnt list the same selector took it from 485 fonts to 490 and
+  moved four differentials' denominators - and the five fonts it admitted turned
+  up a defect in this library the moment they arrived (§7.3, the `loca` that
+  indexes nothing).
 
 The same program is what selects the *fixtures* for that differential, so a new
 strike fixture joins it by existing rather than by somebody remembering a second
@@ -2442,6 +2480,43 @@ Each of those three allowances was planted and seen to fire. One clause did not:
 the invented-name check also requires the reference's ordinal to be *this* glyph's
 index, and making that unconditional changes no number in the gate, so it is a
 precaution rather than a tested one. Said in the docstring rather than implied.
+
+**And then the sfnt corpus stopped selecting by file extension too, as of
+2026-10-01.** It was 485 fonts against the EBDT list's 490 - one corpus chosen by
+content and one by name, in the same image - and closing that took the sfnt corpus
+to 490 and moved four denominators:
+
+| gate | before, by extension | after, by magic |
+| --- | ---: | ---: |
+| `check-oracle-ttx` | 519 faces, 573,544 fields | 524 faces, **579,860** fields, **0** |
+| `check-oracle-cmap` | 485 fonts, 1,128,934 codepoints | 490 fonts, **1,141,468** codepoints, **0** |
+| `check-oracle-glyf` | 473 fonts, 5,787,773 fields | 473 fonts, 5,787,773 fields, **0**, and 5 declared bitmap-only |
+| `check-oracle-cff` | 47 of 534 fonts, 25,530 fields | 47 of **539**, 25,530 fields, **0** |
+
+The five fonts are the `.otb` faces, and they paid for the change immediately:
+
+- **They found a defect**, the `loca` that indexes nothing (§7.3). It had been
+  there since `loca` was read, and no amount of reading the code had found it,
+  because the five fonts that provoke it were the five the corpus could not see.
+- **`glyf_diff` was skipping them on a reference crash.** fontTools raises
+  `KeyError: '.notdef'` on a `glyf` whose `loca` indexed no glyphs, and the
+  differential's blanket "the reference exited non-zero, skip the font" turned that
+  into one line among thirty-five ordinary `no glyf table` skips. Before the
+  corpus widened, every font that clause had ever excluded was a *fixture* that is
+  not an sfnt at all, so the clause had never once been wrong; the first real font
+  it swallowed arrived with the five. The adapter now reports fontTools' own state
+  - it loaded no glyphs and warned about `loca` while doing it - and the
+  differential **asserts the agreement before skipping the comparison**: this
+  library must refuse the face as unsupported, and reading an outline, or refusing
+  it as *corrupt*, is a disagreement it prints and counts.
+
+  The refusal *kind* is the assertion and that is the whole point of it. The old
+  behaviour refused every glyph too, so a check for "did this library refuse" would
+  have passed and let the defect straight back in. Reverting the fix with the
+  assertion in place reports five disagreements naming the wrong answer.
+- **Nothing else moved.** `eblc_diff`, `bitmap_diff`, `check-golden`,
+  `check-fixtures` and `check-vectors` are identical, which is what a corpus change
+  that admitted exactly five files should do.
 
 **`EBSC` is read, as of 2026-10-01**: ::gfnt_face_scaled_strike_count() and
 ::gfnt_face_scaled_strike_at(), over the eleven Debian faces that have one. §7.5

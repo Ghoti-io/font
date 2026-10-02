@@ -182,8 +182,12 @@ typedef enum {
  * Which producer this face's outlines come from.
  *
  * `glyf` without `loca` - or `loca` without `glyf` - is neither, because neither
- * table indexes a glyph without the other. `CFF2` is neither as well: it is a
- * different format in a different table and is not read (design.md section 16).
+ * table indexes a glyph without the other. **A `loca` of fewer than four bytes is
+ * neither too**: one glyph needs a start and an end, so such a table names no
+ * glyph in either format and is the same situation as one that is absent. That is
+ * the bitmap-only `.otb` FontForge writes - `glyf` zero bytes, `loca` two - and
+ * FreeType reports those faces as not scalable. `CFF2` is neither as well: it is
+ * a different format in a different table and is not read (design.md section 16).
  * A face carrying both `glyf`/`loca` and `CFF ` is malformed and is read as
  * TrueType, which is what every shipping implementation does.
  *

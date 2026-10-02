@@ -1477,6 +1477,139 @@ TEST(Glyf, AComponentMatchingAPointNeitherGlyphHasIsRefused) {
       std::string::npos) << outcome.message;
 }
 
+/** A font with `glyf` and `loca` given verbatim, so a test can state loca's size. */
+std::vector<uint8_t> font_with_raw_loca(uint16_t glyphs, int16_t loca_format,
+    const std::vector<uint8_t> & glyf, const std::vector<uint8_t> & loca) {
+  std::vector<std::pair<uint16_t, int16_t>> metrics;
+
+  for (uint16_t index = 0; index < glyphs; ++index) {
+    metrics.push_back({(uint16_t)(500 + 10 * index), (int16_t)index});
+  }
+  return gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, {
+      {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, loca_format)},
+      {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 100, glyphs)},
+      {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics, {})},
+      {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(glyphs)},
+      {GFNT_TAG('g', 'l', 'y', 'f'), glyf},
+      {GFNT_TAG('l', 'o', 'c', 'a'), loca},
+  });
+}
+
+TEST(Glyf, ALocaTooShortToNameOneGlyphIsAFaceWithNoOutlines) {
+  // The bitmap-only sfnt, which is a real shape and not a broken one: FontForge
+  // writes `glyf` of zero bytes and `loca` of two for a `.otb`, and Debian ships
+  // five - four Terminus faces and Creep2. One `loca` entry cannot name even
+  // glyph 0's *end*, so nothing in the table is indexable, and this is therefore
+  // a fact about the face rather than about any glyph.
+  //
+  // Read as an outline producer, Terminus answered GFNT_ERR_CORRUPT for all 1,326
+  // of its glyphs while gfnt_face_has_outlines() said yes - which is the wrong
+  // answer to the question that predicate documents itself as asking, namely
+  // whether asking for an outline can succeed. FreeType's FT_IS_SCALABLE is 0 for
+  // exactly these faces, which is the second reader for the refusal.
+  struct Case {
+    const char * why;
+    uint16_t glyphs;
+    int16_t format;
+    std::vector<uint8_t> loca;
+    bool outlines;              // what gfnt_face_has_outlines() must say
+    GFNT_Result first;          // and what glyph 0 must answer
+  };
+  const Case cases[] = {
+    // Fewer than four bytes names no glyph in *either* format, which is why the
+    // rule does not have to read `head` to apply.
+    {"no loca bytes at all", 1, 0, {}, false, GFNT_ERR_UNSUPPORTED},
+    {"one short entry, as a .otb has", 1326, 0, {0x00, 0x00}, false,
+        GFNT_ERR_UNSUPPORTED},
+    {"three bytes, short of a short pair", 1, 0, {0x00, 0x00, 0x00}, false,
+        GFNT_ERR_UNSUPPORTED},
+    // And the control, which the first draft of this rule got wrong by keying on
+    // `glyf`'s length instead: a `glyf` of zero bytes under a *complete* `loca` of
+    // zero offsets is a face whose every glyph is empty, and an empty glyph is an
+    // answer. Refusing it would refuse every `space` in every font, one step on.
+    {"one complete short pair over an empty glyf", 1, 0, {0x00, 0x00, 0x00, 0x00},
+        true, GFNT_OK},
+    {"a complete long loca of zero offsets", 2, 1,
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, true, GFNT_OK},
+  };
+
+  for (const Case & test : cases) {
+    const std::vector<uint8_t> bytes =
+        font_with_raw_loca(test.glyphs, test.format, {}, test.loca);
+    GFNT_Blob * blob = nullptr;
+    GFNT_Face * face = nullptr;
+    GFNT_Outline * outline = nullptr;
+    GFNT_Error error{};
+
+    ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK)
+        << test.why;
+    ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK)
+        << test.why << ": " << (error.message ? error.message : "");
+
+    // One predicate and one load, because two answers to "has this face
+    // outlines" is the defect gfnt_sfnt_producer() exists to prevent.
+    EXPECT_EQ(gfnt_face_has_outlines(face), test.outlines) << test.why;
+    EXPECT_EQ(gfnt_face_glyph_outline(face, 0, nullptr, nullptr, &outline,
+        &error), test.first) << test.why << ": "
+        << (error.message ? error.message : "");
+    if (test.first == GFNT_OK) {
+      EXPECT_EQ(gfnt_outline_point_count(outline), 0u) << test.why;
+    }
+    else {
+      ASSERT_NE(error.message, nullptr) << test.why;
+      EXPECT_NE(std::string(error.message).find("loca"), std::string::npos)
+          << test.why << ": " << error.message;
+    }
+    gfnt_outline_destroy(outline);
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+}
+
+TEST(Glyf, ALocaLongEnoughForSomeGlyphsIsStillPerGlyph) {
+  // The other side of the line, and the reason it is drawn at "can any glyph be
+  // named" rather than at "are all of them": a `loca` that covers glyph 0 and
+  // stops is a producer, glyph 0 reads, and glyph 1 is GFNT_ERR_CORRUPT - a fact
+  // about that glyph and not about the font (M11). A rule that compared `loca`'s
+  // length against `numGlyphs` would turn this font into a face with no outlines
+  // and lose the glyph it does describe.
+  std::vector<uint8_t> glyphs = gfnttest::build_glyf_glyph(
+      {{{0, 0, true}, {100, 0, true}, {100, 100, true}}});
+  if (glyphs.size() % 2) {
+    // A short `loca` stores half of each offset, so an odd length cannot be
+    // spelled in one - which is why a writer pads. Padded here rather than
+    // rounded, because rounding down hands the reader a glyph one byte short and
+    // the refusal that follows is the test measuring its own builder.
+    glyphs.push_back(0);
+  }
+  std::vector<uint8_t> loca;
+  gfnttest::put_u16(loca, 0);
+  gfnttest::put_u16(loca, (uint16_t)(glyphs.size() / 2));
+  const std::vector<uint8_t> bytes = font_with_raw_loca(2, 0, glyphs, loca);
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Outline * outline = nullptr;
+  GFNT_Error error{};
+
+  ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+      GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
+
+  EXPECT_TRUE(gfnt_face_has_outlines(face));
+  EXPECT_EQ(gfnt_face_glyph_outline(face, 0, nullptr, nullptr, &outline, &error),
+      GFNT_OK) << (error.message ? error.message : "");
+  EXPECT_EQ(gfnt_outline_point_count(outline), 3u);
+  gfnt_outline_destroy(outline);
+  outline = nullptr;
+  EXPECT_EQ(gfnt_face_glyph_outline(face, 1, nullptr, nullptr, &outline, &error),
+      GFNT_ERR_CORRUPT);
+  EXPECT_NE(error.message, nullptr);
+  gfnt_outline_destroy(outline);
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
+}
+
 TEST(Glyf, AnIndexToLocFormatOtherThanZeroOrOneIsRefused) {
   // `head` has two loca formats and a font that names a third is broken in a
   // way that decides the width of every offset in the table. Read as either

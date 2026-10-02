@@ -42,9 +42,11 @@ still worth something: a stride samples pixels, and a strike's glyph *set* is
 what the whole index subtable walk decides, so a subtable read at the wrong
 offset moves a count that a sample could step over.
 
-**The population is two fonts, and that is the finding rather than a limitation
-of this file.** Nothing on the host has these tables and nothing else in the
-oracle image does either (`notes/font/EBLC.md` has the survey):
+**The population is thirty-three fonts of Debian's 5,927 sfnts, and that is the
+finding rather than a limitation of this file.** It read *two* for a while, which
+is what a survey reports when its candidate list came from the hypothesis being
+tested; `notes/font/EBLC.md` has both the number and how the first one was wrong.
+Two of the thirty-three carry what the rest do not:
 
   * `uming.ttc`, four faces over **one** `EBLC`/`EBDT` byte range, six strikes of
     27,123 glyphs. Index formats 1 and 2 with image formats 5 and 7, and 97.8% of
@@ -59,9 +61,11 @@ oracle image does either (`notes/font/EBLC.md` has the survey):
     skip: if a future fontTools reads it, this gate fails and says to move the
     font to the both-sides list.
 
-So the fixtures are not a supplement here, they are most of the evidence: index
-formats 3, 4 and 5 and image formats 1 and 2 appear **nowhere** in the
-population, and image format 6 appears only in the font the reference declines.
+So the fixtures still carry what the population does not: index formats **4 and
+5** appear nowhere in it, and image format 6 appears only in the font the
+reference declines. Index format 3 and image formats 1 and 2 *are* covered by real
+fonts - which the earlier two-font reading reported as appearing nowhere, and is
+the clearest measure of what that survey cost.
 `strike-formats.ttf` draws one design in six pairings and fontTools reads every
 one of them, which is what makes a fixture a measurement rather than a
 restatement of what this library did. The report prints the census of pairings

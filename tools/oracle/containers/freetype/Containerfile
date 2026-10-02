@@ -1,0 +1,113 @@
+# FreeType: the only reader of `EBDT` that is not fontTools, and the only reader
+# of `mona.ttf` at all.
+#
+# documentation/design.md sections 7.5 and 14.7. What this oracle is *for* is
+# narrower and sharper than "a second font engine", and the three jobs are worth
+# naming because each was unanswerable before it existed:
+#
+#   1. **`mona.ttf`'s pixels.** fontTools cannot parse that font's `EBLC`
+#      (fonttools#317), so its three strikes of image format 6 - the only format
+#      6 in Debian - were read by this library and by nothing else. A font no
+#      second reader has looked at is not evidence.
+#   2. **A composite's placement.** The specification documents
+#      `EbdtComponent.xOffset` as "Position of component left" and stops, which
+#      fixes the bytes and settles neither the coordinate space, the direction y
+#      runs, whether the component's own bearings also apply, nor what becomes of
+#      a component that does not fit. All four change the pixels. FreeType's
+#      `src/sfnt/ttsbit.c` is where this library's answer came from, so until now
+#      the rule and its only witness were the same source read once.
+#   3. **Per-glyph corruption (M11).** FreeType fails one glyph without
+#      condemning the strike, which is this library's rule too - so the claim
+#      "7,224 of mona.ttf's 7,225 glyphs read and the last one does not" is a
+#      claim a second engine can contradict.
+#
+# **This image carries no fonts, and that is deliberate.** The `fonttools` image
+# holds the corpus and `corpus.py` materialises it under `build/oracle/corpus`,
+# which is inside the tree every oracle container gets mounted read-only. So both
+# references read the *same file on the host* rather than their own copy of a
+# package, and a disagreement cannot be two different builds of one font. A
+# second copy of `uming.ttc` in here would be a second thing to keep in step for
+# no gain.
+#
+# The driver links **only FreeType**, as `unicode`'s ICU driver links only ICU:
+# the reference must not be able to reach the implementation it answers for.
+# Nothing of this library is built in here.
+FROM docker.io/library/debian@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
+
+# Why a source build and not `libfreetype-dev`:
+#
+#   * **The version is the pin, and it has to be a version whose source was
+#     read.** `src/bitmap/ebdt.c` cites `ttsbit.c` for the placement rule, and a
+#     citation is only worth something if the oracle is the code it cites.
+#     Debian 13 gives 2.13.3; 2.14.3 is current, and the compound loader is
+#     unchanged between them - bearings saved and restored across the recursion,
+#     `x_pos + dx`, `y_pos + dy`, one canvas, a component outside it refused.
+#     That the rule survived a minor-version bump is itself worth knowing, so the
+#     pin is the newer one and the comment in `ebdt.c` names both.
+#   * **An apt pin into a distribution expires; a source release does not.** The
+#     `fonttools` image accepts that cost because its answers are version-shaped
+#     anyway. This gate's disagreements would mean a defect in this library, so
+#     an expiring pin is the worst place to put one.
+#
+# Pinned by the SHA-256 of the release tarball. FreeType publishes a detached GPG
+# signature beside the release and no digest file, so this hash is one this
+# repository computed - but not from a single fetch: Savannah and SourceForge are
+# unrelated distribution paths and both serve these same bytes, which is what
+# makes the digest a corroborated fact rather than a note of what arrived once.
+# It is still not a signature check; raising the pin is the moment to verify
+# `freetype-2.x.y.tar.xz.sig` against the maintainer's key.
+ARG FREETYPE_VERSION=2.14.3
+ARG FREETYPE_SHA256=36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f
+
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl gcc make libc6-dev pkg-config zlib1g-dev xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+# `--without-harfbuzz` is not a size decision: HarfBuzz links FreeType, so
+# building it in would put a second consumer of these tables inside the
+# reference. `--without-png` and `--without-brotli` drop the dependencies for
+# image formats 17-19 and WOFF 2, neither of which this library reads, and every
+# dependency left out is one fewer thing to pin. zlib stays because FreeType
+# reads gzipped PCF with it, which phase 1b wants.
+# Two mirrors, tried in order, because Savannah refused every connection for the
+# length of one build the day this was written. The fallback is safe precisely
+# because the digest check below is not a formality: whichever host answers, the
+# bytes have to be the pinned ones or the build stops. A mirror list without a
+# digest would be the dangerous version of this.
+RUN cd /tmp \
+ && tarball="freetype-${FREETYPE_VERSION}.tar.xz" \
+ && (curl -fsSL --max-time 300 -o "$tarball" \
+        "https://download.savannah.gnu.org/releases/freetype/${tarball}" \
+     || curl -fsSL --max-time 300 -o "$tarball" \
+        "https://downloads.sourceforge.net/project/freetype/freetype2/${FREETYPE_VERSION}/${tarball}") \
+ && printf '%s  freetype-%s.tar.xz\n' "${FREETYPE_SHA256}" "${FREETYPE_VERSION}" | sha256sum -c - \
+ && tar xf "freetype-${FREETYPE_VERSION}.tar.xz" \
+ && cd "freetype-${FREETYPE_VERSION}" \
+ && ./configure --prefix=/usr/local \
+      --without-harfbuzz --without-png --without-brotli --without-bzip2 \
+      --with-zlib \
+ && make -j"$(nproc)" \
+ && make install \
+ && ldconfig \
+ && cd /tmp && rm -rf "/tmp/freetype-${FREETYPE_VERSION}" \
+      "/tmp/freetype-${FREETYPE_VERSION}.tar.xz"
+
+# The version probe and the strike driver, both compiled here against the headers
+# the oracle itself uses. Copied in and compiled rather than written with printf
+# in a RUN: the first draft of the `fonttools` image wrote its probe with printf
+# and the \x27 escapes reached the file literally, which is a quoting layer
+# between a check and the fact it checks.
+COPY freetype-version.c freetype-strikes.c /tmp/
+RUN gcc -O1 -Wall -Wextra -Werror -o /usr/local/bin/freetype-version \
+      /tmp/freetype-version.c $(pkg-config --cflags --libs freetype2) \
+ && gcc -O2 -Wall -Wextra -Werror -o /usr/local/bin/freetype-strikes \
+      /tmp/freetype-strikes.c $(pkg-config --cflags --libs freetype2) \
+ && rm /tmp/freetype-version.c /tmp/freetype-strikes.c \
+ && /usr/local/bin/freetype-version
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+ENTRYPOINT []
+CMD ["freetype-version"]

@@ -30,9 +30,26 @@
 # has (design.md section 14.7).
 fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0 Pillow 12.3.0	Every sfnt table's fields, every cmap's mapping, EBLC/EBDT strikes glyph by glyph, PCF and BDF bitmaps through Pillow, and the corpus of real fonts - including the whole Debian population of embedded bitmap strikes, which is two fonts
 
+# FreeType, built here, driver compiled inside the image against FreeType alone.
+#
+# What it answers today is the bitmap tables, and the three questions it answers
+# were each unanswerable before it: `mona.ttf`'s pixels, which fontTools cannot
+# reach at all; a composite's **placement**, which the specification does not
+# state and which this library took from `ttsbit.c`, so the rule and its only
+# witness were one source read once; and the set of glyphs a strike carries, over
+# a population where fontTools and this library disagreed about 13,249 of
+# Konatu.ttf's glyphs and FreeType broke the tie.
+#
+# The outline and coverage differentials (phase 1) are the other half of this
+# image's eventual job and are not written. The driver is one program per
+# question, so that is a new program beside `freetype-strikes`, not a change to it.
+#
+# This image carries **no fonts**: corpus.py materialises the fonttools image's
+# corpus under build/oracle/corpus, which is inside the tree every oracle
+# container mounts read-only, so both references read the same bytes on the host.
+freetype	localhost/ghoti-font-oracle-freetype:2.14.3	FreeType 2.14.3	EBLC/EBDT strikes glyph by glyph - the second reading of every composite's pixels, the only reading of mona.ttf besides this library's, and the only reading of a strike's own sbitLineMetrics (for a bitmap-only sfnt, which is the one shape where FreeType reports them)
+
 # Not here yet, and each is a phase rather than an afternoon:
-#   freetype   outline and coverage differentials (phase 1), built here,
-#              driver compiled inside the image against FreeType alone
 #   harfbuzz   hb-shape, already a batch tool (phase 3)
 #   pango      pango-view, for paragraph layout (phase 3b)
 #   xfonts     bdftopcf and psftools: a *second* reading of PCF, and the only
@@ -40,8 +57,7 @@ fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0 Pillow 1
 #              and BDF outright, so what is still missing is PSF, `.hex`, and an
 #              independent reading of PCF's encodings table - see bitmap_diff.py
 #
-# `freetype` has one more job than the list above gives it: it is the only reader
-# of `EBDT` outside fontTools, and fontTools cannot parse `mona.ttf`'s `EBLC` at
-# all. So that font's three strikes are read here and nowhere else, which
-# eblc_diff.py prints beside its skip. If the freetype image ever lands,
-# `mona.ttf` is the first thing to point it at.
+# `mona.ttf` was the first thing the freetype image was pointed at, and it read
+# all three strikes: 346,780 lines of protocol, of which 28 differ and none is a
+# pixel. What remains unread by any second reader is nothing in this population -
+# which is a sentence that could not be written before that image existed.

@@ -1824,9 +1824,9 @@ TEST(Ebdt, AnOffsetFormatsZeroLengthGlyphIsOneTheStrikeDoesNotCarry) {
   // glyph and carries no bitmap for it, a space rather than an absence. The reading
   // was wrong and the test is why it survived a differential - Konatu.ttf has
   // 13,249 such glyphs in each of its fourteen strikes, so this library reported
-  // 15,570 of its 15,572 glyphs as carried where fontTools says 2,323. The
-  // specification says the difference between consecutive offsets is the data
-  // size, and FreeType's format 1 and 3 arms comment the same check
+  // 15,570 of its 15,572 glyphs as carried where fontTools and FreeType both say
+  // 2,323. The specification says the difference between consecutive offsets is
+  // the data size, and FreeType's format 1 and 3 arms comment the same check
   // "missing glyph".
   //
   // What makes it checkable rather than a matter of taste is that an offset

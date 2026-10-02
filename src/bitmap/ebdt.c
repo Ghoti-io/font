@@ -164,12 +164,12 @@ static GFNT_Result gfnt_ebdt_read_metrics(GFNT_Reader * reader,
  * glyph that is present and has no pixels, and that was wrong. Konatu.ttf is
  * where it showed: 13,249 of its 15,572 glyphs are zero-length in every one of
  * its fourteen strikes, so this library reported each strike as carrying 15,570
- * glyphs where fontTools says 2,323. What settles it besides the reference is the
- * specification's wording for format 1 - the difference between consecutive
- * offsets is the data size, and there is no data when it is zero - and FreeType,
- * which spells the same comparison as `image_start == image_end` under the comment
- * "missing glyph" in the format 1 and format 3 arms of
- * `tt_sbit_decoder_load_image`.
+ * glyphs where fontTools and FreeType both say 2,323. Two independent references
+ * agreeing against one reading is as close to settled as this format gets, and
+ * the specification's wording for format 1 - the difference between consecutive
+ * offsets is the data size, and there is no data when it is zero - is the third
+ * voice. FreeType spells it as `image_start == image_end`, commented "missing
+ * glyph", in the format 1 and format 3 arms of `tt_sbit_decoder_load_image`.
  *
  * It also makes the two ways this format can say "nothing here" agree. A sparse
  * format says it by leaving the glyph out of its list, and that already reported

@@ -911,16 +911,20 @@ check-reader: ## Fail if anything under src/ reads font bytes around the reader
 ORACLE := tools/oracle
 ORACLE_RUN := python3 $(ORACLE)/oracle_run.py
 
-oracle-build: ## Build the fontTools oracle image from its pinned Containerfile
+oracle-build: ## Build both oracle images from their pinned Containerfiles
 	@printf "\n### Building the fontTools oracle image ###\n"
 	podman build -t ghoti-font-oracle-fonttools:4.66.0 \
 		-f $(ORACLE)/containers/fonttools/Containerfile \
 		$(ORACLE)/containers/fonttools
+	@printf "\n### Building the FreeType oracle image ###\n"
+	podman build -t ghoti-font-oracle-freetype:2.14.3 \
+		-f $(ORACLE)/containers/freetype/Containerfile \
+		$(ORACLE)/containers/freetype
 
-oracle-version: ## Print which reference would answer, and fail if none would
+oracle-version: ## Print which references would answer, and fail if one would not
 oracle-version:
-	@GHOTI_ORACLE_REQUIRED=1 $(ORACLE_RUN) fonttools -- true \
-		&& printf "the reference is reachable and matches its pin\n"
+	@GHOTI_ORACLE_REQUIRED=1 $(ORACLE_RUN) fonttools,freetype -- true \
+		&& printf "both references are reachable and match their pins\n"
 
 oracle-corpus: ## Copy the image's fonts to build/oracle/corpus for both sides
 	@python3 $(ORACLE)/corpus.py sfnt
@@ -964,9 +968,9 @@ check-oracle-bitmap: $(EXAMPLES)
 # time, and a strided default would leave the format's only real population
 # sampled for no saving worth having. `--stride` exists for a developer looking
 # at one font.
-check-oracle-eblc: ## Diff every EBLC/EBDT strike's glyphs and pixels against fontTools
+check-oracle-eblc: ## Diff every EBLC/EBDT strike against fontTools and FreeType both
 check-oracle-eblc: $(EXAMPLES)
-	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
 		python3 $(ORACLE)/eblc_diff.py --quiet
 
 check-oracle-bitmap-exhaustive: ## The same, over every glyph of every font

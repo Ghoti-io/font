@@ -610,8 +610,10 @@ in Debian carry one - Anonymous Pro's four and seven of Wine's core bitmap faces
 and what they state is a list of 28-byte `BitmapScale` records, each naming a ppem
 that is to be drawn by *scaling* another ppem's `EBLC` strike. Anonymous Pro asks
 for 7, 8 and 9 ppem from its 10 ppem strike; Wine's `system.ttf` names 21 of them,
-8 through 40, drawn from its 16 and 18 ppem strikes. The scaling rule itself is
-not in the specification, which says only that the substitute strike is to be used.
+8 through 40, drawn from its 16 and 18 ppem strikes. **FreeType does not read the
+table at all**, so fontTools is the only reference for its fields and there is no
+second reader of a scaled pixel anywhere - and the scaling rule itself is not in
+the specification, which says only that the substitute strike is to be used.
 
 **A composite's components are placed by their offsets and by nothing else.**
 Image formats 8 and 9 carry no rows: past the metrics - and, for format 8, past a
@@ -1125,6 +1127,7 @@ memory.** Fonts have three excellent oracles and one of them can also
 | paragraph layout | **Pango** `pango-view --output` positions for a paragraph corpus, with the line-breaking differences that come from Pango's ICU tailorings recorded as known | `tools/oracle/pango_diff.py` | `pango`, built here: `pango-view` from the pinned apt package, `C.UTF-8` pinned in the image |
 | bitmap formats | **Pillow**'s `PcfFontFile` and `BdfFontFile`, every pixel of every glyph; a *second* reading of PCF and the only reading of PSF and `.hex` would need `bdftopcf` and `psftools` | `tools/oracle/bitmap_diff.py`, `make check-oracle-bitmap` | `fonttools` (Pillow is pinned in it); the `xfonts` image is not built |
 | **embedded** bitmap strikes are read identically | **fontTools**' `EBLC`/`EBDT`: every strike's ppem both ways, depth and baseline, each strike's present/absent/corrupt glyph counts over *every* glyph, and every sampled glyph's box, bearings, advance and pixels | `tools/oracle/eblc_diff.py`, `make check-oracle-eblc` | `fonttools`; the image carries the **whole** Debian population of the table - 33 fonts, from a scan of all 589 font packages |
+| a **composite** strike glyph is composed the same way, and `mona.ttf` is read at all | **FreeType**'s `ttsbit.c` through a driver compiled in its own image: the same line protocol, so the same comparison. The only second reader of a composite's pixels - fontTools parses a component list and does not compose one - and the only reader of `mona.ttf` besides this library | `tools/oracle/eblc_diff.py`, `make check-oracle-eblc` | `freetype`; carries no fonts of its own, reading the corpus `corpus.py` materialised for both |
 | Type 1 | FreeType again, over fixtures converted from OFL fonts | `ft_outline.c` | `freetype` |
 
 **None of the three principal oracles is installed on the development
@@ -1365,8 +1368,8 @@ Three things the third one does that the other two do not, and each was paid for
 - **It does not select by file extension, which cost it five fonts.** It matched
   `*.ttf`, `*.otf`, `*.ttc` and `*.otc`, and Debian's bitmap-only sfnts are named
   **`.otb`** - so the one shape in this population that is *nothing but* embedded
-  strikes was the one shape the list could not see - the only faces in the
-  population with no outlines at all to fall back on. The same mistake in the same
+  strikes was the one shape the list could not see - and those five turn out to be
+  the only faces from which FreeType reports a strike's own baseline. The same mistake in the same
   spelling is what made an earlier survey report two fonts where there are 33. An sfnt says what it is in its first four bytes; the
   extension decides nothing, and every regular file under the roots is now offered
   to a magic check instead.
@@ -2119,9 +2122,10 @@ equidistant from 11 ppem, so the tie rule is a rule. What that cost in findings:
   2 real fonts had not.** `Konatu.ttf` has 13,249 zero-length glyphs in each of
   its fourteen strikes, and this library read a zero-length entry in an
   offset-array index format as a glyph that is *present with no pixels*: it
-  reported 15,570 of 15,572 glyphs carried where fontTools says 2,323. A unit test
-  asserted the wrong reading **in a comment explaining why it was right**, which is
-  why no gate had ever disagreed - `AGlyphOfZeroLengthIsASpaceAndKeepsItsAdvance`
+  reported 15,570 of 15,572 glyphs carried where fontTools and FreeType both say
+  2,323 - one reference disagreeing is a question, and two agreeing is an answer.
+  A unit test asserted the wrong reading **in a comment explaining why it was
+  right**, which is why no gate had ever disagreed - `AGlyphOfZeroLengthIsASpaceAndKeepsItsAdvance`
   is now `AnOffsetFormatsZeroLengthGlyphIsOneTheStrikeDoesNotCarry`. What settles
   it besides the reference is the specification - the difference between
   consecutive offsets is the data size - and FreeType's source, whose format 1 and
@@ -2217,15 +2221,56 @@ What that cost in findings, all of them about what a test could see:
   either being wrong alone.
 
 **The strike differential is built, as of 2026-10-01**: `eblc_diff.py` against
-fontTools over the whole Debian population of this table and every strike
-fixture. Until it, every claim in the two blocks above rested on fixtures this
-repository wrote and the reference reading them back.
+fontTools **and FreeType**, over the whole Debian population of this table and
+every strike fixture. Until it, every claim in the two blocks above rested on
+fixtures this repository wrote and a reference reading them back.
 
-Current figures, exhaustively - every glyph of every strike, not a stride:
-**17,085,462 fields over 40 faces, 0 disagreements**, across 36 fonts (33 real,
-3 fixtures). The population went from 2 fonts to 33 when it was surveyed properly,
-and the first run over the other 31 found a real defect in this library - the
-`Konatu.ttf` zero-length reading above.
+**17,085,462 fields over 40 faces against fontTools and 17,539,615 over 41
+against FreeType, 0 disagreements each**, exhaustively - every glyph of every
+strike, not a stride - over 36 fonts.
+
+**Two references, because each alone has a hole the other covers.** This is the
+whole argument for the second oracle image, and it is not redundancy:
+
+- fontTools parses every field and **composes no image**, so a composite's pixels
+  were this repository's arithmetic on *both* sides of the comparison - the one
+  thing a clean differential must not leave looking checked. FreeType composes,
+  and `ttsbit.c` is where this library's placement rule came from, so the rule now
+  has a reader that is not the document it was taken from. Every pixel of every
+  composite in `strike-composite.ttf` agrees.
+- fontTools **cannot parse `mona.ttf`** at all. FreeType reads all three strikes:
+  346,780 protocol lines, 28 of which differ and none a pixel. "Read by this
+  library and nobody else" is now true of nothing in the population.
+- FreeType in exchange answers less, and **says so in its own output** rather than
+  being exempted by a list here. It reports no per-strike bit depth; it reports a
+  strike's baseline only for a face it judges bitmap-only, because
+  `tt_size_select` prefers the scaled outline's for any other; it cannot separate
+  an absent glyph from a corrupt one, or - on a bitmap-only face - from an empty
+  one, because `ttgload.c` turns a missing glyph there into whitespace built from
+  `hmtx`; and it **fills a stated advance of zero** from `hmtx` for a renderer's
+  benefit. Each is a `census unanswered`, `census coarse` or `census fills` line
+  from the driver, and the differential narrows exactly what the reference
+  disclaims. A reference that stops disclaiming a key is compared on it from that
+  run onward, which is the direction this has to fail in.
+
+**Both arms of `FT_IS_SCALABLE` were a bug in the driver's first draft, and both
+printed plausible numbers.** It read `size->metrics.ascender` for every face and
+reported `ascent 11` for a mona.ttf strike whose byte says 10 - not a disagreement
+about `EBLC`, but one reader answering a different question in the same units. And
+it trusted a successful load to mean the strike carried the glyph, which on a
+bitmap-only face it does not. `FT_IS_SCALABLE` is FreeType's judgement rather than
+"has a `glyf` table": Wine's `system.ttf` has one and is bitmap-only by that test,
+which is how 191 glyphs of its 18 ppem strike arrived as whitespace the table does
+not contain.
+
+**The version is pinned to the source that was read.** `src/bitmap/ebdt.c` cites
+`ttsbit.c` for the composite placement, so the oracle is that code: 2.14.3, built
+from a tarball pinned by a SHA-256 that Savannah and SourceForge independently
+serve. The compound loader is unchanged from Debian's 2.13.3, which is worth
+knowing on its own, so the citation names both. A source release also has no
+expiry, unlike an apt pin into a distribution, and this is the one gate here whose
+disagreement would mean a defect in this library.
+
 - **It is a gate with no `-exhaustive` variant, deliberately.** Every other
   differential here samples because its corpus is 329 fonts; this one's is 36 and
   it runs in two minutes, so a strided default would leave the format's only real
@@ -2241,15 +2286,25 @@ and the first run over the other 31 found a real defect in this library - the
   pass, and selecting with the reference drops `mona.ttf` - the one font the two
   disagree about being *readable*. The same program picks the fixtures, so a new
   strike fixture joins the differential by existing.
-- **A font the reference declines is an assertion, not a skip.** `mona.ttf` is
-  named with the error fontTools must fail with. If a future fontTools reads it,
-  the gate fails and says to move the font to the both-sides population; if it
-  fails differently, the gate says that too. Both arms were planted and seen to
-  fire. What the report prints beside the skip is what *this* library read of it -
-  three strikes, 7,224 present and 1 corrupt each - because "skipped" and "read by
-  one reader and nobody else" are different facts, and the second is a claim with
-  no second opinion behind it. **That claim is still outstanding here**: nothing
-  but this library has read `mona.ttf`'s pixels.
+- **A font a reference declines is an assertion, not a skip**, and the table of
+  them is now per reference. `mona.ttf` is named with the error fontTools must fail
+  with; **FreeType's table is empty**, which is the assertion that every font in
+  the population must reach it. If a future fontTools reads `mona.ttf`, the gate
+  fails and says to move it to that reference's compared population; if it fails
+  differently, the gate says that too; if FreeType declines anything at all, the
+  gate names it. All of those arms were planted and seen to fire.
+  - The "ours alone" line - what *this* library read of a face nothing compared -
+    now prints only for a face **no** reference read. With one reference a decline
+    and an unread face were the same thing; with two they are not, and `mona.ttf`
+    is exactly the case that separates them, so printing "read by one reader and
+    nobody else" beside it would now be false.
+- **A strike-level key no face answered is a comparison that stopped happening**,
+  and that is a guard of its own. FreeType answers the baseline only for a
+  bitmap-only face, so that whole arm rests on which fonts the corpus holds - and
+  the `.otb` files were invisible to the corpus list until it stopped selecting by
+  file extension. Drop every bitmap-only face and the gate fails naming the
+  packages; drop only the `.otb` files and it does not, because Wine's fonts are
+  bitmap-only by FreeType's test too. Both of those were run.
 - **The report names the cells of the grid the run visited**, from fontTools'
   census: `(2,5)` 54,268 subtables, `(1,7)` 1,739, `(1,2)` 850, `(3,1)` 50, and
   one each of `(1,1)`, `(3,6)`, `(4,2)`, `(5,5)`, `(1,8)` and `(1,9)`. Index
@@ -2291,7 +2346,7 @@ sfnt corpus from 329 fonts to 485, and the embedded-strike corpus from 2 to 33:
 
 | gate | result, 2026-10-01, over the full population |
 | --- | ---: |
-| `check-oracle-eblc` | 40 faces of 36 fonts, 1,461,150 glyphs, 12,944,707 fields, **0** |
+| `check-oracle-eblc` | vs fontTools 40 faces, 17,085,462 fields, **0**; vs FreeType 41 faces, 17,539,615 fields, **0** |
 | `check-oracle-ttx` | 519 faces, 573,544 fields, **0** |
 | `check-oracle-cmap` | 485 fonts, 1,128,934 codepoints, **0** |
 | `check-oracle-glyf` | 473 fonts, 79,290 glyphs, 5,787,773 fields, **0** |

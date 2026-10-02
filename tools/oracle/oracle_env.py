@@ -77,6 +77,12 @@ class OracleUnavailable(Exception):
 # interpreter's version was incidental and the UCD it carried was the pin.
 PROBE = {
     "fonttools": (["fonttools-version"], "fontTools "),
+    # FreeType's probe is a compiled program for the same reason `unicode`'s ICU
+    # image compiles one: it reports `FT_Library_Version` from the shared object
+    # the driver itself links, which is the claim check_pin() needs. The ARG in
+    # the Containerfile says what the build was told to fetch, and an image is not
+    # its recipe.
+    "freetype": (["freetype-version"], "FreeType "),
 }
 
 _pins = None

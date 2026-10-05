@@ -10,7 +10,8 @@
  * alone cannot write the `GDEF` that changes which of its glyphs are skipped.
  *
  * With bit 0x80 of the options the first two thirds are Apple's `morx` and `feat`
- * instead of `GSUB` and `GPOS`; with bit 0x40 they are `kerx` and `kern`.
+ * instead of `GSUB` and `GPOS`; with bit 0x40 they are `kerx` and `kern`, the second
+ * is read as `ankr` too and the third as `trak`, at a point size the options give.
  *
  * The input is an options byte, a byte that splits the rest between the tables
  * (the first and second thirds, in the order `GSUB`, `GPOS`, `GDEF`: the byte
@@ -221,6 +222,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     }
     if (!gdef.empty()) {
       tables.push_back({GFNT_TAG('G', 'D', 'E', 'F'), gdef});
+      // The same bytes are read as tracking as well, and the second region as anchors.
+      tables.push_back({GFNT_TAG('t', 'r', 'a', 'k'), gdef});
+    }
+    if (!gpos.empty()) {
+      tables.push_back({GFNT_TAG('a', 'n', 'k', 'r'), gpos});
     }
   }
   else {
@@ -293,6 +299,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   shape_options.direction = (options & 0x10u) ? GFNT_DIRECTION_RTL
                                               : GFNT_DIRECTION_LTR;
   shape_options.features = features;
+  shape_options.point_size = (options & 0x40u) ? 6.0f + 5.0f * (float)(options & 0x07u) : 0.0f;
   shape_options.feature_count = feature_count;
 
   GFNT_ShapedRun first{};

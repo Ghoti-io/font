@@ -94,20 +94,14 @@
 /** The escape byte that introduces a two-byte DICT operator. */
 #define GFNT_CFF_DICT_ESCAPE 12
 
-/** One DICT operator and the operands that preceded it. */
-typedef struct GFNT_CffDictOp {
-  uint16_t op;                                  ///< 0-21, or 0x0c00 | n.
-  size_t count;                                 ///< Operands given.
-  int64_t values[GFNT_CFF_DICT_MAX_OPERANDS];   ///< 16.16.
-} GFNT_CffDictOp;
-
-/** What ::gfnt_cff_dict_walk() calls for each operator. */
-typedef GFNT_Result (*GFNT_CffDictVisit)(void * user,
-    const GFNT_CffDictOp * entry, GFNT_Error * error);
-
 GFNT_Result gfnt_cff_index_parse(GFNT_Reader * reader,
     GFNT_CffIndex * out_index, GFNT_Error * error) {
-  uint16_t count = 0;
+  return gfnt_cff_index_parse_ex(reader, false, GFNT_TAG_CFF, out_index, error);
+}
+
+GFNT_Result gfnt_cff_index_parse_ex(GFNT_Reader * reader, bool wide_count,
+    GFNT_Tag table, GFNT_CffIndex * out_index, GFNT_Error * error) {
+  uint32_t count = 0;
   uint8_t off_size = 0;
   size_t offsets;
   size_t data_base;
@@ -119,7 +113,17 @@ GFNT_Result gfnt_cff_index_parse(GFNT_Reader * reader,
     return GFNT_ERR_INVALID;
   }
   memset(out_index, 0, sizeof *out_index);
-  result = gfnt_read_u16(reader, &count);
+  if (wide_count) {
+    // CFF2 counts its INDEXes in four bytes, because a glyph count past 65,535 is
+    // a thing an OpenType font may have.
+    result = gfnt_read_u32(reader, &count);
+  }
+  else {
+    uint16_t narrow = 0;
+
+    result = gfnt_read_u16(reader, &narrow);
+    count = narrow;
+  }
   if (result != GFNT_OK) {
     return result;
   }
@@ -135,14 +139,14 @@ GFNT_Result gfnt_cff_index_parse(GFNT_Reader * reader,
     return result;
   }
   if (off_size < 1 || off_size > 4) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table,
         gfnt_reader_tell(reader) - 1, GFNT_GLYPH_NONE,
         "an INDEX whose offsets are neither one, two, three nor four bytes");
   }
   offsets = gfnt_reader_tell(reader);
   // count + 1 offsets: the extra one is where the data ends.
   if (!gfnt_reader_has(reader, ((size_t)count + 1) * off_size)) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, offsets,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table, offsets,
         GFNT_GLYPH_NONE,
         "an INDEX whose offset array does not fit in the table");
   }
@@ -161,7 +165,7 @@ GFNT_Result gfnt_cff_index_parse(GFNT_Reader * reader,
     last = (last << 8) | byte;
   }
   if (last < 1) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, offsets,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table, offsets,
         GFNT_GLYPH_NONE,
         "an INDEX whose final offset is below one, which the one-based "
         "numbering makes impossible");
@@ -172,7 +176,7 @@ GFNT_Result gfnt_cff_index_parse(GFNT_Reader * reader,
   out_index->data_base = data_base;
   out_index->end = data_base + last;
   if (out_index->end > reader->length || out_index->end < data_base) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, offsets,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table, offsets,
         GFNT_GLYPH_NONE, "an INDEX whose data runs past the end of the table");
   }
   return gfnt_reader_seek(reader, out_index->end);
@@ -339,8 +343,9 @@ static GFNT_Result gfnt_cff_real(GFNT_Reader * reader, int64_t * out_value,
  * than a struct-filling parse: the parser does not know what it is reading
  * until after it has read it.
  */
-static GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict,
-    GFNT_CffDictVisit visit, void * user, GFNT_Error * error) {
+GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict, GFNT_Tag table,
+    size_t max_operands, GFNT_CffDictVisit visit, void * user,
+    GFNT_Error * error) {
   GFNT_CffDictOp entry;
   GFNT_Result result;
 
@@ -399,7 +404,7 @@ static GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict,
       value = (-((int64_t)b0 - 251) * 256 - b1 - 108) * GFNT_FIXED_ONE;
     }
     else if (b0 == 31 || b0 == 255) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF,
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, table,
           gfnt_reader_tell(dict) - 1, GFNT_GLYPH_NONE,
           "a DICT byte the format reserves");
     }
@@ -422,15 +427,15 @@ static GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict,
       entry.count = 0;
       continue;
     }
-    if (entry.count >= GFNT_CFF_DICT_MAX_OPERANDS) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF,
+    if (entry.count >= max_operands) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, table,
           gfnt_reader_tell(dict), GFNT_GLYPH_NONE,
           "a DICT operator with more operands than the format allows");
     }
     entry.values[entry.count++] = value;
   }
   if (entry.count > 0) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table,
         gfnt_reader_tell(dict), GFNT_GLYPH_NONE,
         "a DICT ending in operands with no operator to take them");
   }
@@ -446,17 +451,18 @@ typedef struct GFNT_CffTopState {
 } GFNT_CffTopState;
 
 /** An operand as an offset, refusing a negative or absurd one. */
-static GFNT_Result gfnt_cff_offset_operand(const GFNT_CffDictOp * entry,
-    size_t which, size_t limit, size_t * out_offset, GFNT_Error * error) {
+GFNT_Result gfnt_cff_offset_operand(const GFNT_CffDictOp * entry,
+    GFNT_Tag table, size_t which, size_t limit, size_t * out_offset,
+    GFNT_Error * error) {
   int64_t value;
 
   if (which >= entry->count) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table, 0,
         GFNT_GLYPH_NONE, "a DICT operator with fewer operands than it takes");
   }
   value = entry->values[which] >> 16;
   if (value < 0 || (uint64_t)value > (uint64_t)limit) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table, 0,
         GFNT_GLYPH_NONE, "a DICT offset outside the table it points into");
   }
   *out_offset = (size_t)value;
@@ -508,7 +514,7 @@ static GFNT_Result gfnt_cff_top_visit(void * user,
       return GFNT_OK;
     }
     case GFNT_CFF_OP_CHARSET:
-      result = gfnt_cff_offset_operand(entry, 0, cff->length, &offset, error);
+      result = gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 0, cff->length, &offset, error);
       if (result != GFNT_OK) {
         return result;
       }
@@ -523,7 +529,7 @@ static GFNT_Result gfnt_cff_top_visit(void * user,
       }
       return GFNT_OK;
     case GFNT_CFF_OP_ENCODING:
-      result = gfnt_cff_offset_operand(entry, 0, cff->length, &offset, error);
+      result = gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 0, cff->length, &offset, error);
       if (result != GFNT_OK) {
         return result;
       }
@@ -536,7 +542,7 @@ static GFNT_Result gfnt_cff_top_visit(void * user,
       }
       return GFNT_OK;
     case GFNT_CFF_OP_CHARSTRINGS:
-      return gfnt_cff_offset_operand(entry, 0, cff->length,
+      return gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 0, cff->length,
           &state->cff->charstrings.offsets, error);
     case GFNT_CFF_OP_PRIVATE:
       if (entry->count < 2) {
@@ -544,12 +550,12 @@ static GFNT_Result gfnt_cff_top_visit(void * user,
             GFNT_GLYPH_NONE,
             "a Private DICT entry without both its size and its offset");
       }
-      result = gfnt_cff_offset_operand(entry, 0, cff->length,
+      result = gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 0, cff->length,
           &state->private_size, error);
       if (result != GFNT_OK) {
         return result;
       }
-      result = gfnt_cff_offset_operand(entry, 1, cff->length,
+      result = gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 1, cff->length,
           &state->private_offset, error);
       if (result != GFNT_OK) {
         return result;
@@ -592,10 +598,10 @@ static GFNT_Result gfnt_cff_top_visit(void * user,
       cff->is_cid = true;
       return GFNT_OK;
     case GFNT_CFF_OP_FDARRAY:
-      return gfnt_cff_offset_operand(entry, 0, cff->length,
+      return gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 0, cff->length,
           &cff->fdarray.offsets, error);
     case GFNT_CFF_OP_FDSELECT:
-      return gfnt_cff_offset_operand(entry, 0, cff->length, &cff->fdselect,
+      return gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 0, cff->length, &cff->fdselect,
           error);
     default:
       // Every other operator is metadata: names, the bounding box, the hinting
@@ -621,7 +627,7 @@ static GFNT_Result gfnt_cff_private_visit(void * user,
     case GFNT_CFF_OP_SUBRS:
       // Relative to the Private DICT, uniquely in this format. See the file
       // comment: every other offset in a CFF is from the table's start.
-      return gfnt_cff_offset_operand(entry, 0, state->limit,
+      return gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 0, state->limit,
           &state->subrs_offset, error);
     case GFNT_CFF_OP_DEFAULT_WIDTH_X:
       if (entry->count >= 1) {
@@ -658,7 +664,8 @@ static GFNT_Result gfnt_cff_private_parse(const GFNT_Reader * table,
   if (result != GFNT_OK) {
     return result;
   }
-  result = gfnt_cff_dict_walk(&dict, gfnt_cff_private_visit, &state, error);
+  result = gfnt_cff_dict_walk(&dict, GFNT_TAG_CFF, GFNT_CFF_DICT_MAX_OPERANDS,
+      gfnt_cff_private_visit, &state, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -760,8 +767,8 @@ GFNT_Result gfnt_cff_parse(const GFNT_Face * face, void * out,
   if (cff->major != 1) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_CFF, 0,
         GFNT_GLYPH_NONE,
-        "a CFF whose major version is not 1; CFF2 is a different format in a "
-        "different table and is not read at all (design.md section 16)");
+        "a CFF whose major version is not 1; a CFF2 is a different format in "
+        "a different table (design.md section 7.7)");
   }
   if (cff->header_size < 4) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 2,
@@ -809,7 +816,8 @@ GFNT_Result gfnt_cff_parse(const GFNT_Face * face, void * out,
   if (result != GFNT_OK) {
     return result;
   }
-  result = gfnt_cff_dict_walk(&top, gfnt_cff_top_visit, &state, error);
+  result = gfnt_cff_dict_walk(&top, GFNT_TAG_CFF, GFNT_CFF_DICT_MAX_OPERANDS,
+      gfnt_cff_top_visit, &state, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -894,7 +902,9 @@ bool gfnt_cff_glyph_bound(const GFNT_Face * face, size_t * out_bound) {
   const GFNT_Cff * cff = NULL;
 
   if (!gfnt_sfnt_find(face, GFNT_TAG_CFF)) {
-    return false;
+    // A CFF2 states its glyph count the same way, in its own CharStrings INDEX,
+    // and the callers want one answer to "what does the outline table imply".
+    return gfnt_cff2_glyph_bound(face, out_bound);
   }
   if (gfnt_face_cff(face, &cff, NULL) != GFNT_OK) {
     return false;
@@ -1448,9 +1458,9 @@ static GFNT_Result gfnt_cff_fd_visit(void * user, const GFNT_CffDictOp * entry,
         GFNT_GLYPH_NONE,
         "a Font DICT whose Private entry lacks its size or its offset");
   }
-  result = gfnt_cff_offset_operand(entry, 0, state->limit, &state->size, error);
+  result = gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 0, state->limit, &state->size, error);
   if (result == GFNT_OK) {
-    result = gfnt_cff_offset_operand(entry, 1, state->limit, &state->offset,
+    result = gfnt_cff_offset_operand(entry, GFNT_TAG_CFF, 1, state->limit, &state->offset,
         error);
   }
   state->stated = result == GFNT_OK;
@@ -1492,7 +1502,8 @@ GFNT_Result gfnt_cff_private_for_glyph(const GFNT_Face * face,
   }
   memset(&state, 0, sizeof state);
   state.limit = table.length;
-  result = gfnt_cff_dict_walk(&font_dict, gfnt_cff_fd_visit, &state, error);
+  result = gfnt_cff_dict_walk(&font_dict, GFNT_TAG_CFF, GFNT_CFF_DICT_MAX_OPERANDS,
+      gfnt_cff_fd_visit, &state, error);
   if (result != GFNT_OK) {
     return result;
   }

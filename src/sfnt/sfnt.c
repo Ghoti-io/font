@@ -301,6 +301,9 @@ GFNT_Producer gfnt_sfnt_producer(const GFNT_Face * face) {
   if (gfnt_sfnt_find(face, GFNT_TAG_CFF)) {
     return GFNT_PRODUCER_CFF;
   }
+  if (gfnt_sfnt_find(face, GFNT_TAG_CFF2)) {
+    return GFNT_PRODUCER_CFF2;
+  }
   return GFNT_PRODUCER_NONE;
 }
 

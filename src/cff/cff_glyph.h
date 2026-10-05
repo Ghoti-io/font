@@ -36,6 +36,7 @@
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/outline.h>
 #include "cff.h"
+#include "cff2.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -99,6 +100,34 @@ GFNT_Result gfnt_cff_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
  * The CFF half of ::gfnt_face_glyph_charstring_metrics().
  */
 GFNT_Result gfnt_cff_glyph_metrics(const GFNT_Face * face, uint32_t glyph,
+    GFNT_CharstringMetrics * out_metrics, GFNT_Error * error);
+
+/**
+ * Draw one CFF2 glyph into @p outline at a location.
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param variation The location (normalised 2.14), or NULL for the default.
+ *   Already validated by the caller against the face's axes.
+ * @param outline Receives the contours, appended.
+ * @param out_metrics Receives what the run counted, or NULL. A CFF2 charstring
+ *   states no advance, so `width_stated` is false.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_UNSUPPORTED for a `FontMatrix` that disagrees with
+ *   `head.unitsPerEm`; ::GFNT_ERR_INVALID for a glyph the font does not have;
+ *   ::GFNT_ERR_CORRUPT; ::GFNT_ERR_LIMIT; or ::GFNT_ERR_OOM.
+ */
+GFNT_Result gfnt_cff2_load(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_CharstringMetrics * out_metrics, GFNT_Error * error);
+
+/** One CFF2 glyph's charstring bytes, borrowed; the CFF2 half of ::gfnt_face_glyph_charstring(). */
+GFNT_Result gfnt_cff2_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
+    GFNT_CharstringType * out_type, const uint8_t ** out_bytes,
+    size_t * out_length, GFNT_Error * error);
+
+/** What a CFF2 glyph's charstring counted, by running it at the default location. */
+GFNT_Result gfnt_cff2_glyph_metrics(const GFNT_Face * face, uint32_t glyph,
     GFNT_CharstringMetrics * out_metrics, GFNT_Error * error);
 
 GFNT_Result gfnt_cff_is_composite(const GFNT_Face * face, uint32_t glyph,

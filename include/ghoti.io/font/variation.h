@@ -109,8 +109,10 @@ typedef struct GFNT_NamedInstance {
 /**
  * @brief Whether the face carries an `fvar`.
  *
- * Says nothing about whether this library can *move* its outlines: a CFF2 face
- * has an `fvar` and no `gvar`, and a variation is refused for it by name.
+ * Says nothing about whether this library can *move* its outlines: a `glyf` face
+ * moves through `gvar`, a CFF2 face through its blend operators, and a face with
+ * an `fvar` and neither has a design space and outlines that do not move in it, so
+ * a variation is refused for it by name.
  *
  * @param face The face, or NULL.
  * @return true if the table directory has an `fvar`.

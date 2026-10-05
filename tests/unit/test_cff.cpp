@@ -1381,23 +1381,24 @@ TEST(Cff, ACffWhoseMajorVersionIsNotOneIsRefusedByName) {
   GFNT_Error error{};
   EXPECT_EQ(gfnt_face_glyph_outline(font.face, 0, nullptr, nullptr, &outline,
       &error), GFNT_ERR_UNSUPPORTED);
-  names(error, "CFF2 is a different format");
+  names(error, "a CFF2 is a different format");
 }
 
-TEST(Cff, ACff2TableIsNotReadAtAll) {
-  // Section 16 defers CFF2, and the refusal says which table it saw rather than
-  // reporting that the face has no outlines.
+TEST(Cff, ACffTableUnderTheCff2TagIsRefusedByName) {
+  // A face with a `CFF2` table is read as CFF2 (test_cff2.cpp), and these bytes are
+  // a CFF: their major version is 1, which a CFF2 reader refuses by saying so and
+  // not by mistaking one format for the other.
   CffSpec spec;
   spec.charstrings = {square()};
   Font font(build_cff(spec), 1, GFNT_TAG('C', 'F', 'F', '2'));
   ASSERT_EQ(font.result, GFNT_OK);
 
-  EXPECT_FALSE(gfnt_face_has_outlines(font.face));
+  EXPECT_TRUE(gfnt_face_has_outlines(font.face));
   GFNT_Outline * outline = nullptr;
   GFNT_Error error{};
   EXPECT_EQ(gfnt_face_glyph_outline(font.face, 0, nullptr, nullptr, &outline,
       &error), GFNT_ERR_UNSUPPORTED);
-  names(error, "CFF2 charstrings");
+  names(error, "major version is not 2");
 }
 
 TEST(Cff, ATopDictIndexWithNoEntriesDescribesNoFont) {

@@ -758,6 +758,24 @@ def main():
     write_pair(corpus / "vartables/avar2-no-store.seed", 0x31, 0x00,
                avar2_table([[(-16384, -16384), (0, 0), (16384, 16384)], []], b""))
 
+    # CFF2 for fuzz_cff2: the fixture's own table, which fontTools wrote, under
+    # options that pick the axis count (bit 0) and tighten no cap, then the cap
+    # variants. The table is read out of the committed fixture so the seed cannot
+    # drift from the font it was cut from.
+    cff2_font = (root / "tests/data/fonts/variable-cff2.otf").read_bytes()
+    count = struct.unpack(">H", cff2_font[4:6])[0]
+    cff2_table = b""
+    for i in range(count):
+        entry = cff2_font[12 + 16 * i:28 + 16 * i]
+        if entry[:4] == b"CFF2":
+            offset, length = struct.unpack(">II", entry[8:16])
+            cff2_table = cff2_font[offset:offset + length]
+    for label, options in (("fixture", 0x01), ("one-axis", 0x00),
+                           ("few-points", 0x13), ("shallow", 0x45),
+                           ("few-ops", 0x69)):
+        write(corpus / ("cff2/%s.seed" % label), options, cff2_table)
+    write(corpus / "cff2/truncated.seed", 0x01, cff2_table[:len(cff2_table) // 2])
+
     # Paths for the rasteriser, which reads no font at all.
     write_pair(corpus / "raster/square.seed", 0x00, 0x00, raster_points([
         [(0, 0, 0), (256, 0, 0), (256, 256, 0), (0, 256, 0)]]))

@@ -57,6 +57,7 @@ LISTS = {
     "bitmap": "fonttools-corpus-bitmap",
     "ebdt": "fonttools-corpus-ebdt",
     "variable": "fonttools-corpus-variable",
+    "cff2": "fonttools-corpus-cff2",
 }
 
 

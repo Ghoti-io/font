@@ -238,11 +238,11 @@ GFNT_API void gfnt_outline_clear(GFNT_Outline * outline);
  *   ::GFNT_ERR_INVALID, as is a variation of coordinates promised and not given.
  * - **A variation that moves nothing - every coordinate zero - is the default
  *   instance** and is answered as one, for any face.
- * - Anything else needs `glyf` outlines and a `gvar`. A face with charstring
- *   outlines is ::GFNT_ERR_UNSUPPORTED (its variations are CFF2's blend
- *   operators, which are not read), and so is a `glyf` face with an `fvar` and no
- *   `gvar` - for **every** glyph, an empty one included, so that the answer does
- *   not depend on which glyph a caller tried first.
+ * - Anything else needs `glyf` outlines and a `gvar`, or `CFF2` outlines, whose
+ *   `blend` operators move them. A face with `CFF ` or Type 1 outlines is
+ *   ::GFNT_ERR_UNSUPPORTED (they have no blend operators), and so is a `glyf` face
+ *   with an `fvar` and no `gvar` - for **every** glyph, an empty one included, so
+ *   that the answer does not depend on which glyph a caller tried first.
  * - A `gvar` that contradicts itself condemns **the glyph** it contradicts
  *   (::GFNT_ERR_CORRUPT, M11) and not the face: the next glyph and the default
  *   instance still answer. A tuple that does not apply at the location is not

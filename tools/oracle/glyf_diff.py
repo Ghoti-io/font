@@ -155,8 +155,8 @@ def stated_box(text, scale):
     invented a fraction the file cannot hold and silently rounding it away is
     how that stops being visible.
     """
-    if text == "empty":
-        return "empty"
+    if text in ("empty", "none"):
+        return text
     out = []
     for number in text.split():
         value = int(number)

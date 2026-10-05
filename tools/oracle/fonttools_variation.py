@@ -177,6 +177,24 @@ def draw(font, order, glyph_set, stride, first):
             print("glyph %d path: %s" % (index, line))
 
 
+def draw_cff2(order, glyph_set, stride, first):
+    """Every sampled glyph's path at a CFF2 glyph set's location.
+
+    A CFF2 glyph has no components and no matched points, so the glyph set's own
+    `draw()` is the whole story - and it is fontTools' interpreter, `blend` and all.
+    """
+    for index in range(first, len(order), stride):
+        name = order[index]
+        try:
+            pen = Path(None)
+            glyph_set[name].draw(pen)
+        except Exception as why:  # noqa: BLE001 - the reason is the output
+            print("glyph %d: reference refused %s" % (index, type(why).__name__))
+            continue
+        for line in pen.lines:
+            print("glyph %d path: %s" % (index, line))
+
+
 def main(argv):
     """Usage: fonttools_variation.py <font> <face> <stride> <first> <spec>...
 
@@ -197,11 +215,15 @@ def main(argv):
     first = int(argv[4])
 
     font = TTFont(path, fontNumber=face, lazy=True)
-    if "glyf" not in font or "gvar" not in font:
+    cff2 = "CFF2" in font and "fvar" in font
+    if not cff2 and ("glyf" not in font or "gvar" not in font):
         print("outlines: no gvar")
         return 0
     for tag, low, default, high in axes_of(font):
         print("axis: %s %r %r %r" % (tag, low, default, high))
+    # Said so that the other side can hold a CFF2 font to the tolerance that kind
+    # of outline has: see var_diff.py's BLEND_ALLOWANCE.
+    print("kind: %s" % ("CFF2" if cff2 else "glyf"))
     order = font.getGlyphOrder()
     print("outlines: %d glyph(s), stride %d from %d"
           % (len(order), stride, first))
@@ -219,7 +241,10 @@ def main(argv):
         else:
             used = location
         glyph_set = font.getGlyphSet(location=used, normalized=True)
-        draw(font, order, glyph_set, stride, first)
+        if cff2:
+            draw_cff2(order, glyph_set, stride, first)
+        else:
+            draw(font, order, glyph_set, stride, first)
     print("outlines: %d inexact coordinate(s)" % INEXACT[0])
     return 0
 

@@ -73,6 +73,35 @@ GFNT_Result gfnt_ivs_delta(const GFNT_Face * face, const GFNT_Reader * store,
     uint32_t outer, uint32_t inner, int64_t * out_delta, GFNT_Error * error);
 
 /**
+ * The scalars of every region one item variation data uses, at a location.
+ *
+ * What `CFF2`'s `blend` needs and nothing else does: it has no items to look up
+ * and sums deltas it carries itself, so what it asks of the store is *which
+ * regions the data names and how far inside each the location is*.
+ *
+ * @param face The face, whose `fvar` fixes the axis count the store must agree with.
+ * @param store A reader whose extent begins at the store.
+ * @param table The table the store is in, for the diagnostic.
+ * @param coordinates The location: normalised 2.14, in `fvar` order, or NULL.
+ * @param coordinate_count How many were given; axes past it are zero.
+ * @param data_index Which ItemVariationData: `CFF2`'s `vsindex`.
+ * @param out_scalars Receives one scalar per region the data names, in the data's
+ *   order, each with ::GFNT_GVAR_FRACTION_BITS fractional bits. Written only on
+ *   success.
+ * @param capacity How many @p out_scalars holds.
+ * @param out_count Receives how many the data names. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_CORRUPT for a store that contradicts itself or an
+ *   index it does not have; ::GFNT_ERR_UNSUPPORTED for a store format other than
+ *   1; ::GFNT_ERR_LIMIT for a data with more regions than @p capacity; or
+ *   ::GFNT_ERR_OOM.
+ */
+GFNT_Result gfnt_ivs_region_scalars(const GFNT_Face * face,
+    const GFNT_Reader * store, GFNT_Tag table, const GFNT_F2Dot14 * coordinates,
+    size_t coordinate_count, uint32_t data_index, int64_t * out_scalars,
+    size_t capacity, size_t * out_count, GFNT_Error * error);
+
+/**
  * Which row a glyph (or any other index) is in, through a delta-set index map.
  *
  * An index past the map's end takes the **last** entry, which is the format's own

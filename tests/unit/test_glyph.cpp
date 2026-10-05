@@ -163,12 +163,11 @@ TEST(Outlines, AreFoundWhenTheirTablesAreBothThere) {
   EXPECT_FALSE(gfnt_face_has_outlines(nullptr));
 }
 
-TEST(Outlines, ACff2OnlyFaceHasNoneThisLibraryReads) {
-  // Section 16 defers CFF2, and this is now the *only* reason a charstring face
-  // answers no: `CFF ` says yes, so a test that could not tell "deferred" from
-  // "not implemented yet" is one this pair of tests no longer has.
+TEST(Outlines, ACff2OnlyFaceHasOutlines) {
+  // CFF2 is read, so its face answers yes like `CFF ` does - the same answer for
+  // the same reason, which is what the history above is about.
   Font font({stub(GFNT_TAG('C', 'F', 'F', '2'))}, GFNT_FLAVOUR_CFF);
-  EXPECT_FALSE(gfnt_face_has_outlines(font.face));
+  EXPECT_TRUE(gfnt_face_has_outlines(font.face));
 }
 
 TEST(Strikes, AFaceWithNoBitmapTablesHasNone) {

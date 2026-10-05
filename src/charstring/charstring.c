@@ -63,6 +63,15 @@
  */
 #define GFNT_CS_STACK 48
 
+/** The stack a CFF2 charstring may fill, which is what `blend` needs room for. */
+#define GFNT_CS_STACK_CFF2 513
+
+/** The most regions one `blend` may scale its deltas by. */
+#define GFNT_CS_MAX_REGIONS 64
+
+/** The fractional bits of a region scalar: 2^24 is one. */
+#define GFNT_CS_SCALAR_BITS 24
+
 /**
  * 2^16, as a multiplier rather than a shift.
  *
@@ -116,6 +125,8 @@ static int64_t gfnt_cs_scalable(int64_t value) {
 #define GFNT_CS_RRCURVETO 8
 #define GFNT_CS_CLOSEPATH 9
 #define GFNT_CS_CALLSUBR 10
+#define GFNT_CS_VSINDEX 15
+#define GFNT_CS_BLEND 16
 #define GFNT_CS_RETURN 11
 #define GFNT_CS_ESCAPE 12
 #define GFNT_CS_HSBW 13
@@ -185,8 +196,14 @@ typedef struct GFNT_CsState {
   GFNT_Outline * outline;            ///< Where contours go.
   GFNT_Error * error;                ///< Where a refusal is recorded.
 
-  int64_t stack[GFNT_CS_STACK];      ///< Operands, 16.16.
+  int64_t stack[GFNT_CS_STACK_CFF2]; ///< Operands, 16.16.
   size_t count;                      ///< How many are on it.
+  size_t stack_limit;                ///< How many it may hold: 48, or 513 for CFF2.
+  bool cff2;                         ///< Whether this is CFF2's Type 2.
+  uint32_t vsindex;                  ///< CFF2: the ItemVariationData blends use.
+  bool scalars_valid;                ///< Whether `scalars` is for `vsindex`.
+  size_t scalar_count;               ///< How many regions it names.
+  int64_t scalars[GFNT_CS_MAX_REGIONS]; ///< Their scalars, 24 fractional bits.
   int64_t transient[GFNT_CS_TRANSIENT]; ///< `put` and `get`.
 
   int64_t x;                         ///< Current point, 16.16.
@@ -245,7 +262,7 @@ static GFNT_Result gfnt_cs_fail(GFNT_CsState * state, GFNT_Result result,
 
 /** Push one operand, or refuse a stack that a valid charstring cannot fill. */
 static GFNT_Result gfnt_cs_push(GFNT_CsState * state, int64_t value) {
-  if (state->count >= GFNT_CS_STACK) {
+  if (state->count >= state->stack_limit) {
     return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, 0,
         "more operands than a charstring's stack holds");
   }
@@ -699,7 +716,7 @@ static GFNT_Result gfnt_cs_arithmetic(GFNT_CsState * state, uint8_t op,
       }
       n = (size_t)b;
       if (n > 1) {
-        int64_t copy[GFNT_CS_STACK];
+        int64_t copy[GFNT_CS_STACK_CFF2];
         size_t base = state->count - n;
         size_t at;
         int64_t turn = shift % (int64_t)n;
@@ -789,6 +806,85 @@ static GFNT_Result gfnt_cs_number(GFNT_CsState * state, uint8_t b0,
   }
   *cursor = at;
   return gfnt_cs_push(state, value);
+}
+
+/**
+ * Make the scalars of the current `vsindex` available to a `blend`.
+ *
+ * Fetched when first needed and again after each `vsindex`, because a charstring
+ * that never blends - most of a font's glyphs at its default location - should not
+ * pay to read the store.
+ */
+static GFNT_Result gfnt_cs_scalars(GFNT_CsState * state, size_t offset) {
+  const GFNT_CharstringBlend * blend = state->ctx->blend;
+  GFNT_Result result;
+
+  if (state->scalars_valid) {
+    return GFNT_OK;
+  }
+  if (!blend || !blend->scalars) {
+    return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, offset,
+        "a blend or vsindex in a font that has no variation store to blend with");
+  }
+  result = blend->scalars(blend->user, state->vsindex, state->scalars,
+      GFNT_CS_MAX_REGIONS, &state->scalar_count);
+  if (result != GFNT_OK) {
+    return gfnt_cs_fail(state, result == GFNT_ERR_OOM ? result : GFNT_ERR_CORRUPT,
+        offset, "a vsindex the font's variation store has no data for, or one "
+        "with more regions than a blend may scale by");
+  }
+  state->scalars_valid = true;
+  return GFNT_OK;
+}
+
+/**
+ * `blend`: @p n values and then, for each, one delta per region of the current
+ * `vsindex`, collapse to the @p n values with their deltas added in.
+ *
+ * Each delta is a 16.16 number and each scalar carries 24 fractional bits, so a
+ * product has 40 and the sum of a value's are rounded **once**, half away from
+ * zero, to the 16.16 the stack holds - the rule every other delta in this library
+ * follows, and the reason a blend at a location is the same number however many
+ * regions contribute.
+ */
+static GFNT_Result gfnt_cs_blend(GFNT_CsState * state, size_t offset) {
+  int64_t n;
+  size_t k;
+  size_t base;
+  GFNT_Result result;
+
+  if (state->count < 1) {
+    return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, offset,
+        "a blend with no operand count");
+  }
+  result = gfnt_cs_scalars(state, offset);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  k = state->scalar_count;
+  n = state->stack[--state->count] >> 16;
+  if (n < 0 || (uint64_t)n > state->count
+      || (uint64_t)n * (k + 1u) > state->count) {
+    return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, offset,
+        "a blend whose operands are fewer than its count says: it takes each "
+        "value and one delta per region for it");
+  }
+  base = state->count - (size_t)n * (k + 1u);
+  for (size_t i = 0; i < (size_t)n; ++i) {
+    int64_t sum = 0;
+
+    for (size_t j = 0; j < k; ++j) {
+      // A delta is at most 2^31 in a 16.16 operand and a scalar at most 2^24, so
+      // a term is at most 2^55 and sixty-four of them cannot leave an int64.
+      sum += (int64_t)gfnt_saturate32(
+                 state->stack[base + (size_t)n + i * k + j])
+          * state->scalars[j];
+    }
+    state->stack[base + i] = gfnt_add_clamp64(state->stack[base + i],
+        gfnt_round_shift(sum, GFNT_CS_SCALAR_BITS));
+  }
+  state->count = base + (size_t)n;
+  return GFNT_OK;
 }
 
 static GFNT_Result gfnt_cs_run_frame(GFNT_CsState * state,
@@ -1302,7 +1398,45 @@ static GFNT_Result gfnt_cs_run_frame(GFNT_CsState * state,
       case GFNT_CS_RETURN:
         return GFNT_OK;
 
+      case GFNT_CS_VSINDEX:
+        if (!state->cff2) {
+          return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor - 1,
+              "vsindex, which only a CFF2 charstring has");
+        }
+        if (state->count < 1) {
+          return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor - 1,
+              "a vsindex with no operand");
+        }
+        // It takes one operand and leaves the rest of the stack alone: it is not a
+        // stack-clearing operator, and an operand pushed before it is still there.
+        {
+          int64_t chosen = state->stack[--state->count] >> 16;
+
+          if (chosen < 0 || chosen > 0xFFFF) {
+            return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor - 1,
+                "a vsindex that is not a possible ItemVariationData index");
+          }
+          state->vsindex = (uint32_t)chosen;
+          state->scalars_valid = false;
+        }
+        break;
+
+      case GFNT_CS_BLEND:
+        if (!state->cff2) {
+          return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor - 1,
+              "blend, which only a CFF2 charstring has");
+        }
+        result = gfnt_cs_blend(state, cursor - 1);
+        if (result != GFNT_OK) {
+          return result;
+        }
+        break;
+
       case GFNT_CS_ENDCHAR:
+        if (state->cff2) {
+          return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor - 1,
+              "endchar, which CFF2 removed: a charstring ends where its bytes do");
+        }
         if (state->type == GFNT_CHARSTRING_TYPE2) {
           if (!state->width_done) {
             state->width_done = true;
@@ -1538,6 +1672,16 @@ GFNT_Result gfnt_charstring_run_nested(GFNT_CharstringType type,
         "Type 1 nor Type 2");
   }
   memset(&state, 0, sizeof state);
+  if (type == GFNT_CHARSTRING_CFF2) {
+    // CFF2 is Type 2 with differences, so everything that asks "is this Type 2"
+    // keeps getting yes; what differs is read from `cff2`.
+    state.cff2 = true;
+    type = GFNT_CHARSTRING_TYPE2;
+  }
+  state.stack_limit = state.cff2 ? GFNT_CS_STACK_CFF2 : GFNT_CS_STACK;
+  if (context->blend) {
+    state.vsindex = context->blend->default_vsindex;
+  }
   state.type = type;
   state.ctx = context;
   state.outline = outline;
@@ -1550,6 +1694,11 @@ GFNT_Result gfnt_charstring_run_nested(GFNT_CharstringType type,
     gfnt_limits_default(&state.limits);
   }
   state.width = context->default_width;
+  if (state.cff2) {
+    // CFF2 states no width: the advance is `hmtx`'s, so there is none to find and
+    // no operator that may carry one.
+    state.width_done = true;
+  }
   if (context->limits) {
     // One source of truth for this run: the caps a caller states in the context
     // are the caps the outline enforces on the points this run adds. Leaving the
@@ -1592,6 +1741,7 @@ const char * gfnt_charstring_type_string(GFNT_CharstringType type) {
   switch (type) {
     case GFNT_CHARSTRING_TYPE2: return "Type 2";
     case GFNT_CHARSTRING_TYPE1: return "Type 1";
+    case GFNT_CHARSTRING_CFF2: return "CFF2";
     case GFNT_CHARSTRING_TYPE_COUNT: break;
   }
   return "unknown";
@@ -1608,8 +1758,8 @@ const char * gfnt_charstring_type_string(GFNT_CharstringType type) {
  * caller divides the bytes after it as a mask - so one reserved byte in a Type 1
  * charstring would make every operator printed after it fiction.
  */
-static const char * gfnt_cs_op_name(GFNT_CharstringType type, uint8_t op,
-    uint8_t op2) {
+static const char * gfnt_cs_op_name(GFNT_CharstringType type, bool cff2,
+    uint8_t op, uint8_t op2) {
   const bool t1 = type == GFNT_CHARSTRING_TYPE1;
 
   if (op != GFNT_CS_ESCAPE) {
@@ -1642,6 +1792,9 @@ static const char * gfnt_cs_op_name(GFNT_CharstringType type, uint8_t op,
       case GFNT_CS_VVCURVETO: return t1 ? "reserved" : "vvcurveto";
       case GFNT_CS_HHCURVETO: return t1 ? "reserved" : "hhcurveto";
       case GFNT_CS_CALLGSUBR: return t1 ? "reserved" : "callgsubr";
+      // CFF2's two, which Type 2 and Type 1 both reserve.
+      case GFNT_CS_VSINDEX: return cff2 ? "vsindex" : "reserved";
+      case GFNT_CS_BLEND: return cff2 ? "blend" : "reserved";
       default: return "reserved";
     }
   }
@@ -1704,8 +1857,9 @@ GFNT_Result gfnt_charstring_dump(GFNT_CharstringType type,
   size_t cursor = 0;
   size_t stems = 0;
   size_t pending = 0;
-  int64_t operands[GFNT_CS_STACK];
+  int64_t operands[GFNT_CS_STACK_CFF2];
   bool called_subr = false;
+  const bool cff2 = type == GFNT_CHARSTRING_CFF2;
   // What a run of this program reported, when the caller has one. It is the
   // stem count that decides every mask's width, and a subroutine may have
   // declared some of them.
@@ -1718,6 +1872,10 @@ GFNT_Result gfnt_charstring_dump(GFNT_CharstringType type,
   if (fprintf(out, "charstring %s %zu bytes\n",
       gfnt_charstring_type_string(type), length) < 0) {
     return GFNT_ERR_IO;
+  }
+  if (cff2) {
+    // Everything below asks whether the language is Type 2, and CFF2's is.
+    type = GFNT_CHARSTRING_TYPE2;
   }
   while (cursor < length) {
     size_t at = cursor;
@@ -1764,7 +1922,7 @@ GFNT_Result gfnt_charstring_dump(GFNT_CharstringType type,
         }
         cursor += 4;
       }
-      if (pending < GFNT_CS_STACK) {
+      if (pending < (cff2 ? GFNT_CS_STACK_CFF2 : GFNT_CS_STACK)) {
         operands[pending++] = value;
       }
       continue;
@@ -1773,7 +1931,7 @@ GFNT_Result gfnt_charstring_dump(GFNT_CharstringType type,
       if (cursor >= length) { break; }
       op2 = bytes[cursor++];
     }
-    if (fprintf(out, "%zu %s", at, gfnt_cs_op_name(type, op, op2)) < 0) {
+    if (fprintf(out, "%zu %s", at, gfnt_cs_op_name(type, cff2, op, op2)) < 0) {
       return GFNT_ERR_IO;
     }
     for (index = 0; index < pending; index++) {

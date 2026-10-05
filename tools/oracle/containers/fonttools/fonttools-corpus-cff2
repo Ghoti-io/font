@@ -1,0 +1,10 @@
+#!/bin/sh
+# The CFF2 variable-font corpus: every sfnt in this image with a design space and
+# outlines that are CFF2 charstrings.
+#
+# `fvar` names the axes and `CFF2` holds the glyphs, whose blend operators are what
+# moves them along those axes - the counterpart of fonttools-corpus-variable, which
+# asks for `gvar` and so never lists a font whose outlines are not TrueType.
+#
+# A wrapper, not a program, for the reason fonttools-corpus-variable is one.
+exec fonttools-corpus --require fvar,CFF2 "$@"

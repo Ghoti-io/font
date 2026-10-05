@@ -422,7 +422,8 @@ static int32_t gfnt_metrics_add(int64_t base, int64_t delta) {
  * How far a glyph's advance moves at a location.
  *
  * `HVAR` when the font has one, and the difference of `gvar`'s first two phantom
- * points when it does not, which is FreeType's order and fontTools'.
+ * points when it does not, which is FreeType's order and fontTools'. A CFF2 face
+ * has no phantom points, so without an `HVAR` its advances do not move.
  */
 static GFNT_Result gfnt_metrics_advance_delta(const GFNT_Face * face,
     uint32_t glyph, const GFNT_Variation * variation, int64_t * out_delta,
@@ -434,6 +435,14 @@ static GFNT_Result gfnt_metrics_advance_delta(const GFNT_Face * face,
   if (gfnt_face_has_table(face, GFNT_TAG_HVAR)) {
     return gfnt_hvar_delta(face, glyph, GFNT_HVAR_ADVANCE, variation->coords,
         variation->count, out_delta, error);
+  }
+  if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF2) {
+    // A CFF2 charstring states no width and the format has no phantom points, so
+    // `HVAR` is its *only* way to vary an advance: a font without one says its
+    // advances do not move, which is an answer and not a gap. FreeType and
+    // fontTools agree, and `variable-cff2.otf` is the font that shows it.
+    *out_delta = 0;
+    return GFNT_OK;
   }
   if (!gfnt_face_has_table(face, GFNT_TAG_GVAR)) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,

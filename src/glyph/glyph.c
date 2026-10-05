@@ -92,9 +92,7 @@ bool gfnt_face_has_outlines(const GFNT_Face * face) {
   // same sentence - and ::gfnt_face_strike_at() then told a caller with an OTTO
   // font it had outlines to scale, months before anything could draw one.
   //
-  // `CFF ` reports true as of phase 2. `CFF2` still reports false, and now for
-  // the only reason left: it is a format this library does not read at all
-  // (design.md section 16).
+  // `CFF ` reports true as of phase 2, and `CFF2` with it once it was read.
   return gfnt_sfnt_producer(face) != GFNT_PRODUCER_NONE;
 }
 

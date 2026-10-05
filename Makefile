@@ -661,7 +661,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Fuzz commands
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
-.PHONY: fuzz-metvar fuzz-run-metvar fuzz-vartables fuzz-run-vartables
+.PHONY: fuzz-cff2 fuzz-run-cff2 fuzz-metvar fuzz-run-metvar fuzz-vartables fuzz-run-vartables
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
@@ -1680,6 +1680,11 @@ $(eval $(call fuzz-rule,fuzz_vartables,vartables))
 # runs both languages over every input, because 255 introduces a 16.16 in one and
 # an integer in the other - the same bytes are two programs.
 $(eval $(call fuzz-rule,fuzz_cff,cff))
+# fuzz_cff2 takes the whole `CFF2` table, for fuzz_cff's reason, and draws every glyph
+# at a spread of locations because what a CFF2 adds is `blend`: deltas scaled by
+# region scalars read from a store the table carries. It checks that asking twice
+# gives one answer and that a location that moves nothing is the default instance.
+$(eval $(call fuzz-rule,fuzz_cff2,cff2))
 $(eval $(call fuzz-rule,fuzz_charstring,charstring))
 # fuzz_type1 takes the whole file, unaltered, which no other harness here does.
 # It has to: a Type 1 font's bytes are *computed* before any parser sees them -
@@ -1698,7 +1703,7 @@ $(eval $(call fuzz-rule,fuzz_type1,type1))
 # input either.
 $(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
 
-FUZZERS := sfnt cmap glyf raster cff charstring type1 bitmap gvar variation metvar vartables
+FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

@@ -339,7 +339,8 @@ GFNT_API bool gfnt_face_num_glyphs_disagreement(const GFNT_Face * face,
  * @return ::GFNT_OK, ::GFNT_ERR_INVALID for a glyph the face does not have or
  *   a variation with more coordinates than the face has axes,
  *   ::GFNT_ERR_UNSUPPORTED if the font has no `hmtx` or `hhea` - or, at a
- *   location, has neither `HVAR` nor `gvar` to say how the advance moves - or
+ *   location, is a `glyf` font with neither `HVAR` nor `gvar` to say how the
+ *   advance moves (a CFF2 font without an `HVAR` says it does not) - or
  *   ::GFNT_ERR_CORRUPT.
  */
 GFNT_API GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face,

@@ -329,7 +329,7 @@ def main(argv):
         fonts = rest
         synthetic = 0
     else:
-        real = corpus.fonts("variable")
+        real = corpus.fonts("variable") + corpus.fonts("cff2")
         if limit is not None:
             step = max(1, len(real) // limit)
             real = real[::step][:limit]

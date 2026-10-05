@@ -228,6 +228,7 @@ int main(int argc, char ** argv) {
     GFNT_Outline * outline = NULL;
     Context context;
     bool composite = false;
+    bool stated_known = true;
     GFNT_Box stated;
     GFNT_Box drawn;
     GFNT_Box control;
@@ -242,8 +243,15 @@ int main(int argc, char ** argv) {
           gfnt_result_string(error.result));
       continue;
     }
-    if (gfnt_face_glyph_stated_box(face, (uint32_t)glyph, &stated, &error)
-        != GFNT_OK) {
+    stated_known = true;
+    result = gfnt_face_glyph_stated_box(face, (uint32_t)glyph, &stated, &error);
+    if (result == GFNT_ERR_UNSUPPORTED) {
+      // A charstring glyph - CFF, CFF2, Type 1 - states no box of its own, and that
+      // is a fact about the format and not a refusal to draw it: the line says so
+      // and the outline is drawn.
+      stated_known = false;
+    }
+    else if (result != GFNT_OK) {
       printf("glyph %zu: refused %s\n", glyph,
           gfnt_result_string(error.result));
       continue;
@@ -257,7 +265,10 @@ int main(int argc, char ** argv) {
     printf("glyph %zu: composite %d, points %zu, contours %zu\n", glyph,
         composite ? 1 : 0, gfnt_outline_point_count(outline),
         gfnt_outline_contour_count(outline));
-    if (gfnt_box_is_empty(&stated)) {
+    if (!stated_known) {
+      printf("glyph %zu stated: none\n", glyph);
+    }
+    else if (gfnt_box_is_empty(&stated)) {
       printf("glyph %zu stated: empty\n", glyph);
     }
     else {

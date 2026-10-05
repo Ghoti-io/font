@@ -25,12 +25,12 @@
  * container.
  *
  * documentation/design.md sections 4.1 and 7.4, and decision 17.7. A charstring
- * is a program that draws one glyph, and four different containers hold them:
+ * is a program that draws one glyph, and five different containers hold them:
  * `CFF ` inside an sfnt, bare CFF as a PDF embeds it, a Type 1 font program,
- * and - absent, section 16 - `CFF2`. Each of those is a different way of
- * finding bytes and subroutines; the drawing is the same, so it is here, and
- * the container passes it a ::GFNT_CharstringContext saying where the
- * subroutines are.
+ * and `CFF2`, whose charstrings move through a variation store. Each of those is
+ * a different way of finding bytes and subroutines; the drawing is the same, so
+ * it is here, and the container passes it a ::GFNT_CharstringContext saying where
+ * the subroutines are.
  *
  * That split is what makes Type 1 cheap after Type 2, and it is what a PDF
  * library needs: a `FontFile3` stream is a bare CFF, and a `FontFile` is a Type
@@ -59,7 +59,7 @@ extern "C" {
 /**
  * @brief Which charstring language a program is written in.
  *
- * The two are not versions of one language: Type 1 carries its advance and left
+ * Type 1 and Type 2 are not versions of one language: Type 1 carries its advance and left
  * side bearing in `hsbw`, has no subroutine bias, no `hintmask`, no operand
  * stack arithmetic to speak of, and reaches flex and hint replacement through
  * `callothersubr`. They share the curve operators and little else, which is why
@@ -68,8 +68,13 @@ extern "C" {
  * first byte it cannot read, not a plausible wrong shape.
  */
 typedef enum {
-  GFNT_CHARSTRING_TYPE2 = 0, ///< Type 2, as CFF and CFF2 hold.
+  GFNT_CHARSTRING_TYPE2 = 0, ///< Type 2, as CFF holds.
   GFNT_CHARSTRING_TYPE1,     ///< Type 1, as a Type 1 font program holds.
+  /**
+   * Type 2 as `CFF2` holds it: no width, no `endchar`, an operand stack of 513
+   * and two operators more - `vsindex` and `blend`.
+   */
+  GFNT_CHARSTRING_CFF2,
   GFNT_CHARSTRING_TYPE_COUNT ///< Closes the enum for the string table's test.
 } GFNT_CharstringType;
 
@@ -106,6 +111,35 @@ typedef struct GFNT_CharstringSubrs {
 } GFNT_CharstringSubrs;
 
 /**
+ * @brief Where a `CFF2` charstring's `blend` finds how far inside each region the
+ *   location is.
+ *
+ * A `blend` adds to each of its values the sum of that many deltas, each scaled by
+ * the scalar of one region of the font's variation store, and *which* regions is
+ * the charstring's `vsindex` - the Private DICT's, unless the charstring chose
+ * another. The interpreter knows neither the store nor the location, so the
+ * container supplies this.
+ */
+typedef struct GFNT_CharstringBlend {
+  /**
+   * The scalars of the regions one ItemVariationData names, at the location.
+   *
+   * @param user The `user` field below.
+   * @param vsindex Which ItemVariationData.
+   * @param out_scalars Receives one scalar per region, in the data's order, each
+   *   with 24 fractional bits (2^24 is 1).
+   * @param capacity How many @p out_scalars holds.
+   * @param out_count Receives how many the data names.
+   * @return ::GFNT_OK, or ::GFNT_ERR_CORRUPT for an index the store does not
+   *   have.
+   */
+  GFNT_Result (*scalars)(void * user, uint32_t vsindex, int64_t * out_scalars,
+      size_t capacity, size_t * out_count);
+  void * user;            ///< Passed to `scalars`.
+  uint32_t default_vsindex; ///< The `vsindex` a charstring has until it says otherwise.
+} GFNT_CharstringBlend;
+
+/**
  * @brief Everything an interpreter needs that is not the charstring itself.
  */
 typedef struct GFNT_CharstringContext {
@@ -139,6 +173,13 @@ typedef struct GFNT_CharstringContext {
    * for the run.
    */
   const GFNT_Limits * limits;
+
+  /**
+   * `CFF2` only: where `blend` finds its scalars. NULL makes a `blend` or a
+   * `vsindex` a refusal, which is the right answer for a font with no variation
+   * store.
+   */
+  const GFNT_CharstringBlend * blend;
 } GFNT_CharstringContext;
 
 /**

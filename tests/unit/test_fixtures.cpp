@@ -208,6 +208,7 @@ const std::vector<Entry> & every_fixture() {
       {"variable-avar2.ttf", 9},
       {"variable-stat.ttf", 9},
       {"variable-cvar.ttf", 9},
+      {"variable-cff2.otf", 8},
       {"variable-featurevars.ttf", 9},
   };
   return names;

@@ -569,7 +569,8 @@ TEST(Charstring, AnOperandThatRunsOffTheEndIsCorrupt) {
 }
 
 TEST(Charstring, AnOperatorTheFormatDoesNotDefineIsCorrupt) {
-  // 15, 16 and 17 are reserved in Type 2, and 13 is Type 1's hsbw.
+  // 17 is reserved in Type 2, and 13 is Type 1's hsbw. 15 and 16 are CFF2's
+  // `vsindex` and `blend`, which a Type 2 charstring does not have and says so.
   for (uint8_t reserved : {uint8_t{15}, uint8_t{16}, uint8_t{17}}) {
     Program program;
     program.op(reserved);
@@ -577,7 +578,8 @@ TEST(Charstring, AnOperatorTheFormatDoesNotDefineIsCorrupt) {
     Drawn run;
     EXPECT_EQ(run.go(program, &context), GFNT_ERR_CORRUPT)
         << "operator " << (int)reserved;
-    names(run.error, "does not define");
+    names(run.error, reserved == 17 ? "does not define"
+                                    : "only a CFF2 charstring has");
   }
 }
 

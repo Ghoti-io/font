@@ -28,7 +28,7 @@
 # (cmap_diff), *and* the image the fixture generator will run in, so that a
 # fixture's bytes depend on a pinned fontTools rather than on whatever the host
 # has (design.md section 14.7).
-fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0 Pillow 12.3.0	Every sfnt table's fields, every cmap's mapping, EBLC/EBDT strikes glyph by glyph, PCF and BDF bitmaps through Pillow, and the corpus of real fonts - 506 sfnts selected by magic rather than by name, including the whole Debian population of embedded bitmap strikes, which is thirty-three, and sixteen variable TrueType fonts from four producers (Inter, Cascadia Code, Vazirmatn, Sahel) for fvar, avar and gvar
+fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0 Pillow 12.3.0	Every sfnt table's fields, every cmap's mapping, EBLC/EBDT strikes glyph by glyph, PCF and BDF bitmaps through Pillow, and the corpus of real fonts - 507 sfnts selected by magic rather than by name, including the whole Debian population of embedded bitmap strikes, which is thirty-three, sixteen variable TrueType fonts from four producers (Inter, Cascadia Code, Vazirmatn, Sahel) for fvar, avar, gvar and cvar, and the one CFF2 variable font (Cantarell) for blend
 
 # FreeType, built here, driver compiled inside the image against FreeType alone.
 #

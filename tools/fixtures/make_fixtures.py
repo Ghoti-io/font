@@ -1277,6 +1277,84 @@ def build_variable_cvar(out):
     fb.save(out)
 
 
+# What the CFF2 fixture's charstrings blend with: two axes and three regions of
+# them. R0 is the weight ramp up from the default, R1 the weight ramp down, and R2
+# the corner where weight and width are both up, so a blend is a sum over a
+# one-axis region, its mirror and a two-axis product.
+CFF2_REGIONS = [{"wght": (0.0, 1.0, 1.0)}, {"wght": (-1.0, -1.0, 0.0)},
+                {"wght": (0.0, 1.0, 1.0), "wdth": (0.0, 1.0, 1.0)}]
+
+
+def _blend(values, deltas):
+    """A blend's program: the values, then each value's delta per region."""
+    program = list(values)
+    for row in deltas:
+        program.extend(row)
+    return program + [len(values), "blend"]
+
+
+def cff2_charstrings():
+    """The CFF2 fixture's glyphs, by hand: every operator is chosen to be read."""
+    from fontTools.misc.psCharStrings import T2CharString
+
+    def cs(program):
+        return T2CharString(program=program)
+
+    glyphs = {
+        ".notdef": cs([]),
+        "space": cs([]),
+        # Three blended lines: a square whose sides move with every region.
+        "sq": cs([0, 0, "rmoveto"]
+                 + _blend([100], [[20, -10, 5]]) + ["hlineto"]
+                 + _blend([100], [[0, 8, -3]]) + ["vlineto"]
+                 + _blend([-100], [[20, -10, 5]]) + ["hlineto"]),
+        # Two values blended at once, moving the pen: the layout of a blend whose
+        # deltas are grouped by value and not by region.
+        "pen": cs(_blend([100, 50], [[10, -10, 3], [4, 5, -6]]) + ["rmoveto"]
+                  + [30, "hlineto", 30, "vlineto"]),
+        # A curve of six blended numbers, one of them fractional.
+        "curve": cs([0, 0, "rmoveto"]
+                    + _blend([10, 40, 30, 30, 40, 10],
+                             [[2, 0, 1], [0, 3, -2], [4.5, -1, 0], [0, 0, 6],
+                              [-3, 2, 2], [1, -1, 1]])
+                    + ["rrcurveto"]),
+        # hvcurveto, then a vlineto, with a blend in the middle of the operands.
+        "hv": cs([0, 0, "rmoveto"]
+                 + _blend([10, 20, 20, 10], [[1, 2, 3], [0, 0, 4], [-2, 1, 0],
+                                             [5, 0, -5]])
+                 + ["hvcurveto", 20, "vlineto"]),
+        # Hints, which a blend can also feed; the mask is skipped by its width.
+        "hint": cs(_blend([0, 20], [[0, 0, 0], [2, 4, 1]])
+                   + ["hstemhm", 10, 20, "vstemhm", "hintmask", b"\xC0",
+                      0, 0, "rmoveto"]
+                   + _blend([50], [[5, 5, 5]]) + ["hlineto"]),
+        # Nothing blends: a glyph a variable font still states plainly.
+        "plain": cs([10, 10, "rmoveto", 40, "hlineto", 40, "vlineto"]),
+    }
+    return glyphs
+
+
+def build_variable_cff2(out):
+    """A CFF2 variable font: blends over two axes and three regions."""
+    order = list(cff2_charstrings())
+    fb = FontBuilder(UPEM, isTTF=False)
+    fb.setupGlyphOrder(order)
+    fb.setupHorizontalMetrics({n: (600, 0) for n in order})
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, [subtable(4, 3, 1, {0x20: "space", 0x41: "sq", 0x42: "pen"})])
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names("Variable Cff2"), mac=True)
+    fb.setupPost(keepGlyphNames=True)
+    fb.setupFvar([AxisDescriptor(name="Weight", tag="wght", minimum=100,
+                                 default=400, maximum=900),
+                  AxisDescriptor(name="Width", tag="wdth", minimum=75,
+                                 default=100, maximum=125)],
+                 [{"location": {"wght": 700, "wdth": 100}, "stylename": "Bold"}])
+    fb.setupCFF2(cff2_charstrings(), regions=CFF2_REGIONS)
+    pin(fb)
+    fb.save(out)
+
+
 def build_variable_hvar(out):
     """`variable-gvar.ttf` with `HVAR` (advance and bearing mappings) and `MVAR`."""
     from fontTools.ttLib.tables import otTables as ot
@@ -4005,6 +4083,11 @@ FIXTURES = {
         "variable-gvar.ttf's font with a cvt table of eight values and a cvar of "
         "four tuples: every value, a sparse list, an intermediate region and a "
         "two-axis corner, written by fontTools"),
+    "variable-cff2.otf": (build_variable_cff2,
+        "a CFF2 variable font written by fontTools: two axes, three regions "
+        "(weight up, weight down, weight and width up together) and glyphs that "
+        "blend one value, several at once, a curve with a fractional delta, an "
+        "hvcurveto, and a hintmask"),
     "variable-gvar.ttf": (build_variable_gvar,
         "fvar, avar and gvar written by fontTools: two axes (one hidden), three "
         "named instances (one with a PostScript name), a bent avar on one axis "

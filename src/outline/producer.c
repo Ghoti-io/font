@@ -54,11 +54,6 @@
 /** The refusal a face with no outlines this library reads gets, by name. */
 static GFNT_Result gfnt_producer_refuse(const GFNT_Face * face, uint32_t glyph,
     GFNT_Error * error) {
-  if (gfnt_sfnt_find(face, GFNT_TAG_CFF2)) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_CFF2, 0, glyph,
-        "this face's outlines are CFF2 charstrings, which are a different "
-        "format in a different table and are not read (design.md section 16)");
-  }
   {
     const GFNT_SfntTable * glyf = gfnt_sfnt_find(face, GFNT_TAG_GLYF);
     const GFNT_SfntTable * loca = gfnt_sfnt_find(face, GFNT_TAG_LOCA);
@@ -96,11 +91,13 @@ static GFNT_Result gfnt_producer_refuse(const GFNT_Face * face, uint32_t glyph,
  *     default instance and is answered as one, whether or not the face could have
  *     honoured a real one. A caller that asks for the default by name has asked
  *     for something this library can give.
+ *   * `CFF2` moves through its own `blend` operators, so a location is passed
+ *     down and the charstrings read the variation store themselves.
  *   * Anything else needs `gvar` over `glyf`, and is refused by name when the
- *     face has something else: a CFF font's variations are `CFF2`'s blend
- *     operators, and a `glyf` face with an `fvar` and no `gvar` has a design
- *     space and no outlines that move through it. Drawing the default and
- *     reporting success would hand back a shape for a location it is not at.
+ *     face has something else: a `CFF ` font has no blend operators, and a `glyf`
+ *     face with an `fvar` and no `gvar` has a design space and no outlines that
+ *     move through it. Drawing the default and reporting success would hand back
+ *     a shape for a location it is not at.
  */
 static GFNT_Result gfnt_producer_variation(const GFNT_Face * face,
     uint32_t glyph, const GFNT_Variation * variation,
@@ -113,11 +110,14 @@ static GFNT_Result gfnt_producer_variation(const GFNT_Face * face,
   if (result != GFNT_OK || !moved) {
     return result;
   }
+  if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF2) {
+    *out_active = variation;
+    return GFNT_OK;
+  }
   if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_GLYF) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        "this face's outlines are charstrings, whose variations are CFF2's blend "
-        "operators and are not read, so a location other than the default "
-        "cannot be honoured");
+        "this face's outlines are charstrings with no blend operators - only a "
+        "CFF2 varies - so a location other than the default cannot be honoured");
   }
   if (!gfnt_face_has_table(face, GFNT_TAG_GVAR)) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_GVAR, 0, glyph,
@@ -159,6 +159,9 @@ GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
     case GFNT_PRODUCER_CFF:
       result = gfnt_cff_load(face, glyph, outline, NULL, error);
       break;
+    case GFNT_PRODUCER_CFF2:
+      result = gfnt_cff2_load(face, glyph, active, outline, NULL, error);
+      break;
     case GFNT_PRODUCER_TYPE1:
       result = gfnt_type1_load(face, glyph, outline, NULL, error);
       break;
@@ -198,6 +201,10 @@ GFNT_Result gfnt_face_glyph_is_composite(const GFNT_Face * face, uint32_t glyph,
       // reports - this glyph is drawn out of other glyphs - reached by a
       // different construction, which is why one predicate answers for both.
       return gfnt_cff_is_composite(face, glyph, out_composite, error);
+    case GFNT_PRODUCER_CFF2:
+      // There is no `seac` in a CFF2: the construction was removed with `endchar`.
+      *out_composite = false;
+      return GFNT_OK;
     case GFNT_PRODUCER_NONE:
       break;
   }
@@ -228,6 +235,10 @@ GFNT_Result gfnt_face_glyph_stated_box(const GFNT_Face * face, uint32_t glyph,
           "a CFF glyph states no bounding box of its own; the Top DICT's "
           "FontBBox is the whole font's, and this glyph's own bounds come from "
           "gfnt_outline_bounds()");
+    case GFNT_PRODUCER_CFF2:
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_CFF2, 0, glyph,
+          "a CFF2 glyph states no bounding box of its own, and its outline moves "
+          "with the location; its bounds come from gfnt_outline_bounds()");
     case GFNT_PRODUCER_NONE:
       break;
   }
@@ -244,6 +255,9 @@ GFNT_Result gfnt_face_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
   switch (gfnt_sfnt_producer(face)) {
     case GFNT_PRODUCER_CFF:
       return gfnt_cff_glyph_charstring(face, glyph, out_type, out_bytes,
+          out_length, error);
+    case GFNT_PRODUCER_CFF2:
+      return gfnt_cff2_glyph_charstring(face, glyph, out_type, out_bytes,
           out_length, error);
     case GFNT_PRODUCER_TYPE1: {
       const GFNT_Type1 * type1 = NULL;
@@ -283,6 +297,8 @@ GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
   switch (gfnt_sfnt_producer(face)) {
     case GFNT_PRODUCER_CFF:
       return gfnt_cff_glyph_metrics(face, glyph, out_metrics, error);
+    case GFNT_PRODUCER_CFF2:
+      return gfnt_cff2_glyph_metrics(face, glyph, out_metrics, error);
     case GFNT_PRODUCER_TYPE1:
       return gfnt_type1_metrics(face, glyph, out_metrics, error);
     case GFNT_PRODUCER_GLYF:

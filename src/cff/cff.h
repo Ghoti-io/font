@@ -58,7 +58,7 @@ extern "C" {
 
 /** No SID: not a valid one, because SID 0 is the string `.notdef`. */
 #define GFNT_CFF_SID_NONE 0xFFFFFFFFu
-/** The tag of the CFF2 table, which this library reads no glyph from. */
+/** The tag of the CFF2 table. */
 #define GFNT_TAG_CFF2 GFNT_TAG('C', 'F', 'F', '2')
 
 /**
@@ -69,6 +69,23 @@ extern "C" {
  * DICT, so there is nothing to grow for.
  */
 #define GFNT_CFF_DICT_MAX_OPERANDS 48
+
+/**
+ * The most operands a CFF2 DICT operator may be given: `blend` takes a count and
+ * then that many values and their deltas, which the format bounds at 513.
+ */
+#define GFNT_CFF2_DICT_MAX_OPERANDS 513
+
+/** One DICT operator and the operands that preceded it. */
+typedef struct GFNT_CffDictOp {
+  uint16_t op;                                  ///< 0-24, or 0x0c00 | n.
+  size_t count;                                 ///< Operands given.
+  int64_t values[GFNT_CFF2_DICT_MAX_OPERANDS];  ///< 16.16.
+} GFNT_CffDictOp;
+
+/** What ::gfnt_cff_dict_walk() calls for each operator. */
+typedef GFNT_Result (*GFNT_CffDictVisit)(void * user,
+    const GFNT_CffDictOp * entry, GFNT_Error * error);
 
 /**
  * Where an INDEX's elements are.
@@ -269,6 +286,30 @@ GFNT_Result gfnt_cff_index_at(const GFNT_Reader * table,
     GFNT_Error * error);
 
 /**
+ * Walk a DICT, calling @p visit once per operator.
+ *
+ * Operands come first and the operator last, which is why this is a walk with a
+ * callback rather than a struct-filling parse.
+ *
+ * @param dict A reader spanning exactly the DICT.
+ * @param table The table the DICT is in, for the diagnostic.
+ * @param max_operands How many operands an operator may be given: 48 in a CFF and
+ *   513 in a CFF2.
+ * @param visit What to call.
+ * @param user Passed to @p visit.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_CORRUPT, or what @p visit returned.
+ */
+GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict, GFNT_Tag table,
+    size_t max_operands, GFNT_CffDictVisit visit, void * user,
+    GFNT_Error * error);
+
+/** An operand as an offset below @p limit, refusing a negative or absurd one. */
+GFNT_Result gfnt_cff_offset_operand(const GFNT_CffDictOp * entry,
+    GFNT_Tag table, size_t which, size_t limit, size_t * out_offset,
+    GFNT_Error * error);
+
+/**
  * Read an INDEX at the reader's cursor, leaving the cursor past it.
  *
  * @param reader The table reader, positioned at the INDEX.
@@ -278,6 +319,19 @@ GFNT_Result gfnt_cff_index_at(const GFNT_Reader * table,
  */
 GFNT_Result gfnt_cff_index_parse(GFNT_Reader * reader,
     GFNT_CffIndex * out_index, GFNT_Error * error);
+
+/**
+ * Read an INDEX whose count is two bytes (CFF) or four (CFF2).
+ *
+ * @param reader The table reader, positioned at the INDEX.
+ * @param wide_count Whether the count is a `uint32`, as in a CFF2.
+ * @param table The table, for the diagnostic.
+ * @param out_index Receives it.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK or ::GFNT_ERR_CORRUPT.
+ */
+GFNT_Result gfnt_cff_index_parse_ex(GFNT_Reader * reader, bool wide_count,
+    GFNT_Tag table, GFNT_CffIndex * out_index, GFNT_Error * error);
 
 /**
  * The Private DICT that governs one glyph.

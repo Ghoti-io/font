@@ -128,6 +128,28 @@ COMPOSITE_ALLOWANCE = 2
 # survive in fontTools alone.
 FREETYPE_POINT_ALLOWANCE = 2
 FREETYPE_COMPOSITE_ALLOWANCE = 66
+# A CFF2 glyph's coordinates, whose variation is `blend`: one 64th of a font unit
+# against fontTools - the same measurement as a simple glyph's, and for the same
+# reason, one rounding of one exactly-summed value - and **a whole font unit against
+# FreeType**, 64 64ths, which is not a margin but what FreeType does. Its CFF2 engine
+# holds a blended coordinate to an integer number of font units where this library and
+# fontTools keep the fraction: over Cantarell's 1,322 glyphs the differences are spread
+# evenly from 0 to 64 and never past it, with `variable-cff2.otf`'s half-unit cases
+# (a delta of 5 at a scalar of a half) showing it in a form that can be worked by hand.
+# A tolerance this wide cannot see a coordinate off by a fraction of a unit, and that is
+# what the fontTools comparison is for; what this one adds is a second implementation's
+# agreement on *which regions* a blend uses and *which way* it moves.
+BLEND_ALLOWANCE = {"fontTools": 1, "FreeType": 64}
+
+
+def allowance_for(reference, kind):
+    """How many 64ths a coordinate of this kind of glyph may differ by."""
+    if kind == "blended":
+        return BLEND_ALLOWANCE[reference]
+    if reference == "fontTools":
+        return COMPOSITE_ALLOWANCE if kind == "composite" else POINT_ALLOWANCE
+    return (FREETYPE_COMPOSITE_ALLOWANCE if kind == "composite"
+            else FREETYPE_POINT_ALLOWANCE)
 
 
 class Skip(Exception):
@@ -144,7 +166,7 @@ class Skip(Exception):
 
 
 def fixtures():
-    """The synthetic variable fixtures: every `variable-*.ttf` in the manifest."""
+    """The synthetic variable fixtures: every `variable-*.ttf` and `.otf` in the manifest."""
     manifest = os.path.join(FIXTURES, "MANIFEST")
     if not os.path.exists(manifest):
         return []
@@ -154,7 +176,7 @@ def fixtures():
             if line.startswith("#") or not line.strip():
                 continue
             name = line.split("\t")[0]
-            if name.startswith("variable-") and name.endswith(".ttf"):
+            if name.startswith("variable-") and name.endswith((".ttf", ".otf")):
                 found.append(os.path.join(FIXTURES, name))
     return found
 
@@ -263,11 +285,14 @@ def reference_axes(path, face):
     if "outlines: no gvar" in finished.stdout:
         raise Skip("no gvar", expected=True)
     axes = []
+    blended = False
     for line in finished.stdout.splitlines():
         if line.startswith("axis: "):
             tag, low, default, high = line[6:].split()
             axes.append((tag, float(low), float(default), float(high)))
-    return axes
+        elif line.startswith("kind: "):
+            blended = line.strip() == "kind: CFF2"
+    return axes, blended
 
 
 def normalised_of(text):
@@ -352,7 +377,7 @@ def compare(path, face, stride, locations, report, histogram, normal_histogram,
 
     Returns (compared, disagreements, glyph-locations, locations, declined).
     """
-    axes = reference_axes(path, face)
+    axes, blended = reference_axes(path, face)
     if not axes:
         raise Skip("no axes", expected=True)
     seed = zlib.crc32(os.path.basename(path).encode("utf-8"))
@@ -430,11 +455,9 @@ def compare(path, face, stride, locations, report, histogram, normal_histogram,
                 composite = str(mine_values.get("glyph.%s.shape" % glyph, "")
                                 ).startswith("composite 1")
                 kind = "composite" if composite else "simple"
-                if name == "fontTools":
-                    allowed = COMPOSITE_ALLOWANCE if composite else POINT_ALLOWANCE
-                else:
-                    allowed = (FREETYPE_COMPOSITE_ALLOWANCE if composite
-                               else FREETYPE_POINT_ALLOWANCE)
+                if blended:
+                    kind = "blended"
+                allowed = allowance_for(name, kind)
                 if paths_close(theirs.get(key), mine_values.get(key),
                                histogram.setdefault((name, kind), {}), allowed):
                     continue
@@ -487,6 +510,8 @@ def main(argv):
             COMPOSITE_ALLOWANCE = POINT_ALLOWANCE
             FREETYPE_POINT_ALLOWANCE = POINT_ALLOWANCE
             FREETYPE_COMPOSITE_ALLOWANCE = POINT_ALLOWANCE
+            BLEND_ALLOWANCE["fontTools"] = POINT_ALLOWANCE
+            BLEND_ALLOWANCE["FreeType"] = POINT_ALLOWANCE
             skip_next = True
         elif argument == "--quiet":
             continue
@@ -501,7 +526,9 @@ def main(argv):
         fonts = rest
         synthetic = 0
     else:
-        real = corpus.fonts("variable")
+        # Both kinds of outline: TrueType, which `gvar` moves, and CFF2, which moves
+        # itself through blend operators. A font in neither list has nothing here.
+        real = corpus.fonts("variable") + corpus.fonts("cff2")
         if limit is not None:
             step = max(1, len(real) // limit)
             real = real[::step][:limit]
@@ -550,13 +577,8 @@ def main(argv):
               % (name, ", ".join("%d: %d" % (k, v) for k, v in sorted(
                   normal_histogram.get(name, {}).items())) or "none",
                  NORMAL_ALLOWANCE[name]))
-        for kind in ("simple", "composite"):
-            if name == "fontTools":
-                allowed = COMPOSITE_ALLOWANCE if kind == "composite" \
-                    else POINT_ALLOWANCE
-            else:
-                allowed = FREETYPE_COMPOSITE_ALLOWANCE if kind == "composite" \
-                    else FREETYPE_POINT_ALLOWANCE
+        for kind in ("simple", "composite", "blended"):
+            allowed = allowance_for(name, kind)
             print("var_diff: %s glyphs' coordinates, by how far %s's differs "
                   "from this library's in 64ths of a font unit: %s; %d allowed"
                   % (kind, name, ", ".join("%d: %d" % (k, v) for k, v in sorted(

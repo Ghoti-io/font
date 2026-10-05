@@ -134,8 +134,11 @@ RUN pip install --no-cache-dir --no-compile \
 #                            normalisation (linear either side of the default) is
 #                            the whole story for it
 #
-# Not here: `fonts-cantarell` is variable too, and its outlines are CFF2, which is
-# a different format in a different table that this library does not read.
+#   fonts-cantarell          the one **CFF2** variable font: `fvar` and `CFF2` and no
+#                            `gvar`, so its outlines move through blend operators in
+#                            their charstrings rather than through tuples. Not in the
+#                            `variable` list, which asks for `gvar`; the `cff2` list
+#                            asks for `CFF2`
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends \
       fonts-dejavu-core=2.37-8 \
@@ -162,6 +165,7 @@ RUN apt-get update -qq \
       fonts-cascadia-code=2407.24-1 \
       fonts-vazirmatn-variable=33.003-3 \
       fonts-sahel-variable=3.4.0-3 \
+      fonts-cantarell=0.303.1-4 \
     && rm -rf /var/lib/apt/lists/*
 
 # Wine puts its fonts in /usr/share/wine/fonts, which is not /usr/share/fonts, so
@@ -179,10 +183,11 @@ RUN mv /usr/share/wine/fonts /usr/share/fonts/truetype/wine
 # check and the fact it checks, which is the same reason `unicode`'s ICU image
 # compiles a version program instead of parsing icuinfo's XML.
 COPY fonttools-version fonttools-corpus fonttools-corpus-bitmap \
-     fonttools-corpus-ebdt fonttools-corpus-variable \
+     fonttools-corpus-ebdt fonttools-corpus-variable fonttools-corpus-cff2 \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/fonttools-version \
       /usr/local/bin/fonttools-corpus \
       /usr/local/bin/fonttools-corpus-bitmap \
       /usr/local/bin/fonttools-corpus-ebdt \
-      /usr/local/bin/fonttools-corpus-variable
+      /usr/local/bin/fonttools-corpus-variable \
+      /usr/local/bin/fonttools-corpus-cff2

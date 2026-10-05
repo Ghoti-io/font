@@ -120,7 +120,8 @@ which of them this library takes, and which of those it reads today.
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
 | | WOFF 2 | not here; it waits on Brotli in `compress` |
-| | `CFF2`, AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
+| | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
+| | AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
 | **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
@@ -285,13 +286,13 @@ convention on the way out (M18).
 | Result | Here means |
 | --- | --- |
 | `ERR_FORMAT` | not a font this library recognises: no sfnt magic, no PCF magic, no `%!PS-AdobeFont` |
-| `ERR_UNSUPPORTED` | a font, with a feature outside §16's line: `CFF2`, a `morx` table, a hinting-only request |
+| `ERR_UNSUPPORTED` | a font, with a feature outside §16's line: a `morx` table, a hinting-only request |
 | `ERR_CORRUPT` | a font, with bytes that violate its own specification: an offset past its table, a `loca` running backwards |
 | `ERR_LIMIT` | a `GFNT_Limits` field exceeded, never by silently truncating |
 | `ERR_INVALID` | a caller error: `NULL`, a glyph id past `numGlyphs`, a ppem of zero |
 
 The distinctions must survive per table, or "this font is broken" and "we do
-not do CFF2" become one answer. A missing *optional* table is not an error at
+not do `morx`" become one answer. A missing *optional* table is not an error at
 all. A `GFNT_Error` carries the table tag, the byte offset within it, the
 glyph id if one was involved, and a static message, as `chron`'s `GCHRON_Error`
 carries a position - because "corrupt" is not a diagnostic.
@@ -549,8 +550,8 @@ width parsing against `nominalWidthX`/`defaultWidthX`, the transient array,
 Four containers feed them: `CFF ` inside an sfnt (header, the INDEX
 structures, Top and Private DICTs, charsets, encodings, `FDArray`/`FDSelect`
 for CID-keyed fonts), **bare CFF** (the same without the sfnt, as PDF embeds it
-as `FontFile3`/`Type1C` and `CIDFontType0C`), Type 1 (§7.1), and - absent, §16 -
-`CFF2`. This is decision §17.7 and it is what makes Type 1 cheap after CFF,
+as `FontFile3`/`Type1C` and `CIDFontType0C`), Type 1 (§7.1), and `CFF2` (§7.7).
+This is decision §17.7 and it is what makes Type 1 cheap after CFF,
 and what a PDF library would need (§13.3).
 
 **Built: both interpreters, and the first of the four containers.** `CFF ` inside
@@ -882,7 +883,10 @@ decides, and what a reader can get wrong without any error:
   where none of them says.** An advance is the stored one plus `HVAR`'s delta for the
   glyph (through its advance mapping, or by glyph number when it has none); in a font
   with **no `HVAR`** it is the difference of `gvar`'s first two phantom points, which
-  is FreeType's order and fontTools'; with neither it is `ERR_UNSUPPORTED`. A left
+  is FreeType's order and fontTools'; a `glyf` font with neither is `ERR_UNSUPPORTED`, and a
+  CFF2 font without `HVAR` has no other way to vary an advance, so its advances do not
+  move - which `variable-cff2.otf` is what showed, when fontTools and this library
+  disagreed about it for the one font in the corpus that has no `HVAR`. A left
   side bearing is the stored one plus `HVAR`'s bearing mapping, and is refused when
   there is none - the bearing then follows the outline, and answering it would mean
   loading the varied outline's box for a call that does not otherwise load one. A
@@ -957,6 +961,50 @@ comparisons, 0 disagreements; FreeType differs from this library by one unit in 
 105,444 advances (it rounds each region on its own) and by 2 and 8 units for the two
 `USE_MY_METRICS` glyphs; fontTools agrees exactly once its unrounded delta is rounded
 half away from zero.
+
+**`CFF2` moves its own outlines (`src/cff/cff2.c`, `src/charstring/charstring.c`,
+`src/cff/cff_glyph.c`).** A CFF2 is a Compact Font Format with the width, the name and
+string INDEXes, the charset and `endchar` removed and a variation store added, and
+what differs from a CFF is what a reader that took it for one would get wrong without
+an error:
+
+- **The Top DICT is not an INDEX.** The header is five bytes and the next
+  `topDictLength` bytes *are* the DICT; every INDEX counts in four bytes; `FDArray` is
+  required, and `FDSelect` has a format 4 (32-bit ranges) a CFF lacks.
+- **A charstring states no width**, so the advance is `hmtx`'s (and `HVAR`'s, which
+  already moves it), and the interpreter takes no leading operand for one. **It has no
+  `endchar`**: a charstring ends where its bytes do, and one that spells it is refused as
+  corrupt rather than accepted as a CFF's.
+- **The operand stack is 513**, not 48, because `blend` needs room for a value, its
+  deltas for every region, and the next value.
+- **`blend`** takes `n` values and then, for each, one delta per region of the current
+  `vsindex` - in value-major order - and leaves the `n` values with the deltas added in.
+  Each delta is scaled by that region's scalar, **the same function `gvar` and `HVAR` use**
+  (an item variation store's regions follow one rule, and `gfnt_ivs_region_scalars()` is
+  where a store gives a charstring them), summed at 24 fractional bits and rounded **once**
+  half away from zero to the 16.16 the stack holds. `vsindex` takes one operand and leaves
+  the rest of the stack alone; the Private DICT's `vsindex` is the default.
+- A **blend with no variation store** is corrupt, an **index the store has no data for** is
+  corrupt, and a data naming more than 64 regions is a limit - which no font here
+  approaches (Cantarell has two).
+
+The reference for it is fontTools' charstring interpreter and FreeType's, on a font
+fontTools wrote (`variable-cff2.otf`, hand-checkable blends over two axes and three
+regions: one value, several at once, a curve with a fractional delta, an `hvcurveto`,
+and a hintmask whose stems are blended) and on the one real CFF2 font Debian ships,
+Cantarell (`fonts-cantarell`, one axis, 1,322 glyphs, 1,227 local subroutines and 3,400
+blends). Both ride `var_diff` with the TrueType fonts. **Measured: against fontTools, 92,582
+blended coordinates exact and 10 at one 64th, no more** (one rounding of one exactly summed
+value, as for a simple glyph). **FreeType differs evenly from 0 to a whole font unit and never
+past it** - its CFF2 engine holds a blended coordinate to integer font units where this
+library and fontTools keep the fraction, which the fixture shows by hand (a delta of 5 at a
+scalar of a half is 2.5, which FreeType draws as 2) - so `BLEND_ALLOWANCE` gives it 64 64ths
+and says why, and the precision claim is fontTools'. What FreeType's agreement adds at that
+width is *which regions a blend uses and which way it moves*, which a shared misreading of the
+format would survive in fontTools alone. `metrics_var_diff` takes the same two fonts and found
+one thing: a CFF2 font with no `HVAR` has no other way to vary an advance (no phantom points,
+no width in a charstring), so its advances do not move - fontTools and FreeType both say so,
+and this library had refused it.
 
 **`avar` version 2, `STAT`, `FeatureVariations` and `cvar` (§7.7).** Each is read in
 place at the call, like the item variation stores, and each has a fontTools-written
@@ -1869,7 +1917,7 @@ file or the request names it, and nowhere is there a function that pretends.
 - **The TrueType hinting interpreter and any autohinter** (M3, §8.5).
 - **WOFF 2** until `compress` has Brotli.
 - **The `SVG ` table** until `text` has XML, and an SVG subset after that.
-- **`CFF2`**, **AAT** (`morx`, `kerx`, `feat`, `trak`, ...), **`.dfont`**,
+- **AAT** (`morx`, `kerx`, `feat`, `trak`, ...), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.
 - **Synthetic bold and oblique**, LCD filtering, stem darkening.
 - **Hyphenation data**, **`SA` dictionaries**, **Knuth-Plass**, vertical layout,
@@ -2914,7 +2962,7 @@ What that cost in findings:
   `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
   which is a fact about the font rather than about the object model.
 
-**Not built:** `CFF2` (§16); `CBDT` and `sbix` (§7.5); colour
+**Not built:** `CBDT` and `sbix` (§7.5); colour
 (§7.6);
 `VVAR` and a `FeatureVariations` condition of format 2 (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`

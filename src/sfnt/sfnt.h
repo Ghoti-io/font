@@ -45,6 +45,7 @@
 #include "../bitmap/eblc.h"
 #include "../bitmap/ebsc.h"
 #include "../cff/cff.h"
+#include "../cff/cff2.h"
 #include "../type1/type1.h"
 #include "../reader/reader.h"
 #include "../var/gvar.h"
@@ -155,6 +156,8 @@ struct GFNT_Face {
   GFNT_CmapSubtable cmap_best;
   GFNT_Cached cff_state;            ///< The `CFF ` container, parsed on first use.
   GFNT_Cff cff;
+  GFNT_Cached cff2_state;           ///< The `CFF2` container, parsed on first use.
+  GFNT_Cff2 cff2;
   GFNT_Cached type1_state;          ///< The Type 1 program, parsed on first use.
   GFNT_Type1 type1;
   GFNT_Cached bitmap_state;         ///< The strike of a standalone bitmap font.
@@ -183,6 +186,7 @@ typedef enum {
   GFNT_PRODUCER_NONE = 0, ///< Neither, or a format this library cannot read.
   GFNT_PRODUCER_GLYF,     ///< `glyf` with `loca`.
   GFNT_PRODUCER_CFF,      ///< `CFF ` charstrings.
+  GFNT_PRODUCER_CFF2,     ///< `CFF2` charstrings, which blend through a variation store.
   GFNT_PRODUCER_TYPE1     ///< A Type 1 font program's charstrings.
 } GFNT_Producer;
 
@@ -194,10 +198,12 @@ typedef enum {
  * neither too**: one glyph needs a start and an end, so such a table names no
  * glyph in either format and is the same situation as one that is absent. That is
  * the bitmap-only `.otb` FontForge writes - `glyf` zero bytes, `loca` two - and
- * FreeType reports those faces as not scalable. `CFF2` is neither as well: it is
- * a different format in a different table and is not read (design.md section 16).
+ * FreeType reports those faces as not scalable. `CFF2` is its own producer: a
+ * different format in a different table, whose charstrings state no width and
+ * move through a variation store (design.md section 7.7).
  * A face carrying both `glyf`/`loca` and `CFF ` is malformed and is read as
- * TrueType, which is what every shipping implementation does.
+ * TrueType, which is what every shipping implementation does; `CFF ` outranks
+ * `CFF2`, which is what FreeType's driver order does too.
  *
  * @param face The face, or NULL.
  * @return Which one, or ::GFNT_PRODUCER_NONE.

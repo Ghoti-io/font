@@ -411,7 +411,7 @@ def compare(path, face, stride, report, allowance):
 
     if theirs.get("outlines", "").startswith("no indexed glyf"):
         # The bitmap-only sfnt: `glyf` of zero bytes under a `loca` of two, which
-        # is five of this corpus's 490 fonts and 100% of that shape. Neither
+        # is five of this corpus's 506 fonts and 100% of that shape. Neither
         # reader can index an outline in it, and both say so - fontTools by
         # loading no glyphs at all and warning about `loca` while it does, this
         # library by answering GFNT_ERR_UNSUPPORTED for the face.

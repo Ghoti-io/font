@@ -112,6 +112,30 @@ RUN pip install --no-cache-dir --no-compile \
 #   fonts-konatu             fourteen strikes in one face, 8 to 21 ppem
 #   fonts-misaki             a single 8 ppem strike, the smallest here
 #   fonts-ukij-uyghur        two more faces of index format 1 with image format 2
+# The variable fonts, which are the other half of what "the real fonts" means.
+# Before these the image held **no** font with an `fvar` table, so nothing in any
+# corpus could say whether a variation was applied correctly: the one thing a
+# `gvar` reader is *for* had no population at all. A survey of the Debian font
+# packages that ship variable TrueType found these, and they were chosen for
+# being different producers rather than for being many:
+#
+#   fonts-inter-variable     **two axes** - `opsz` and `wght` - so a location is a
+#                            point in a plane and not a position on a line, which
+#                            is the case where a tuple's scalar is a *product*;
+#                            `avar`, `HVAR` and `MVAR`; 2,900 glyphs each, in an
+#                            upright and an italic
+#   fonts-cascadia-code      twelve files of one design, with `cvar` as well as
+#                            `gvar` - Microsoft's producer, and the only one here
+#                            whose composites are numerous enough to carry
+#                            component-offset deltas in bulk
+#   fonts-vazirmatn-variable an Arabic-script face: a third producer, 1,333
+#                            glyphs, one axis with `avar`
+#   fonts-sahel-variable     one axis and **no `avar`**, so the default
+#                            normalisation (linear either side of the default) is
+#                            the whole story for it
+#
+# Not here: `fonts-cantarell` is variable too, and its outlines are CFF2, which is
+# a different format in a different table that this library does not read.
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends \
       fonts-dejavu-core=2.37-8 \
@@ -134,6 +158,10 @@ RUN apt-get update -qq \
       fonts-unikurdweb=1.0-6 \
       fonts-wine=10.0~repack-6 \
       fonts-wqy-zenhei=0.9.45-8 \
+      fonts-inter-variable=4.1+ds-1 \
+      fonts-cascadia-code=2407.24-1 \
+      fonts-vazirmatn-variable=33.003-3 \
+      fonts-sahel-variable=3.4.0-3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Wine puts its fonts in /usr/share/wine/fonts, which is not /usr/share/fonts, so
@@ -151,9 +179,10 @@ RUN mv /usr/share/wine/fonts /usr/share/fonts/truetype/wine
 # check and the fact it checks, which is the same reason `unicode`'s ICU image
 # compiles a version program instead of parsing icuinfo's XML.
 COPY fonttools-version fonttools-corpus fonttools-corpus-bitmap \
-     fonttools-corpus-ebdt \
+     fonttools-corpus-ebdt fonttools-corpus-variable \
      /usr/local/bin/
 RUN chmod +x /usr/local/bin/fonttools-version \
       /usr/local/bin/fonttools-corpus \
       /usr/local/bin/fonttools-corpus-bitmap \
-      /usr/local/bin/fonttools-corpus-ebdt
+      /usr/local/bin/fonttools-corpus-ebdt \
+      /usr/local/bin/fonttools-corpus-variable

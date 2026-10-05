@@ -1,0 +1,13 @@
+#!/bin/sh
+# The variable-font corpus: every sfnt in this image that can be set to a
+# location in a design space and has glyf outlines to move.
+#
+# `fvar` names the axes and `gvar` is what moves a TrueType outline along them; a
+# font with one and not the other has nothing for a variation differential to
+# compare (a CFF2 font like Cantarell has `fvar` and no `gvar`, and is a format
+# this library does not read). Both tags are required for the same reason
+# fonttools-corpus-ebdt requires two: neither names a result without the other.
+#
+# A wrapper, not a program: fonttools-corpus holds the walk, the magic test and
+# the dedupe, so what an sfnt is stays decided in one place.
+exec fonttools-corpus --require fvar,gvar "$@"

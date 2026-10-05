@@ -40,7 +40,7 @@ CORPUS = os.path.join(ROOT, "build", "oracle", "corpus")
 # the same reason: a denominator that is mostly files the differential skipped
 # reports the same clean number whatever it covered. The bitmap corpus is several
 # hundred PCF files, and the EBDT corpus is the **whole** Debian population of
-# embedded bitmap strikes inside an sfnt - thirty-three fonts of the 490 sfnts in
+# embedded bitmap strikes inside an sfnt - thirty-three fonts of the 506 sfnts in
 # the image, which is the measurement `notes/font/EBLC.md` records and the reason
 # that differential's report says what rests on fixtures instead.
 #
@@ -48,10 +48,15 @@ CORPUS = os.path.join(ROOT, "build", "oracle", "corpus")
 # because they were two and disagreed: the EBDT list selected by sfnt magic while
 # the sfnt list globbed `*.ttf`/`*.otf`/`*.ttc`/`*.otc`, so Debian's five
 # bitmap-only `.otb` fonts were in one corpus and invisible to the other.
+# `variable` is the sixteen sfnts with both `fvar` and `gvar`: a design space and
+# the outlines that move through it. A font with the first and not the second -
+# Cantarell, whose outlines are CFF2 - has nothing a variation differential can
+# compare, and is in the `sfnt` list like every other font.
 LISTS = {
     "sfnt": "fonttools-corpus",
     "bitmap": "fonttools-corpus-bitmap",
     "ebdt": "fonttools-corpus-ebdt",
+    "variable": "fonttools-corpus-variable",
 }
 
 

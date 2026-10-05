@@ -70,8 +70,12 @@ static uint8_t khmer_category(uint32_t u) {
   if (u == 0x25CC) {
     return KC_DOTTEDCIRCLE;
   }
-  if (u == 0x00A0 || u == 0x2010 || u == 0x2011 || (u >= 0x17E0 && u <= 0x17E9)) {
+  if (u == 0x00A0 || u == 0x2010 || u == 0x2011) {
     return KC_PLACEHOLDER;
+  }
+  // The digits and the phnaek muan take a robatic like a consonant, in HarfBuzz.
+  if ((u >= 0x17E0 && u <= 0x17E9) || u == 0x17D9) {
+    return KC_C;
   }
   if (u == 0x179A) {
     return KC_RA;
@@ -112,6 +116,7 @@ static uint8_t khmer_category(uint32_t u) {
 #define ALT(x, y) gfnt_re_alt(&b, (x), (y))
 #define STAR(x) gfnt_re_star(&b, (x))
 #define OPT(x) gfnt_re_opt(&b, (x))
+#define PLUS(x) gfnt_re_plus(&b, (x))
 #define SET(m) gfnt_re_set(&b, (m))
 
 static GFNT_Nfa * khmer_grammar(void) {
@@ -134,10 +139,20 @@ static GFNT_Nfa * khmer_grammar(void) {
   tail = SEQ(SEQ(xgroup, matra_group), SEQ(xgroup, ygroup));
   coeng_cn = SEQ(SEQ(OPT(joiner), SYM(KC_COENG)), cn);
   any = SET(~(uint64_t)0);
-  roots[KS_CONSONANT] = SEQ(SEQ(ALT(cn, SET(BIT(KC_PLACEHOLDER)
-      | BIT(KC_DOTTEDCIRCLE))), STAR(coeng_cn)), tail);
-  roots[KS_BROKEN] = SEQ(SEQ(OPT(SEQ(OPT(joiner), SYM(KC_ROBATIC))),
-      STAR(coeng_cn)), tail);
+  // A coeng with no consonant after it is accepted straight after a consonant;
+  // anywhere else it is a broken cluster of its own, as in HarfBuzz.
+  roots[KS_CONSONANT] = SEQ(SEQ(SEQ(ALT(cn, SET(BIT(KC_PLACEHOLDER)
+      | BIT(KC_DOTTEDCIRCLE))), STAR(coeng_cn)),
+      OPT(SEQ(OPT(joiner), SYM(KC_COENG)))), tail);
+  {
+    GFNT_Re robatic = SEQ(OPT(joiner), SYM(KC_ROBATIC));
+    GFNT_Re coeng = SEQ(OPT(joiner), SYM(KC_COENG));
+
+    roots[KS_BROKEN] = ALT(
+        SEQ(SEQ(OPT(robatic), STAR(coeng_cn)), tail),
+        ALT(SEQ(ALT(SEQ(robatic, STAR(coeng_cn)), PLUS(coeng_cn)), OPT(coeng)),
+            coeng));
+  }
   roots[KS_NON_KHMER] = any;
   nfa = gfnt_nfa_compile(&b, roots, KS_COUNT);
   gfnt_re_free(&b);

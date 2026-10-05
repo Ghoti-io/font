@@ -2853,3 +2853,21 @@ TEST(ShapeVariation, ACharacterAndASelectorTheFontHasASequenceForShapeAsTheGlyph
   ASSERT_EQ(shape(font, V{'A', 0x0301, 0xFE00}, request, &g), GFNT_OK);
   EXPECT_EQ(g[0].glyph, 1u);
 }
+
+TEST(ShapeKhmer, ACoengWithNoConsonantAfterItIsABrokenClusterUnlessItFollowsOne) {
+  // KA 2, COENG 3, AA 4, the dotted circle 5.
+  Font font(small_font({}, 8, {{0x1780, 2}, {0x17D2, 3}, {0x17B6, 4},
+      {0x25CC, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "khmr";
+  // Straight after a consonant it is left alone.
+  ASSERT_EQ(shape(font, V{0x1780, 0x17D2}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 3}));
+  // After a vowel sign, or alone, it stands where a base would, and the circle
+  // is put in front of it.
+  ASSERT_EQ(shape(font, V{0x17D2}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5, 3}));
+  ASSERT_EQ(shape(font, V{0x1780, 0x17B6, 0x17D2}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4, 5, 3}));
+}

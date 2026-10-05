@@ -38,7 +38,9 @@
 #include <ghoti.io/unicode/char.h>
 #include "fallback.h"
 #include "normalize.h"
+#include <ghoti.io/unicode/bidi.h>
 #include "plan.h"
+#include "vertical.h"
 #include "script_tags.h"
 #include "uprops.h"
 
@@ -110,7 +112,7 @@ static GFNT_Result gfnt_shape_apply(GFNT_LApply * c, const GFNT_PlanTable * pt,
  * does map, or that a lookup has ligated, is left as the font says.
  */
 static void gfnt_fallback_spaces(const GFNT_Face * face, GFNT_LBuffer * buf,
-    const GFNT_Variation * variation) {
+    const GFNT_Variation * variation, bool vertical) {
   uint16_t upem = 0;
   size_t i;
 
@@ -130,11 +132,25 @@ static void gfnt_fallback_spaces(const GFNT_Face * face, GFNT_LBuffer * buf,
       case GFNT_SPACE_EM_5:
       case GFNT_SPACE_EM_6:
       case GFNT_SPACE_EM_16:
-        pos->x_advance = (int32_t)(((int64_t)upem + info->space / 2)
-            / info->space);
+        {
+          int32_t em = (int32_t)(((int64_t)upem + info->space / 2)
+              / info->space);
+
+          if (vertical) {
+            pos->y_advance = -em;
+          }
+          else {
+            pos->x_advance = em;
+          }
+        }
         break;
       case GFNT_SPACE_4_EM_18:
-        pos->x_advance = (int32_t)((int64_t)upem * 4 / 18);
+        if (vertical) {
+          pos->y_advance = -(int32_t)((int64_t)upem * 4 / 18);
+        }
+        else {
+          pos->x_advance = (int32_t)((int64_t)upem * 4 / 18);
+        }
         break;
       case GFNT_SPACE_FIGURE:
       case GFNT_SPACE_PUNCTUATION: {
@@ -152,16 +168,28 @@ static void gfnt_fallback_spaces(const GFNT_Face * face, GFNT_LBuffer * buf,
 
           if (gfnt_face_glyph_for_codepoint(face, probe[k], &glyph, NULL)
                   == GFNT_OK && glyph
-              && gfnt_face_glyph_advance(face, glyph, variation, &advance,
-                  NULL) == GFNT_OK) {
-            pos->x_advance = advance;
+              && (vertical
+                  ? gfnt_vertical_advance(face, glyph, variation, &advance)
+                  : gfnt_face_glyph_advance(face, glyph, variation, &advance,
+                      NULL)) == GFNT_OK) {
+            if (vertical) {
+              pos->y_advance = advance;
+            }
+            else {
+              pos->x_advance = advance;
+            }
             break;
           }
         }
         break;
       }
       case GFNT_SPACE_NARROW:
-        pos->x_advance /= 2;
+        if (vertical) {
+          pos->y_advance /= 2;
+        }
+        else {
+          pos->x_advance /= 2;
+        }
         break;
       default:
         break;
@@ -262,6 +290,32 @@ static void gfnt_setup_fraction_masks(const GFNT_Plan * plan,
  * Take a mark's advance away. If no `GPOS` has placed it, it is moved back by the
  * advance first, so that it hangs over the glyph before it instead of after.
  */
+/**
+ * The vertical presentation form of a character, which is what HarfBuzz puts in
+ * its place in a vertical run when the font has no `vert` feature of its own.
+ */
+static uint32_t gfnt_vertical_form(uint32_t c) {
+  static const struct { uint16_t from, to; } forms[] = {
+    {0x2013, 0xFE32}, {0x2014, 0xFE31}, {0x2025, 0xFE30}, {0x2026, 0xFE19},
+    {0x3001, 0xFE11}, {0x3002, 0xFE12}, {0x3008, 0xFE3F}, {0x3009, 0xFE40},
+    {0x300A, 0xFE3D}, {0x300B, 0xFE3E}, {0x300C, 0xFE41}, {0x300D, 0xFE42},
+    {0x300E, 0xFE43}, {0x300F, 0xFE44}, {0x3010, 0xFE3B}, {0x3011, 0xFE3C},
+    {0x3014, 0xFE39}, {0x3015, 0xFE3A}, {0x3016, 0xFE17}, {0x3017, 0xFE18},
+    {0xFE4F, 0xFE34}, {0xFF01, 0xFE15}, {0xFF08, 0xFE35}, {0xFF09, 0xFE36},
+    {0xFF0C, 0xFE10}, {0xFF1A, 0xFE13}, {0xFF1B, 0xFE14}, {0xFF1F, 0xFE16},
+    {0xFF3B, 0xFE47}, {0xFF3D, 0xFE48}, {0xFF3F, 0xFE33}, {0xFF5B, 0xFE37},
+    {0xFF5D, 0xFE38},
+  };
+  size_t i;
+
+  for (i = 0; i < sizeof forms / sizeof forms[0]; i++) {
+    if (forms[i].from == c) {
+      return forms[i].to;
+    }
+  }
+  return c;
+}
+
 static void gfnt_zero_mark_widths(GFNT_LBuffer * buf, bool adjust) {
   size_t i;
 
@@ -323,6 +377,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   size_t chars_capacity = 0;
   bool native_rtl;
   bool reversed_first;
+  bool vertical;
   size_t i;
 
   gfnt_error_clear(error);
@@ -344,6 +399,13 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   if (count == 0) {
     *out_run = run;
     return GFNT_OK;
+  }
+  vertical = options->direction == GFNT_DIRECTION_TTB
+      || options->direction == GFNT_DIRECTION_BTT;
+  if (vertical && options->variation && options->variation->count) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
+        "vertical text at a location in the design space is not shaped: the "
+        "vertical metrics would have to move with it");
   }
   // No script named: the text's own, as HarfBuzz guesses it.
   resolved = *options;
@@ -397,7 +459,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // marks; a run in the script's own direction is turned round at the end.
   native_rtl = plan.native_rtl;
   ctx.native_rtl = native_rtl;
-  reversed_first = (options->direction == GFNT_DIRECTION_RTL) != native_rtl;
+  reversed_first = (options->direction == GFNT_DIRECTION_RTL
+                       || options->direction == GFNT_DIRECTION_BTT) != native_rtl;
   if (reversed_first) {
     gfnt_reverse_clusters(chars, count);
   }
@@ -409,6 +472,35 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
       result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
           "no memory while preparing the run");
       goto done;
+    }
+  }
+
+  // Text that runs backwards shows a bracket the other way round, if the font has
+  // the glyph for its mirror image.
+  if (options->direction == GFNT_DIRECTION_RTL
+      || options->direction == GFNT_DIRECTION_BTT) {
+    for (i = 0; i < chars_len; i++) {
+      uint32_t mirrored = guni_bidi_mirror(chars[i].unicode);
+      uint32_t glyph = 0;
+
+      if (mirrored != chars[i].unicode
+          && gfnt_face_glyph_for_codepoint(face, mirrored, &glyph, NULL)
+              == GFNT_OK && glyph) {
+        chars[i].unicode = mirrored;
+      }
+    }
+  }
+
+  if (vertical && !gfnt_plan_found_mask(&plan, GFNT_TAG('v', 'e', 'r', 't'))) {
+    for (i = 0; i < chars_len; i++) {
+      uint32_t form = gfnt_vertical_form(chars[i].unicode);
+      uint32_t glyph = 0;
+
+      if (form != chars[i].unicode
+          && gfnt_face_glyph_for_codepoint(face, form, &glyph, NULL)
+              == GFNT_OK && glyph) {
+        chars[i].unicode = form;
+      }
     }
   }
 
@@ -587,9 +679,26 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     // Every field, not only the advance: the array grew with the run and holds
     // whatever the allocator last had in it.
     memset(&buf.pos[i], 0, sizeof buf.pos[i]);
-    buf.pos[i].x_advance = advance;
+    if (vertical) {
+      int32_t origin_x = 0;
+      int32_t origin_y = 0;
+
+      if (!gfnt_vertical_advance(face, buf.info[i].glyph, options->variation,
+              &buf.pos[i].y_advance)) {
+        buf.pos[i].y_advance = 0;
+      }
+      // The glyph is drawn with its vertical origin where the pen is.
+      if (gfnt_vertical_origin(face, buf.info[i].glyph, options->variation,
+              &origin_x, &origin_y)) {
+        buf.pos[i].x_offset -= origin_x;
+        buf.pos[i].y_offset -= origin_y;
+      }
+    }
+    else {
+      buf.pos[i].x_advance = advance;
+    }
   }
-  gfnt_fallback_spaces(face, &buf, options->variation);
+  gfnt_fallback_spaces(face, &buf, options->variation, vertical);
 
   // A shaper that wants marks taken out of the width before positioning says so.
   if (plan.shaper->zero_width_marks == 1) {
@@ -604,6 +713,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     gpos.gdef = &gdef;
     gpos.is_gpos = true;
     gpos.rtl = native_rtl;
+    gpos.vertical = vertical;
     result = gfnt_layout_open(face, GFNT_TAG_GPOS, &gpos_table, error);
     if (result != GFNT_OK) {
       goto done;
@@ -648,7 +758,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     }
   }
   if (plan.tables[1].present) {
-    gfnt_gpos_position_finish_offsets(&buf, native_rtl);
+    gfnt_gpos_position_finish_offsets(&buf, native_rtl, vertical);
   }
   // A font with no `GPOS` does not say where a mark goes, so the shaper does.
   if (!plan.tables[1].present && plan.shaper->fallback_position) {

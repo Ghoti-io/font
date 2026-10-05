@@ -63,7 +63,7 @@ FIXTURES = os.path.join(ROOT, "tests", "data", "fonts")
 # of these areas is read as the gap and not as a defect - and so that the corpus
 # below visibly avoids them rather than quietly omitting them.
 GAPS = {
-    "bidi and vertical text": "one direction, horizontal, per run",
+    "bidi text": "one direction per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
     "Indic character details": "a handful of characters in Gujarati, Oriya and Telugu "
@@ -135,6 +135,7 @@ FORMS = [
 # means. A group names a probe code point, and only fonts that map it are shaped:
 # a font with no Arabic shapes every Arabic text to .notdef the same way twice.
 ARABIC = [
+    "(مرحبا) [بالعالم] {جميل} «نعم»",
     "\u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u0639\u0627\u0644\u0645",
     "\u0627\u0644\u0633\u0644\u0627\u0645 \u0639\u0644\u064a\u0643\u0645",
     "\u0628\u0633\u0645 \u0627\u0644\u0644\u0647 \u0627\u0644\u0631\u062d\u0645\u0646 \u0627\u0644\u0631\u062d\u064a\u0645",
@@ -149,6 +150,7 @@ ARABIC = [
     "\u0628\u0651\u064e\u064b\u0650 \u0628\u064e\u0651 \u0644\u0651\u0670\u0627",
 ]
 HEBREW = [
+    "(שלום) [עולם] {טוב} «כן»",
     "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd",
     "\u05d1\u05b0\u05bc\u05e8\u05b5\u05d0\u05e9\u05b4\u05c1\u05d9\u05ea \u05d1\u05b8\u05bc\u05e8\u05b8\u05d0",
     "\u05d0\u05b1\u05dc\u05b9\u05d4\u05b4\u05d9\u05dd \u05d4\u05b7\u05e9\u05b8\u05c1\u05de\u05b7\u05d9\u05b4\u05dd",
@@ -206,6 +208,14 @@ CYRILLIC = [
     "Таким образом ЛТ ГА ТА та",
 ]
 
+CJK = [
+    "日本語のテキスト、これは「例」です。",
+    "漢字（かんじ）と、ひらがな・カタカナ！",
+    "ABC 日本 123 ー。",
+    "ＡＢＣ　全角　スペース",
+    "「あ」「い」（う）〜…―",
+]
+
 # (name, ISO 15924 script, OpenType script, BCP 47 language or None, OpenType
 # language system or 0, HarfBuzz feature list, corpus). The two language tags are
 # the same language spelled the two ways each side takes it.
@@ -234,6 +244,11 @@ GROUPS = [
     ("thai", "Thai", "thai", None, "", "", THAI, "", 0xe01),
     ("lao", "Laoo", "lao ", None, "", "", LAO, "", 0xe81),
     ("hangul", "Hang", "hang", None, "", "", HANGUL, "", 0xac00),
+    ("vertical latin", "Latn", "latn", None, "", "", LATIN, "", 0, "ttb"),
+    ("vertical cjk", "Hani", "hani", None, "", "", CJK, "", 0x3001, "ttb"),
+    ("vertical cjk btt", "Hani", "hani", None, "", "", CJK, "", 0x3001, "btt"),
+    ("vertical -vert", "Hani", "hani", None, "", "-vert,+vkrn", CJK, "", 0x3001,
+        "ttb"),
     ("greek", "Grek", "grek", None, "", "", GREEK),
     ("cyrillic", "Cyrl", "cyrl", None, "", "", CYRILLIC),
 ]
@@ -495,6 +510,8 @@ def hb_command(font, group, lines, out):
         parts.append("--features=%s" % features)
     if variations:
         parts.append("--variations=%s" % variations)
+    if len(group) > 9 and group[9]:
+        parts.append("--direction=%s" % group[9])
     parts.append("--text-file=%s" % lines)
     return " ".join("'%s'" % p.replace("'", "'\\''") for p in parts) + \
         " > '%s' 2> '%s.err'" % (out, out)
@@ -506,6 +523,8 @@ def ours(font, group, lines):
     argv = [DRIVER, "--batch"]
     if variations:
         argv += ["--location", variations]
+    if len(group) > 9 and group[9]:
+        argv.append("--" + group[9])
     if ot:
         argv += ["--script", ot]
     if ot_lang:
@@ -545,6 +564,14 @@ DUMP = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
                     "font-dump")
 SAMPLES = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
                        "font-samples")
+
+
+def has_vertical(font):
+    """Whether the file carries a `vmtx` (or a `VORG`): the fonts that vertical
+    text means something for. A collection is searched whole."""
+    with open(font, "rb") as handle:
+        data = handle.read()
+    return b"vmtx" in data or b"VORG" in data
 
 
 def has_aat(font):
@@ -679,6 +706,8 @@ def main(argv):
         for group in (own if own is not None else groups):
             if own is None and len(group) > 8 and group[8] \
                     and group[8] not in have:
+                continue
+            if len(group) > 9 and group[9] and not has_vertical(font):
                 continue
             # One lines file per distinct corpus: the shared groups reuse theirs.
             key = hashlib.sha1("\n".join(group[6]).encode("utf-8")).hexdigest()[:12]

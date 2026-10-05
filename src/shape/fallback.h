@@ -40,6 +40,21 @@
 #include <stdbool.h>
 #include "../layout_tables/layout.h"
 
+/** A glyph's box: HarfBuzz's `hb_glyph_extents_t`, y up, height negative. */
+typedef struct GFNT_Extents {
+  int32_t x_bearing;
+  int32_t y_bearing;
+  int32_t width;
+  int32_t height;
+} GFNT_Extents;
+
+/**
+ * The box of a glyph, in whole font units: HarfBuzz's `get_glyph_extents()`.
+ * @return false if the face cannot say.
+ */
+bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Extents * out);
+
 /**
  * Position the marks of every cluster of the run.
  *

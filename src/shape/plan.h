@@ -52,6 +52,7 @@
 #define GFNT_PF_MANUAL_ZWNJ 0x04u   ///< Joiners are the lookup's business, not skipped.
 #define GFNT_PF_MANUAL_ZWJ 0x08u
 #define GFNT_PF_PER_SYLLABLE 0x10u  ///< Matches do not cross a syllable.
+#define GFNT_PF_GLOBAL_SEARCH 0x20u ///< If the language system lacks it, any feature of the tag will do.
 
 #define GFNT_NO_FEATURE 0xFFFFu
 #define GFNT_MAX_STAGES 32
@@ -167,6 +168,7 @@ struct GFNT_Plan {
   bool has_frac;
   bool has_mark_feature;      ///< `mark` is in a language system of either table.
   bool native_rtl;
+  bool vertical;              ///< The run is top to bottom or bottom to top.
 };
 
 /** Grow a vector, as in shape.c: the new storage, or NULL (the old stays valid). */

@@ -217,6 +217,19 @@ static uint32_t gfnt_find_feature(GFNT_LApply * c, size_t langsys,
   return GFNT_NO_FEATURE;
 }
 
+/** The first feature in the table's list with this tag, or GFNT_NO_FEATURE. */
+static uint32_t gfnt_find_feature_anywhere(GFNT_LApply * c, GFNT_Tag tag) {
+  const GFNT_LayoutTable * lt = c->lt;
+  uint32_t i;
+
+  for (i = 0; i < lt->feature_count && !c->fault.bad; i++) {
+    if (gfnt_lu32(c, lt->feature_list + 2 + 6 * (size_t)i) == tag) {
+      return i;
+    }
+  }
+  return GFNT_NO_FEATURE;
+}
+
 /** Add a feature's lookups to the table's list. */
 static bool gfnt_plan_add_lookups(GFNT_LApply * c, const GFNT_Face * face,
     GFNT_PlanTable * pt, const GFNT_Allocator * a, uint32_t feature,
@@ -573,8 +586,14 @@ static void gfnt_plan_collect_default(GFNT_Plan * plan) {
     }
     gfnt_plan_enable(plan, common[i], flags, 1);
   }
-  for (i = 0; i < sizeof horizontal / sizeof horizontal[0]; i++) {
-    gfnt_plan_enable(plan, horizontal[i], 0, 1);
+  if (plan->vertical) {
+    // Only `vert`, and wherever the font keeps it.
+    gfnt_plan_enable(plan, GFNT_TAG('v', 'e', 'r', 't'), GFNT_PF_GLOBAL_SEARCH, 1);
+  }
+  else {
+    for (i = 0; i < sizeof horizontal / sizeof horizontal[0]; i++) {
+      gfnt_plan_enable(plan, horizontal[i], 0, 1);
+    }
   }
   if (plan->shaper->override_features) {
     plan->shaper->override_features(plan);
@@ -654,9 +673,12 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
     }
   }
 
-  plan->native_rtl = gfnt_script_native_rtl(plan->script);
+  plan->vertical = options->direction == GFNT_DIRECTION_TTB
+      || options->direction == GFNT_DIRECTION_BTT;
+  // Vertical text has no native direction of its script: it is top to bottom.
+  plan->native_rtl = !plan->vertical && gfnt_script_native_rtl(plan->script);
   plan->shaper = gfnt_shaper_select(plan->script, plan->tables[0].script,
-      true);
+      !plan->vertical);
 
   gfnt_plan_collect_default(plan);
   for (i = 0; i < options->feature_count; i++) {
@@ -677,7 +699,8 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
   }
   plan->gsub_stages = (size_t)plan->gsub_stage + 1;
   gfnt_plan_compile_features(plan);
-  plan->kern_mask = gfnt_plan_mask(plan, GFNT_TAG('k', 'e', 'r', 'n'));
+  plan->kern_mask = gfnt_plan_mask(plan, plan->vertical
+      ? GFNT_TAG('v', 'k', 'r', 'n') : GFNT_TAG('k', 'e', 'r', 'n'));
   plan->frac_mask = gfnt_plan_mask(plan, GFNT_TAG('f', 'r', 'a', 'c'));
   plan->numr_mask = gfnt_plan_mask(plan, GFNT_TAG('n', 'u', 'm', 'r'));
   plan->dnom_mask = gfnt_plan_mask(plan, GFNT_TAG('d', 'n', 'o', 'm'));
@@ -714,6 +737,9 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
       }
       index = s->langsys ? gfnt_find_feature(&s->c, s->langsys, f->tag)
                          : GFNT_NO_FEATURE;
+      if (index == GFNT_NO_FEATURE && (f->flags & GFNT_PF_GLOBAL_SEARCH)) {
+        index = gfnt_find_feature_anywhere(&s->c, f->tag);
+      }
       if (index != GFNT_NO_FEATURE) {
         f->found = true;
       }
@@ -755,7 +781,8 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
   }
   // Kerning is the table's job when GPOS has none of its own: a font from before
   // OpenType layout, or one whose GPOS carries only marks.
-  plan->kern_fallback = plan->kern_mask != 0 && !plan->tables[1].kern_found;
+  plan->kern_fallback = !plan->vertical && plan->kern_mask != 0
+      && !plan->tables[1].kern_found;
   if (plan->shaper->data_create) {
     plan->shaper_data = plan->shaper->data_create(plan, a);
     if (!plan->shaper_data) {

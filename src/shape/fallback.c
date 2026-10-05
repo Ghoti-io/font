@@ -30,14 +30,6 @@
 #include "../tables/tables.h"
 #include "fallback.h"
 
-/** A glyph's box: HarfBuzz's `hb_glyph_extents_t`, y up, height negative. */
-typedef struct GFNT_Extents {
-  int32_t x_bearing;
-  int32_t y_bearing;
-  int32_t width;
-  int32_t height;
-} GFNT_Extents;
-
 // Positional combining classes (UAX #44).
 #define GFNT_CCC_ATTACHED_BELOW_LEFT 200
 #define GFNT_CCC_ATTACHED_BELOW 202
@@ -60,7 +52,7 @@ typedef struct GFNT_Extents {
  * `xMin` (they differ when a font keeps the glyph away from its origin). At a
  * location, and for a charstring, it is the box of the control points.
  */
-static bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
+bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Extents * out) {
   GFNT_Box box;
   GFNT_Outline * outline = NULL;

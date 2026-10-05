@@ -155,6 +155,7 @@ struct Request {
   std::string features;
   std::string location;  ///< `tag=value,...` in user coordinates, or empty.
   bool rtl = false;
+  GFNT_Direction vertical = GFNT_DIRECTION_LTR;  ///< TTB or BTT, to override rtl.
 };
 
 /** The normalised coordinates of a location: every axis at its default but the named. */
@@ -200,7 +201,8 @@ GFNT_Result shape(const Font & font, const std::vector<uint32_t> & text,
       ? 0 : tag4(request.script);
   options.language = request.language.empty() || request.language == "-"
       ? 0 : tag4(request.language);
-  options.direction = request.rtl ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
+  options.direction = request.vertical != GFNT_DIRECTION_LTR ? request.vertical
+      : request.rtl ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
   options.features = features.empty() ? nullptr : features.data();
   options.feature_count = features.size();
   std::vector<GFNT_F2Dot14> coordinates =
@@ -258,6 +260,47 @@ constexpr uint32_t kA = 2, kB = 3, kC = 4, kD = 5, kF = 7, kH = 9, kI = 10,
     kL = 13, kM = 14, kO = 16, kP = 17, kQ = 18, kX = 25, kY = 26, kZ = 27,
     kAAlt2 = 29, kFI = 31, kFF = 32, kFFI = 33, kFL = 34, kOO = 35,
     kAcute = 36, kGrave = 37;
+
+/** A `vhea` of @p count long metrics, and a `vmtx` giving each one 700 and tsb 50. */
+std::vector<gfnttest::Table> vertical_tables(uint16_t count, bool vorg) {
+  std::vector<uint8_t> vhea;
+  gfnttest::put_u16(vhea, 1);
+  gfnttest::put_u16(vhea, 0x1000);
+  for (int i = 0; i < 15; ++i) {
+    gfnttest::put_u16(vhea, 0);
+  }
+  gfnttest::put_u16(vhea, count);
+  std::vector<uint8_t> vmtx;
+  for (uint16_t i = 0; i < count; ++i) {
+    gfnttest::put_u16(vmtx, 700);
+    gfnttest::put_s16(vmtx, 50);
+  }
+  std::vector<gfnttest::Table> out = {{GFNT_TAG('v', 'h', 'e', 'a'), vhea},
+      {GFNT_TAG('v', 'm', 't', 'x'), vmtx}};
+  if (vorg) {
+    std::vector<uint8_t> v;
+    gfnttest::put_u16(v, 1);
+    gfnttest::put_u16(v, 0);
+    gfnttest::put_s16(v, 880);   // the default origin
+    gfnttest::put_u16(v, 1);     // one exception
+    gfnttest::put_u16(v, 2);     // glyph 2 ...
+    gfnttest::put_s16(v, 760);   // ... sits higher up
+    out.push_back({GFNT_TAG('V', 'O', 'R', 'G'), v});
+  }
+  return out;
+}
+
+Glyphs shape_vertical(std::vector<uint8_t> bytes, const std::vector<uint32_t> & text,
+    GFNT_Direction direction, const std::string & features = "") {
+  Font font(std::move(bytes));
+  EXPECT_EQ(font.result, GFNT_OK);
+  Request request;
+  request.vertical = direction;
+  request.features = features;
+  Glyphs g;
+  EXPECT_EQ(shape(font, text, request, &g), GFNT_OK);
+  return g;
+}
 
 }  // namespace
 
@@ -1913,4 +1956,74 @@ TEST(ShapeAllocation, EveryAllocationRefusedInTurnInTheScriptShapersToo) {
           << " leaked";
     }
   }
+}
+
+// --- vertical text and mirroring ---------------------------------------------------
+
+TEST(ShapeVertical, AdvancesComeFromVmtxAndTheOriginFromVorg) {
+  Glyphs g = shape_vertical(small_font(vertical_tables(1, true)), cps("AB"),
+      GFNT_DIRECTION_TTB);
+  // Down is negative. The pen sits half the glyph's width across and at VORG's
+  // height, so the glyph moves left by 250 and down by that height.
+  EXPECT_EQ(g, (Glyphs{{1, 0, 0, -700, -250, -880}, {2, 1, 0, -700, -250, -760}}));
+}
+
+TEST(ShapeVertical, WithoutVorgTheOriginIsTheAscender) {
+  Glyphs g = shape_vertical(small_font(vertical_tables(1, false)), cps("A"),
+      GFNT_DIRECTION_TTB);
+  EXPECT_EQ(g, (Glyphs{{1, 0, 0, -700, -250, -800}}));
+}
+
+TEST(ShapeVertical, WithoutVmtxAnAdvanceIsTheHeightOfTheLine) {
+  Glyphs g = shape_vertical(small_font({}), cps("A"), GFNT_DIRECTION_TTB);
+  EXPECT_EQ(g[0].y_advance, -1000);
+  EXPECT_EQ(g[0].x_advance, 0);
+}
+
+TEST(ShapeVertical, BottomToTopComesBackInVisualOrder) {
+  Glyphs g = shape_vertical(small_font(vertical_tables(1, true)), cps("AB"),
+      GFNT_DIRECTION_BTT);
+  EXPECT_EQ(g, (Glyphs{{2, 1, 0, -700, -250, -760}, {1, 0, 0, -700, -250, -880}}));
+}
+
+TEST(ShapeVertical, TheVertFeatureReplacesTheHorizontalOnes) {
+  Font font("layout-gpos.ttf");
+  Request request;
+  request.vertical = GFNT_DIRECTION_TTB;
+  Glyphs vertical, horizontal;
+  ASSERT_EQ(shape(font, cps("AV"), request, &vertical), GFNT_OK);
+  ASSERT_EQ(shape(font, cps("AV"), Request{}, &horizontal), GFNT_OK);
+  // The font kerns A V; vertical text does not ask for `kern`.
+  EXPECT_NE(horizontal[0].x_advance, vertical[0].x_advance);
+  EXPECT_EQ(vertical[0].x_advance, 0);
+}
+
+TEST(ShapeVertical, ALocationInTheDesignSpaceIsRefused) {
+  Font font("variable-featurevars.ttf");
+  Request request;
+  request.vertical = GFNT_DIRECTION_TTB;
+  request.location = "wght=900";
+  request.script = "";
+  Glyphs g;
+  EXPECT_EQ(shape(font, cps("AB"), request, &g), GFNT_ERR_UNSUPPORTED);
+}
+
+TEST(ShapeVertical, AVerticalFormStandsInWhereTheFontHasNoVertFeature) {
+  Glyphs g = shape_vertical(small_font(vertical_tables(1, false), 8,
+                                {{0xFF08, 6}, {0xFE35, 7}}),
+      {0xFF08}, GFNT_DIRECTION_TTB);
+  EXPECT_EQ(g[0].glyph, 7u);
+}
+
+TEST(ShapeMirror, ABracketTurnsRoundInABackwardsRunIfTheFontHasItsMirror) {
+  auto font = small_font({}, 8, {{'(', 6}, {')', 7}});
+  Font f(font);
+  Request request;
+  request.rtl = true;
+  Glyphs g;
+  ASSERT_EQ(shape(f, cps("(A"), request, &g), GFNT_OK);
+  EXPECT_EQ(g[0].glyph, 1u);
+  EXPECT_EQ(g[1].glyph, 7u);
+  ASSERT_EQ(shape(f, cps("(A"), Request{}, &g), GFNT_OK);
+  EXPECT_EQ(g[0].glyph, 6u);
 }

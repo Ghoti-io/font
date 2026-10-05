@@ -43,8 +43,10 @@
  *     the forms the font's features make. In nine scripts a handful of
  *     characters are sorted into a different category than HarfBuzz's table
  *     gives them; `hb_diff.py` lists them.
- *   * **No bidirectional reordering and no vertical text.** A run is one
- *     direction, left to right or right to left, and horizontal.
+ *   * **No bidirectional reordering.** A run is one direction: left to right,
+ *     right to left, top to bottom or bottom to top. Vertical text is shaped as
+ *     HarfBuzz shapes it for a font that is not variable; at a location in the
+ *     design space a vertical run is refused.
  *   * **No device table for a pixel size.** Positions are in font units; a
  *     `VariationIndex` device table is read when a location is given.
  *
@@ -74,7 +76,16 @@ extern "C" {
 /** @brief Which way a run reads. */
 typedef enum GFNT_Direction {
   GFNT_DIRECTION_LTR = 0, ///< Left to right: the glyphs come back in text order.
-  GFNT_DIRECTION_RTL      ///< Right to left: they come back in visual order.
+  GFNT_DIRECTION_RTL,     ///< Right to left: they come back in visual order.
+  /**
+   * Top to bottom: the glyphs come back in text order, and each one moves the pen
+   * down by `y_advance`, which is negative because y points up. The `vert`
+   * feature is on in place of the horizontal ones, advances come from `vmtx` and
+   * every offset puts the glyph's vertical origin, from `VORG` or `vmtx`, where
+   * the pen is.
+   */
+  GFNT_DIRECTION_TTB,
+  GFNT_DIRECTION_BTT      ///< Bottom to top: as top to bottom, in visual order.
 } GFNT_Direction;
 
 /**

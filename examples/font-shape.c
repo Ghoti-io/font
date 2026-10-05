@@ -29,6 +29,7 @@
  *   --language <tag>    the OpenType language system tag, as `TRK `
  *   --rtl, --ltr        the run reads right to left, or left to right; with
  *                       neither, the way its script is written
+ *   --ttb, --btt        the run reads top to bottom, or bottom to top
  *   --features <list>   as HarfBuzz's: `+liga,-kern,aalt=2,liga[3:5]`
  *   --face <n>          which face of a collection
  *   --unicodes <list>   code points, as `U+0041,U+0056`, instead of <text>
@@ -218,6 +219,14 @@ int main(int argc, char ** argv) {
       options.direction = GFNT_DIRECTION_LTR;
       direction_given = true;
     }
+    else if (strcmp(argv[arg], "--ttb") == 0) {
+      options.direction = GFNT_DIRECTION_TTB;
+      direction_given = true;
+    }
+    else if (strcmp(argv[arg], "--btt") == 0) {
+      options.direction = GFNT_DIRECTION_BTT;
+      direction_given = true;
+    }
     else if (strcmp(argv[arg], "--features") == 0 && arg + 1 < argc) {
       features = argv[++arg];
     }
@@ -263,7 +272,7 @@ int main(int argc, char ** argv) {
   }
   if (!path || (!text && !unicodes && !layout && !batch)) {
     fprintf(stderr,
-        "usage: %s [--script tag] [--language tag] [--rtl] [--features list]"
+        "usage: %s [--script tag] [--language tag] [--rtl|--ttb|--btt] [--features list]"
         " [--face n] [--unicodes U+0041,...] <font> <text>\n", argv[0]);
     return 2;
   }

@@ -129,7 +129,12 @@ static bool gfnt_gpos_apply_value(GFNT_LApply * c, uint32_t format, size_t base,
   }
   if (format & GFNT_VF_Y_ADVANCE) {
     // Only vertical text moves the pen along y; in horizontal text the value is
-    // read and dropped, as HarfBuzz does. (Vertical text is not shaped here.)
+    // read and dropped, as HarfBuzz does. A y advance grows downward and the
+    // font's space grows upward, hence the negation.
+    if (c->vertical) {
+      pos->y_advance -= gfnt_ls16(c, values);
+      applied = true;
+    }
     values += 2;
   }
   if (format & GFNT_VF_DEVICES) {
@@ -149,6 +154,10 @@ static bool gfnt_gpos_apply_value(GFNT_LApply * c, uint32_t format, size_t base,
       values += 2;
     }
     if (format & GFNT_VF_Y_ADV_DEVICE) {
+      if (c->vertical) {
+        pos->y_advance -= gfnt_gpos_round(c, gfnt_gpos_device_delta(c,
+            gfnt_l_rel(base, gfnt_lu16(c, values))));
+      }
       values += 2;
     }
   }
@@ -311,7 +320,7 @@ static bool gfnt_gpos_pair(GFNT_LApply * c, size_t sub) {
 
 /** Undo the links of a cursive chain that is about to be re-parented. */
 static void gfnt_gpos_reverse_cursive(GFNT_LPos * pos, size_t i,
-    size_t new_parent) {
+    size_t new_parent, bool vertical) {
   int32_t chain = pos[i].attach_chain;
   uint8_t type = pos[i].attach_type;
   size_t j;
@@ -325,8 +334,13 @@ static void gfnt_gpos_reverse_cursive(GFNT_LPos * pos, size_t i,
   if (j == new_parent) {
     return;
   }
-  gfnt_gpos_reverse_cursive(pos, j, new_parent);
-  pos[j].y_offset = -pos[i].y_offset;
+  gfnt_gpos_reverse_cursive(pos, j, new_parent, vertical);
+  if (vertical) {
+    pos[j].x_offset = -pos[i].x_offset;
+  }
+  else {
+    pos[j].y_offset = -pos[i].y_offset;
+  }
   pos[j].attach_chain = -chain;
   pos[j].attach_type = type;
 }
@@ -384,7 +398,15 @@ static bool gfnt_gpos_cursive(GFNT_LApply * c, size_t sub) {
   j = b->idx;
   gfnt_gpos_anchor(c, exit_anchor, &exit_x, &exit_y);
   gfnt_gpos_anchor(c, entry, &entry_x, &entry_y);
-  if (!c->rtl) {
+  if (c->vertical) {
+    // Vertical text is always shaped top to bottom: bottom to top is turned round
+    // before and after.
+    b->pos[i].y_advance = gfnt_gpos_round(c, exit_y) + b->pos[i].y_offset;
+    d = gfnt_gpos_round(c, entry_y) + b->pos[j].y_offset;
+    b->pos[j].y_advance -= d;
+    b->pos[j].y_offset -= d;
+  }
+  else if (!c->rtl) {
     b->pos[i].x_advance = gfnt_gpos_round(c, exit_x) + b->pos[i].x_offset;
     d = gfnt_gpos_round(c, entry_x) + b->pos[j].x_offset;
     b->pos[j].x_advance -= d;
@@ -411,18 +433,27 @@ static bool gfnt_gpos_cursive(GFNT_LApply * c, size_t sub) {
     x_offset = -x_offset;
     y_offset = -y_offset;
   }
-  (void)x_offset;
   // If the child was already attached, its old chain is reversed so that the
   // whole tree it was part of now hangs from the new parent.
-  gfnt_gpos_reverse_cursive(b->pos, child, parent);
+  gfnt_gpos_reverse_cursive(b->pos, child, parent, c->vertical);
   b->pos[child].attach_type = GFNT_ATTACH_CURSIVE;
   b->pos[child].attach_chain = (int32_t)((int64_t)parent - (int64_t)child);
   b->has_attachment = true;
-  b->pos[child].y_offset = gfnt_gpos_round(c, y_offset);
+  if (c->vertical) {
+    b->pos[child].x_offset = gfnt_gpos_round(c, x_offset);
+  }
+  else {
+    b->pos[child].y_offset = gfnt_gpos_round(c, y_offset);
+  }
   // If the parent was attached to the child, separate them.
   if (b->pos[parent].attach_chain == -b->pos[child].attach_chain) {
     b->pos[parent].attach_chain = 0;
-    b->pos[parent].y_offset = 0;
+    if (c->vertical) {
+      b->pos[parent].x_offset = 0;
+    }
+    else {
+      b->pos[parent].y_offset = 0;
+    }
   }
   b->idx++;
   return true;
@@ -700,7 +731,7 @@ void gfnt_gpos_position_start(GFNT_LBuffer * b) {
  * measured from the base's origin and the pen has moved on.
  */
 static void gfnt_gpos_propagate(GFNT_LPos * pos, size_t len, size_t i,
-    bool rtl) {
+    bool rtl, bool vertical) {
   int32_t chain = pos[i].attach_chain;
   uint8_t type = pos[i].attach_type;
   size_t j;
@@ -717,9 +748,14 @@ static void gfnt_gpos_propagate(GFNT_LPos * pos, size_t len, size_t i,
   if (j >= len) {
     return;
   }
-  gfnt_gpos_propagate(pos, len, j, rtl);
+  gfnt_gpos_propagate(pos, len, j, rtl, vertical);
   if (type & GFNT_ATTACH_CURSIVE) {
-    pos[i].y_offset += pos[j].y_offset;
+    if (vertical) {
+      pos[i].x_offset += pos[j].x_offset;
+    }
+    else {
+      pos[i].y_offset += pos[j].y_offset;
+    }
   }
   else {
     pos[i].x_offset += pos[j].x_offset;
@@ -739,13 +775,14 @@ static void gfnt_gpos_propagate(GFNT_LPos * pos, size_t len, size_t i,
   }
 }
 
-void gfnt_gpos_position_finish_offsets(GFNT_LBuffer * b, bool rtl) {
+void gfnt_gpos_position_finish_offsets(GFNT_LBuffer * b, bool rtl,
+    bool vertical) {
   size_t i;
 
   if (!b->has_attachment) {
     return;
   }
   for (i = 0; i < b->len; i++) {
-    gfnt_gpos_propagate(b->pos, b->len, i, rtl);
+    gfnt_gpos_propagate(b->pos, b->len, i, rtl, vertical);
   }
 }

@@ -208,6 +208,7 @@ typedef struct GFNT_LApply {
   bool auto_zwnj;
   bool is_gpos;
   bool rtl;
+  bool vertical;       ///< The run is vertical: advances are y, cursive runs down.
   uint32_t nesting_left;
 } GFNT_LApply;
 
@@ -372,7 +373,8 @@ GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error);
 
 void gfnt_gpos_position_start(GFNT_LBuffer * b);
-void gfnt_gpos_position_finish_offsets(GFNT_LBuffer * b, bool rtl);
+void gfnt_gpos_position_finish_offsets(GFNT_LBuffer * b, bool rtl,
+    bool vertical);
 
 #ifdef __cplusplus
 }

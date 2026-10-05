@@ -1,0 +1,29 @@
+# The HarfBuzz oracle: the reference for "does shaping this text produce the
+# same glyphs, advances and offsets", and for what the same text looks like when
+# another engine draws it.
+#
+# documentation/design.md section 14. Built here, like the fontTools and FreeType
+# images, so what is pinned is everything the build reads: the base by digest
+# (the same one the FreeType image uses, so the two share its layers) and the
+# HarfBuzz packages by full apt version. The run-time version check in
+# oracle_env.py is the real guarantee. The apt pin will eventually fail to
+# resolve when the archive moves past it; that is the intended failure, because
+# a newer HarfBuzz is new answers, and a new answer that disagrees is a finding
+# to triage rather than a regression to fix.
+#
+# hb-shape answers the shaping differential. hb-view draws with cairo and
+# FreeType, which is the second rendering the side-by-side picture is built from.
+# The image carries no fonts: corpus.py materialises the fontTools image's corpus
+# under build/oracle/corpus, which every oracle container mounts read-only.
+FROM docker.io/library/debian@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
+
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+      libharfbuzz-bin=10.2.0-1+deb13u1 \
+      libharfbuzz0b=10.2.0-1+deb13u1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY harfbuzz-version /usr/local/bin/
+RUN chmod +x /usr/local/bin/harfbuzz-version

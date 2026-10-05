@@ -36,6 +36,10 @@ cmap-format12.ttf	cmap format 12 on (3,10) past the BMP, beside a format 4
 cmap-format6.ttf	cmap format 6 on (1,0): a trimmed array with firstCode
 cmap-symbol.ttf	cmap (3,0) symbol only: U+0041 reachable only via the 0xF0xx rule
 collection.ttc	ttcf: two faces sharing tables, with different OS/2 versions
+layout-gpos.shape	The runs layout-gpos.ttf is shaped on, one per line: script, language, features, code points, and what the case exercises
+layout-gpos.ttf	GPOS with one of every lookup type and format: single in both formats, pair in both (with a value for each glyph of a pair, and a value with device tables), cursive in left-to-right and right-to-left lookups, mark to base, to ligature (a different anchor on each component) and to mark, context in formats 1, 2 and 3, chain in formats 2 and 3, and a lookup behind an extension - written by fontTools
+layout-gsub.shape	The runs layout-gsub.ttf is shaped on, one per line: script, language, features, code points, and what the case exercises
+layout-gsub.ttf	GSUB with one of every lookup type and format: single in both formats, multiple (including to nothing), alternate, ligature, context in formats 1, 2 and 3, chain in formats 1, 2 and 3, reverse chaining, a lookup behind an extension, lookup flags with and without a mark filtering set and a mark attachment type, and nested lookups that grow the run - written by fontTools
 name-mac-encodings.ttf	name: every single-byte Macintosh encoding, all 128 high bytes each
 name-macroman.ttf	name: a Macintosh Roman record holding U+2122 as byte 0xAA
 os2-v0.ttf	OS/2 version 0: no code page ranges, no x-height, no optical size
@@ -63,6 +67,7 @@ type1.pfb	A Type 1 font program in PFB framing: binary segments with little-endi
 variable-avar2.ttf	variable-gvar.ttf's font with an avar version 2: segment maps, then a variation store of three regions (weight up, width up, weight down) that moves each axis as a function of the others, and an index map that sends the weight axis to the second row and the width axis to the first, written by fontTools
 variable-cff2.otf	a CFF2 variable font written by fontTools: two axes, three regions (weight up, weight down, weight and width up together) and glyphs that blend one value, several at once, a curve with a fractional delta, an hvcurveto, and a hintmask
 variable-cvar.ttf	variable-gvar.ttf's font with a cvt table of eight values and a cvar of four tuples: every value, a sparse list, an intermediate region and a two-axis corner, written by fontTools
+variable-featurevars.shape	The runs variable-featurevars.ttf is shaped on, each at a location in its design space: one per FeatureVariations record, the order they are tried in, and either side of a condition's edge
 variable-featurevars.ttf	variable-gvar.ttf's font with a GSUB 1.1 whose FeatureVariations has three records: one condition, two that must both hold, and a substitution of two glyphs; written by fontTools
 variable-gvar.ttf	fvar, avar and gvar written by fontTools: two axes (one hidden), three named instances (one with a PostScript name), a bent avar on one axis and an identity map on the other; and in gvar a single named point, an inferred run between two corners, named points in two contours of one glyph, an intermediate region, a two-axis corner, shared and embedded peaks, a composite whose component offsets move (one placed by matching points, whose delta is ignored), a composite of a composite, and a glyph with no contours that varies only in its phantom points
 variable-hvar.ttf	variable-gvar.ttf's glyphs with HVAR - an advance mapping and a left bearing mapping that shares three rows among nine glyphs, over two regions - and MVAR carrying the hhea, window and typographic ascent, descent and gap, all written by fontTools

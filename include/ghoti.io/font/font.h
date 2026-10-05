@@ -29,8 +29,9 @@
  * boundary: a consumer that only needs to know which glyph a codepoint maps to
  * and how wide it is should not link a rasteriser. Include them by name.
  *
- * Shaping, layout, font discovery and writing are not implemented at all. See
- * documentation/design.md section 18.
+ * Shaping is in `shape.h`, and like `outline.h` and `raster.h` it is not included
+ * here. Paragraph layout, font discovery and writing are not implemented at all.
+ * See documentation/design.md section 18.
  */
 
 #ifndef GHOTI_IO_GFNT_FONT_H

@@ -83,6 +83,9 @@ PROBE = {
     # the Containerfile says what the build was told to fetch, and an image is not
     # its recipe.
     "freetype": (["freetype-version"], "FreeType "),
+    # `hb-shape --version` is what the Containerfile's probe script reads, so the
+    # claim is the version of the binary that will answer and not of its package.
+    "harfbuzz": (["harfbuzz-version"], "HarfBuzz "),
 }
 
 _pins = None

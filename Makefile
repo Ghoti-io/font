@@ -662,13 +662,14 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
 .PHONY: fuzz-cff2 fuzz-run-cff2 fuzz-metvar fuzz-run-metvar fuzz-vartables fuzz-run-vartables
+.PHONY: fuzz-shape fuzz-run-shape
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive
+.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
 .PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
@@ -914,7 +915,7 @@ check-reader: ## Fail if anything under src/ reads font bytes around the reader
 ORACLE := tools/oracle
 ORACLE_RUN := python3 $(ORACLE)/oracle_run.py
 
-oracle-build: ## Build both oracle images from their pinned Containerfiles
+oracle-build: ## Build the oracle images from their pinned Containerfiles
 	@printf "\n### Building the fontTools oracle image ###\n"
 	podman build -t ghoti-font-oracle-fonttools:4.66.0 \
 		-f $(ORACLE)/containers/fonttools/Containerfile \
@@ -923,11 +924,15 @@ oracle-build: ## Build both oracle images from their pinned Containerfiles
 	podman build -t ghoti-font-oracle-freetype:2.14.3 \
 		-f $(ORACLE)/containers/freetype/Containerfile \
 		$(ORACLE)/containers/freetype
+	@printf "\n### Building the HarfBuzz oracle image ###\n"
+	podman build -t ghoti-font-oracle-harfbuzz:10.2.0 \
+		-f $(ORACLE)/containers/harfbuzz/Containerfile \
+		$(ORACLE)/containers/harfbuzz
 
 oracle-version: ## Print which references would answer, and fail if one would not
 oracle-version:
-	@GHOTI_ORACLE_REQUIRED=1 $(ORACLE_RUN) fonttools,freetype -- true \
-		&& printf "both references are reachable and match their pins\n"
+	@GHOTI_ORACLE_REQUIRED=1 $(ORACLE_RUN) fonttools,freetype,harfbuzz -- true \
+		&& printf "every reference is reachable and matches its pin\n"
 
 oracle-corpus: ## Copy the image's fonts to build/oracle/corpus for both sides
 	@python3 $(ORACLE)/corpus.py sfnt
@@ -944,7 +949,7 @@ check-oracle-ttx: $(EXAMPLES)
 check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
-check-oracle: check-oracle-var check-oracle-metrics
+check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -978,6 +983,17 @@ check-oracle-metrics: ## Diff every variable font's advances and line metrics at
 check-oracle-metrics: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
 		python3 $(ORACLE)/metrics_var_diff.py --quiet
+
+# What a line of text shapes to, against HarfBuzz: every string of a corpus per
+# script, over every sfnt in the image and every fixture, under the default
+# features and under feature, language and range variations; and the fixtures'
+# own cases, whose recorded answers (tests/data/golden/shape.txt) are checked
+# against HarfBuzz here so that the unit suite's copy of them cannot go stale.
+# See tools/oracle/hb_diff.py for what is explained by a named gap and what is not.
+check-oracle-hb: ## Diff what every corpus string shapes to against HarfBuzz
+check-oracle-hb: $(EXAMPLES)
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/hb_diff.py --quiet \
+		--check-golden tests/data/golden/shape.txt
 
 check-oracle-cff: ## Diff every CFF glyph's program, path and advance against fontTools
 check-oracle-cff: $(EXAMPLES)
@@ -1669,6 +1685,13 @@ $(eval $(call fuzz-rule,fuzz_metvar,metvar))
 # twice answers once, a count agrees with a listing, and a location that moves
 # nothing returns the table's own values.
 $(eval $(call fuzz-rule,fuzz_vartables,vartables))
+# fuzz_shape takes `GSUB`, `GPOS` and `GDEF` together and shapes a run of text
+# with them, because what a lookup has to survive is the relationship between the
+# three: a coverage that names a glyph the font lacks, a mark class that decides
+# which glyphs a lookup skips, a nested lookup index past the end of the list. It
+# checks that asking twice gives one answer, that every cluster is a position in
+# the text and runs in one direction, and that a run never outgrows the limit.
+$(eval $(call fuzz-rule,fuzz_shape,shape))
 # fuzz_cff takes the whole `CFF ` table, because a CFF is a nest of offsets that
 # point at each other - the Top DICT at the charset and the CharStrings INDEX, the
 # Private DICT at its local subroutines *relative to itself* - and a fuzzer given
@@ -1703,7 +1726,7 @@ $(eval $(call fuzz-rule,fuzz_type1,type1))
 # input either.
 $(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
 
-FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables
+FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables shape
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

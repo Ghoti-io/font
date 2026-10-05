@@ -1,10 +1,12 @@
 # Design
 
 What is implemented reads the sfnt container, the metric tables, `cmap`
-and `name`. §18 lists that, and what of it is not built. Outlines,
-rasterisation, shaping, layout, font discovery and writing are not
-implemented. Shaping and layout need the `unicode` library. Reading a file
-and drawing an outline do not.
+and `name`, draws outlines, and shapes text through `GSUB`, `GPOS` and `kern`
+(§9; the default shaper only - §9.2 says which script shapers are not here).
+§18 lists that, and what of it is not built. Paragraph layout, font discovery
+and writing are not implemented. Layout and the script shapers need the
+`unicode` library. Reading a file, drawing an outline and applying a font's
+lookups do not.
 
 `font` is the suite's font library: font files in - every family of them, not
 one - and positioned glyphs, coverage bitmaps and laid-out paragraphs out, with
@@ -118,7 +120,7 @@ which of them this library takes, and which of those it reads today.
 | | `EBDT`/`EBLC`/`EBSC` strikes; `COLR` v0 + `CPAL` | **wanted**, not implemented |
 | | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | wanted, not implemented; colour bitmaps need `image` |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
-| | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
+| | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |
 | | WOFF 2 | not here; it waits on Brotli in `compress` |
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
@@ -170,7 +172,7 @@ to keep open.
 | `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Both producers are implemented |
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
 | `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Implemented; of the four containers that feed them, `CFF ` inside an sfnt is read |
-| `shape.h` | `GFNT_ShapedRun`, features, the language registry, the script-shaper vtable. Not implemented |
+| `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()`. The default shaper only: no language registry, no script shapers, no normalisation (§9.2) |
 | `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
 | `discover.h` | `GFNT_FontSet`, directory scanning, matching, the default fallback provider. Not implemented |
 | `write.h` | the sfnt serialiser, the subsetter, WOFF 1, the PDF helpers. Not implemented |
@@ -1213,6 +1215,33 @@ falls back to the script's default language system and the run says so.
 `likelySubtags`, which would resolve `zh` to `zh-Hans`, is CLDR and is not
 here; the caller supplies a full tag or accepts the default.
 
+### 9.6 What is built
+
+The engine of 9.1 and the default shaper of 9.2, in `src/layout_tables/` and
+`src/shape/`, behind `shape.h`'s `gfnt_face_shape()`; and the `kern` table of 9.4,
+used only where `GPOS` has no `kern` feature for the script and language system.
+Everything is read in place, like `STAT`: a lookup is an offset into the table,
+and a read past the table sets a flag that turns the run into
+`GFNT_ERR_CORRUPT` with the table and the offset.
+
+What the plan does with a feature, and in what order lookups run, is HarfBuzz's:
+the default features of its default shaper (`rvrn` first, then `ccmp`, `locl`,
+`mark`, `mkmk`, `rlig`, `calt`, `clig`, `curs`, `dist`, `kern`, `liga`, `rclt`, and
+`ltra`/`ltrm` or `rtla`/`rtlm`), the caller's features merged over them (a later
+global request overrides, a ranged one keeps the default for the rest), every
+lookup run once over the whole run in index order. A glyph carries a mask with one
+bit per boolean feature and enough bits for an alternate's number. A nested
+lookup's positions follow the run as it grows or shrinks, the rule 9.1 names, and
+a run may not outgrow sixty-four times its text (never under 16,384 glyphs).
+
+Departures from 9.2, each stated rather than approximated: **no script shaper, no
+normalisation** (so no canonical reordering of marks), **no fallback mark
+positioning**, **no vertical text**, no `GFNT_Scale` (positions are in font
+units), anchors by contour point read their stated coordinates, and a device
+table for a pixel size is ignored. The oracle (§14) is `hb-shape`, and
+`tools/oracle/hb_diff.py` names each of those as a gap and holds the rest to the
+glyph, the cluster, the advance and the offset.
+
 ---
 
 ## 10. Layout
@@ -1228,8 +1257,8 @@ drew.
 
 | # | Thing | Where |
 | --- | --- | --- |
-| 1 | Shaping | `font` shaping, not implemented |
-| 2 | Run measurement: advance sum, ink extents | `font` shaping, not implemented |
+| 1 | Shaping | `font` shaping - the default shaper is implemented, the script shapers are not |
+| 2 | Run measurement: advance sum, ink extents | `font` shaping; the advance sum is a sum over the run, the ink extents are not built |
 | 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, not implemented |
 | 4 | Break opportunities: UAX #14 lines, UAX #29 graphemes and words | `unicode`, applied here |
 | 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout, not implemented |

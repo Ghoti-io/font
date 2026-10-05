@@ -119,6 +119,13 @@ struct Entry {
    * catching a fixture whose generator dropped its `name` table.
    */
   bool states_own_name = true;
+  /**
+   * Whether this fixture is a font at all. False for the cases files beside the
+   * layout fixtures (`*.shape`), which are text the shaping tests and the
+   * HarfBuzz differential read: they are in MANIFEST like every other file the
+   * generator writes, and have no face to load.
+   */
+  bool is_font = true;
 };
 
 const std::vector<Entry> & every_fixture() {
@@ -210,6 +217,14 @@ const std::vector<Entry> & every_fixture() {
       {"variable-cvar.ttf", 9},
       {"variable-cff2.otf", 8},
       {"variable-featurevars.ttf", 9},
+      // The layout fixtures: thirty-nine glyphs (a-z, three alternates, four
+      // ligatures, o_o, three marks) and eighteen (sixteen glyphs after .notdef
+      // and space), and the text files naming the runs each is shaped on.
+      {"layout-gsub.ttf", 39},
+      {"layout-gpos.ttf", 18},
+      {"layout-gsub.shape", 0, false, false, false},
+      {"layout-gpos.shape", 0, false, false, false},
+      {"variable-featurevars.shape", 0, false, false, false},
   };
   return names;
 }
@@ -274,6 +289,9 @@ TEST(Fixtures, ThisSuitesListIsTheGeneratorsList) {
 
 TEST(Fixtures, EveryCommittedFixtureLoads) {
   for (const Entry & entry : every_fixture()) {
+    if (!entry.is_font) {
+      continue;
+    }
     const std::string name = entry.name;
     Fixture fixture(name);
     ASSERT_EQ(fixture.result, GFNT_OK) << name;
@@ -305,6 +323,9 @@ TEST(Fixtures, EveryFixtureNamesItselfAndItsLicence) {
   // the licence question this repository does not have is one the fixture
   // states rather than one a reader infers from its absence (section 14.5).
   for (const Entry & entry : every_fixture()) {
+    if (!entry.is_font) {
+      continue;
+    }
     const std::string name = entry.name;
     Fixture fixture(name);
     ASSERT_EQ(fixture.result, GFNT_OK) << name;
@@ -711,6 +732,9 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
   size_t with_many = 0;
 
   for (const Entry & entry : every_fixture()) {
+    if (!entry.is_font) {
+      continue;
+    }
     const std::string name = entry.name;
     Fixture fixture(name);
     ASSERT_EQ(fixture.result, GFNT_OK) << name;

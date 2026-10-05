@@ -225,6 +225,14 @@
 #define gfnt_face_feature_variations_dump GHOTIIO_FONT(gfnt_face_feature_variations_dump)
 #define gfnt_face_cvt_count GHOTIIO_FONT(gfnt_face_cvt_count)
 #define gfnt_face_cvt_values GHOTIIO_FONT(gfnt_face_cvt_values)
+#define GFNT_Direction GHOTIIO_FONT(GFNT_Direction)
+#define GFNT_ShapeFeature GHOTIIO_FONT(GFNT_ShapeFeature)
+#define GFNT_ShapeOptions GHOTIIO_FONT(GFNT_ShapeOptions)
+#define GFNT_ShapedGlyph GHOTIIO_FONT(GFNT_ShapedGlyph)
+#define GFNT_ShapedRun GHOTIIO_FONT(GFNT_ShapedRun)
+#define gfnt_face_shape GHOTIIO_FONT(gfnt_face_shape)
+#define gfnt_shaped_run_free GHOTIIO_FONT(gfnt_shaped_run_free)
+#define gfnt_face_layout_dump GHOTIIO_FONT(gfnt_face_layout_dump)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

@@ -755,6 +755,25 @@ def main():
                       [(False, 2, [0, 1], [[0, 3000], [-2500, 0]])], axis_count=2)
     write_pair(corpus / "vartables/avar2.seed", 0x31, 0x00,
                avar2_table([[], []], store, delta_map(0, 0x00, [1, 0])))
+    # The tables fuzz_shape reads: the layout fixtures' own GSUB, GPOS and GDEF,
+    # which fontTools wrote and which between them hold every lookup type. The
+    # second header byte places the cut between GSUB and the rest; the options byte
+    # picks features and direction, and a spread of them is written so that each
+    # lookup family is reached on the first run and not by luck.
+    for fixture in ("layout-gsub", "layout-gpos"):
+        fixture_bytes = (root / ("tests/data/fonts/%s.ttf" % fixture)).read_bytes()
+        count = struct.unpack(">H", fixture_bytes[4:6])[0]
+        found = {}
+        for i in range(count):
+            entry = fixture_bytes[12 + 16 * i:28 + 16 * i]
+            table_tag, _, offset, length = struct.unpack(">4sIII", entry)
+            found[table_tag] = fixture_bytes[offset:offset + length]
+        gsub, gpos, gdef = (found.get(b"GSUB", b""), found.get(b"GPOS", b""),
+                            found.get(b"GDEF", b""))
+        total = len(gsub) + len(gpos) + len(gdef)
+        for options in (0x00, 0x01, 0x03, 0x07, 0x10, 0x17, 0x47, 0x0F, 0x1F):
+            write_pair(corpus / ("shape/%s-%02x.seed" % (fixture, options)), options,
+                       (256 * len(gsub)) // max(1, total), gsub + gpos + gdef)
     write_pair(corpus / "vartables/avar2-no-store.seed", 0x31, 0x00,
                avar2_table([[(-16384, -16384), (0, 0), (16384, 16384)], []], b""))
 

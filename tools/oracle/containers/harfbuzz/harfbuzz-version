@@ -1,0 +1,4 @@
+#!/bin/sh
+# What oracle_env.py's probe runs: the version of the library hb-shape is
+# linked against, as the binary reports it rather than as the package is named.
+hb-shape --version | sed -n 's/^.*(HarfBuzz) \([0-9.]*\).*$/HarfBuzz \1/p' | head -1

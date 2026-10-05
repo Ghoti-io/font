@@ -1507,6 +1507,34 @@ def table_offset(data, want):
     raise SystemExit("no %s table in the written font" % want)
 
 
+def build_layout_gsub(out):
+    """GSUB with one of every lookup type and format: see layout_fixtures.py."""
+    import layout_fixtures
+    layout_fixtures.build_layout_gsub(sys.modules[__name__], out)
+
+
+def build_layout_gsub_cases(out):
+    import layout_fixtures
+    layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
+
+
+def build_variable_featurevars_cases(out):
+    import layout_fixtures
+    layout_fixtures.build_variable_featurevars_cases(sys.modules[__name__], out)
+
+
+def build_layout_gpos(out):
+    """GPOS with one of every lookup type and format: see layout_fixtures.py."""
+    import layout_fixtures
+    layout_fixtures.build_layout_gpos(sys.modules[__name__], out)
+
+
+def build_layout_gpos_cases(out):
+    import layout_fixtures
+    layout_fixtures.build_layout_gpos_cases(sys.modules[__name__], out)
+
+
+
 def build_outline_broken_loca(out):
     """A `loca` entry that runs backwards, which condemns one glyph (M11).
 
@@ -4097,6 +4125,30 @@ FIXTURES = {
         "peaks, a composite whose component offsets move (one placed by matching "
         "points, whose delta is ignored), a composite of a composite, and a glyph "
         "with no contours that varies only in its phantom points"),
+    "variable-featurevars.shape": (build_variable_featurevars_cases,
+        "The runs variable-featurevars.ttf is shaped on, each at a location in its "
+        "design space: one per FeatureVariations record, the order they are tried "
+        "in, and either side of a condition's edge"),
+    "layout-gsub.ttf": (build_layout_gsub,
+        "GSUB with one of every lookup type and format: single in both formats, "
+        "multiple (including to nothing), alternate, ligature, context in "
+        "formats 1, 2 and 3, chain in formats 1, 2 and 3, reverse chaining, a "
+        "lookup behind an extension, lookup flags with and without a mark "
+        "filtering set and a mark attachment type, and nested lookups that grow "
+        "the run - written by fontTools"),
+    "layout-gsub.shape": (build_layout_gsub_cases,
+        "The runs layout-gsub.ttf is shaped on, one per line: script, language, "
+        "features, code points, and what the case exercises"),
+    "layout-gpos.ttf": (build_layout_gpos,
+        "GPOS with one of every lookup type and format: single in both formats, "
+        "pair in both (with a value for each glyph of a pair, and a value with "
+        "device tables), cursive in left-to-right and right-to-left lookups, mark "
+        "to base, to ligature (a different anchor on each component) and to mark, "
+        "context in formats 1, 2 and 3, chain in formats 2 and 3, and a lookup "
+        "behind an extension - written by fontTools"),
+    "layout-gpos.shape": (build_layout_gpos_cases,
+        "The runs layout-gpos.ttf is shaped on, one per line: script, language, "
+        "features, code points, and what the case exercises"),
     "outline-broken-loca.ttf": (build_outline_broken_loca,
         "loca: the last entry running backwards, so that exactly one glyph is "
         "corrupt and the rest of the font still answers (M11)"),

@@ -20,8 +20,12 @@ This is what the library implements.
 - The four **standalone bitmap** containers: PCF, BDF, PSF 1 and 2, and GNU Unifont's `.hex`. Each is a face with one strike and no outlines, and a glyph comes back as pixels with its own box and advance.
 - A font that arrives **gzipped**, which is how a PCF almost always does: the wrapper is undone before the format is looked at, under the same size ceiling a file read from disk is held to.
 
+- **Shaping**: a run of code points through `cmap`, `GSUB` (lookup types 1 to 8, with the extension form), the metric tables, `GPOS` (types 1 to 9) and `kern`, to glyphs with clusters, advances and offsets. The lookups run in HarfBuzz's order and with HarfBuzz's rules for what a nested lookup does to a run that grew or shrank, which glyph a mark attaches to and what a lookup flag skips, and are held to it: 74,494 lines of text over 549 fonts shape the same, glyph for glyph, with the exceptions named below. Features, language systems, ranges and alternates; `FeatureVariations` and variation-indexed adjustments at a location in a variable font; left to right and right to left.
+
+**What shaping does not do**, stated rather than approximated: no script shaper (Arabic joining, Indic reordering, Hangul jamo), no normalisation (a base and a mark the font has a composite for stay two glyphs, and a precomposed character the font lacks is `.notdef`), no fallback mark positioning for a font whose `GPOS` has no `mark` feature, no Apple `morx` or `kerx`, no vertical text, no bidi reordering, no device table for a pixel size.
+
 The bitmap strikes *inside* an sfnt (`EBDT`/`EBLC`, `CBDT`, `sbix`),
-colour, shaping, layout, discovery and writing are not built.
+colour, paragraph layout, discovery and writing are not built.
 
 ## Before you call it
 
@@ -84,6 +88,12 @@ The line it prints depends on `Example.ttf`.
 +%*=....
 ```
 
+`examples/font-shape.c` shapes a string and prints one line per glyph (`--layout`
+lists a face's `GSUB` and `GPOS`; `--location wght=700` shapes at a place in a
+variable font's design space), and `examples/font-typeset.c` draws the shaped line
+as a PGM. `tools/oracle/typeset_compare.py` runs both beside HarfBuzz and FreeType
+and writes one picture: the reference, this library, and where they differ.
+
 ## Compile and link
 
 Once the library is installed, pkg-config carries the include path, the
@@ -124,7 +134,7 @@ vector generators.
 | Target | What it does |
 | --- | --- |
 | `make examples` | The programs under `examples/` |
-| `make check-oracle` | Differentials against fontTools, in a pinned container |
+| `make check-oracle` | Differentials against fontTools, FreeType and HarfBuzz, in pinned containers |
 | `make check-golden` | The same pixels, rebuilt for three big-endian targets |
 | `make fuzz` | The sfnt, cmap, glyf, raster, CFF and charstring fuzzers |
 | `make docs` | The Doxygen manual, into `./docs` |
@@ -132,9 +142,9 @@ vector generators.
 ## The API
 
 Everything is prefixed `gfnt_` / `GFNT_`, under `<ghoti.io/font/...>`.
-`<ghoti.io/font/font.h>` is the umbrella for the reader. `outline.h` and
-`raster.h` are included by name rather than through it, so a program that only
-asks which glyph a code point maps to does not link a rasteriser.
+`<ghoti.io/font/font.h>` is the umbrella for the reader. `outline.h`,
+`raster.h` and `shape.h` are included by name rather than through it, so a program that only
+asks which glyph a code point maps to does not link a rasteriser or a shaper.
 
 - **`core.h`** — `GFNT_Result`, `GFNT_Error`, the fixed-point types (26.6, 16.16, 2.14), `GFNT_Limits`, and the version.
 - **`allocator.h`** — `GFNT_Allocator`, which is cutil's `GCU_Allocator`.
@@ -150,6 +160,7 @@ asks which glyph a code point maps to does not link a rasteriser.
 - **`charstring.h`** — the Type 2 and Type 1 interpreters, which know nothing about any container: a program, its subroutines, and the outline it draws. What a PDF library needs for a `FontFile3` stream.
 - **`outline.h`** — `GFNT_Outline`: a glyph as a path, from either producer. It holds the font's own points rather than a path derived from them, so `gfnt_outline_decompose()` is where `glyf`'s implicit on-curve points appear. Bounds come two ways, because the box `glyf` states is the box of the coordinates and the curve's own box is smaller; a CFF glyph states no box at all, and the refusal says so.
 - **`raster.h`** — the scan converter and `GFNT_Coverage`: exact-area coverage, non-zero or even-odd, and no `float` between a font's bytes and a pixel.
+- **`shape.h`** — `gfnt_face_shape()`: code points in, a `GFNT_ShapedRun` out - glyph, cluster, advance and offset in font units - under the features, script, language, direction and location the caller names; and `gfnt_face_layout_dump()`, which lists a face's `GSUB` and `GPOS`.
 
 [What is implemented](#what-is-implemented) is the inventory.
 [Before you call it](#before-you-call-it) is what that changes about a call.
@@ -174,8 +185,11 @@ The tables named above are parsed, glyphs from `glyf` and from `CFF `
 charstrings are turned into outlines, and those outlines are rasterised. Six
 containers are read: an sfnt, a collection, a bare `CFF `, a Type 1 program, and
 the four standalone bitmap formats, any of them gzipped. The sfnt bitmap
-strikes, colour, shaping, layout, font discovery and writing are not
-implemented.
+strikes, colour, paragraph layout, font discovery and writing are not
+implemented. Text shaped through `GSUB` and `GPOS` is compared against HarfBuzz
+(see `tools/oracle/hb_diff.py`), and `tools/oracle/typeset_compare.py` draws the
+same lines with HarfBuzz and FreeType and with this library, one above the
+other, for a person to read.
 
 Every glyph of 312 real fonts is compared against fontTools — 1,999,069 fields
 over 37,218 glyphs — and every charstring of another 43 is compared three ways:

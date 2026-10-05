@@ -49,8 +49,15 @@ fonttools	localhost/ghoti-font-oracle-fonttools:4.66.0	fontTools 4.66.0 Pillow 1
 # container mounts read-only, so both references read the same bytes on the host.
 freetype	localhost/ghoti-font-oracle-freetype:2.14.3	FreeType 2.14.3	EBLC/EBDT strikes glyph by glyph - the second reading of every composite's pixels, the only reading of mona.ttf besides this library's, and the only reading of a strike's own sbitLineMetrics (for a bitmap-only sfnt, which is the one shape where FreeType reports them)
 
+# HarfBuzz, built here from the Debian package. hb-shape is already a batch tool
+# - it shapes one text per line of its input - so this image has no driver: it
+# answers the shaping differential (glyph, cluster, advance and offset of every
+# glyph of every string) and, through hb-view, draws the same text with cairo and
+# FreeType for the side-by-side picture. It carries no fonts; corpus.py
+# materialises the fontTools image's, as for FreeType.
+harfbuzz	localhost/ghoti-font-oracle-harfbuzz:10.2.0	HarfBuzz 10.2.0	What a string shapes to: GSUB and GPOS applied in the order every browser applies them, held to the glyph, the cluster, the advance and the offset - and, drawn by hb-view, the second rendering of a line of text
+
 # Not here yet, and each is a phase rather than an afternoon:
-#   harfbuzz   hb-shape, already a batch tool (phase 3)
 #   pango      pango-view, for paragraph layout (phase 3b)
 #   xfonts     bdftopcf and psftools: a *second* reading of PCF, and the only
 #              reading of PSF and `.hex` there is. Pillow covers PCF's bitmaps

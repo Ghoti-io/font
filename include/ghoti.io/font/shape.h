@@ -33,14 +33,16 @@
  *
  * **What it does not do, stated rather than approximated:**
  *
- *   * **Only some script shapers.** Arabic and the scripts that join like it
- *     (Syriac, Mongolian, N'Ko, Mandaic and the rest) are shaped with HarfBuzz's
- *     joining state machine and, for a font with no joining features, from the
- *     Unicode presentation forms; Hebrew has its own composition of letters and
- *     points. Indic reordering, Hangul jamo, Khmer, Myanmar, Thai and Lao and the
- *     Universal Shaping Engine's clusters are not here: a run in one of those is
- *     shaped as if it were Latin, with the font's lookups run and the forms a
- *     shaper would have selected not selected.
+ *   * **No Hangul shaper, and a few characters sorted differently.** Arabic and
+ *     the scripts that join like it (Syriac, Mongolian, N'Ko, Mandaic and the
+ *     rest) are shaped with HarfBuzz's joining state machine and, for a font with
+ *     no joining features, from the Unicode presentation forms; Hebrew has its
+ *     own composition of letters and points; Thai and Lao move their SARA AM;
+ *     the Indic scripts, Khmer, Myanmar and the Universal Shaping Engine's
+ *     scripts cut a run into syllables, reorder them and select the forms the
+ *     font's features make. Hangul jamo are left as they are. In nine scripts a
+ *     handful of characters are sorted into a different category than
+ *     HarfBuzz's table gives them; `hb_diff.py` lists them.
  *   * **No bidirectional reordering and no vertical text.** A run is one
  *     direction, left to right or right to left, and horizontal.
  *   * **No device table for a pixel size.** Positions are in font units; a

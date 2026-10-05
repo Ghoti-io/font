@@ -114,6 +114,14 @@ const GFNT_Shaper * gfnt_shaper_select(GFNT_Tag script, GFNT_Tag chosen,
   if (script == GFNT_TAG('t', 'h', 'a', 'i') || script == GFNT_TAG('l', 'a', 'o', ' ')) {
     return &gfnt_shaper_thai;
   }
+  if (script == GFNT_TAG('m', 'y', 'm', 'r')) {
+    return horizontal && font_has_script ? &gfnt_shaper_myanmar
+                                         : &gfnt_shaper_default;
+  }
+  if (script == GFNT_TAG('k', 'h', 'm', 'r')) {
+    return horizontal && font_has_script ? &gfnt_shaper_khmer
+                                         : &gfnt_shaper_default;
+  }
   if (gfnt_script_is_indic(script)) {
     return horizontal && font_has_script ? &gfnt_shaper_indic
                                          : &gfnt_shaper_default;

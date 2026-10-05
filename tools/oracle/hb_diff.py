@@ -66,8 +66,7 @@ GAPS = {
     "bidi and vertical text": "one direction, horizontal, per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
-    "script shaper not written": "Khmer and Myanmar scripts, whose clusters this "
-                                 "library does not form yet",
+    "script shaper not written": "Hangul, whose jamo this library does not compose",
     "Indic character details": "a handful of characters in Gujarati, Oriya and Telugu "
                                "that HarfBuzz sorts or syllabifies differently from "
                                "the Unicode data: found by the generated texts, not "
@@ -88,13 +87,11 @@ INDIC_DETAIL_SCRIPTS = set("gujr orya telu".split())
 # The Universal Shaping Engine scripts in which a few characters still differ.
 USE_DETAIL_SCRIPTS = set("gran java sind mong tavt tirh".split())
 
-# The scripts whose shaper this library has not got yet: a text in one of them is
-# generated from the font (`auto` groups) and shaped as if it were Latin. As each
-# shaper arrives its scripts leave this list, and the differential holds them.
-UNSHAPED_SCRIPTS = set("""
-    khmr mymr
-""".split())
-
+# Scripts whose shaper this library has not got: only Hangul, which the corpus
+# reaches through three fonts. A text in one of them is generated from
+# the font (`auto` groups) and shaped as if it were Latin, and the differential
+# holds the scripts that have a shaper.
+UNSHAPED_SCRIPTS = set(["hang"])
 
 # Fixtures whose outlines are of a kind HarfBuzz does not read. A mark is placed
 # against its base's box when the font has no GPOS, and the box is the one thing

@@ -1803,3 +1803,36 @@ TEST(ShapeIndic, ANuktaStaysWithTheLeftVowelSignItFollows) {
   ASSERT_EQ(shape(font, V{0x995, 0x9BC, 0x9BF}, request, &g), GFNT_OK);
   EXPECT_EQ(ids(g), (V{3, 2, 4}));
 }
+
+TEST(ShapeKhmer, TheLeftVowelAndTheCoengRaGoToTheFrontOfTheSyllable) {
+  // KA 2, the left-hand vowel SRA E 3, the coeng 4, RA 5, the dotted circle 6.
+  Font font(small_font({}, 8, {{0x1780, 2}, {0x17C1, 3}, {0x17D2, 4},
+      {0x179A, 5}, {0x25CC, 6}}));
+  Glyphs g;
+  Request request;
+  request.script = "khmr";
+  ASSERT_EQ(shape(font, V{0x1780, 0x17C1}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2}));
+  ASSERT_EQ(shape(font, V{0x1780, 0x17D2, 0x179A}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 5, 2}));
+  // A sign with no base is given the circle.
+  ASSERT_EQ(shape(font, V{0x17C1}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 6}));
+}
+
+TEST(ShapeMyanmar, TheLeftVowelAndTheMedialRaGoBeforeTheConsonant) {
+  // KA 2, vowel sign E 3, medial RA 4, the dotted circle 5.
+  Font font(small_font({}, 8, {{0x1000, 2}, {0x1031, 3}, {0x103C, 4},
+      {0x25CC, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "mymr";
+  ASSERT_EQ(shape(font, V{0x1000, 0x1031}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2}));
+  ASSERT_EQ(shape(font, V{0x1000, 0x103C, 0x1031}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 4, 2}));
+  // A joiner by itself is not a broken syllable.
+  ASSERT_EQ(shape(font, V{0x200C}, request, &g), GFNT_OK);
+  std::vector<uint32_t> out = ids(g);
+  EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 0);
+}

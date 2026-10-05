@@ -22,7 +22,7 @@ This is what the library implements.
 
 - **Shaping**: a run of code points through `cmap`, `GSUB` (lookup types 1 to 8, with the extension form), the metric tables, `GPOS` (types 1 to 9) and `kern`, to glyphs with clusters, advances and offsets. The lookups run in HarfBuzz's order and with HarfBuzz's rules for what a nested lookup does to a run that grew or shrank, which glyph a mark attaches to and what a lookup flag skips, and are held to it: 74,494 lines of text over 549 fonts shape the same, glyph for glyph, with the exceptions named below. Features, language systems, ranges and alternates; `FeatureVariations` and variation-indexed adjustments at a location in a variable font; left to right and right to left.
 
-**What shaping does not do**, stated rather than approximated: no script shaper (Arabic joining, Indic reordering, Hangul jamo), no Apple `morx` or `kerx`, no vertical text, no bidi reordering, no device table for a pixel size.
+**What shaping does not do**, stated rather than approximated: no Indic, Hangul, Khmer, Myanmar, Thai or Universal Shaping Engine shaper (Arabic, the scripts that join like it, and Hebrew are done), no Apple `morx` or `kerx`, no vertical text, no bidi reordering, no device table for a pixel size.
 
 The bitmap strikes *inside* an sfnt (`EBDT`/`EBLC`, `CBDT`, `sbix`),
 colour, paragraph layout, discovery and writing are not built.

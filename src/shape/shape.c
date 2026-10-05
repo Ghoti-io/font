@@ -38,589 +38,9 @@
 #include <ghoti.io/unicode/char.h>
 #include "fallback.h"
 #include "normalize.h"
+#include "plan.h"
+#include "script_tags.h"
 #include "uprops.h"
-
-#define GFNT_PF_GLOBAL 0x01u
-#define GFNT_PF_MANUAL_ZWNJ 0x04u
-#define GFNT_PF_MANUAL_ZWJ 0x08u
-
-#define GFNT_NO_FEATURE 0xFFFFu
-
-#define GFNT_TAG_DFLT GFNT_TAG('D', 'F', 'L', 'T')
-#define GFNT_TAG_dflt GFNT_TAG('d', 'f', 'l', 't')
-#define GFNT_TAG_latn GFNT_TAG('l', 'a', 't', 'n')
-
-/** A feature the plan wants, before its bits are allocated. */
-typedef struct GFNT_PlanFeature {
-  GFNT_Tag tag;
-  uint32_t flags;
-  uint32_t default_value;
-  uint32_t max_value;
-  uint32_t seq;
-  uint32_t shift;
-  uint32_t mask;
-  uint8_t stage;
-} GFNT_PlanFeature;
-
-/** One lookup to run: which, on which glyphs, in which pass. */
-typedef struct GFNT_PlanLookup {
-  uint32_t index;
-  uint32_t mask;
-  uint8_t stage;
-  bool auto_zwnj;
-  bool auto_zwj;
-} GFNT_PlanLookup;
-
-typedef struct GFNT_PlanTable {
-  GFNT_PlanLookup * lookups;
-  size_t count;
-  size_t capacity;
-  GFNT_Tag script;
-  GFNT_Tag language;
-  bool present;
-  bool kern_found;   ///< GPOS only: the `kern` feature is in the language system.
-} GFNT_PlanTable;
-
-/**
- * Grow a vector of @p size-byte elements to hold @p needed, returning the new
- * storage, or NULL if there is none to be had (the old storage is then still
- * the caller's).
- */
-static void * gfnt_vec_grow(const GFNT_Allocator * a, void * data,
-    size_t * capacity, size_t needed, size_t size) {
-  size_t wanted;
-  void * grown;
-
-  if (needed <= *capacity) {
-    return data;
-  }
-  wanted = *capacity ? *capacity * 2 : 16;
-  while (wanted < needed) {
-    wanted *= 2;
-  }
-  grown = a->realloc_fn(a->ctx, data, wanted * size);
-  if (grown) {
-    *capacity = wanted;
-  }
-  return grown;
-}
-
-/** Scripts written right to left, by their OpenType tag. */
-static bool gfnt_script_native_rtl(GFNT_Tag script) {
-  static const GFNT_Tag rtl[] = {
-    GFNT_TAG('a', 'r', 'a', 'b'), GFNT_TAG('h', 'e', 'b', 'r'),
-    GFNT_TAG('s', 'y', 'r', 'c'), GFNT_TAG('t', 'h', 'a', 'a'),
-    GFNT_TAG('n', 'k', 'o', ' '), GFNT_TAG('a', 'd', 'l', 'm'),
-    GFNT_TAG('m', 'a', 'n', 'd'), GFNT_TAG('m', 'e', 'n', 'd'),
-    GFNT_TAG('s', 'a', 'm', 'r'), GFNT_TAG('p', 'h', 'n', 'x'),
-    GFNT_TAG('r', 'o', 'h', 'g'), GFNT_TAG('h', 'a', 't', 'r'),
-  };
-  size_t i;
-
-  for (i = 0; i < sizeof rtl / sizeof rtl[0]; i++) {
-    if (rtl[i] == script) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/* --- script, language and feature selection ------------------------------ */
-
-static GFNT_LApply gfnt_plan_context(const GFNT_LayoutTable * lt,
-    const GFNT_Gdef * gdef) {
-  GFNT_LApply c;
-
-  memset(&c, 0, sizeof c);
-  c.lt = lt;
-  c.gdef = gdef;
-  return c;
-}
-
-/** The offset of a script table, or 0; and the tag that was found. */
-static size_t gfnt_select_script(GFNT_LApply * c, GFNT_Tag requested,
-    GFNT_Tag * chosen) {
-  const GFNT_LayoutTable * lt = c->lt;
-  GFNT_Tag tries[4];
-  size_t tried = 0;
-  size_t i;
-  uint32_t count;
-
-  if (!lt->script_list) {
-    return 0;
-  }
-  if (requested) {
-    tries[tried++] = requested;
-  }
-  tries[tried++] = GFNT_TAG_DFLT;
-  tries[tried++] = GFNT_TAG_dflt;
-  tries[tried++] = GFNT_TAG_latn;
-  count = gfnt_lu16(c, lt->script_list);
-  for (i = 0; i < tried; i++) {
-    uint32_t k;
-
-    for (k = 0; k < count && !c->fault.bad; k++) {
-      size_t record = lt->script_list + 2 + 6 * (size_t)k;
-
-      if (gfnt_lu32(c, record) == tries[i]) {
-        *chosen = tries[i];
-        return gfnt_l_rel(lt->script_list, gfnt_lu16(c, record + 4));
-      }
-    }
-  }
-  return 0;
-}
-
-/** The offset of a LangSys: the requested one, else 'dflt', else the default. */
-static size_t gfnt_select_langsys(GFNT_LApply * c, size_t script,
-    GFNT_Tag requested, GFNT_Tag * chosen) {
-  uint32_t count = gfnt_lu16(c, script + 2);
-  GFNT_Tag tries[2];
-  size_t tried = 0;
-  size_t i;
-
-  if (requested) {
-    tries[tried++] = requested;
-  }
-  tries[tried++] = GFNT_TAG_dflt;
-  for (i = 0; i < tried; i++) {
-    uint32_t k;
-
-    for (k = 0; k < count && !c->fault.bad; k++) {
-      size_t record = script + 4 + 6 * (size_t)k;
-
-      if (gfnt_lu32(c, record) == tries[i]) {
-        *chosen = tries[i];
-        return gfnt_l_rel(script, gfnt_lu16(c, record + 4));
-      }
-    }
-  }
-  *chosen = 0;
-  return gfnt_l_rel(script, gfnt_lu16(c, script));
-}
-
-/** The feature index with this tag in the LangSys, or GFNT_NO_FEATURE. */
-static uint32_t gfnt_find_feature(GFNT_LApply * c, size_t langsys,
-    GFNT_Tag tag) {
-  const GFNT_LayoutTable * lt = c->lt;
-  uint32_t count;
-  uint32_t i;
-
-  if (!langsys) {
-    return GFNT_NO_FEATURE;
-  }
-  count = gfnt_lu16(c, langsys + 4);
-  for (i = 0; i < count && !c->fault.bad; i++) {
-    uint32_t index = gfnt_lu16(c, langsys + 6 + 2 * (size_t)i);
-
-    if (index < lt->feature_count
-        && gfnt_lu32(c, lt->feature_list + 2 + 6 * (size_t)index) == tag) {
-      return index;
-    }
-  }
-  return GFNT_NO_FEATURE;
-}
-
-/** Add a feature's lookups to the table's list. */
-static bool gfnt_plan_add_lookups(GFNT_LApply * c, const GFNT_Face * face,
-    GFNT_PlanTable * pt, const GFNT_Allocator * a, uint32_t feature,
-    size_t record, bool have_record, uint32_t mask, uint8_t stage,
-    bool auto_zwnj, bool auto_zwj) {
-  const GFNT_LayoutTable * lt = c->lt;
-  size_t table;
-  uint32_t count;
-  uint32_t i;
-  size_t substitutions = 0;
-  size_t j;
-  void * grown;
-
-  if (feature >= lt->feature_count) {
-    return true;
-  }
-  // A FeatureVariations record that substitutes this feature replaces its
-  // lookups wholesale.
-  if (have_record
-      && gfnt_face_feature_substitution_count(face, lt->tag, record,
-             &substitutions, NULL) == GFNT_OK) {
-    for (j = 0; j < substitutions; j++) {
-      uint16_t replaced = 0;
-      size_t lookups = 0;
-      size_t k;
-
-      if (gfnt_face_feature_substitution_at(face, lt->tag, record, j, &replaced,
-              &lookups, NULL) != GFNT_OK || replaced != feature) {
-        continue;
-      }
-      for (k = 0; k < lookups; k++) {
-        uint16_t lookup = 0;
-
-        if (gfnt_face_feature_substitution_lookup(face, lt->tag, record, j, k,
-                &lookup, NULL) != GFNT_OK) {
-          continue;
-        }
-        grown = gfnt_vec_grow(a, pt->lookups, &pt->capacity, pt->count + 1,
-            sizeof *pt->lookups);
-        if (!grown) {
-          return false;
-        }
-        pt->lookups = grown;
-        pt->lookups[pt->count++] = (GFNT_PlanLookup){lookup, mask, stage,
-            auto_zwnj, auto_zwj};
-      }
-      return true;
-    }
-  }
-  table = gfnt_l_rel(lt->feature_list,
-      gfnt_lu16(c, lt->feature_list + 2 + 6 * (size_t)feature + 4));
-  if (!table) {
-    return true;
-  }
-  count = gfnt_lu16(c, table + 2);
-  for (i = 0; i < count && !c->fault.bad; i++) {
-    uint32_t lookup = gfnt_lu16(c, table + 4 + 2 * (size_t)i);
-
-    grown = gfnt_vec_grow(a, pt->lookups, &pt->capacity, pt->count + 1,
-        sizeof *pt->lookups);
-    if (!grown) {
-      return false;
-    }
-    pt->lookups = grown;
-    pt->lookups[pt->count++] = (GFNT_PlanLookup){lookup, mask, stage,
-        auto_zwnj, auto_zwj};
-  }
-  return true;
-}
-
-static int gfnt_plan_lookup_compare(const void * left, const void * right) {
-  const GFNT_PlanLookup * a = left;
-  const GFNT_PlanLookup * b = right;
-
-  if (a->stage != b->stage) {
-    return a->stage < b->stage ? -1 : 1;
-  }
-  if (a->index != b->index) {
-    return a->index < b->index ? -1 : 1;
-  }
-  return 0;
-}
-
-/** Sort the lookups into running order and merge those named twice. */
-static void gfnt_plan_finish_table(GFNT_PlanTable * pt) {
-  size_t i;
-  size_t j = 0;
-
-  if (!pt->count) {
-    return;
-  }
-  qsort(pt->lookups, pt->count, sizeof *pt->lookups, gfnt_plan_lookup_compare);
-  for (i = 1; i < pt->count; i++) {
-    if (pt->lookups[i].index == pt->lookups[j].index
-        && pt->lookups[i].stage == pt->lookups[j].stage) {
-      pt->lookups[j].mask |= pt->lookups[i].mask;
-      pt->lookups[j].auto_zwnj = pt->lookups[j].auto_zwnj
-          && pt->lookups[i].auto_zwnj;
-      pt->lookups[j].auto_zwj = pt->lookups[j].auto_zwj
-          && pt->lookups[i].auto_zwj;
-    }
-    else {
-      pt->lookups[++j] = pt->lookups[i];
-    }
-  }
-  pt->count = j + 1;
-}
-
-static int gfnt_plan_feature_compare(const void * left, const void * right) {
-  const GFNT_PlanFeature * a = left;
-  const GFNT_PlanFeature * b = right;
-
-  if (a->tag != b->tag) {
-    return a->tag < b->tag ? -1 : 1;
-  }
-  if (a->seq != b->seq) {
-    return a->seq < b->seq ? -1 : 1;
-  }
-  return 0;
-}
-
-static uint32_t gfnt_bit_storage(uint32_t value) {
-  uint32_t bits = 0;
-
-  while (value) {
-    bits++;
-    value >>= 1;
-  }
-  return bits;
-}
-
-/** The plan: the features with their bits, and the lookups of each table. */
-typedef struct GFNT_Plan {
-  GFNT_PlanFeature * features;
-  size_t feature_count;
-  size_t feature_capacity;
-  uint32_t global_mask;
-  uint32_t kern_mask;       ///< The `kern` feature's bits, or 0 when it is off.
-  bool kern_fallback;       ///< `GPOS` does not kern, so the `kern` table does.
-  GFNT_PlanTable tables[2]; ///< GSUB, GPOS.
-} GFNT_Plan;
-
-static void gfnt_plan_free(GFNT_Plan * plan, const GFNT_Allocator * a) {
-  a->free_fn(a->ctx, plan->features);
-  a->free_fn(a->ctx, plan->tables[0].lookups);
-  a->free_fn(a->ctx, plan->tables[1].lookups);
-  memset(plan, 0, sizeof *plan);
-}
-
-static bool gfnt_plan_add_feature(GFNT_Plan * plan, const GFNT_Allocator * a,
-    GFNT_Tag tag, uint32_t flags, uint32_t value, uint8_t stage) {
-  GFNT_PlanFeature * f;
-  void * grown;
-
-  grown = gfnt_vec_grow(a, plan->features, &plan->feature_capacity,
-      plan->feature_count + 1, sizeof *plan->features);
-  if (!grown) {
-    return false;
-  }
-  plan->features = grown;
-  f = &plan->features[plan->feature_count];
-  memset(f, 0, sizeof *f);
-  f->tag = tag;
-  f->flags = flags;
-  f->default_value = (flags & GFNT_PF_GLOBAL) ? value : 0;
-  f->max_value = value;
-  f->seq = (uint32_t)plan->feature_count;
-  f->stage = stage;
-  plan->feature_count++;
-  return true;
-}
-
-/**
- * Sort the features by tag and merge duplicates, then give each a mask.
- *
- * A later global request for a tag overrides the earlier one - which is how
- * `-liga` turns a default off - and a ranged request keeps the default for the
- * rest of the run and adds the value inside its range. A feature whose maximum
- * value is 0 is off and gets no bits and no lookups.
- */
-static void gfnt_plan_compile_features(GFNT_Plan * plan) {
-  size_t i;
-  size_t j = 0;
-  uint32_t next_bit = 1;
-
-  qsort(plan->features, plan->feature_count, sizeof *plan->features,
-      gfnt_plan_feature_compare);
-  for (i = 1; i < plan->feature_count; i++) {
-    GFNT_PlanFeature * a = &plan->features[j];
-    const GFNT_PlanFeature * b = &plan->features[i];
-
-    if (b->tag != a->tag) {
-      plan->features[++j] = *b;
-      continue;
-    }
-    if (b->flags & GFNT_PF_GLOBAL) {
-      a->flags |= GFNT_PF_GLOBAL;
-      a->max_value = b->max_value;
-      a->default_value = b->default_value;
-    }
-    else {
-      a->flags &= ~GFNT_PF_GLOBAL;
-      if (b->max_value > a->max_value) {
-        a->max_value = b->max_value;
-      }
-    }
-    if (b->stage < a->stage) {
-      a->stage = b->stage;
-    }
-  }
-  if (plan->feature_count) {
-    plan->feature_count = j + 1;
-  }
-  plan->global_mask = 1;
-  for (i = 0; i < plan->feature_count; i++) {
-    GFNT_PlanFeature * f = &plan->features[i];
-    uint32_t bits = (f->flags & GFNT_PF_GLOBAL) && f->max_value == 1
-        ? 0 : gfnt_bit_storage(f->max_value);
-
-    f->mask = 0;
-    if (!f->max_value || next_bit + bits >= 31) {
-      continue;
-    }
-    if (bits == 0) {
-      f->shift = 0;
-      f->mask = 1;
-    }
-    else {
-      f->shift = next_bit;
-      f->mask = (1u << (next_bit + bits)) - (1u << next_bit);
-      next_bit += bits;
-      plan->global_mask |= (f->default_value << f->shift) & f->mask;
-    }
-  }
-}
-
-static const GFNT_PlanFeature * gfnt_plan_find(const GFNT_Plan * plan,
-    GFNT_Tag tag) {
-  size_t i;
-
-  for (i = 0; i < plan->feature_count; i++) {
-    if (plan->features[i].tag == tag) {
-      return &plan->features[i];
-    }
-  }
-  return NULL;
-}
-
-static GFNT_Result gfnt_plan_build(const GFNT_Face * face,
-    const GFNT_ShapeOptions * options, size_t count, GFNT_Plan * plan,
-    const GFNT_Allocator * a, GFNT_Error * error) {
-  static const GFNT_Tag common[] = {
-    GFNT_TAG('a', 'b', 'v', 'm'), GFNT_TAG('b', 'l', 'w', 'm'),
-    GFNT_TAG('c', 'c', 'm', 'p'), GFNT_TAG('l', 'o', 'c', 'l'),
-    GFNT_TAG('m', 'a', 'r', 'k'), GFNT_TAG('m', 'k', 'm', 'k'),
-    GFNT_TAG('r', 'l', 'i', 'g'),
-    GFNT_TAG('c', 'a', 'l', 't'), GFNT_TAG('c', 'l', 'i', 'g'),
-    GFNT_TAG('c', 'u', 'r', 's'), GFNT_TAG('d', 'i', 's', 't'),
-    GFNT_TAG('k', 'e', 'r', 'n'), GFNT_TAG('l', 'i', 'g', 'a'),
-    GFNT_TAG('r', 'c', 'l', 't'),
-  };
-  size_t i;
-  size_t t;
-  const GFNT_Tag tables[2] = {GFNT_TAG_GSUB, GFNT_TAG_GPOS};
-
-  memset(plan, 0, sizeof *plan);
-  if (!gfnt_plan_add_feature(plan, a, GFNT_TAG('r', 'v', 'r', 'n'),
-          GFNT_PF_GLOBAL, 1, 0)) {
-    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-        "no memory for the shaping plan");
-  }
-  if (options->direction == GFNT_DIRECTION_RTL) {
-    (void)(gfnt_plan_add_feature(plan, a, GFNT_TAG('r', 't', 'l', 'a'),
-               GFNT_PF_GLOBAL, 1, 1)
-        && gfnt_plan_add_feature(plan, a, GFNT_TAG('r', 't', 'l', 'm'),
-               GFNT_PF_GLOBAL, 1, 1));
-  }
-  else {
-    (void)(gfnt_plan_add_feature(plan, a, GFNT_TAG('l', 't', 'r', 'a'),
-               GFNT_PF_GLOBAL, 1, 1)
-        && gfnt_plan_add_feature(plan, a, GFNT_TAG('l', 't', 'r', 'm'),
-               GFNT_PF_GLOBAL, 1, 1));
-  }
-  (void)gfnt_plan_add_feature(plan, a, GFNT_TAG('t', 'r', 'a', 'k'),
-      GFNT_PF_GLOBAL, 1, 1);
-  for (i = 0; i < sizeof common / sizeof common[0]; i++) {
-    uint32_t flags = GFNT_PF_GLOBAL;
-
-    // `mark` and `mkmk` manage joiners themselves, so a ZWJ or ZWNJ between a
-    // base and its marks does not break the attachment.
-    if (common[i] == GFNT_TAG('m', 'a', 'r', 'k')
-        || common[i] == GFNT_TAG('m', 'k', 'm', 'k')) {
-      flags |= GFNT_PF_MANUAL_ZWNJ | GFNT_PF_MANUAL_ZWJ;
-    }
-    if (!gfnt_plan_add_feature(plan, a, common[i], flags, 1, 1)) {
-      return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-          "no memory for the shaping plan");
-    }
-  }
-  for (i = 0; i < options->feature_count; i++) {
-    const GFNT_ShapeFeature * f = &options->features[i];
-    bool whole = f->start == 0 && (f->end == GFNT_SHAPE_END || f->end >= count);
-
-    if (f->end != GFNT_SHAPE_END && f->end < f->start) {
-      return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
-          "a feature's range ends before it starts");
-    }
-    if (!gfnt_plan_add_feature(plan, a, f->tag, whole ? GFNT_PF_GLOBAL : 0,
-            f->value, 1)) {
-      return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-          "no memory for the shaping plan");
-    }
-  }
-  gfnt_plan_compile_features(plan);
-  {
-    const GFNT_PlanFeature * kern = gfnt_plan_find(plan, GFNT_TAG('k', 'e', 'r', 'n'));
-
-    plan->kern_mask = kern ? kern->mask : 0;
-  }
-
-  for (t = 0; t < 2; t++) {
-    GFNT_LayoutTable lt;
-    GFNT_Gdef gdef;
-    GFNT_LApply c;
-    GFNT_PlanTable * pt = &plan->tables[t];
-    GFNT_Result result;
-    size_t script;
-    size_t langsys;
-    size_t record = 0;
-    bool have_record = false;
-
-    if (!gfnt_face_has_table(face, tables[t])) {
-      continue;
-    }
-    result = gfnt_layout_open(face, tables[t], &lt, error);
-    if (result != GFNT_OK) {
-      return result;
-    }
-    pt->present = true;
-    gfnt_gdef_open(face, &gdef);
-    c = gfnt_plan_context(&lt, &gdef);
-    script = gfnt_select_script(&c, options->script, &pt->script);
-    langsys = script ? gfnt_select_langsys(&c, script, options->language,
-                           &pt->language) : 0;
-    if (options->variation && options->variation->count && lt.variations) {
-      size_t found = GFNT_FEATURE_VARIATIONS_NONE;
-
-      result = gfnt_face_feature_variations_match(face, tables[t],
-          options->variation->coords, options->variation->count, &found, error);
-      if (result != GFNT_OK) {
-        return result;
-      }
-      have_record = found != GFNT_FEATURE_VARIATIONS_NONE;
-      record = found;
-    }
-    // The feature the language system requires always applies.
-    if (langsys) {
-      uint32_t required = gfnt_lu16(&c, langsys + 2);
-
-      if (required != GFNT_NO_FEATURE
-          && !gfnt_plan_add_lookups(&c, face, pt, a, required, record,
-                 have_record, plan->global_mask, 1, true, true)) {
-        return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-            "no memory for the shaping plan");
-      }
-    }
-    for (i = 0; i < plan->feature_count; i++) {
-      const GFNT_PlanFeature * f = &plan->features[i];
-      uint32_t index;
-
-      if (!f->mask) {
-        continue;
-      }
-      index = langsys ? gfnt_find_feature(&c, langsys, f->tag) : GFNT_NO_FEATURE;
-      if (f->tag == GFNT_TAG('k', 'e', 'r', 'n') && t == 1
-          && index != GFNT_NO_FEATURE) {
-        pt->kern_found = true;
-      }
-      if (index == GFNT_NO_FEATURE) {
-        continue;
-      }
-      if (!gfnt_plan_add_lookups(&c, face, pt, a, index, record, have_record,
-              f->mask, f->stage, !(f->flags & GFNT_PF_MANUAL_ZWNJ),
-              !(f->flags & GFNT_PF_MANUAL_ZWJ))) {
-        return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-            "no memory for the shaping plan");
-      }
-    }
-    if (c.fault.bad) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, c.fault.table,
-          c.fault.offset, GFNT_GLYPH_NONE,
-          "a layout table's script or feature list reads past the table");
-    }
-    gfnt_plan_finish_table(pt);
-  }
-  // Kerning is the table's job when GPOS has none of its own: a font from before
-  // OpenType layout, or one whose GPOS carries only marks.
-  plan->kern_fallback = plan->kern_mask != 0 && !plan->tables[1].kern_found;
-  return GFNT_OK;
-}
 
 /* --- the pipeline -------------------------------------------------------- */
 
@@ -633,13 +53,16 @@ void gfnt_shaped_run_free(GFNT_ShapedRun * run) {
   }
 }
 
-/** Run one table's lookups, stage by stage. */
+/**
+ * Run one table's lookups, stage by stage. After each stage of substitution the
+ * shaper's work for that pause is done, when it has any.
+ */
 static GFNT_Result gfnt_shape_apply(GFNT_LApply * c, const GFNT_PlanTable * pt,
-    GFNT_Error * error, size_t * out_ran) {
+    size_t stages, GFNT_ShapeCtx * ctx, GFNT_Error * error, size_t * out_ran) {
   size_t i;
-  uint8_t stage;
+  size_t stage;
 
-  for (stage = 0; stage < 2; stage++) {
+  for (stage = 0; stage < stages; stage++) {
     for (i = 0; i < pt->count; i++) {
       const GFNT_PlanLookup * l = &pt->lookups[i];
 
@@ -666,61 +89,15 @@ static GFNT_Result gfnt_shape_apply(GFNT_LApply * c, const GFNT_PlanTable * pt,
             GFNT_GLYPH_NONE, "no memory while applying a layout lookup");
       }
     }
+    if (ctx && ctx->plan->pause[stage]) {
+      ctx->plan->pause[stage](ctx);
+      if (ctx->oom) {
+        return gfnt_error_set(error, GFNT_ERR_OOM, c->lt->tag, 0,
+            GFNT_GLYPH_NONE, "no memory in a shaper's step");
+      }
+    }
   }
   return GFNT_OK;
-}
-
-/**
- * Mark the characters that continue the grapheme before them but are not marks:
- * a ZWJ and the emoji it joins, an emoji modifier, a half-width katakana voiced
- * mark and a tag character.
- */
-static void gfnt_mark_continuations(GFNT_LInfo * chars, size_t count) {
-  size_t i;
-
-  for (i = 1; i < count; i++) {
-    uint32_t u = chars[i].unicode;
-
-    if (chars[i].flags & GFNT_GF_ZWJ) {
-      chars[i].flags |= GFNT_GF_CONTINUATION;
-      if (i + 1 < count && guni_has_property(chars[i + 1].unicode,
-              GUNI_PROP_EXTENDED_PICTOGRAPHIC)) {
-        i++;
-        chars[i].flags |= GFNT_GF_CONTINUATION;
-      }
-    }
-    else if ((u >= 0x1F3FB && u <= 0x1F3FF) || (u >= 0xFF9E && u <= 0xFF9F)
-        || (u >= 0xE0020 && u <= 0xE007F)) {
-      chars[i].flags |= GFNT_GF_CONTINUATION;
-    }
-  }
-}
-
-/** Reverse the run grapheme by grapheme: each cluster keeps its own order. */
-static void gfnt_reverse_clusters(GFNT_LInfo * chars, size_t count) {
-  size_t i;
-  size_t start = 0;
-
-  for (i = 0; i < count / 2; i++) {
-    GFNT_LInfo t = chars[i];
-
-    chars[i] = chars[count - 1 - i];
-    chars[count - 1 - i] = t;
-  }
-  for (i = 1; i <= count; i++) {
-    if (i == count || chars[i].cluster != chars[i - 1].cluster) {
-      size_t lo = start;
-      size_t hi = i - 1;
-
-      while (lo < hi) {
-        GFNT_LInfo t = chars[lo];
-
-        chars[lo++] = chars[hi];
-        chars[hi--] = t;
-      }
-      start = i;
-    }
-  }
 }
 
 /**
@@ -791,12 +168,127 @@ static void gfnt_fallback_spaces(const GFNT_Face * face, GFNT_LBuffer * buf,
   }
 }
 
+/**
+ * Mark the characters that continue the grapheme before them but are not marks:
+ * a ZWJ and the emoji it joins, an emoji modifier, a half-width katakana voiced
+ * mark and a tag character.
+ */
+static void gfnt_mark_continuations(GFNT_LInfo * chars, size_t count) {
+  size_t i;
+
+  for (i = 1; i < count; i++) {
+    uint32_t u = chars[i].unicode;
+
+    if (chars[i].flags & GFNT_GF_ZWJ) {
+      chars[i].flags |= GFNT_GF_CONTINUATION;
+      if (i + 1 < count && guni_has_property(chars[i + 1].unicode,
+              GUNI_PROP_EXTENDED_PICTOGRAPHIC)) {
+        i++;
+        chars[i].flags |= GFNT_GF_CONTINUATION;
+      }
+    }
+    else if ((u >= 0x1F3FB && u <= 0x1F3FF) || (u >= 0xFF9E && u <= 0xFF9F)
+        || (u >= 0xE0020 && u <= 0xE007F)) {
+      chars[i].flags |= GFNT_GF_CONTINUATION;
+    }
+  }
+}
+
+/** Reverse the run grapheme by grapheme: each cluster keeps its own order. */
+static void gfnt_reverse_clusters(GFNT_LInfo * chars, size_t count) {
+  size_t i;
+  size_t start = 0;
+
+  for (i = 0; i < count / 2; i++) {
+    GFNT_LInfo t = chars[i];
+
+    chars[i] = chars[count - 1 - i];
+    chars[count - 1 - i] = t;
+  }
+  for (i = 1; i <= count; i++) {
+    if (i == count || chars[i].cluster != chars[i - 1].cluster) {
+      size_t lo = start;
+      size_t hi = i - 1;
+
+      while (lo < hi) {
+        GFNT_LInfo t = chars[lo];
+
+        chars[lo++] = chars[hi];
+        chars[hi--] = t;
+      }
+      start = i;
+    }
+  }
+}
+
+/**
+ * Switch the fraction features on around a FRACTION SLASH: the digits before it
+ * take the numerator form, the digits after it the denominator form, and the
+ * slash itself the fraction form.
+ */
+static void gfnt_setup_fraction_masks(const GFNT_Plan * plan,
+    GFNT_LBuffer * buf) {
+  size_t i;
+
+  if (!plan->has_frac) {
+    return;
+  }
+  for (i = 0; i < buf->len; i++) {
+    if (buf->info[i].unicode == 0x2044) {
+      size_t start = i;
+      size_t end = i + 1;
+      size_t j;
+
+      while (start && buf->info[start - 1].gc == GUNI_GC_DECIMAL_NUMBER) {
+        start--;
+      }
+      while (end < buf->len && buf->info[end].gc == GUNI_GC_DECIMAL_NUMBER) {
+        end++;
+      }
+      for (j = start; j < i; j++) {
+        buf->info[j].mask |= plan->numr_mask | plan->frac_mask;
+      }
+      buf->info[i].mask |= plan->frac_mask;
+      for (j = i + 1; j < end; j++) {
+        buf->info[j].mask |= plan->dnom_mask | plan->frac_mask;
+      }
+      i = end;
+    }
+  }
+}
+
+GFNT_Tag gfnt_shape_script_of(const uint32_t * codepoints, size_t count) {
+  size_t i;
+
+  for (i = 0; codepoints && i < count; i++) {
+    uint32_t script = (uint32_t)guni_script(codepoints[i]);
+    const char * tag;
+
+    if (script >= GFNT_SCRIPT_TAG_COUNT) {
+      continue;
+    }
+    tag = gfnt_script_tags[script];
+    if (tag[0]) {
+      return GFNT_TAG(tag[0], tag[1], tag[2], tag[3]);
+    }
+  }
+  return 0;
+}
+
+GFNT_Direction gfnt_shape_script_direction(GFNT_Tag script) {
+  return gfnt_script_native_rtl(script) ? GFNT_DIRECTION_RTL
+                                        : GFNT_DIRECTION_LTR;
+}
+
 GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     size_t count, const GFNT_ShapeOptions * options,
     const GFNT_Allocator * allocator, GFNT_ShapedRun * out_run,
     GFNT_Error * error) {
   static const GFNT_ShapeOptions defaults;
   GFNT_Plan plan;
+  GFNT_ShapeCtx ctx;
+  GFNT_ShapeOptions resolved;
+  GFNT_NormHooks hooks;
   GFNT_LBuffer buf;
   GFNT_LayoutTable gsub_table;
   GFNT_LayoutTable gpos_table;
@@ -833,12 +325,24 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     *out_run = run;
     return GFNT_OK;
   }
+  // No script named: the text's own, as HarfBuzz guesses it.
+  resolved = *options;
+  if (!resolved.script) {
+    resolved.script = gfnt_shape_script_of(codepoints, count);
+  }
+  options = &resolved;
 
   result = gfnt_plan_build(face, options, count, &plan, allocator, error);
   if (result != GFNT_OK) {
-    gfnt_plan_free(&plan, allocator);
     return result;
   }
+  memset(&ctx, 0, sizeof ctx);
+  ctx.face = face;
+  ctx.options = options;
+  ctx.plan = &plan;
+  ctx.buf = &buf;
+  ctx.gdef = &gdef;
+  ctx.allocator = allocator;
   memset(&buf, 0, sizeof buf);
   gfnt_gdef_open(face, &gdef);
   memset(&gsub, 0, sizeof gsub);
@@ -871,16 +375,32 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // The shaper works in the script's own direction. Text the other way is turned
   // round first, a grapheme at a time so that each keeps its base before its
   // marks; a run in the script's own direction is turned round at the end.
-  native_rtl = gfnt_script_native_rtl(options->script);
+  native_rtl = plan.native_rtl;
+  ctx.native_rtl = native_rtl;
   reversed_first = (options->direction == GFNT_DIRECTION_RTL) != native_rtl;
   if (reversed_first) {
     gfnt_reverse_clusters(chars, count);
   }
 
+  // The script's shaper may rewrite the text before it is normalised.
+  if (plan.shaper->preprocess_text) {
+    plan.shaper->preprocess_text(&ctx, &chars, &chars_len, &chars_capacity);
+    if (ctx.oom) {
+      result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "no memory while preparing the run");
+      goto done;
+    }
+  }
+
   // Normalise: the glyphs come from here, with the composites the font has made
   // and the characters it lacks taken apart.
+  if (plan.shaper->normalization_hooks) {
+    hooks = *plan.shaper->normalization_hooks;
+    hooks.ctx = &ctx;
+  }
   if (!gfnt_normalize(face, &chars, &chars_len, &chars_capacity, allocator,
-          GFNT_NORM_COMPOSED_DIACRITICS, NULL)) {
+          plan.shaper->normalization,
+          plan.shaper->normalization_hooks ? &hooks : NULL)) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory while normalising the run");
     goto done;
@@ -898,6 +418,17 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   }
   (void)gfnt_face_glyph_for_codepoint(face, 0x20, &space, NULL);
   count = chars_len;
+
+  // Which glyphs the fraction features apply to, and then the script's own masks.
+  gfnt_setup_fraction_masks(&plan, &buf);
+  if (plan.shaper->setup_masks) {
+    plan.shaper->setup_masks(&ctx);
+    if (ctx.oom) {
+      result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "no memory while setting up the masks");
+      goto done;
+    }
+  }
 
   // Features with a range of their own: set their value on the code points in it.
   for (i = 0; i < options->feature_count; i++) {
@@ -953,10 +484,25 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     }
   }
   if (plan.tables[0].present) {
-    result = gfnt_shape_apply(&gsub, &plan.tables[0], error,
-        &run.gsub_lookups);
+    result = gfnt_shape_apply(&gsub, &plan.tables[0], plan.gsub_stages, &ctx,
+        error, &run.gsub_lookups);
     if (result != GFNT_OK) {
       goto done;
+    }
+  }
+  else {
+    // No `GSUB`, but the shaper's steps between the stages are still its own work.
+    size_t stage;
+
+    for (stage = 0; stage < plan.gsub_stages; stage++) {
+      if (plan.pause[stage]) {
+        plan.pause[stage](&ctx);
+        if (ctx.oom) {
+          result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+              "no memory in a shaper's step");
+          goto done;
+        }
+      }
     }
   }
 
@@ -1038,7 +584,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     }
     gpos.lt = &gpos_table;
     gfnt_gpos_position_start(&buf);
-    result = gfnt_shape_apply(&gpos, &plan.tables[1], error,
+    result = gfnt_shape_apply(&gpos, &plan.tables[1], 1, NULL, error,
         &run.gpos_lookups);
     if (result != GFNT_OK) {
       goto done;
@@ -1046,7 +592,15 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   }
 
   if (plan.kern_fallback) {
+    // The `kern` table's pairs are in visual order: a right-to-left run is turned
+    // round for it, and back.
+    if (native_rtl) {
+      gfnt_lbuf_reverse(&buf);
+    }
     result = gfnt_kern_apply(face, &buf, &gdef, plan.kern_mask, error);
+    if (native_rtl) {
+      gfnt_lbuf_reverse(&buf);
+    }
     if (result != GFNT_OK) {
       goto done;
     }
@@ -1109,7 +663,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
 done:
   allocator->free_fn(allocator->ctx, chars);
   gfnt_lbuf_free(&buf);
-  gfnt_plan_free(&plan, allocator);
+  gfnt_plan_free(&plan);
   return result;
 }
 
@@ -1144,7 +698,9 @@ GFNT_Result gfnt_face_layout_dump(const GFNT_Face * face, GFNT_Tag table,
     return result;
   }
   gfnt_gdef_open(face, &gdef);
-  c = gfnt_plan_context(&lt, &gdef);
+  memset(&c, 0, sizeof c);
+  c.lt = &lt;
+  c.gdef = &gdef;
   scripts = lt.script_list ? gfnt_lu16(&c, lt.script_list) : 0;
   fprintf(out, "%s: %u scripts, %u features, %u lookups\n",
       table == GFNT_TAG_GSUB ? "GSUB" : "GPOS", scripts, lt.feature_count,

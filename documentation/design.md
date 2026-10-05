@@ -1252,7 +1252,18 @@ stays behind its base. The data is `unicode`'s (the font's third dependency). A
 font with no `GPOS` has its marks **positioned by the shaper**, from the base's
 box and the mark's combining class (`fallback.c`).
 
-Departures from 9.2, each stated rather than approximated: **no script shaper**,
+A run is shaped by **a shaper chosen from its script** (`shaper.c`): the default,
+the Arabic one for the scripts that join (joining forms from a state machine over
+each letter's joining type, run one feature at a time in the specification's
+order, with Unicode's presentation forms standing in for a font that has none),
+and Hebrew's (letters and points composed into the presentation forms an old font
+expects, and a `GPOS` believed only if it names the Hebrew script). A shaper
+supplies features and *pauses* between stages, a normalisation mode and hooks, the
+masks that say which glyphs a feature reaches, and what to do with marks
+(`plan.h`).
+
+Departures from 9.2, each stated rather than approximated: **no Indic, Hangul,
+Khmer, Myanmar, Thai or Universal Shaping Engine shaper**,
 **no vertical text**, no `GFNT_Scale` (positions are in font units), anchors by
 contour point read their stated coordinates, and a device table for a pixel size
 is ignored. The oracle (§14) is `hb-shape`, and

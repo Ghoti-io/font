@@ -1578,3 +1578,77 @@ TEST(ShapeDirection, AReversedRunKeepsEachMarkAfterItsBase) {
   EXPECT_EQ(g[1].cluster, 0u);
   EXPECT_EQ(g[2].cluster, 0u);
 }
+
+
+// --- script shapers ----------------------------------------------------------------
+
+TEST(ShapeScript, TheScriptOfATextIsItsFirstCharacterThatBelongsToOne) {
+  const uint32_t latin[] = {'1', ' ', 'a'};
+  const uint32_t arabic[] = {'(', 0x627, 'a'};
+  const uint32_t none[] = {'1', ' ', 0x301};
+
+  EXPECT_EQ(gfnt_shape_script_of(latin, 3), GFNT_TAG('l', 'a', 't', 'n'));
+  EXPECT_EQ(gfnt_shape_script_of(arabic, 3), GFNT_TAG('a', 'r', 'a', 'b'));
+  EXPECT_EQ(gfnt_shape_script_of(none, 3), 0u);
+  EXPECT_EQ(gfnt_shape_script_direction(GFNT_TAG('a', 'r', 'a', 'b')),
+      GFNT_DIRECTION_RTL);
+  EXPECT_EQ(gfnt_shape_script_direction(GFNT_TAG('l', 'a', 't', 'n')),
+      GFNT_DIRECTION_LTR);
+  EXPECT_EQ(gfnt_shape_script_direction(0), GFNT_DIRECTION_LTR);
+}
+
+namespace {
+
+/**
+ * A font that knows Arabic only as its pre-OpenType self does: BEH (glyph 4) and
+ * its four presentation forms, isolated 5, final 6, initial 7, medial 8, and no
+ * layout table at all.
+ */
+std::vector<uint8_t> beh_font() {
+  return small_font({}, 10, {{0x628, 4}, {0xFE8F, 5}, {0xFE90, 6}, {0xFE91, 7},
+      {0xFE92, 8}});
+}
+
+}  // namespace
+
+TEST(ShapeArabic, AFontWithNoLayoutIsJoinedFromItsPresentationForms) {
+  Font font(beh_font());
+  Glyphs g;
+  Request request;
+  request.script = "arab";
+  request.rtl = true;
+  // One letter alone is its isolated form.
+  ASSERT_EQ(shape(font, V{0x628}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5}));
+  // Three in a row: initial, medial, final in reading order - which, as the glyphs
+  // come back in visual order, is last to first.
+  ASSERT_EQ(shape(font, V{0x628, 0x628, 0x628}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{6, 8, 7}));
+  EXPECT_EQ(g[0].cluster, 2u);
+  EXPECT_EQ(g[2].cluster, 0u);
+}
+
+TEST(ShapeArabic, AZeroWidthNonJoinerStopsTheJoin) {
+  Font font(beh_font());
+  Glyphs g;
+  Request request;
+  request.script = "arab";
+  request.rtl = true;
+  // beh, ZWNJ, beh: each is alone, and the joiner draws as nothing (the font has no
+  // space either, so it is dropped from the run).
+  ASSERT_EQ(shape(font, V{0x628, 0x200C, 0x628}, request, &g), GFNT_OK);
+  std::vector<uint32_t> out = ids(g);
+  EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 2);
+}
+
+TEST(ShapeArabic, ADualJoiningLetterBeforeAJoinerTakesItsInitialForm) {
+  Font font(beh_font());
+  Glyphs g;
+  Request request;
+  request.script = "arab";
+  request.rtl = true;
+  // beh, ZWJ: the joiner joins to its right in reading order, so beh is initial.
+  ASSERT_EQ(shape(font, V{0x628, 0x200D}, request, &g), GFNT_OK);
+  std::vector<uint32_t> out = ids(g);
+  EXPECT_NE(std::find(out.begin(), out.end(), 7u), out.end());
+}

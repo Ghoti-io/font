@@ -27,7 +27,8 @@
  *
  *   --script <tag>      the OpenType script tag, as `latn`
  *   --language <tag>    the OpenType language system tag, as `TRK `
- *   --rtl               the run reads right to left
+ *   --rtl, --ltr        the run reads right to left, or left to right; with
+ *                       neither, the way its script is written
  *   --features <list>   as HarfBuzz's: `+liga,-kern,aalt=2,liga[3:5]`
  *   --face <n>          which face of a collection
  *   --unicodes <list>   code points, as `U+0041,U+0056`, instead of <text>
@@ -195,6 +196,8 @@ int main(int argc, char ** argv) {
   GFNT_F2Dot14 normalised[64];
   GFNT_Variation variation;
   GFNT_DeltaRounding rounding = GFNT_DELTA_ROUND_HALF_UP;
+  bool direction_given = false;
+  GFNT_ShapeOptions line_options;
   int arg;
 
   memset(&options, 0, sizeof options);
@@ -209,6 +212,11 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[arg], "--rtl") == 0) {
       options.direction = GFNT_DIRECTION_RTL;
+      direction_given = true;
+    }
+    else if (strcmp(argv[arg], "--ltr") == 0) {
+      options.direction = GFNT_DIRECTION_LTR;
+      direction_given = true;
     }
     else if (strcmp(argv[arg], "--features") == 0 && arg + 1 < argc) {
       features = argv[++arg];
@@ -412,8 +420,13 @@ int main(int argc, char ** argv) {
       }
       memset(&run, 0, sizeof run);
       gfnt_error_clear(&error);
-      if (gfnt_face_shape(face, codepoints, (size_t)n, &options, NULL, &run,
-              &error) != GFNT_OK) {
+      line_options = options;
+      if (!direction_given) {
+        line_options.direction = gfnt_shape_script_direction(options.script
+            ? options.script : gfnt_shape_script_of(codepoints, (size_t)n));
+      }
+      if (gfnt_face_shape(face, codepoints, (size_t)n, &line_options, NULL,
+              &run, &error) != GFNT_OK) {
         printf("{\"error\":\"%s\"}\n", gfnt_result_string(error.result));
         continue;
       }
@@ -433,6 +446,10 @@ int main(int argc, char ** argv) {
     return 0;
   }
   memset(&run, 0, sizeof run);
+  if (!direction_given) {
+    options.direction = gfnt_shape_script_direction(options.script
+        ? options.script : gfnt_shape_script_of(codepoints, (size_t)count));
+  }
   if (gfnt_face_shape(face, codepoints, (size_t)count, &options, NULL, &run,
           &error) != GFNT_OK) {
     gfnt_error_dump(&error, stderr);

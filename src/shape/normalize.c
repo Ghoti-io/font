@@ -125,6 +125,42 @@ static void gfnt_output_char(GFNT_NormCtx * c, uint32_t unicode,
   }
 }
 
+/**
+ * The character whose whole decomposition is @p full[0..n), when it is one the
+ * composition table does not know: the Hebrew presentation forms and the musical
+ * symbols are *excluded* from composition, so composing the first characters of
+ * a longer decomposition cannot find them. They are all in a few blocks.
+ */
+static uint32_t gfnt_excluded_prefix(const uint32_t * full, size_t n) {
+  static const uint32_t ranges[][2] = {
+    {0xFB1D, 0xFB4F}, {0x1D15E, 0x1D164}, {0x0958, 0x095F}, {0x09DC, 0x09DF},
+    {0x0A33, 0x0A59}, {0x0F43, 0x0F69}, {0x0F73, 0x0F81},
+  };
+  size_t r;
+
+  for (r = 0; r < sizeof ranges / sizeof ranges[0]; r++) {
+    uint32_t u;
+
+    for (u = ranges[r][0]; u <= ranges[r][1]; u++) {
+      uint32_t candidate[32];
+      size_t m = 0;
+      size_t i;
+
+      if (guni_decomposition_type(u) != GUNI_DT_CANONICAL
+          || guni_decompose(u, false, candidate, 32, &m) != GUNI_OK
+          || m != n) {
+        continue;
+      }
+      for (i = 0; i < n && candidate[i] == full[i]; i++) {
+      }
+      if (i == n) {
+        return u;
+      }
+    }
+  }
+  return 0;
+}
+
 /** One step of canonical decomposition, derived from `unicode`'s full one. */
 static bool gfnt_unicode_decompose(uint32_t ab, uint32_t * a, uint32_t * b,
     void * ctx) {
@@ -171,18 +207,21 @@ static bool gfnt_unicode_decompose(uint32_t ab, uint32_t * a, uint32_t * b,
   for (i = 1; i + 1 < n && prefix; i++) {
     prefix = guni_compose(prefix, full[i]);
   }
+  if (!prefix && n >= 3) {
+    prefix = gfnt_excluded_prefix(full, n - 1);
+  }
   if (prefix) {
     composite = guni_compose(prefix, full[n - 1]);
-    if (composite == ab) {
+    if (composite == ab || composite == 0) {
+      // Composes back to this character, or is excluded from composing and so
+      // cannot say: either way the last character is the second of the step.
       *a = prefix;
       *b = full[n - 1];
       return true;
     }
-    if (composite) {
-      *a = composite;
-      *b = 0;
-      return true;
-    }
+    *a = composite;   // a singleton, whose expansion is another character's
+    *b = 0;
+    return true;
   }
   *a = full[0];
   *b = full[1];

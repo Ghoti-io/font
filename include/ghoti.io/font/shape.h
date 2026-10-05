@@ -33,10 +33,14 @@
  *
  * **What it does not do, stated rather than approximated:**
  *
- *   * **No script shaper.** Arabic joining, Indic reordering, Hangul jamo and the
- *     Universal Shaping Engine's clusters are not here. A run in one of those
- *     scripts is shaped as if it were Latin: the font's lookups run, and the
- *     joining forms that a shaper would have selected are not selected.
+ *   * **Only some script shapers.** Arabic and the scripts that join like it
+ *     (Syriac, Mongolian, N'Ko, Mandaic and the rest) are shaped with HarfBuzz's
+ *     joining state machine and, for a font with no joining features, from the
+ *     Unicode presentation forms; Hebrew has its own composition of letters and
+ *     points. Indic reordering, Hangul jamo, Khmer, Myanmar, Thai and Lao and the
+ *     Universal Shaping Engine's clusters are not here: a run in one of those is
+ *     shaped as if it were Latin, with the font's lookups run and the forms a
+ *     shaper would have selected not selected.
  *   * **No bidirectional reordering and no vertical text.** A run is one
  *     direction, left to right or right to left, and horizontal.
  *   * **No device table for a pixel size.** Positions are in font units; a
@@ -166,6 +170,30 @@ GFNT_API void gfnt_shaped_run_free(GFNT_ShapedRun * run);
  */
 GFNT_API GFNT_Result gfnt_face_layout_dump(const GFNT_Face * face, GFNT_Tag table,
     FILE * out);
+
+/**
+ * @brief The script a run of text is written in, as an OpenType tag.
+ *
+ * The first character that belongs to a script of its own, which is how
+ * HarfBuzz guesses it: a digit or a space (Common) and a combining mark
+ * (Inherited) say nothing. It is what ::gfnt_face_shape() uses when the options
+ * name no script.
+ *
+ * @param codepoints The text.
+ * @param count How many.
+ * @return The tag (`GFNT_TAG('a','r','a','b')`), or 0 if the text has none.
+ */
+GFNT_API GFNT_Tag gfnt_shape_script_of(const uint32_t * codepoints,
+    size_t count);
+
+/**
+ * @brief The direction a script is written in.
+ *
+ * @param script An OpenType script tag, or 0.
+ * @return ::GFNT_DIRECTION_RTL for Arabic, Hebrew, Syriac and the other
+ *   right-to-left scripts, ::GFNT_DIRECTION_LTR for everything else.
+ */
+GFNT_API GFNT_Direction gfnt_shape_script_direction(GFNT_Tag script);
 
 #ifdef __cplusplus
 }

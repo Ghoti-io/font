@@ -110,6 +110,46 @@ FORMS = [
     "\u00c0\u00c1\u00c2\u00c3\u00c4\u00c5\u00c6\u00c7\u00c8\u00c9\u00ca\u00cb",
     "\u0100\u0101\u0102\u0103\u0104\u0105\u0106\u0107\u010c\u010d\u0158\u0159",
 ]
+# The scripts that have a shaper of their own. Each corpus is real words and the
+# characters a shaper has rules for, written as escapes so the file says what it
+# means. A group names a probe code point, and only fonts that map it are shaped:
+# a font with no Arabic shapes every Arabic text to .notdef the same way twice.
+ARABIC = [
+    "\u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u0639\u0627\u0644\u0645",
+    "\u0627\u0644\u0633\u0644\u0627\u0645 \u0639\u0644\u064a\u0643\u0645",
+    "\u0628\u0633\u0645 \u0627\u0644\u0644\u0647 \u0627\u0644\u0631\u062d\u0645\u0646 \u0627\u0644\u0631\u062d\u064a\u0645",
+    "\u0644\u0627 \u0644\u0623 \u0644\u0625 \u0644\u0622 \u0627\u0644\u0644\u0647",
+    "\u0645\u064f\u062d\u064e\u0645\u0651\u064e\u062f \u0643\u0650\u062a\u064e\u0627\u0628",
+    "\u0640\u0640\u0640 \u0628\u0640\u0628 \u0633\u0640\u0640\u0640\u0645",
+    "\u06af\u0686\u067e\u0698\u06a4 \u06ba\u06be\u06d2 \u0679\u0688\u0691 \u06cc\u06d3",
+    "\u0661\u0662\u0663 \u06f1\u06f2\u06f3 abc \u0645\u0631\u062d\u0628\u0627 123",
+    "\ufefb \ufdf2 \ufe8d\ufe8e \ufe91\ufe92\ufe93",
+    "\u0628\u200d\u0628 \u0628\u200c\u0628 \u0628\u200d \u200d\u0628",
+    "\u0623\u0625\u0622\u0671\u0674\u0675\u0676\u0677 \u0624\u0626\u0621",
+    "\u0628\u0651\u064e\u064b\u0650 \u0628\u064e\u0651 \u0644\u0651\u0670\u0627",
+]
+HEBREW = [
+    "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd",
+    "\u05d1\u05b0\u05bc\u05e8\u05b5\u05d0\u05e9\u05b4\u05c1\u05d9\u05ea \u05d1\u05b8\u05bc\u05e8\u05b8\u05d0",
+    "\u05d0\u05b1\u05dc\u05b9\u05d4\u05b4\u05d9\u05dd \u05d4\u05b7\u05e9\u05b8\u05c1\u05de\u05b7\u05d9\u05b4\u05dd",
+    "\u05e9\u05c1 \u05e9\u05c2 \ufb2c \ufb2d \ufb2a \ufb2b \ufb49 \ufb4a",
+    "\u05d0\u05b7 \u05d0\u05b8 \ufb30 \u05d1\u05bf \u05db\u05bc \u05e4\u05bc",
+    "\u05e9\u05b0\u05c1\u05dc\u05b9\u05de\u05b9\u05d4 \u05d9\u05b0\u05d4\u05d5\u05bc\u05d3\u05b8\u05d4",
+    "\u05d1\u05b8\u05be\u05d0\u05b8\u05d3\u05b8\u05dd \u05d0\u05b7\u05e8\u05b0\u05d1\u05bc\u05b8\u05e2\u05b8\u05d4",
+    "\u05f2\u05b7 \u05f0 \u05f1 \u05f2 \u05f3 \u05f4 abc \u05e9\u05dc\u05d5\u05dd 123",
+    "\u05d0\u05b9\u05b7 \u05d0\u05b7\u05b9 \u05d0\u05bc\u05b7 \u05d0\u05b7\u05bc \u05d0\u05c7\u05b8",
+]
+SYRIAC = [
+    "\u0710\u0723\u0718\u072a\u071d\u0710 \u0712\u0720\u0710",
+    "\u0710\u0712\u0718\u0722 \u0715\u0712\u0328\u0308\u072c\u0710",
+    "\u0710\u0720\u0729 \u0715\u0719 \u072a\u0712 \u0715\u0710 \u0717\u0718",
+    "\u0712\u0710\u0718\u0720 \u0720\u0710\u0718",
+    "\u0710\u0723\u0718\u072a\u071d\u0710\u0711\u0308 \u0715\u0714\u0715",
+]
+THAANA = [
+    "\u078b\u07a8\u0788\u07ac\u0780\u07a8 \u0784\u07a6\u0790\u07b0",
+    "\u0780\u07a8\u0783\u07a6\u078e\u07a6\u0782\u07b0 \u0787\u07a6\u0787\u07a8",
+]
 GREEK = [
     "Αλφάβητο Τάξη Υ ωΩ",
     "ΑΒΓΔΕ αβγδε ΤΑ ΓΑ",
@@ -139,6 +179,11 @@ GROUPS = [
     ("dutch", "Latn", "latn", "nl", "NLD ", "", LATIN),
     ("forms", "Latn", "latn", None, "", "", FORMS),
     ("forms -ccmp", "Latn", "latn", None, "", "-ccmp", FORMS),
+    ("arabic", "Arab", "arab", None, "", "", ARABIC, "", 0x627),
+    ("arabic -liga", "Arab", "arab", None, "", "-liga,-rlig,-calt", ARABIC, "", 0x627),
+    ("hebrew", "Hebr", "hebr", None, "", "", HEBREW, "", 0x5d0),
+    ("syriac", "Syrc", "syrc", None, "", "", SYRIAC, "", 0x710),
+    ("thaana", "Thaa", "thaa", None, "", "", THAANA, "", 0x780),
     ("greek", "Grek", "grek", None, "", "", GREEK),
     ("cyrillic", "Cyrl", "cyrl", None, "", "", CYRILLIC),
 ]
@@ -282,6 +327,71 @@ def tag_arg(tag):
     return tag if len(tag) == 4 else tag.ljust(4)
 
 
+_covered = {}
+
+
+def covered(font, probes):
+    """The probe code points the font maps, by asking this library's driver once."""
+    key = (font, tuple(sorted(probes)))
+    if key not in _covered:
+        text = "".join(chr(p) + "\n" for p in sorted(probes))
+        finished = subprocess.run([DRIVER, "--batch", "--script", "latn", font],
+                                  input=text, capture_output=True, text=True)
+        have = set()
+        for probe, line in zip(sorted(probes),
+                               finished.stdout.split("\n")):
+            try:
+                glyphs = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(glyphs, list) and glyphs and glyphs[0]["g"] != 0:
+                have.add(probe)
+        _covered[key] = have
+    return _covered[key]
+
+
+# Real fonts with a layout table taken out, so that the paths for a font without
+# one are held to HarfBuzz too: Arabic from presentation forms, marks from their
+# boxes, glyph classes from the characters. (source file, what to remove.)
+DERIVED = [
+    ("DejaVuSans.ttf", ("nogsub", "nogpos", "nogdef", "nolayout")),
+    ("DejaVuSerif.ttf", ("nogsub", "nolayout")),
+    ("tahoma.ttf", ("nogsub", "nogpos", "nogdef", "nolayout")),
+    ("titr.ttf", ("nogsub",)),
+    ("UKIJTor.ttf", ("nogsub", "nolayout")),
+]
+DERIVED_DIR = os.path.join(ROOT, "build", "oracle", "hb-derived")
+
+
+def derived_fonts(found):
+    """The fonts DERIVED names, made in the fontTools image and listed here."""
+    by_name = {os.path.basename(f): f for f in found}
+    wanted = []
+    for name, variants in DERIVED:
+        if name in by_name:
+            for variant in variants:
+                wanted.append("%s:%s" % (by_name[name], variant))
+    if not wanted:
+        return []
+    os.makedirs(DERIVED_DIR, exist_ok=True)
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "derive_fonts.py")
+    argv = oracle_env.command("fonttools",
+        ["python3", script, DERIVED_DIR] + wanted, scratch=DERIVED_DIR)
+    finished = subprocess.run(argv, capture_output=True, text=True)
+    if finished.returncode != 0:
+        sys.stderr.write("deriving fonts failed: %s\n" % finished.stderr[-400:])
+        return []
+    out = []
+    for item in wanted:
+        source, variant = item.rsplit(":", 1)
+        path = os.path.join(DERIVED_DIR, "%s.%s.ttf" % (
+            os.path.splitext(os.path.basename(source))[0], variant))
+        if os.path.exists(path):
+            out.append(path)
+    return out
+
+
 def corpus_fonts(args):
     if args:
         return [os.path.abspath(a) for a in args]
@@ -290,7 +400,7 @@ def corpus_fonts(args):
         for name in sorted(os.listdir(FIXTURES)):
             if name.endswith((".ttf", ".otf")):
                 found.append(os.path.join(FIXTURES, name))
-    return found
+    return found + derived_fonts(found)
 
 
 def write_inputs(key, group):
@@ -486,7 +596,12 @@ def main(argv):
     tasks = []
     for font in fonts:
         own = cases_for(font)
+        probes = {g[8] for g in groups if len(g) > 8 and g[8]}
+        have = covered(font, probes) if own is None and probes else set()
         for group in (own if own is not None else groups):
+            if own is None and len(group) > 8 and group[8] \
+                    and group[8] not in have:
+                continue
             # One lines file per distinct corpus: the shared groups reuse theirs.
             key = hashlib.sha1("\n".join(group[6]).encode("utf-8")).hexdigest()[:12]
             lines = write_inputs(key, group)

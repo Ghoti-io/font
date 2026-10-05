@@ -1727,6 +1727,16 @@ TEST(ShapeThai, SaraAmIsSplitAndItsNikhahitMovesBeforeAToneMark) {
   EXPECT_EQ(ids(g), (V{2, 4, 5, 3}));
 }
 
+TEST(ShapeThai, LaoMaiKonGoesAfterTheNikhahitOfASaraAmToo) {
+  // KO 2, MAI KON 3, NIGGAHITA 4, SARA AA 5.
+  Font font(small_font({}, 8, {{0xE81, 2}, {0xEBB, 3}, {0xECD, 4}, {0xEB2, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "lao ";
+  ASSERT_EQ(shape(font, V{0xE81, 0xEBB, 0xEB3}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4, 3, 5}));
+}
+
 namespace {
 
 /**

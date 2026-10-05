@@ -39,12 +39,15 @@ static bool gfnt_thai_is_sara_am(uint32_t u) {
   return (u & ~0x0080u) == 0x0E33u;
 }
 
-/** The tone marks and the other signs above a consonant, which NIKHAHIT goes below. */
+/**
+ * The tone marks and the other signs above a consonant, which NIKHAHIT goes
+ * below. Lao's U+0EBB counts, though it has no Thai twin.
+ */
 static bool gfnt_thai_is_tone_mark(uint32_t u) {
   uint32_t x = u & ~0x0080u;
 
   return (x >= 0x0E34 && x <= 0x0E37) || (x >= 0x0E47 && x <= 0x0E4E)
-      || x == 0x0E31;
+      || x == 0x0E31 || x == 0x0E3B;
 }
 
 static void gfnt_thai_preprocess(GFNT_ShapeCtx * ctx, GFNT_LInfo ** chars,

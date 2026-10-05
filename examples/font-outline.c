@@ -23,7 +23,14 @@
  *
  * Print every glyph's outline, its points and its path.
  *
- * Usage: font-outline <font> [face-index] [stride] [first]
+ * Usage: font-outline <font> [face-index] [stride] [first] [location]
+ *
+ * `location` is a design-space location in **user** coordinates, as
+ * `tag=value,tag=value` - `wght=700,opsz=14` - and is turned into the normalised
+ * coordinates every accessor takes by ::gfnt_face_normalize(), which is the
+ * library's own and is printed so that the differential can compare it. An axis
+ * not named takes its default. Without one the default instance is drawn, as
+ * before.
  *
  * **This is the driver `tools/oracle/glyf_diff.py` compares against fontTools.**
  * It prints two different things per glyph and both are deliberate: the points
@@ -43,6 +50,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <ghoti.io/font/font.h>
 #include <ghoti.io/font/outline.h>
@@ -103,6 +111,10 @@ int main(int argc, char ** argv) {
   size_t index = 0;
   size_t stride = 1;
   size_t first = 0;
+  const char * location = NULL;
+  GFNT_F16Dot16 user[64];
+  GFNT_F2Dot14 normalised[64];
+  GFNT_Variation variation = { NULL, 0 };
   GFNT_Blob * blob = NULL;
   GFNT_Face * face = NULL;
   GFNT_Error error;
@@ -127,6 +139,9 @@ int main(int argc, char ** argv) {
   if (argc > 4) {
     first = (size_t)strtoul(argv[4], NULL, 10);
   }
+  if (argc > 5) {
+    location = argv[5];
+  }
 
   gfnt_error_clear(&error);
   result = gfnt_blob_create_file(path, NULL, NULL, &blob, &error);
@@ -145,6 +160,66 @@ int main(int argc, char ** argv) {
     gfnt_face_free(face);
     gfnt_blob_destroy(blob);
     return 1;
+  }
+  if (location) {
+    size_t axes = 0;
+    GFNT_Axis axis;
+    char * cursor;
+    char copy[512];
+
+    if (strlen(location) >= sizeof copy) {
+      fprintf(stderr, "location too long\n");
+      return 2;
+    }
+    memcpy(copy, location, strlen(location) + 1);
+    if (gfnt_face_axis_count(face, &axes, &error) != GFNT_OK || axes > 64) {
+      gfnt_error_dump(&error, stderr);
+      return 1;
+    }
+    // Every axis starts at its default, so a location that names one axis of
+    // several leaves the rest where the designer put them.
+    for (size_t i = 0; i < axes; ++i) {
+      if (gfnt_face_axis_at(face, i, &axis, &error) != GFNT_OK) {
+        gfnt_error_dump(&error, stderr);
+        return 1;
+      }
+      user[i] = axis.def;
+    }
+    for (cursor = strtok(copy, ","); cursor; cursor = strtok(NULL, ",")) {
+      char * equals = strchr(cursor, '=');
+      bool found = false;
+
+      if (!equals || equals - cursor != 4) {
+        fprintf(stderr, "bad location item '%s'\n", cursor);
+        return 2;
+      }
+      for (size_t i = 0; i < axes; ++i) {
+        (void)gfnt_face_axis_at(face, i, &axis, &error);
+        if (axis.tag == GFNT_TAG(cursor[0], cursor[1], cursor[2], cursor[3])) {
+          // 16.16, rounded to nearest: the value a user typed is a decimal and
+          // the nearest 16.16 is what any reader would store it as.
+          user[i] = (GFNT_F16Dot16)(strtod(equals + 1, NULL) * 65536.0
+              + (strtod(equals + 1, NULL) < 0 ? -0.5 : 0.5));
+          found = true;
+        }
+      }
+      if (!found) {
+        fprintf(stderr, "this face has no axis '%.4s'\n", cursor);
+        return 2;
+      }
+    }
+    result = gfnt_face_normalize(face, user, axes, normalised, 64, &error);
+    if (result != GFNT_OK) {
+      gfnt_error_dump(&error, stderr);
+      return 1;
+    }
+    variation.coords = normalised;
+    variation.count = axes;
+    printf("variation: %zu axes, normalised", axes);
+    for (size_t i = 0; i < axes; ++i) {
+      printf(" %d", normalised[i]);
+    }
+    printf("\n");
   }
   printf("outlines: %zu glyph(s), stride %zu from %zu\n", glyphs, stride,
       first);
@@ -173,8 +248,8 @@ int main(int argc, char ** argv) {
           gfnt_result_string(error.result));
       continue;
     }
-    result = gfnt_face_glyph_outline(face, (uint32_t)glyph, NULL, NULL,
-        &outline, &error);
+    result = gfnt_face_glyph_outline(face, (uint32_t)glyph,
+        location ? &variation : NULL, NULL, &outline, &error);
     if (result != GFNT_OK) {
       printf("glyph %zu: refused %s\n", glyph, gfnt_result_string(result));
       continue;

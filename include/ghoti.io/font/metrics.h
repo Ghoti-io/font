@@ -37,8 +37,15 @@
  *   is that enum and zero is the font's own request.
  *
  * Every accessor takes a `const GFNT_Variation *`; NULL means the default
- * instance, which is all this library answers until phase 4 parses the
- * variation tables (section 7.7).
+ * instance. A variation that moves nothing - every coordinate zero - is the
+ * default instance too and is answered as one. **Anything else is refused as
+ * ::GFNT_ERR_UNSUPPORTED**, because what moves a metric at a location is `HVAR`,
+ * `MVAR` or `gvar`'s phantom points and none of them is read yet: answering the
+ * default's number for a location a face is not at would lay text out at weight
+ * 900 with the advances of weight 400 and report success. The outline at the same
+ * location *is* honoured (outline.h), so a caller drawing and measuring at one
+ * location is told which of the two it cannot have. More coordinates than the face
+ * has axes is ::GFNT_ERR_INVALID (section 7.7).
  */
 
 #ifndef GHOTI_IO_GFNT_METRICS_H

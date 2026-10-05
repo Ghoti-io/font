@@ -834,7 +834,11 @@ TEST(Glyf, AFaceWhoseOutlinesAreCharstringsIsAnsweredByTheOtherProducer) {
       << error.message;
 }
 
-TEST(Glyf, VariationCoordinatesAreRefusedRatherThanIgnored) {
+TEST(Glyf, VariationCoordinatesOnAFaceWithNoAxesAreTheCallersMistake) {
+  // This face has no `fvar`, so it has no axes and one coordinate is one more than
+  // it takes. It was GFNT_ERR_UNSUPPORTED - "gvar is not read yet" - back when no
+  // variation could be honoured; now that one can, the refusal says what is true
+  // of *this* face, and `test_variation.cpp` covers the faces that can honour it.
   Font font("outline-simple.ttf");
   GFNT_F2Dot14 coords[1] = {0};
   GFNT_Variation variation{coords, 1};
@@ -842,7 +846,7 @@ TEST(Glyf, VariationCoordinatesAreRefusedRatherThanIgnored) {
   GFNT_Error error{};
 
   EXPECT_EQ(gfnt_face_glyph_outline(font, kQuadExplicit, &variation, nullptr,
-      &outline, &error), GFNT_ERR_UNSUPPORTED);
+      &outline, &error), GFNT_ERR_INVALID);
   EXPECT_NE(error.message, nullptr);
   gfnt_outline_destroy(outline);
 }

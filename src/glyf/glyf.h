@@ -73,13 +73,19 @@ GFNT_Result gfnt_loca_range(const GFNT_Face * face, uint32_t glyph,
  *
  * @param face The face.
  * @param glyph The glyph index.
+ * @param variation Normalised coordinates `gvar` moves the points by, or NULL for
+ *   the default instance. **The caller has checked it can be honoured**: this
+ *   function reads `gvar` and does not ask whether the face has one, because
+ *   ::gfnt_face_glyph_outline() has already refused every case where it does not
+ *   and a second refusal here would be a second place to answer it.
  * @param outline Receives the contours, appended to whatever is there.
  * @param error Receives a diagnostic on failure, or NULL.
  * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED,
  *   ::GFNT_ERR_CORRUPT, ::GFNT_ERR_LIMIT or ::GFNT_ERR_OOM.
  */
 GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
-    GFNT_Outline * outline, GFNT_Error * error);
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_Error * error);
 
 /**
  * Whether this glyph's `glyf` description is a composite.

@@ -39,11 +39,13 @@
 #include <ghoti.io/font/outline.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include "../core/chain.h"
 #include "../core/fixed.h"
 #include "../outline/outline.h"
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
+#include "../var/gvar.h"
 #include "glyf.h"
 
 /** The tag of the table holding the glyph descriptions. */
@@ -315,11 +317,89 @@ static GFNT_Result gfnt_glyf_coordinates(GFNT_Reader * reader,
 }
 
 /**
+ * A `gvar` delta to 26.6: the bits past the sixth go, rounded half away from zero.
+ *
+ * One rule for the outline's points and a composite's offsets, so that a component
+ * placed by an offset and a point moved by a delta of the same size land in the
+ * same place.
+ */
+static int64_t gfnt_glyf_delta_to_26dot6(int64_t delta) {
+  return gfnt_round_shift(gfnt_clamp64(delta), GFNT_GVAR_FRACTION_BITS - 6);
+}
+
+/**
+ * Move a simple glyph's points by what `gvar` says they do at @p variation.
+ *
+ * Done after the points are read and before anything else sees them, so that a
+ * composite built from this glyph places the *varied* outline. The unvaried
+ * positions are what `gvar` interpolates from, and they are read back out of the
+ * outline here - whole font units, because nothing has yet been added to them -
+ * rather than kept from the read, which would be a second array to fall out of
+ * step with the first.
+ */
+static GFNT_Result gfnt_glyf_vary_simple(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Outline * outline, size_t base,
+    size_t point_count, size_t first_contour, size_t contour_count,
+    GFNT_Error * error) {
+  const GFNT_Allocator * allocator = face->allocator;
+  GFNT_GvarPoints points;
+  int32_t * original = NULL;
+  int64_t * delta = NULL;
+  size_t * ends = NULL;
+  GFNT_Result result;
+
+  if (point_count == 0) {
+    return GFNT_OK;
+  }
+  original = allocator->calloc_fn(allocator->ctx, point_count * 2u,
+      sizeof *original);
+  delta = allocator->calloc_fn(allocator->ctx,
+      (point_count + GFNT_GVAR_PHANTOM_POINTS) * 2u, sizeof *delta);
+  ends = allocator->calloc_fn(allocator->ctx, contour_count ? contour_count : 1u,
+      sizeof *ends);
+  if (!original || !delta || !ends) {
+    result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_GVAR, 0, glyph,
+        "no memory for a glyph's variation deltas");
+    goto done;
+  }
+  for (size_t i = 0; i < point_count; ++i) {
+    original[i] = outline->points[base + i].x / GFNT_F26DOT6_ONE;
+    original[point_count + i] = outline->points[base + i].y / GFNT_F26DOT6_ONE;
+  }
+  for (size_t c = 0; c < contour_count; ++c) {
+    ends[c] = outline->contours[first_contour + c] - base;
+  }
+  points.count = point_count;
+  points.x = original;
+  points.y = original + point_count;
+  points.contour_ends = ends;
+  points.contour_count = contour_count;
+  result = gfnt_gvar_glyph_deltas(face, glyph, variation->coords,
+      variation->count, &points, delta,
+      delta + point_count + GFNT_GVAR_PHANTOM_POINTS, error);
+  if (result != GFNT_OK) {
+    goto done;
+  }
+  for (size_t i = 0; i < point_count; ++i) {
+    outline->points[base + i].x = gfnt_saturate32((int64_t)outline->points[base
+        + i].x + gfnt_glyf_delta_to_26dot6(delta[i]));
+    outline->points[base + i].y = gfnt_saturate32((int64_t)outline->points[base
+        + i].y + gfnt_glyf_delta_to_26dot6(
+            delta[point_count + GFNT_GVAR_PHANTOM_POINTS + i]));
+  }
+done:
+  allocator->free_fn(allocator->ctx, original);
+  allocator->free_fn(allocator->ctx, delta);
+  allocator->free_fn(allocator->ctx, ends);
+  return result;
+}
+
+/**
  * A simple glyph: contours, flags, and the two coordinate streams.
  */
 static GFNT_Result gfnt_glyf_simple(const GFNT_Face * face, GFNT_Reader * reader,
-    int16_t contours, uint32_t glyph, GFNT_Outline * outline,
-    GFNT_Error * error) {
+    int16_t contours, uint32_t glyph, const GFNT_Variation * variation,
+    GFNT_Outline * outline, GFNT_Error * error) {
   size_t contour_count = (size_t)contours;
   size_t point_count = 0;
   size_t base = gfnt_outline_point_count(outline);
@@ -417,6 +497,10 @@ static GFNT_Result gfnt_glyf_simple(const GFNT_Face * face, GFNT_Reader * reader
     outline->point_count = base + point_count;
   }
   face->allocator->free_fn(face->allocator->ctx, flags);
+  if (result == GFNT_OK && variation) {
+    result = gfnt_glyf_vary_simple(face, glyph, variation, outline, base,
+        point_count, first_contour, contour_count, error);
+  }
   return result;
 }
 
@@ -584,12 +668,18 @@ static GFNT_Result gfnt_glyf_component(GFNT_Reader * reader, uint32_t glyph,
  * **unscaled**, which is Microsoft's reading and what every shipping rasteriser
  * does; a font that wants Apple's says so with the flag.
  */
-static void gfnt_glyf_offset(const GFNT_Component * component,
-    GFNT_Point * out_offset) {
+static void gfnt_glyf_offset(const GFNT_Component * component, int64_t delta_x,
+    int64_t delta_y, GFNT_Point * out_offset) {
   GFNT_Point offset;
 
-  offset.x = gfnt_saturate32((int64_t)component->arg1 * GFNT_F26DOT6_ONE);
-  offset.y = gfnt_saturate32((int64_t)component->arg2 * GFNT_F26DOT6_ONE);
+  // The variation's delta is added to the offset *as stored*, before the
+  // component's own transform scales it when the flags say the offset is in the
+  // component's space: `gvar` varies the numbers in the file and the flags decide
+  // what those numbers mean.
+  offset.x = gfnt_saturate32((int64_t)component->arg1 * GFNT_F26DOT6_ONE
+      + gfnt_glyf_delta_to_26dot6(delta_x));
+  offset.y = gfnt_saturate32((int64_t)component->arg2 * GFNT_F26DOT6_ONE
+      + gfnt_glyf_delta_to_26dot6(delta_y));
   if ((component->flags & GFNT_GLYF_SCALED_OFFSET)
       && !(component->flags & GFNT_GLYF_UNSCALED_OFFSET)) {
     offset = gfnt_outline_apply_matrix(offset, component->xx, component->xy,
@@ -599,66 +689,83 @@ static void gfnt_glyf_offset(const GFNT_Component * component,
 }
 
 /**
- * ::gfnt_glyf_load() with the recursion's state, which is what recurses.
+ * What `gvar` says each component of a composite moves by at @p variation.
  *
- * @p chain is every glyph this walk already has open, innermost last, and @p
- * depth is how many of them there are. Both, rather than deriving the depth from
- * the chain's length, because the chain is walked per *component* and the depth
- * is compared per *call*: counting frames would make the cheaper of the two
- * checks the more expensive one.
+ * A composite's "points" are its components - one per component record, in file
+ * order, before the four phantom points - and what a delta to one of them moves is
+ * its **offset**. The components are counted by reading the records once without
+ * acting on them, because `gvar`'s "every point" shorthand and its point numbers
+ * are both relative to a count the composite does not state anywhere.
+ *
+ * @param reader Positioned on the first component record. Not advanced.
+ * @param out_deltas Receives `2 * (count + 4)` values, x then y, owned by
+ *   the caller and freed with the allocator's `free_fn`; NULL when the glyph has
+ *   no variation data to apply.
+ * @param out_count Receives the number of components.
  */
-static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
-    uint32_t glyph, size_t depth, const GFNT_GlyphChain * chain,
-    GFNT_Outline * outline, GFNT_Error * error) {
-  GFNT_Reader reader;
-  GFNT_GlyphChain here;
-  bool empty = false;
-  int16_t contours = 0;
-  size_t composite_base = 0;
+static GFNT_Result gfnt_glyf_vary_composite(const GFNT_Face * face,
+    uint32_t glyph, const GFNT_Variation * variation, const GFNT_Reader * reader,
+    int64_t ** out_deltas, size_t * out_count, GFNT_Error * error) {
+  const GFNT_Allocator * allocator = face->allocator;
+  GFNT_Reader scan = *reader;
+  GFNT_GvarPoints points;
+  GFNT_Component component;
+  size_t count = 0;
+  size_t total;
+  int64_t * deltas = NULL;
   GFNT_Result result;
 
-  if (depth > face->limits.max_composite_depth) {
-    return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_GLYF, 0, glyph,
-        "composite glyphs nest deeper than max_composite_depth allows");
+  do {
+    result = gfnt_glyf_component(&scan, glyph, &component, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    count += 1;
+  } while (component.flags & GFNT_GLYF_MORE_COMPONENTS);
+  total = count + GFNT_GVAR_PHANTOM_POINTS;
+  deltas = allocator->calloc_fn(allocator->ctx, total * 2u, sizeof *deltas);
+  if (!deltas) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_GVAR, 0, glyph,
+        "no memory for a composite's variation deltas");
   }
-  result = gfnt_glyf_reader(face, glyph, &reader, &empty, error);
+  memset(&points, 0, sizeof points);
+  points.count = count;
+  result = gfnt_gvar_glyph_deltas(face, glyph, variation->coords,
+      variation->count, &points, deltas, deltas + total, error);
   if (result != GFNT_OK) {
+    allocator->free_fn(allocator->ctx, deltas);
     return result;
   }
-  if (empty) {
-    // A glyph with no description draws nothing, and that is an answer.
-    return GFNT_OK;
-  }
-  result = gfnt_read_s16(&reader, &contours);
-  if (result != GFNT_OK) {
-    return result;
-  }
-  if (contours == 0) {
-    // A description that exists and states zero contours. Fonts do this.
-    return GFNT_OK;
-  }
-  if (contours > 0) {
-    return gfnt_glyf_simple(face, &reader, contours, glyph, outline, error);
-  }
+  *out_deltas = deltas;
+  *out_count = count;
+  return GFNT_OK;
+}
 
-  // A composite. Every component is loaded into its own outline and appended
-  // transformed, so that point matching can measure against what has been
-  // assembled so far.
-  //
-  // `composite_base` is where this call's own contribution starts, because this
-  // function *appends*: a point index in a component record counts from the
-  // start of the composite being assembled, not from the start of whatever the
-  // outline already holds. Every caller today hands over an outline that is
-  // empty - a nested composite gets a fresh one per component - so the
-  // subtraction is zero in every font this library has met, and it is here
-  // because the correctness of point matching should not rest on that.
-  composite_base = gfnt_outline_point_count(outline);
-  here.parent = chain;
-  here.glyph = glyph;
-  result = gfnt_reader_seek(&reader, GFNT_GLYF_HEADER_BYTES);
-  if (result != GFNT_OK) {
-    return result;
-  }
+static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
+    uint32_t glyph, size_t depth, const GFNT_GlyphChain * chain,
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_Error * error);
+
+/**
+ * The components of a composite, each loaded, placed and appended.
+ *
+ * Separate from ::gfnt_glyf_load_chained() so that the one allocation a variation
+ * needs - the components' deltas - has one place it is freed, rather than one per
+ * `return` of a loop that has eight.
+ *
+ * @param deltas The components' deltas, x then y with the four phantom
+ *   points between, or NULL for the default instance.
+ * @param component_count How many components the composite has, when @p deltas is
+ *   not NULL.
+ */
+static GFNT_Result gfnt_glyf_composite(const GFNT_Face * face, uint32_t glyph,
+    size_t depth, const GFNT_GlyphChain * here, const GFNT_Variation * variation,
+    GFNT_Reader * reader_in, size_t composite_base, const int64_t * deltas,
+    size_t component_count, GFNT_Outline * outline, GFNT_Error * error) {
+  GFNT_Reader reader = *reader_in;
+  size_t component_index = 0;
+  GFNT_Result result;
+
   for (;;) {
     GFNT_Component component;
     GFNT_Outline * part = NULL;
@@ -668,7 +775,7 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
     if (result != GFNT_OK) {
       return result;
     }
-    if (gfnt_glyph_chain_has(&here, component.glyph)) {
+    if (gfnt_glyph_chain_has(here, component.glyph)) {
       // A glyph that reaches itself would recurse to the depth cap and report a
       // limit, which is a true statement about a font that is not deep but
       // circular - and one a caller acts on by raising a budget that will never
@@ -687,15 +794,21 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
       return result;
     }
     gfnt_outline_set_limits(part, &face->limits);
-    result = gfnt_glyf_load_chained(face, component.glyph, depth + 1, &here,
-        part, error);
+    result = gfnt_glyf_load_chained(face, component.glyph, depth + 1, here,
+        variation, part, error);
     if (result != GFNT_OK) {
       gfnt_outline_destroy(part);
       return result;
     }
 
     if (component.flags & GFNT_GLYF_ARGS_ARE_XY) {
-      gfnt_glyf_offset(&component, &offset);
+      // A component placed by matching points has no offset for a delta to
+      // move, and its delta is ignored: the matched points have already moved,
+      // being points of glyphs that were themselves varied.
+      gfnt_glyf_offset(&component,
+          deltas ? deltas[component_index] : 0,
+          deltas ? deltas[component_index + GFNT_GVAR_PHANTOM_POINTS
+              + component_count] : 0, &offset);
     }
     else {
       // Point matching: arg1 indexes a point of what has been assembled so
@@ -732,6 +845,7 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
     if (result != GFNT_OK) {
       return result;
     }
+    component_index += 1;
     if ((component.flags & GFNT_GLYF_MORE_COMPONENTS) == 0) {
       break;
     }
@@ -739,8 +853,87 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
   return GFNT_OK;
 }
 
+/**
+ * ::gfnt_glyf_load() with the recursion's state, which is what recurses.
+ *
+ * @p chain is every glyph this walk already has open, innermost last, and @p
+ * depth is how many of them there are. Both, rather than deriving the depth from
+ * the chain's length, because the chain is walked per *component* and the depth
+ * is compared per *call*: counting frames would make the cheaper of the two
+ * checks the more expensive one.
+ *
+ * @p variation is passed down unchanged, so that every component of a composite is
+ * drawn at the same location as the glyph that places it.
+ */
+static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
+    uint32_t glyph, size_t depth, const GFNT_GlyphChain * chain,
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_Error * error) {
+  GFNT_Reader reader;
+  GFNT_GlyphChain here;
+  bool empty = false;
+  int16_t contours = 0;
+  size_t composite_base = 0;
+  int64_t * component_deltas = NULL;
+  size_t component_count = 0;
+  GFNT_Result result;
+
+  if (depth > face->limits.max_composite_depth) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_GLYF, 0, glyph,
+        "composite glyphs nest deeper than max_composite_depth allows");
+  }
+  result = gfnt_glyf_reader(face, glyph, &reader, &empty, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (empty) {
+    // A glyph with no description draws nothing, and that is an answer.
+    return GFNT_OK;
+  }
+  result = gfnt_read_s16(&reader, &contours);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (contours == 0) {
+    // A description that exists and states zero contours. Fonts do this.
+    return GFNT_OK;
+  }
+  if (contours > 0) {
+    return gfnt_glyf_simple(face, &reader, contours, glyph, variation, outline,
+        error);
+  }
+
+  // A composite: see gfnt_glyf_composite(). `composite_base` is where this call's
+  // own contribution starts, because that function *appends*: a point index in a
+  // component record counts from the start of the composite being assembled, not
+  // from the start of whatever the outline already holds. Every caller today
+  // hands over an outline that is empty - a nested composite gets a fresh one per
+  // component - so the subtraction is zero in every font this library has met,
+  // and it is here because the correctness of point matching should not rest on
+  // that.
+  composite_base = gfnt_outline_point_count(outline);
+  here.parent = chain;
+  here.glyph = glyph;
+  result = gfnt_reader_seek(&reader, GFNT_GLYF_HEADER_BYTES);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (variation) {
+    result = gfnt_glyf_vary_composite(face, glyph, variation, &reader,
+        &component_deltas, &component_count, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+  }
+  result = gfnt_glyf_composite(face, glyph, depth, &here, variation, &reader,
+      composite_base, component_deltas, component_count, outline, error);
+  face->allocator->free_fn(face->allocator->ctx, component_deltas);
+  return result;
+}
+
 GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
-    GFNT_Outline * outline, GFNT_Error * error) {
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_Error * error) {
   if (!face || !outline) {
     return GFNT_ERR_INVALID;
   }
@@ -749,7 +942,7 @@ GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
   // be partway down one could claim a depth without the chain that goes with it,
   // and the cycle check would then be missing exactly the frames that prove the
   // cycle.
-  return gfnt_glyf_load_chained(face, glyph, 0, NULL, outline, error);
+  return gfnt_glyf_load_chained(face, glyph, 0, NULL, variation, outline, error);
 }
 
 GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,

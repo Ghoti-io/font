@@ -247,6 +247,138 @@ def simple_glyph(contours, instructions=b""):
     return bytes(out)
 
 
+def fvar_table(axes, instances):
+    """An `fvar`: axes as (tag, min, default, max, flags, name) in whole units."""
+    with_ps = any(ps is not None for _, _, ps in instances)
+    size = 4 + 4 * len(axes) + (2 if with_ps else 0)
+    out = bytearray(struct.pack(">HHHHHHHH", 1, 0, 16, 2, len(axes), 20,
+                                len(instances), size))
+    for name, low, default, high, flags, label in axes:
+        out += name.encode("ascii") + struct.pack(
+            ">iiiHH", low << 16, default << 16, high << 16, flags, label)
+    for label, coordinates, ps in instances:
+        out += struct.pack(">HH", label, 0)
+        for value in coordinates:
+            out += struct.pack(">i", value << 16)
+        if with_ps:
+            out += struct.pack(">H", 0xFFFF if ps is None else ps)
+    return bytes(out)
+
+
+def avar_table(maps):
+    """An `avar` version 1 from one list of (from, to) 2.14 pairs per axis."""
+    out = bytearray(struct.pack(">HHHH", 1, 0, 0, len(maps)))
+    for pairs in maps:
+        out += struct.pack(">H", len(pairs))
+        for source, target in pairs:
+            out += struct.pack(">hh", source, target)
+    return bytes(out)
+
+
+def packed_deltas(values):
+    """A list of deltas in `gvar`'s packed form: runs of at most 64."""
+    out = bytearray()
+    index = 0
+    while index < len(values):
+        run = 1
+        zero = values[index] == 0
+        wide = not -128 <= values[index] <= 127
+        while (index + run < len(values) and run < 64
+               and (values[index + run] == 0) == zero
+               and (zero or (not -128 <= values[index + run] <= 127) == wide)):
+            run += 1
+        chunk = values[index:index + run]
+        if zero:
+            out.append(0x80 | (run - 1))
+        elif wide:
+            out.append(0x40 | (run - 1))
+            for value in chunk:
+                out += struct.pack(">h", value)
+        else:
+            out.append(run - 1)
+            for value in chunk:
+                out += struct.pack(">b", value)
+        index += run
+    return bytes(out)
+
+
+def packed_points(numbers):
+    """A list of point numbers in `gvar`'s packed form, as deltas between them."""
+    out = bytearray()
+    if len(numbers) < 128:
+        out.append(len(numbers))
+    else:
+        out += struct.pack(">H", 0x8000 | len(numbers))
+    previous = 0
+    index = 0
+    while index < len(numbers):
+        chunk = numbers[index:index + 128]
+        steps = []
+        for number in chunk:
+            steps.append(number - previous)
+            previous = number
+        if all(step < 256 for step in steps):
+            out.append(len(chunk) - 1)
+            out += bytes(steps)
+        else:
+            out.append(0x80 | (len(chunk) - 1))
+            for step in steps:
+                out += struct.pack(">H", step)
+        index += len(chunk)
+    return bytes(out)
+
+
+def gvar_tuple(peak, data, private=False, start=None, end=None, shared_index=0):
+    """(header bytes, serialised bytes) for one tuple."""
+    index = shared_index
+    header = bytearray()
+    if peak is not None:
+        index = 0x8000
+    if start is not None:
+        index |= 0x4000
+    if private:
+        index |= 0x2000
+    header += struct.pack(">HH", len(data), index)
+    for group in (peak, start, end):
+        for value in group or []:
+            header += struct.pack(">h", value)
+    return bytes(header), data
+
+
+def glyph_variation(*tuples, shared_points=None):
+    """A `GlyphVariationData` from tuples, and optional shared point numbers."""
+    count = len(tuples) | (0x8000 if shared_points is not None else 0)
+    headers = b"".join(header for header, _ in tuples)
+    serialised = (shared_points or b"") + b"".join(data for _, data in tuples)
+    return (struct.pack(">HH", count, 4 + len(headers)) + headers + serialised)
+
+
+def gvar_table(glyphs, shared_tuples, long_offsets):
+    """A `gvar` for one axis from per-glyph data."""
+    data = bytearray()
+    offsets = []
+    for glyph in glyphs:
+        offsets.append(len(data))
+        data += glyph
+        while len(data) % 2:
+            data += b"\0"
+    offsets.append(len(data))
+    width = 4 if long_offsets else 2
+    shared_at = 20 + len(offsets) * width
+    shared_bytes = len(shared_tuples) * 2
+    out = bytearray(struct.pack(">HHHHIHHI", 1, 0, 1, len(shared_tuples),
+                                shared_at, len(glyphs),
+                                1 if long_offsets else 0,
+                                shared_at + shared_bytes))
+    for offset in offsets:
+        out += struct.pack(">I" if long_offsets else ">H",
+                           offset if long_offsets else offset // 2)
+    for tuple_ in shared_tuples:
+        for value in tuple_:
+            out += struct.pack(">h", value)
+    return bytes(out + data)
+
+
 def composite_glyph(components):
     """A `glyf` composite from [(glyph, dx, dy), ...], words throughout."""
     out = bytearray(struct.pack(">hhhhh", -1, 0, 0, 1000, 1000))
@@ -342,6 +474,64 @@ def main():
     broken = loca_short([0, len(leaf) + 2, 2]) + leaf + b"\0\0"
     write_pair(corpus / "glyf/backwards-loca.seed", 0x10,
                max(1, (256 * 6) // len(broken)), broken)
+
+    # fvar and avar together, split where the harness looks for the boundary. One
+    # seed per shape the readers have a branch for: both record sizes, an avar with
+    # a map on every axis, and an avar that disagrees with its fvar (which has to
+    # be refused as a pair and not as two tables).
+    plain_fvar = fvar_table([("wght", 100, 400, 900, 0, 256)],
+                            [(257, [300], None), (258, [700], 259)])
+    two_fvar = fvar_table([("wght", 100, 400, 900, 0, 256),
+                           ("wdth", 75, 100, 125, 1, 257)], [])
+    bent = avar_table([[(-16384, -16384), (-8192, -4096), (0, 0),
+                        (8192, 12288), (16384, 16384)]])
+    both = avar_table([[(-16384, -16384), (0, 0), (16384, 16384)], []])
+    for label, first, second in (("one-axis", plain_fvar, bent),
+                                 ("two-axes", two_fvar, both),
+                                 ("no-avar", plain_fvar, b""),
+                                 ("axis-count-mismatch", two_fvar, bent)):
+        total = len(first) + len(second)
+        write_pair(corpus / ("variation/%s.seed" % label), 0x00,
+                   max(0, min(255, (256 * len(first)) // max(1, total))),
+                   first + second)
+
+    # gvar for fuzz_gvar: the options byte, four coordinates, then the table. The
+    # harness's glyph 0 has seven points, so every point list names 0..10 once the
+    # four phantoms are counted; glyph 1 is a composite of two components and glyph
+    # 3 is point-matched. Each seed is one construction: every point by shorthand,
+    # named points and the inference between them, shared points and shared
+    # tuples, an intermediate region, component offsets, and 32-bit offsets.
+    peak = [16384]
+    all_points = gvar_tuple(peak, packed_deltas([3] * 11 + [0] * 0)
+                            + packed_deltas([-2] * 11))
+    named = gvar_tuple(peak, packed_points([0, 3, 5])
+                       + packed_deltas([10, -4, 6]) + packed_deltas([0, 9, -9]),
+                       private=True)
+    shared_a = gvar_tuple(None, packed_deltas([5, -5, 5]) + packed_deltas([1, 1, 1]),
+                          shared_index=0)
+    shared_b = gvar_tuple(None, packed_deltas([-8, 8, -8]) + packed_deltas([0, 0, 0]),
+                          shared_index=1)
+    ramp = gvar_tuple([8192], packed_deltas([12] * 11) + packed_deltas([0] * 11),
+                      start=[4096], end=[16384])
+    offsets = gvar_tuple(peak, packed_deltas([7, -3, 0, 0, 0, 0])
+                         + packed_deltas([0, 9, 0, 0, 0, 0]))
+    for label, glyph_data, shared, long_offsets in (
+            ("all-points", [glyph_variation(all_points)], [], False),
+            ("named-points", [glyph_variation(named)], [], False),
+            ("shared", [glyph_variation(shared_a, shared_b,
+                                        shared_points=packed_points([0, 3, 5]))],
+             [[16384], [-16384]], False),
+            ("intermediate", [glyph_variation(ramp)], [], False),
+            ("composite-offsets", [b"", glyph_variation(offsets)], [], False),
+            ("long-offsets", [glyph_variation(all_points)], [], True)):
+        table = gvar_table(glyph_data, shared, long_offsets)
+        path = corpus / ("gvar/%s.seed" % label)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Options 0x04 writes the harness's axis count over the table's; the four
+        # coordinates are one full axis and zeros.
+        path.write_bytes(bytes([0x04]) + struct.pack(">hhhh", 16384, 0, 0, 0)
+                         + table)
+        print("%s: %d bytes" % (path.relative_to(root), 9 + len(table)))
 
     # Paths for the rasteriser, which reads no font at all.
     write_pair(corpus / "raster/square.seed", 0x00, 0x00, raster_points([

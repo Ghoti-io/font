@@ -391,6 +391,35 @@ GFNT_Result gfnt_face_avar(const GFNT_Face * face, const GFNT_Avar ** out_avar,
   return GFNT_OK;
 }
 
+GFNT_Result gfnt_variation_moves(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, bool * out_moves, GFNT_Error * error) {
+  size_t axes = 0;
+  bool moved = false;
+  GFNT_Result result;
+
+  if (!variation || variation->count == 0) {
+    *out_moves = false;
+    return GFNT_OK;
+  }
+  if (!variation->coords) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, glyph,
+        "a variation states coordinates and gives none");
+  }
+  result = gfnt_face_axis_count(face, &axes, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (variation->count > axes) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, glyph,
+        "a variation has more coordinates than the face has axes");
+  }
+  for (size_t i = 0; i < variation->count; ++i) {
+    moved = moved || variation->coords[i] != 0;
+  }
+  *out_moves = moved;
+  return GFNT_OK;
+}
+
 bool gfnt_face_is_variable(const GFNT_Face * face) {
   return face && gfnt_face_has_table(face, GFNT_TAG_FVAR);
 }

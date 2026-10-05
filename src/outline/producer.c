@@ -42,6 +42,8 @@
 #include <string.h>
 #include "../sfnt/sfnt.h"
 #include "../type1/type1.h"
+#include "../var/gvar.h"
+#include "../var/var.h"
 #include "outline.h"
 
 /** The tag of the table holding TrueType glyph descriptions. */
@@ -81,23 +83,68 @@ static GFNT_Result gfnt_producer_refuse(const GFNT_Face * face, uint32_t glyph,
       "this face has no outlines at all");
 }
 
+/**
+ * Whether a variation can be honoured for this face, and the one to pass down.
+ *
+ * Decided **once, here**, so that `glyf.c` can read `gvar` without asking whether
+ * it should and a CFF face is not asked at all. Three answers, and the third is
+ * the one that matters:
+ *
+ *   * No variation, or one with no coordinates: the default instance, and nothing
+ *     is consulted.
+ *   * A variation that moves nothing - every coordinate zero - is **also** the
+ *     default instance and is answered as one, whether or not the face could have
+ *     honoured a real one. A caller that asks for the default by name has asked
+ *     for something this library can give.
+ *   * Anything else needs `gvar` over `glyf`, and is refused by name when the
+ *     face has something else: a CFF font's variations are `CFF2`'s blend
+ *     operators, and a `glyf` face with an `fvar` and no `gvar` has a design
+ *     space and no outlines that move through it. Drawing the default and
+ *     reporting success would hand back a shape for a location it is not at.
+ */
+static GFNT_Result gfnt_producer_variation(const GFNT_Face * face,
+    uint32_t glyph, const GFNT_Variation * variation,
+    const GFNT_Variation ** out_active, GFNT_Error * error) {
+  bool moved = false;
+  GFNT_Result result;
+
+  *out_active = NULL;
+  result = gfnt_variation_moves(face, glyph, variation, &moved, error);
+  if (result != GFNT_OK || !moved) {
+    return result;
+  }
+  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_GLYF) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
+        "this face's outlines are charstrings, whose variations are CFF2's blend "
+        "operators and are not read, so a location other than the default "
+        "cannot be honoured");
+  }
+  if (!gfnt_face_has_table(face, GFNT_TAG_GVAR)) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_GVAR, 0, glyph,
+        "this face has glyf outlines and no gvar, so nothing moves them through "
+        "a design space");
+  }
+  *out_active = variation;
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, const GFNT_Allocator * allocator,
     GFNT_Outline ** out_outline, GFNT_Error * error) {
   GFNT_Outline * outline = NULL;
+  const GFNT_Variation * active = NULL;
   GFNT_Result result;
 
   gfnt_error_clear(error);
   if (!face || !out_outline) {
     return GFNT_ERR_INVALID;
   }
-  if (variation && variation->count != 0) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        "this library does not read gvar yet, so it cannot honour variation "
-        "coordinates rather than quietly ignoring them");
-  }
   if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_NONE) {
     return gfnt_producer_refuse(face, glyph, error);
+  }
+  result = gfnt_producer_variation(face, glyph, variation, &active, error);
+  if (result != GFNT_OK) {
+    return result;
   }
   result = gfnt_outline_create(allocator ? allocator : face->allocator,
       &outline, error);
@@ -107,7 +154,7 @@ GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
   gfnt_outline_set_limits(outline, &face->limits);
   switch (gfnt_sfnt_producer(face)) {
     case GFNT_PRODUCER_GLYF:
-      result = gfnt_glyf_load(face, glyph, outline, error);
+      result = gfnt_glyf_load(face, glyph, active, outline, error);
       break;
     case GFNT_PRODUCER_CFF:
       result = gfnt_cff_load(face, glyph, outline, NULL, error);

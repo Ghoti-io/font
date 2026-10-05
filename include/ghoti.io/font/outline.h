@@ -219,9 +219,40 @@ GFNT_API void gfnt_outline_clear(GFNT_Outline * outline);
  *
  * @param face The face.
  * @param glyph The glyph index.
- * @param variation Variation coordinates, or NULL for the default instance.
- *   Accepted and required to be NULL until `gvar` arrives (design.md section
- *   7.7); a non-NULL one is ::GFNT_ERR_UNSUPPORTED rather than ignored.
+ * @param variation Normalised coordinates - ::gfnt_face_normalize() makes them
+ *   from the ones a person types - or NULL for the default instance. A `glyf`
+ *   face's points move by what its `gvar` says, a composite's component offsets
+ *   move, and a component is itself drawn at the same location; a point a tuple
+ *   does not name takes a delta inferred from its neighbours in the same contour.
+ *   See "Variation" below for what is refused.
+ *
+ * **Variation.** An outline at a location is the glyph as stored plus its deltas,
+ * with the fraction kept: a delta is a whole number of font units times a scalar
+ * between zero and one, and 26.6 holds the product to a 64th where rounding it to
+ * a font unit would draw a different shape at nearly every point. FreeType rounds
+ * a *composite's component offsets* to whole units and this library and fontTools
+ * do not, so the three agree on a simple glyph to a 64th and on a composite to
+ * half a unit per level of nesting at worst (`tools/oracle/var_diff.py`).
+ *
+ * - Fewer coordinates than axes leave the rest at their default; more is
+ *   ::GFNT_ERR_INVALID, as is a variation of coordinates promised and not given.
+ * - **A variation that moves nothing - every coordinate zero - is the default
+ *   instance** and is answered as one, for any face.
+ * - Anything else needs `glyf` outlines and a `gvar`. A face with charstring
+ *   outlines is ::GFNT_ERR_UNSUPPORTED (its variations are CFF2's blend
+ *   operators, which are not read), and so is a `glyf` face with an `fvar` and no
+ *   `gvar` - for **every** glyph, an empty one included, so that the answer does
+ *   not depend on which glyph a caller tried first.
+ * - A `gvar` that contradicts itself condemns **the glyph** it contradicts
+ *   (::GFNT_ERR_CORRUPT, M11) and not the face: the next glyph and the default
+ *   instance still answer. A tuple that does not apply at the location is not
+ *   read at all, so damage in it is not seen from there.
+ * - ::gfnt_face_glyph_stated_box() is the box the file states and does not vary:
+ *   it is the default instance's. The outline's own bounds are the ones at the
+ *   location.
+ * - The **phantom points** - the four after a glyph's own, which carry advance
+ *   and bearing deltas - are not applied to anything here. Metrics at a location
+ *   are a different accessor's business (design.md section 7.7).
  * @param allocator Allocator for the outline, or NULL for the default.
  * @param out_outline Receives a new outline the caller destroys. Written only
  *   on success.

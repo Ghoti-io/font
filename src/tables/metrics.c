@@ -44,6 +44,7 @@
 #include <ghoti.io/font/macros.h>
 #include "../bitmap/bitmap.h"
 #include "../core/fixed.h"
+#include "../var/var.h"
 #include "tables.h"
 
 GFNT_Result gfnt_face_head(const GFNT_Face * face, const GFNT_Head ** out_head,
@@ -388,6 +389,34 @@ static GFNT_Result gfnt_hmtx_metrics(const GFNT_Face * face, uint32_t glyph,
   return GFNT_OK;
 }
 
+/**
+ * Refuse a variation that would move a metric, since none of them can.
+ *
+ * What moves an advance at a location is `HVAR`, or the phantom points `gvar`
+ * carries when a font has none, and what moves a line's extent is `MVAR`. None of
+ * the three is read. Answering the default's number for a location it is not at
+ * would be the quiet wrong answer this parameter was added to prevent: text laid
+ * out at weight 900 with the advances of weight 400, with no error anywhere. The
+ * outline at the same location *is* honoured (`gvar`), so a caller who draws and
+ * measures at one location gets a shape that moved and a width that would not
+ * have - which is why this is a refusal and not a quiet default.
+ *
+ * A variation that moves nothing is the default instance and is answered as one.
+ */
+static GFNT_Result gfnt_metrics_refuse_variation(const GFNT_Face * face,
+    uint32_t glyph, const GFNT_Variation * variation, GFNT_Error * error) {
+  bool moved = false;
+  GFNT_Result result = gfnt_variation_moves(face, glyph, variation, &moved,
+      error);
+
+  if (result != GFNT_OK || !moved) {
+    return result;
+  }
+  return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
+      "this library reads no HVAR, MVAR or gvar phantom points, so a metric at "
+      "a location other than the default would be the default's, quietly");
+}
+
 GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, int32_t * out_advance,
     GFNT_Error * error) {
@@ -407,10 +436,10 @@ GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face, uint32_t glyph,
         "a bitmap font, whose metrics are pixels rather than font units - "
         "gfnt_face_glyph_bitmap() carries each glyph's own");
   }
-  // Phase 4 consults HVAR here; until then the only instance this library can
-  // answer for is the default one, and the parameter is the API shape that
-  // keeps adding it from being a break (design.md section 7.7).
-  (void)variation;
+  result = gfnt_metrics_refuse_variation(face, glyph, variation, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
 
   result = gfnt_hmtx_metrics(face, glyph, &advance, NULL, error);
   if (result == GFNT_ERR_UNSUPPORTED
@@ -456,7 +485,10 @@ GFNT_Result gfnt_face_glyph_side_bearing(const GFNT_Face * face, uint32_t glyph,
         "a bitmap font, whose metrics are pixels rather than font units - "
         "gfnt_face_glyph_bitmap() carries each glyph's own");
   }
-  (void)variation;
+  result = gfnt_metrics_refuse_variation(face, glyph, variation, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
 
   result = gfnt_hmtx_metrics(face, glyph, NULL, &bearing, error);
   if (result != GFNT_OK) {
@@ -510,8 +542,10 @@ GFNT_Result gfnt_face_line_metrics(const GFNT_Face * face,
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
         "no face, or nowhere to put the metrics");
   }
-  // Phase 4 consults MVAR here.
-  (void)variation;
+  result = gfnt_metrics_refuse_variation(face, GFNT_GLYPH_NONE, variation, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
 
   switch (policy) {
     case GFNT_LINE_METRICS_TYPO:

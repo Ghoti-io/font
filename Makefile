@@ -660,6 +660,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 # Fuzz commands
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
+.PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
@@ -667,6 +668,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive
+.PHONY: check-oracle-var check-oracle-var-exhaustive
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
 .PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
 # Fixture commands
@@ -941,6 +943,7 @@ check-oracle-ttx: $(EXAMPLES)
 check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
+check-oracle: check-oracle-var
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -950,6 +953,21 @@ check-oracle-glyf: ## Diff every glyph's outline and path against fontTools
 check-oracle-glyf: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools -- \
 		python3 $(ORACLE)/glyf_diff.py --quiet
+
+# Both references, and for different reasons: fontTools holds this library to a
+# 64th of a font unit on every point of every glyph, and FreeType is the only other
+# implementation of the *normalisation* - which it must match to the bit, because
+# this library does the same arithmetic on purpose - and of where a composite's
+# components are placed. See tools/oracle/var_diff.py for what each is asked.
+check-oracle-var: ## Diff every variable font's outlines at planned locations against fontTools and FreeType
+check-oracle-var: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
+		python3 $(ORACLE)/var_diff.py --quiet
+
+check-oracle-var-exhaustive: ## The same, over every glyph of every font
+check-oracle-var-exhaustive: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
+		python3 $(ORACLE)/var_diff.py --stride 1 --quiet
 
 check-oracle-cff: ## Diff every CFF glyph's program, path and advance against fontTools
 check-oracle-cff: $(EXAMPLES)
@@ -1617,6 +1635,16 @@ $(eval $(call fuzz-rule,fuzz_sfnt,sfnt))
 $(eval $(call fuzz-rule,fuzz_cmap,cmap))
 $(eval $(call fuzz-rule,fuzz_glyf,glyf))
 $(eval $(call fuzz-rule,fuzz_raster,raster))
+# fuzz_gvar takes a whole `gvar` table and reads it against a fixed set of glyphs at
+# a location the input chooses, because what the table has to survive is its own
+# offsets: a glyph's range, a tuple header's size, a packed list's run length, a
+# point number past the glyph. It checks two properties and not only that nothing
+# crashes - an outline at a location has the points and contours the default has,
+# and a variation that moves nothing draws the default - which no sanitizer sees.
+# fuzz_variation takes `fvar` and `avar` together, for fuzz_glyf's reason: the
+# inputs that matter are in the relationship between the two tables.
+$(eval $(call fuzz-rule,fuzz_gvar,gvar))
+$(eval $(call fuzz-rule,fuzz_variation,variation))
 # fuzz_cff takes the whole `CFF ` table, because a CFF is a nest of offsets that
 # point at each other - the Top DICT at the charset and the CharStrings INDEX, the
 # Private DICT at its local subroutines *relative to itself* - and a fuzzer given
@@ -1646,7 +1674,7 @@ $(eval $(call fuzz-rule,fuzz_type1,type1))
 # input either.
 $(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
 
-FUZZERS := sfnt cmap glyf raster cff charstring type1 bitmap
+FUZZERS := sfnt cmap glyf raster cff charstring type1 bitmap gvar variation
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

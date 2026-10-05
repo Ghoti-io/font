@@ -117,7 +117,7 @@ which of them this library takes, and which of those it reads today.
 | | WOFF 1 | **required**, not implemented |
 | | `EBDT`/`EBLC`/`EBSC` strikes; `COLR` v0 + `CPAL` | **wanted**, not implemented |
 | | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | wanted, not implemented; colour bitmaps need `image` |
-| | variations: `fvar`/`avar`/`gvar`/`HVAR`/`VVAR`/`MVAR`/`STAT` | not implemented. The accessor already takes a `GFNT_Variation *` (§7.7) |
+| | variations: `fvar`/`avar` (version 1)/`gvar` | **implemented** for `glyf` outlines (§7.7). `HVAR`/`VVAR`/`MVAR`/`cvar`/`STAT`, and `avar` version 2, are not: a metric at a location is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
 | | WOFF 2 | not here; it waits on Brotli in `compress` |
 | | `CFF2`, AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
@@ -492,7 +492,7 @@ off-curve points, contours that begin off-curve. Composites: every flag -
 `X_AND_Y_SCALE`, `TWO_BY_TWO`, `SCALED_COMPONENT_OFFSET` versus
 `UNSCALED_COMPONENT_OFFSET` (the Apple/Microsoft difference, defaulting to
 unscaled), `USE_MY_METRICS`, `ROUND_XY_TO_GRID` (ignored, no hinting) - to the
-depth of §6.2. Phantom points are computed for variation support. Instructions
+depth of §6.2. Phantom points are numbered for `gvar`'s sake (§7.7) and nothing else here uses them. Instructions
 are skipped by length. A `loca` entry running backwards or past `glyf` makes
 *that glyph* `ERR_CORRUPT` (M11).
 
@@ -821,6 +821,88 @@ error anywhere.
 `ttx_diff` compares every axis, instance and segment map of every variable font
 in the image against fontTools in the tables' own integers, and each field was
 planted and seen to fire.
+
+**`gvar` moves a `glyf` outline (`src/var/gvar.c`, `src/glyf/glyf.c`).** A glyph's
+tuples each name a region of the design space and the deltas to apply inside it,
+scaled by how far inside; every tuple that applies is summed. What the arithmetic
+decides, and what a reader can get wrong without any error:
+
+- **A delta is a whole number of font units times a fraction, so nothing is rounded
+  to form the product.** The scalar is carried to **24 fractional bits**, where
+  FreeType holds 16. At sixteen, a 3,000-unit delta is uncertain by a tenth of a
+  unit - six 64ths, more than the precision an outline is held to - and the first
+  version of this code, written to 16.16 on FreeType's example, differed from
+  fontTools by 2/64 on real glyphs. At twenty-four the same error is a
+  four-hundredth of that. The widest the arithmetic gets is 2^58, in an
+  interpolation's product, which fits in 64 bits.
+- **The fraction is kept.** An outline at a location is the stored glyph plus its
+  deltas, rounded once to 26.6, where rounding to a font unit would draw a different
+  shape at nearly every point. A composite's component offset is held the same way,
+  and **FreeType rounds it to whole units while this library and fontTools do not**:
+  the three agree on a simple glyph to a 64th and on a composite to half a unit per
+  level of nesting at worst. The specification does not say to round.
+- **A point a tuple does not name takes a delta inferred from its contour (IUP).**
+  Per axis, from the two named points either side of it round the contour, wrapping;
+  at or beyond either end of the span it takes that end's delta; where the two ends
+  are at one coordinate it takes their delta if they agree and nothing if they do
+  not. A contour with one named point moves with it, and a contour with none stays.
+  A composite's "points" are its components and infer nothing.
+- **A composite's component offsets move, and a point-matched component's delta is
+  ignored.** There is no offset for it to move, and the matched points have already
+  moved, being points of glyphs that were themselves varied. The delta is added to the
+  offset *as stored*, before `SCALED_COMPONENT_OFFSET` scales it: `gvar` varies the
+  numbers in the file and the flags decide what they mean.
+- **A tuple region the format calls invalid is ignored for that axis, not refused:**
+  a start past the peak, an end before it, or a range straddling zero around a peak
+  that is not zero. Refusing would condemn a glyph for a header every other reader
+  accepts.
+- **A tuple that does not apply at the location is not read.** Damage in it is not
+  seen from there, which is M11 applied to a location: a glyph is corrupt where its
+  data is used, and the same glyph at another location is fine.
+- **A request is decided once, in one function (`gfnt_variation_moves()`).** A
+  variation that moves nothing - every coordinate zero - is the default instance and
+  is answered as one, for any face. More coordinates than axes, or coordinates
+  promised and not given, is `ERR_INVALID`. Anything else needs `glyf` and a `gvar`,
+  and a face with charstring outlines or an `fvar` and no `gvar` is
+  `ERR_UNSUPPORTED` **for every glyph, an empty one included**, so the answer does
+  not depend on which glyph a caller tried first. The outline accessors and the
+  metric accessors share the function, because "all zeros is the default" is a rule
+  and a rule held in two places is two.
+- **Metrics at a location are refused, not defaulted.** Nothing reads `HVAR`, `MVAR`
+  or the phantom points `gvar` carries, so an advance at weight 900 would be weight
+  400's, quietly. A caller who draws and measures at one location is told which of
+  the two it cannot have. This is the next piece of the variation work and the reason
+  M17 is still open.
+
+**Oracles (§14.5, `tools/oracle/var_diff.py`).** The image carries **sixteen
+variable fonts from four producers** - Inter (two axes, `avar`, an italic), Cascadia
+Code (twelve files, with `cvar`), Vazirmatn and Sahel (no `avar`) - because before
+them it carried none, and a `gvar` reader with no population has no way to be wrong
+out loud. Every glyph is compared at planned locations - the default; each axis alone
+at its minimum, maximum and halfway to each from the default; every axis at once at
+each extreme; alternating corners; and seeded interior points - against **both**
+fontTools and FreeType. They are asked different things: fontTools holds this library
+to 2/64 on every point, and FreeType, the only other implementation of the
+normalisation, must match it **to the bit** (it is the same arithmetic on purpose),
+and independently says where a composite's components are placed.
+`tests/data/fonts/variable-gvar.ttf` is written by fontTools and holds the
+constructions the real fonts share by accident - a single named point, an inferred
+run between two corners, named points in two contours, an intermediate region, a
+two-axis corner, shared and embedded peaks, a composite whose offsets move (one
+point-matched), a composite of a composite, and a glyph with no contours that varies
+only in its phantom points.
+
+**The reference needed care, and three of the first run's disagreements were its.**
+`getGlyphSet(location=)` takes **user** coordinates unless told `normalized=True`, so
+the first comparison drew every glyph at the axis minimum and disagreed almost
+everywhere. A glyph set **cannot draw a composite with a point-matched component at
+all** - `getComponentInfo()` builds a transform from an `x` and `y` the component does
+not have - so the adapter takes fontTools' own varied instance of each glyph and lets
+`getCoordinates()` resolve the composite, as `glyf_diff` does. And the canonical
+contour rotation `glyf_diff` uses, which picks each contour's lexicographically
+smallest start, is stable only while the two sides hold *equal* numbers: here they
+differ by a 64th and the two sides chose different segments, which looked like nine
+Inter disagreements. Contours are matched by trying every rotation.
 
 ### 7.8 Required tables are per operation
 
@@ -1235,6 +1317,7 @@ memory.** Fonts have three excellent oracles and one of them can also
 | every table parses to the same fields | **fontTools** `ttx`: every table of every synthetic fixture and every real font in the image dumped to XML and compared field by field with this library's `_dump` | `tools/oracle/ttx_diff.py`, `make check-oracle-ttx` | `fonttools`, built here: `python` by digest + `fonttools==` and `brotli==` exact, plus Debian's font packages by full apt version; the **same image builds the synthetic fixtures** (§14.5) |
 | `cmap` maps every codepoint identically | fontTools `getBestCmap()` and every subtable, over all 1,114,112 codepoints per font | `tools/oracle/cmap_diff.py` | `fonttools` |
 | outlines are identical | **FreeType** `FT_Load_Glyph` with `FT_LOAD_NO_HINTING \| FT_LOAD_NO_SCALE`, every glyph of every corpus font, point by point | `tools/oracle/ft_outline.c` | `freetype`, built here: the driver links only FreeType and is compiled inside its image; apt version pinned in full |
+| **variable** outlines are identical at a location, and normalisation is bit-exact | **fontTools** (`getGlyphSet` instances, held to 2/64) **and FreeType** (`FT_Set_Var_Design_Coordinates`, whose normalisation this library's must equal exactly), every glyph of every variable font at planned locations | `tools/oracle/var_diff.py`, `make check-oracle-var` | `fonttools` and `freetype` |
 | coverage is close | FreeType `FT_Render_Glyph` at several ppem, compared with a per-pixel tolerance (the two rasterisers are the same algorithm family and differ by rounding) | `tools/oracle/ft_raster.c` | `freetype` |
 | coverage is **byte-identical across platforms** | this library on x86-64 versus this library in the cross container (big-endian, 32-bit) | golden hashes in `tests/data/golden/`, `make check-golden` | the `ghoti-xarch` cross image |
 | shaping is identical | **HarfBuzz** `hb-shape --output-format=json`: glyph ids, advances, offsets and clusters for every string in a per-script corpus, per font | `tools/oracle/hb_diff.py`, `make check-oracle-hb` | `harfbuzz`, built here: `hb-shape` from the pinned apt package, driven by `--text-file` and `--output-format=json` (a batch protocol already) |
@@ -2731,10 +2814,9 @@ What that cost in findings:
   `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
   which is a fact about the font rather than about the object model.
 
-**Not built:** `CFF2` (§16); `EBSC`,
-and `CBDT` and `sbix` (§7.5); colour
+**Not built:** `CFF2` (§16); `CBDT` and `sbix` (§7.5); colour
 (§7.6);
-variations (§7.7); shaping, layout, discovery and the writer; the multi-byte
+`HVAR`/`VVAR`/`MVAR`/`cvar`/`STAT` and `avar` version 2 (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`
 and WOFF 1. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is

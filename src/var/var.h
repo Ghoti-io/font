@@ -105,6 +105,28 @@ void gfnt_avar_release(const GFNT_Allocator * allocator, void * table);
 /** The memoised `fvar`. */
 GFNT_Result gfnt_face_fvar(const GFNT_Face * face, const GFNT_Fvar ** out_fvar,
     GFNT_Error * error);
+/**
+ * Whether a variation asks for anything but the default instance, and whether it
+ * is a well-formed request at all.
+ *
+ * **One answer for every accessor that takes a variation**, because "a variation
+ * that moves nothing is the default instance" is a rule, and a rule stated in two
+ * places is two rules the first time one of them is changed. An outline and an
+ * advance must agree about what a caller who passes all zeros has asked for.
+ *
+ * @param face The face.
+ * @param glyph The glyph the call is about, for the diagnostic, or
+ *   ::GFNT_GLYPH_NONE.
+ * @param variation The variation, or NULL.
+ * @param out_moves Receives false for NULL, for no coordinates, and for every
+ *   coordinate zero; true when some coordinate is not. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID for coordinates promised and not given or
+ *   more of them than the face has axes; or what reading `fvar` returned.
+ */
+GFNT_Result gfnt_variation_moves(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, bool * out_moves, GFNT_Error * error);
+
 /** The memoised `avar`. */
 GFNT_Result gfnt_face_avar(const GFNT_Face * face, const GFNT_Avar ** out_avar,
     GFNT_Error * error);

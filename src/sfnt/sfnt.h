@@ -47,6 +47,7 @@
 #include "../cff/cff.h"
 #include "../type1/type1.h"
 #include "../reader/reader.h"
+#include "../var/gvar.h"
 #include "../var/var.h"
 
 #ifdef __cplusplus
@@ -166,6 +167,8 @@ struct GFNT_Face {
   GFNT_Fvar fvar;
   GFNT_Cached avar_state;           ///< `avar`'s segment maps.
   GFNT_Avar avar;
+  GFNT_Cached gvar_state;           ///< `gvar`'s header; glyph data is read in place.
+  GFNT_Gvar gvar;
 };
 
 /**

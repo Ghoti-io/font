@@ -202,6 +202,8 @@ const std::vector<Entry> & every_fixture() {
       {"strikes.ttf", kNumGlyphs},
       {"post-v2.ttf", kNumGlyphs + 1},
       {"post-v3.ttf", kNumGlyphs},
+      // Nine glyphs, each one encoding choice in `gvar`: see the generator.
+      {"variable-gvar.ttf", 9},
   };
   return names;
 }

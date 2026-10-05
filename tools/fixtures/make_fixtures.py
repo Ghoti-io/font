@@ -76,6 +76,8 @@ from fontTools.ttLib.tables._g_l_y_f import (Glyph, GlyphComponent,
     GlyphCoordinates, flagCubic, flagOnCurve)
 from fontTools.ttLib.tables import ttProgram
 from fontTools.cffLib import cffStandardStrings
+from fontTools.designspaceLib import AxisDescriptor
+from fontTools.ttLib.tables.TupleVariation import TupleVariation
 from fontTools.misc.roundTools import otRound
 from fontTools.ttLib.tables.DefaultTable import DefaultTable
 
@@ -936,6 +938,191 @@ def build_outline_composite(out):
     fb = truetype("Outline Composite", outline_cmap(COMPOSITE_ORDER),
                   order=COMPOSITE_ORDER, glyphs=COMPOSITE_GLYPHS,
                   advances=OUTLINE_ADVANCES, glyph_names=True)
+    fb.save(out)
+
+
+# A variable font whose `gvar` has every construction a reader has to tell apart.
+#
+# It exists because the real variable fonts in the oracle image are four producers'
+# ordinary output, and the things they share are what a reader gets right by
+# accident: a tuple that names every point, a peak at the end of an axis, a
+# composite that is a base and a mark. Each glyph below is one *encoding choice*
+# and is named for it. fontTools writes the table - it decides which peaks are
+# shared tuples, which point lists are shared, and how deltas are packed - so the
+# encoding is not this library's opinion of the format.
+#
+# Nothing here is third-party: every outline is drawn below, and every delta is a
+# small number chosen so that a wrong reading is visibly a different shape.
+VARIABLE_ORDER = [".notdef", "space", "tri", "bar", "ring", "dot", "acc", "acc2",
+                  "ghost"]
+
+VARIABLE_ADVANCES = {".notdef": 600, "space": 300, "tri": 400, "bar": 300,
+                     "ring": 500, "dot": 150, "acc": 700, "acc2": 800,
+                     "ghost": 250}
+
+# Eight points round a square and four inside it. The outer contour alternates
+# on- and off-curve so that "which point moved" is also "which kind of point".
+RING = [
+    [(0, 0, True), (200, -50, False), (400, 0, True), (450, 200, False),
+     (400, 400, True), (200, 450, False), (0, 400, True), (-50, 200, False)],
+    [(100, 100, True), (100, 300, True), (300, 300, True), (300, 100, True)],
+]
+
+TRI = [[(0, 0, True), (300, 0, True), (150, 400, True)]]
+
+# Two corners named and the four points between them left to be inferred. Along
+# each edge the inferred point sits at a different place relative to the two named
+# ones - between them, at one of them, and in a position where only one axis has
+# anything to interpolate - which is the whole of what IUP has to get right.
+BAR = [[(0, 0, True), (100, 0, True), (200, 0, True), (200, 300, True),
+        (100, 300, True), (0, 300, True)]]
+
+DOT = [[(0, 0, True), (0, 100, True), (100, 100, True), (100, 0, True)]]
+
+VARIABLE_GLYPHS = {
+    ".notdef": raw_glyph(OUTLINE_CONTOURS),
+    "space": raw_glyph([]),
+    "tri": raw_glyph(TRI),
+    "bar": raw_glyph(BAR),
+    "ring": raw_glyph(RING),
+    "dot": raw_glyph(DOT),
+    # Four components of one glyph, each placed a different way: byte offsets, word
+    # offsets, a scaled component with the scaled-offset flag, and one placed by
+    # matching points - whose delta is ignored, because there is no offset for it
+    # to move.
+    "acc": composite_glyph([
+        component("dot", x=100, y=100),
+        component("dot", x=-200, y=300),
+        component("dot", x=50, y=50, transform=((0.5, 0), (0, 0.5)),
+                  flags=0x0800),
+        component("dot", first=0, second=1),
+    ]),
+    # A composite of a composite: the inner one must be varied before the outer
+    # one places it.
+    "acc2": composite_glyph([
+        component("acc", x=0, y=0),
+        component("tri", x=500, y=0),
+    ]),
+    # No contours, and variation data: the phantom points alone, which is what a
+    # `space` carries when its advance varies.
+    "ghost": raw_glyph([]),
+}
+
+
+def _phantoms(*moves):
+    """Four phantom points, each a delta or None."""
+    out = list(moves) + [None] * (4 - len(moves))
+    return out
+
+
+def _tuple(axes, deltas):
+    """A TupleVariation from {tag: (start, peak, end)} and a delta list."""
+    return TupleVariation(axes, deltas)
+
+
+def variable_variations():
+    """Every glyph's tuples, as fontTools wants them for `setupGvar`."""
+    wght_up = {"wght": (0.0, 1.0, 1.0)}
+    wght_down = {"wght": (-1.0, -1.0, 0.0)}
+    wdth_up = {"wdth": (0.0, 1.0, 1.0)}
+    wdth_down = {"wdth": (-1.0, -1.0, 0.0)}
+    return {
+        # One point named: IUP's single-point rule moves the whole contour by it.
+        # And a second tuple that names every point, on the other side of the
+        # axis, so the two directions of one axis are separate tuples.
+        "tri": [
+            _tuple(wght_up, [None, None, (0, 100)] + _phantoms()),
+            _tuple(wght_down, [(10, 0), (-10, 0), (0, -20)]
+                   + _phantoms((0, 0), (0, 0))),
+        ],
+        # Two named corners; the rest inferred.
+        "bar": [
+            _tuple(wght_up, [(-20, -10), None, None, (40, 30), None, None]
+                   + _phantoms()),
+        ],
+        "ring": [
+            # An intermediate region: the ramp is only visible between the start
+            # and the peak, and a reader that treats it as a plain tuple gets
+            # every value there wrong.
+            _tuple({"wght": (0.25, 0.5, 1.0)},
+                   [(i, -i) for i in range(12)] + _phantoms()),
+            # Named points in two contours: two in the first (opposite one
+            # another, so the inference wraps) and one in the second (so the
+            # whole contour moves).
+            _tuple(wdth_down,
+                   [None, (30, 0), None, None, None, (-30, 10), None, None,
+                    (15, -15), None, None, None] + _phantoms()),
+            # A corner of the design space: both axes at once, so the scalar is a
+            # product.
+            _tuple({"wght": (0.0, 1.0, 1.0), "wdth": (0.0, 1.0, 1.0)},
+                   [(2, 3)] * 12 + _phantoms()),
+            # An axis's far end alone, so the peak at -1 is a different tuple from
+            # the corner above.
+            _tuple(wght_down, [(-3, -3)] * 12 + _phantoms()),
+        ],
+        "dot": [
+            _tuple(wght_up, [(8, 0), (8, 0), (-8, 0), (-8, 0)] + _phantoms()),
+            _tuple(wdth_up, [(0, 5), (0, -5), (0, -5), (0, 5)] + _phantoms()),
+        ],
+        # A composite's "points" are its components, in order, before the phantoms.
+        # The last component is matched by points, and its delta is ignored.
+        "acc": [
+            _tuple(wght_up, [(10, 20), (-5, 0), (7, 7), (100, 100)]
+                   + _phantoms()),
+            # Only the second component named: the others stay where they are.
+            _tuple(wdth_up, [None, (0, 30), None, None] + _phantoms()),
+        ],
+        "acc2": [
+            _tuple(wght_up, [(-50, 25), (0, 0)] + _phantoms()),
+        ],
+        "ghost": [
+            _tuple(wght_up, _phantoms((0, 0), (30, 0), (0, 0), (0, 0))),
+        ],
+    }
+
+
+def build_variable_gvar(out):
+    """`fvar`, `avar` and `gvar`, written by fontTools around the glyphs above."""
+    fb = truetype("Variable Gvar", outline_cmap(VARIABLE_ORDER),
+                  order=VARIABLE_ORDER, glyphs=VARIABLE_GLYPHS,
+                  advances=VARIABLE_ADVANCES, glyph_names=True)
+    # Every glyph's left side bearing is its own xMin, as in a font anyone ships.
+    # `truetype()` writes zero, which is harmless while nothing looks at it - but a
+    # glyph set drawn at a location shifts every outline by `lsb - xMin`, the
+    # TrueType rule that the left side bearing point is the origin, so a font that
+    # states a bearing its outline does not have is drawn somewhere other than
+    # where its points are. That would make the reference disagree about *every*
+    # glyph for a reason that has nothing to do with `gvar`.
+    glyf = fb.font["glyf"]
+    hmtx = fb.font["hmtx"]
+    for name in VARIABLE_ORDER:
+        glyph = glyf[name]
+        glyph.recalcBounds(glyf)
+        hmtx.metrics[name] = (VARIABLE_ADVANCES[name],
+                              glyph.xMin if hasattr(glyph, "xMin") else 0)
+    weight = AxisDescriptor(name="Weight", tag="wght", minimum=100, default=400,
+                            maximum=900)
+    # Hidden, which is the one flag the format defines and which no real font in
+    # the image sets on an axis a reader would otherwise see.
+    width = AxisDescriptor(name="Width", tag="wdth", minimum=75, default=100,
+                           maximum=125, hidden=True)
+    fb.setupFvar([weight, width], [
+        {"location": {"wght": 300, "wdth": 100}, "stylename": "Light"},
+        # The only instance with a PostScript name, so the two record sizes the
+        # format allows are both present.
+        {"location": {"wght": 400, "wdth": 100}, "stylename": "Regular",
+         "postscriptfontname": "VariableGvar-Regular"},
+        {"location": {"wght": 700, "wdth": 75}, "stylename": "Bold Condensed"},
+    ])
+    avar = fb.font["avar"] = newTable("avar")
+    avar.segments = {
+        # Bent on both sides of the default and unbent at the ends.
+        "wght": {-1.0: -1.0, -0.5: -0.25, 0.0: 0.0, 0.5: 0.75, 1.0: 1.0},
+        # Present and the identity: a map with pairs that does nothing.
+        "wdth": {-1.0: -1.0, 0.0: 0.0, 1.0: 1.0},
+    }
+    fb.setupGvar(variable_variations())
+    pin(fb)
     fb.save(out)
 
 
@@ -3603,6 +3790,15 @@ FIXTURES = {
     "outline-cubic-flag.ttf": (build_outline_cubic_flag,
         "glyf: flag bit 0x80 in a font declaring glyphDataFormat 0, so the "
         "per-glyph refusal is the only one that can fire"),
+    "variable-gvar.ttf": (build_variable_gvar,
+        "fvar, avar and gvar written by fontTools: two axes (one hidden), three "
+        "named instances (one with a PostScript name), a bent avar on one axis "
+        "and an identity map on the other; and in gvar a single named point, an "
+        "inferred run between two corners, named points in two contours of one "
+        "glyph, an intermediate region, a two-axis corner, shared and embedded "
+        "peaks, a composite whose component offsets move (one placed by matching "
+        "points, whose delta is ignored), a composite of a composite, and a glyph "
+        "with no contours that varies only in its phantom points"),
     "outline-broken-loca.ttf": (build_outline_broken_loca,
         "loca: the last entry running backwards, so that exactly one glyph is "
         "corrupt and the rest of the font still answers (M11)"),

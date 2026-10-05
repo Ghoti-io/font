@@ -499,6 +499,31 @@ uint32_t gfnt_plan_mask(const GFNT_Plan * plan, GFNT_Tag tag) {
   return f ? f->mask : 0;
 }
 
+uint32_t gfnt_plan_found_mask(const GFNT_Plan * plan, GFNT_Tag tag) {
+  const GFNT_PlanFeature * f = gfnt_plan_find(plan, tag);
+
+  return f && f->found ? f->mask : 0;
+}
+
+bool gfnt_plan_would_substitute(const GFNT_ShapeCtx * ctx, GFNT_Tag tag,
+    const uint32_t * glyphs, size_t count, bool zero_context) {
+  const GFNT_PlanFeature * f = gfnt_plan_find(ctx->plan, tag);
+  const GFNT_PlanTable * pt = &ctx->plan->tables[0];
+  size_t i;
+
+  if (!f || !f->found || !ctx->gsub || !pt->present) {
+    return false;
+  }
+  for (i = 0; i < pt->count; i++) {
+    if (pt->lookups[i].stage == f->stage
+        && gfnt_l_would_apply(ctx->gsub, pt->lookups[i].index, glyphs, count,
+            zero_context)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool gfnt_plan_has_feature(const GFNT_Plan * plan, GFNT_Tag tag) {
   return gfnt_plan_find(plan, tag) != NULL;
 }

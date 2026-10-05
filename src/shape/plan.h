@@ -70,6 +70,7 @@ typedef struct GFNT_ShapeCtx {
   const GFNT_Plan * plan;
   GFNT_LBuffer * buf;
   const GFNT_Gdef * gdef;
+  GFNT_LApply * gsub;    ///< For asking `GSUB` what it would do; NULL if the face has none.
   const GFNT_Allocator * allocator;
   bool native_rtl;   ///< The run is in a right-to-left script's own order.
   bool oom;          ///< A hook ran out of memory; shaping gives up.
@@ -183,6 +184,15 @@ void gfnt_plan_pause(GFNT_Plan * plan, GFNT_PauseFunc pause);
 const GFNT_PlanFeature * gfnt_plan_find(const GFNT_Plan * plan, GFNT_Tag tag);
 /** The mask of a feature that has bits, or 0. */
 uint32_t gfnt_plan_mask(const GFNT_Plan * plan, GFNT_Tag tag);
+/**
+ * Whether the lookups of the stage a feature runs in would substitute this run of
+ * glyphs, with nothing around it: HarfBuzz's hb_indic_would_substitute_feature_t.
+ * False if the font does not have the feature.
+ */
+bool gfnt_plan_would_substitute(const GFNT_ShapeCtx * ctx, GFNT_Tag tag,
+    const uint32_t * glyphs, size_t count, bool zero_context);
+/** The mask of a feature the font has, or 0: HarfBuzz's get_1_mask(). */
+uint32_t gfnt_plan_found_mask(const GFNT_Plan * plan, GFNT_Tag tag);
 /** Whether the feature was asked for at all. */
 bool gfnt_plan_has_feature(const GFNT_Plan * plan, GFNT_Tag tag);
 
@@ -196,6 +206,7 @@ extern const GFNT_Shaper gfnt_shaper_arabic;
 extern const GFNT_Shaper gfnt_shaper_hebrew;
 extern const GFNT_Shaper gfnt_shaper_thai;
 extern const GFNT_Shaper gfnt_shaper_use;
+extern const GFNT_Shaper gfnt_shaper_indic;
 
 /** The joining masks the Arabic shaper sets, for a shaper that borrows them. */
 void * gfnt_arabic_masks_create(const GFNT_Plan * plan,

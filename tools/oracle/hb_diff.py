@@ -66,28 +66,28 @@ GAPS = {
     "bidi and vertical text": "one direction, horizontal, per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
-    "script shaper not written": "Indic, Khmer and Myanmar scripts, whose clusters "
-                                 "this library does not form",
+    "script shaper not written": "Indic (but Devanagari), Khmer and Myanmar scripts, "
+                                 "whose clusters this library does not form right yet",
     "USE character categories": "a handful of characters in Grantha, Javanese, Khudawadi, "
-                                "Mongolian, Newa, Tai Viet and Tirhuta that HarfBuzz "
-                                "sorts into a different Universal Shaping Engine "
-                                "category than the Unicode data and Microsoft's "
-                                "overrides give: found by the generated texts, not "
-                                "yet traced to a rule",
+                                "Mongolian, Tai Viet and Tirhuta that HarfBuzz sorts into "
+                                "a different Universal Shaping Engine category than the "
+                                "Unicode data and Microsoft's overrides give: found by the "
+                                "generated texts, not yet traced to a rule",
     "outline HarfBuzz does not read": "a Type 1 charstring in a CFF table, or a cubic glyf "
                                       "outline: HarfBuzz measures them wrongly or not at all, "
                                       "so a mark placed from their box differs",
 }
 
+# The Universal Shaping Engine scripts in which a few characters still differ.
+USE_DETAIL_SCRIPTS = set("gran java sind mong tavt tirh".split())
+
 # The scripts whose shaper this library has not got yet: a text in one of them is
 # generated from the font (`auto` groups) and shaped as if it were Latin. As each
 # shaper arrives its scripts leave this list, and the differential holds them.
 UNSHAPED_SCRIPTS = set("""
-    beng deva guru gujr knda mlym orya sinh taml telu khmr mymr
+    beng guru gujr knda mlym orya taml telu khmr mymr
 """.split())
 
-# The Universal Shaping Engine scripts in which a few characters still differ.
-USE_DETAIL_SCRIPTS = set("gran java sind mong newa tavt tirh".split())
 
 # Fixtures whose outlines are of a kind HarfBuzz does not read. A mark is placed
 # against its base's box when the font has no GPOS, and the box is the one thing

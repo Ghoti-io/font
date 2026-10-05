@@ -162,7 +162,7 @@ static uint32_t gfnt_excluded_prefix(const uint32_t * full, size_t n) {
 }
 
 /** One step of canonical decomposition, derived from `unicode`'s full one. */
-static bool gfnt_unicode_decompose(uint32_t ab, uint32_t * a, uint32_t * b,
+bool gfnt_unicode_decompose(uint32_t ab, uint32_t * a, uint32_t * b,
     void * ctx) {
   uint32_t full[32];
   size_t n = 0;

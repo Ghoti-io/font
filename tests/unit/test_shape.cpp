@@ -1741,3 +1741,41 @@ TEST(ShapeUniversal, AMarkAfterASpaceIsLeftWithoutACircle) {
   ASSERT_EQ(shape(font, V{0x20, 0xA9B4}, request, &g), GFNT_OK);
   EXPECT_EQ(ids(g), (V{6, 4}));
 }
+
+namespace {
+
+/**
+ * A font that knows a few Devanagari characters and nothing of layout: KA is glyph
+ * 2, the vowel sign I (written before its consonant) 3, the vowel sign AA 4, the
+ * virama 5, the dotted circle 6.
+ */
+std::vector<uint8_t> devanagari_font() {
+  return small_font({}, 8, {{0x915, 2}, {0x93F, 3}, {0x93E, 4}, {0x94D, 5},
+      {0x25CC, 6}});
+}
+
+}  // namespace
+
+TEST(ShapeIndic, ALeftVowelSignIsDrawnBeforeItsConsonant) {
+  Font font(devanagari_font());
+  Glyphs g;
+  Request request;
+  request.script = "deva";
+  ASSERT_EQ(shape(font, V{0x915, 0x93F}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2}));
+  // The right-hand one stays where it is.
+  ASSERT_EQ(shape(font, V{0x915, 0x93E}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4}));
+}
+
+TEST(ShapeIndic, AVowelSignWithNoConsonantIsGivenTheDottedCircle) {
+  Font font(devanagari_font());
+  Glyphs g;
+  Request request;
+  request.script = "deva";
+  ASSERT_EQ(shape(font, V{0x93E}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{6, 4}));
+  // A left-hand one is moved ahead of the circle it stands on.
+  ASSERT_EQ(shape(font, V{0x93F}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 6}));
+}

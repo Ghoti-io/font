@@ -481,6 +481,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
       goto done;
     }
     gsub.lt = &gsub_table;
+    ctx.gsub = &gsub;
   }
   // Glyph properties, from GDEF where it has classes, from the character where
   // it does not.

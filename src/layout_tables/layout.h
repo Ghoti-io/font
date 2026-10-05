@@ -276,6 +276,15 @@ uint32_t gfnt_lr_class(const GFNT_Reader * r, size_t classdef, uint32_t glyph,
 bool gfnt_l_lookup(GFNT_LApply * c, uint32_t index, size_t * out_offset,
     uint16_t * out_type, uint16_t * out_flag, uint16_t * out_count);
 
+/* --- would.c ---------------------------------------------------------- */
+
+/**
+ * Whether a lookup would substitute this run of glyphs, with nothing around it.
+ * HarfBuzz's hb_ot_layout_lookup_would_substitute().
+ */
+bool gfnt_l_would_apply(GFNT_LApply * c, uint32_t lookup_index,
+    const uint32_t * glyphs, size_t n, bool zero_context);
+
 /* --- buffer.c --------------------------------------------------------- */
 
 bool gfnt_lbuf_init(GFNT_LBuffer * b, const GFNT_Allocator * allocator,

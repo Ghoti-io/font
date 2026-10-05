@@ -35,8 +35,6 @@
 
 #include <ghoti.io/unicode/char.h>
 #include <ghoti.io/unicode/norm.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "nfa.h"
 #include "plan.h"
@@ -50,7 +48,7 @@ enum {
   UC_VS,
   UC_FABV, UC_FBLW, UC_FPST, UC_MABV, UC_MBLW, UC_MPST, UC_MPRE, UC_CMABV,
   UC_CMBLW, UC_VABV, UC_VBLW, UC_VPST, UC_VPRE, UC_VMABV, UC_VMBLW, UC_VMPST,
-  UC_VMPRE, UC_SMABV, UC_SMBLW, UC_FMABV, UC_FMBLW, UC_FMPST, UC_IND, UC_S,
+  UC_VMPRE, UC_SMABV, UC_SMBLW, UC_FMABV, UC_FMBLW, UC_FMPST, UC_IND, UC_S, UC_VMH,
   UC_COUNT
 };
 
@@ -137,6 +135,10 @@ static uint8_t use_category(uint32_t u) {
       GFNT_USE_ISC_OVERRIDE_COUNT, u, (int)guni_indic_syllabic_category(u));
   ipc = (GUNI_IndicPositionalCategory)use_override(gfnt_use_ipc_overrides,
       GFNT_USE_IPC_OVERRIDE_COUNT, u, (int)guni_indic_positional_category(u));
+  // The Sinhala al-lakuna stands where a vowel modifier does, and before them.
+  if (u == 0x0DCA) {
+    return UC_VMH;
+  }
   switch ((int)isc) {
     case GFNT_USE_ISC_HIEROGLYPH:
       return UC_G;
@@ -213,7 +215,8 @@ static uint8_t use_category(uint32_t u) {
     case GUNI_INSC_CONSONANT_PLACEHOLDER:
       return UC_GB;
     case GUNI_INSC_VIRAMA:
-      return gc == GUNI_GC_SPACING_MARK ? UC_HVM : UC_H;
+      (void)gc;
+      return UC_HVM;
     case GUNI_INSC_INVISIBLE_STACKER:
       return UC_H;
     case GUNI_INSC_NUMBER_JOINER:
@@ -336,7 +339,7 @@ static GFNT_Nfa * use_grammar(void) {
       SEQ(OPT(SYM(UC_MBLW)), OPT(SYM(UC_MPST))));
   dep_vow = SEQ(SEQ(STAR(SYM(UC_VPRE)), STAR(SYM(UC_VABV))),
       SEQ(STAR(SYM(UC_VBLW)), STAR(SYM(UC_VPST))));
-  vow_mod = SEQ(STAR(SYM(UC_VMPRE)),
+  vow_mod = SEQ(SEQ(OPT(SYM(UC_VMH)), STAR(SYM(UC_VMPRE))),
       SEQ(SEQ(STAR(SYM(UC_VMABV)), STAR(SYM(UC_VMBLW))),
           STAR(SYM(UC_VMPST))));
   fin_cons = SEQ(SEQ(STAR(SYM(UC_FABV)), STAR(SYM(UC_FBLW))),
@@ -420,6 +423,22 @@ static bool use_arabic_joining(GFNT_Tag script) {
   return false;
 }
 
+/** Whether a halant after a character of this category joins a conjunct. */
+static bool use_conjunct_part(uint8_t category) {
+  return category == UC_B || category == UC_GB || category == UC_SUB
+      || category == UC_CMABV || category == UC_CMBLW;
+}
+
+/** Whether the first character after @p i that is not a joiner is a base. */
+static bool use_next_is_base(const GFNT_LBuffer * buf, size_t i) {
+  for (i++; i < buf->len; i++) {
+    if (buf->info[i].category != UC_ZWNJ && buf->info[i].category != UC_ZWJ) {
+      return buf->info[i].category == UC_B;
+    }
+  }
+  return false;
+}
+
 static void use_find_syllables(GFNT_ShapeCtx * ctx) {
   const GFNT_UseData * data = ctx->plan->shaper_data;
   GFNT_LBuffer * buf = ctx->buf;
@@ -451,8 +470,13 @@ static void use_find_syllables(GFNT_ShapeCtx * ctx) {
 
     // A non-joiner after a virama is not transparent: it keeps the virama
     // from reaching the consonant after it.
-    if (c == UC_ZWNJ && count && (cats[count - 1] == UC_H
-            || cats[count - 1] == UC_HVM || cats[count - 1] == UC_SK)) {
+    if ((c == UC_ZWNJ || c == UC_ZWJ) && count
+        && (cats[count - 1] == UC_VMH
+            || ((cats[count - 1] == UC_H || cats[count - 1] == UC_HVM
+                    || cats[count - 1] == UC_SK)
+                && (c == UC_ZWNJ || count < 2
+                    || !use_conjunct_part(cats[count - 2]))))
+        && use_next_is_base(buf, i)) {
       cats[count] = UC_CGJ;
       where[count++] = i;
     }
@@ -484,17 +508,33 @@ static void use_find_syllables(GFNT_ShapeCtx * ctx) {
     }
     pos += length;
   }
+  // A ZWJ after a halant ended that syllable, and goes with the next one if it is
+  // a whole one.
+  for (i = 0; i + 1 < buf->len; i++) {
+    if (buf->info[i].category == UC_ZWJ
+        && (buf->info[i].syllable & 15) == US_NON_CLUSTER
+        && buf->info[i + 1].syllable
+        && (buf->info[i + 1].syllable & 15) != US_NON_CLUSTER
+        && (buf->info[i + 1].syllable & 15) != US_BROKEN
+        && buf->info[i + 1].category != UC_ZWNJ
+        && buf->info[i + 1].category != UC_ZWJ) {
+      buf->info[i].syllable = buf->info[i + 1].syllable;
+    }
+  }
   for (i = 0; i < buf->len; i++) {
     if (buf->info[i].syllable) {
       continue;
     }
-    // A joiner: it belongs to the syllable before it unless that is not a
-    // cluster, in which case it stands alone.
-    if (i && buf->info[i - 1].category != UC_ZWNJ
-        && buf->info[i - 1].category != UC_ZWJ
-        && (buf->info[i - 1].syllable & 15) != US_NON_CLUSTER) {
+    // A joiner: it belongs to the syllable before it unless that is a broken
+    // one or not a cluster. A ZWJ between two syllables then goes with the one
+    // after, if that is a whole one. Otherwise it stands alone.
+    bool prev_ok = i && buf->info[i - 1].category != UC_ZWNJ
+        && (buf->info[i - 1].syllable & 15) != US_NON_CLUSTER;
+
+    if (prev_ok) {
       buf->info[i].syllable = buf->info[i - 1].syllable;
-    } else {
+    }
+    else {
       // HarfBuzz marks a joiner left on its own as a broken syllable, unless a
       // broken syllable follows, which gets the dotted circle instead.
       int alone = US_NON_CLUSTER;

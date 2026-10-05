@@ -65,6 +65,13 @@ typedef struct GFNT_NormHooks {
 } GFNT_NormHooks;
 
 /**
+ * One step of canonical decomposition, as the default shaper takes it: @p ab into
+ * @p a and @p b (0 if it is a singleton). @p ctx is ignored. For a shaper's hook
+ * to fall back on.
+ */
+bool gfnt_unicode_decompose(uint32_t ab, uint32_t * a, uint32_t * b, void * ctx);
+
+/**
  * Normalise a run in place. @p *info is replaced: it may end longer or shorter.
  *
  * @param face The face whose `cmap` says which characters have glyphs.

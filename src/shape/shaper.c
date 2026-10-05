@@ -54,6 +54,23 @@ static bool gfnt_script_is_joining(GFNT_Tag script) {
   return false;
 }
 
+/** The scripts the Indic shaper shapes. */
+static bool gfnt_script_is_indic(GFNT_Tag script) {
+  static const char * const indic_scripts[] = {
+    "beng", "deva", "gujr", "guru", "knda", "mlym", "orya", "taml", "telu",
+  };
+  size_t i;
+
+  for (i = 0; i < sizeof indic_scripts / sizeof indic_scripts[0]; i++) {
+    const char * t = indic_scripts[i];
+
+    if (GFNT_TAG(t[0], t[1], t[2], t[3]) == script) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** The scripts the Universal Shaping Engine shapes. */
 static bool gfnt_script_is_use(GFNT_Tag script) {
   static const char * const use_scripts[] = {
@@ -65,7 +82,7 @@ static bool gfnt_script_is_use(GFNT_Tag script) {
     "sogo", "ougr", "onao", "hmng", "phag", "rjng", "saur", "shrd", "sidd",
     "sogd", "soyo", "sunu", "sund", "sylo", "tglg", "tagb", "tale", "lana",
     "tavt", "takr", "tnsa", "tibt", "tfng", "tirh", "todr", "toto", "tutg",
-    "vith", "wcho", "yezi", "zanb",
+    "vith", "wcho", "yezi", "zanb", "sinh",
   };
   size_t i;
 
@@ -96,6 +113,10 @@ const GFNT_Shaper * gfnt_shaper_select(GFNT_Tag script, GFNT_Tag chosen,
   }
   if (script == GFNT_TAG('t', 'h', 'a', 'i') || script == GFNT_TAG('l', 'a', 'o', ' ')) {
     return &gfnt_shaper_thai;
+  }
+  if (gfnt_script_is_indic(script)) {
+    return horizontal && font_has_script ? &gfnt_shaper_indic
+                                         : &gfnt_shaper_default;
   }
   if (gfnt_script_is_use(script)) {
     return horizontal && font_has_script ? &gfnt_shaper_use

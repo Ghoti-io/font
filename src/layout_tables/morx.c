@@ -70,88 +70,13 @@ static uint32_t u32(Ctx * c, size_t at) {
 
 /** An AAT lookup table's value for a glyph; false if it has none. */
 static bool lookup_value(Ctx * c, size_t lt, uint32_t glyph, uint16_t * out) {
-  uint16_t format = u16(c, lt);
-  size_t unit;
-  size_t count;
+  uint32_t value = 0;
 
-  if (c->bad) {
+  if (!gfnt_aat_lookup(c->r, lt, c->num_glyphs, glyph, 2, &value, &c->bad)) {
     return false;
   }
-  switch (format) {
-    case 0:
-      if (glyph >= c->num_glyphs) {
-        return false;
-      }
-      *out = u16(c, lt + 2 + 2 * (size_t)glyph);
-      return !c->bad;
-    case 2:
-    case 4:
-    case 6: {
-      size_t lo = 0;
-
-      unit = u16(c, lt + 2);
-      count = u16(c, lt + 4);
-      if (unit < 4 || c->bad) {
-        return false;
-      }
-      while (lo < count) {
-        size_t mid = lo + (count - lo) / 2;
-        size_t at = lt + 12 + mid * unit;
-
-        if (format == 6) {
-          uint32_t g = u16(c, at);
-
-          if (glyph < g) {
-            count = mid;
-          }
-          else if (glyph > g) {
-            lo = mid + 1;
-          }
-          else {
-            *out = u16(c, at + 2);
-            return !c->bad;
-          }
-        }
-        else {
-          uint32_t last = u16(c, at);
-          uint32_t first = u16(c, at + 2);
-
-          if (glyph < first) {
-            count = mid;
-          }
-          else if (glyph > last) {
-            lo = mid + 1;
-          }
-          else {
-            if (format == 2) {
-              *out = u16(c, at + 4);
-            }
-            else {
-              *out = u16(c, lt + u16(c, at + 4) + 2 * (size_t)(glyph - first));
-            }
-            return !c->bad;
-          }
-        }
-        if (c->bad) {
-          return false;
-        }
-      }
-      return false;
-    }
-    case 8: {
-      uint32_t first = u16(c, lt + 2);
-      uint32_t n = u16(c, lt + 4);
-
-      if (glyph < first || glyph - first >= n) {
-        return false;
-      }
-      *out = u16(c, lt + 6 + 2 * (size_t)(glyph - first));
-      return !c->bad;
-    }
-    // Format 10 is not read: HarfBuzz does not either.
-    default:
-      return false;
-  }
+  *out = (uint16_t)value;
+  return true;
 }
 
 /** Whether the glyph at @p i may be touched by the subtable: its cluster's flags allow it. */

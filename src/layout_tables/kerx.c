@@ -1,0 +1,254 @@
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Font.
+ *
+ * Ghoti.io Font is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Font is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/**
+ * @file
+ *
+ * Apple's `kerx` table: pair kerning, in HarfBuzz's way.
+ *
+ * A font with a version 2 `kerx` table is kerned by it and by nothing else: `GPOS` is not
+ * run, and the `kern` table is not read, even when `kerx` has no subtable that
+ * applies. Every subtable is run over the whole run in turn and what they give
+ * adds up. A vertical subtable is not run on horizontal text, and vertical text
+ * is not kerned by `kerx` at all. A cross-stream subtable moves the glyphs
+ * across the line, and the shift carries on to every glyph after it. A subtable
+ * that processes descending is not run: HarfBuzz kerns nothing by one, in either
+ * direction, whatever the pairs.
+ */
+
+#include <string.h>
+#include "layout.h"
+#include "../sfnt/sfnt.h"
+
+#define GFNT_TAG_kerx GFNT_TAG('k', 'e', 'r', 'x')
+
+#define KERX_VERTICAL   0x80000000u
+#define KERX_CROSS      0x40000000u
+#define KERX_VARIATION  0x20000000u
+#define KERX_DESCENDING 0x10000000u
+
+bool gfnt_kerx_present(const GFNT_Face * face) {
+  GFNT_Reader table;
+  bool bad = false;
+
+  // HarfBuzz acts on version 2 only: a table of any other version is as good as
+  // none, and `GPOS` kerns as it would.
+  if (!gfnt_face_has_table(face, GFNT_TAG_kerx)
+      || gfnt_face_table_reader(face, GFNT_TAG_kerx, &table, NULL) != GFNT_OK) {
+    return false;
+  }
+  table.error = NULL;
+  return gfnt_lr_u16(&table, 0, &bad) == 2 && !bad;
+}
+
+/** One pair's value from an ordered-list (format 0) subtable, or 0. */
+static int32_t kerx_format0(const GFNT_Reader * r, size_t subtable,
+    uint32_t left, uint32_t right, bool * bad) {
+  uint32_t pairs = gfnt_lr_u32(r, subtable + 12, bad);
+  uint32_t low = 0;
+  uint32_t high = pairs;
+  uint32_t key = (left << 16) | right;
+  size_t first = subtable + 28;
+
+  if (pairs > (UINT32_MAX - 28) / 6) {
+    *bad = true;
+    return 0;
+  }
+  while (low < high && !*bad) {
+    uint32_t mid = low + (high - low) / 2;
+    size_t at = first + 6 * (size_t)mid;
+    uint32_t value = (gfnt_lr_u16(r, at, bad) << 16)
+        | gfnt_lr_u16(r, at + 2, bad);
+
+    if (key < value) {
+      high = mid;
+    }
+    else if (key > value) {
+      low = mid + 1;
+    }
+    else {
+      return (int16_t)gfnt_lr_u16(r, at + 4, bad);
+    }
+  }
+  return 0;
+}
+
+/**
+ * One pair's value from a class-array (format 2) subtable, or 0. The class values
+ * are indices into the array of values, as HarfBuzz reads them, and a pair past
+ * the end of the array has no kerning.
+ */
+static int32_t kerx_format2(const GFNT_Reader * r, size_t subtable,
+    size_t num_glyphs, uint32_t left, uint32_t right, bool * bad) {
+  size_t left_table = subtable + gfnt_lr_u32(r, subtable + 16, bad);
+  size_t right_table = subtable + gfnt_lr_u32(r, subtable + 20, bad);
+  size_t array = subtable + gfnt_lr_u32(r, subtable + 24, bad);
+  uint32_t l = 0;
+  uint32_t k = 0;
+  bool outside = false;
+  int32_t value;
+
+  if (*bad) {
+    return 0;
+  }
+  // A glyph that has no class, on either side, has no kerning with anything.
+  if (!gfnt_aat_lookup(r, left_table, num_glyphs, left, 2, &l, bad)
+      || !gfnt_aat_lookup(r, right_table, num_glyphs, right, 2, &k, bad)) {
+    return 0;
+  }
+  value = (int16_t)gfnt_lr_u16(r, array + 2 * ((size_t)l + k), &outside);
+  return outside ? 0 : value;
+}
+
+/**
+ * One pair's value from an index-array (format 6) subtable, or 0. As in format 2,
+ * the two lookup values add up to an index into the array, which holds the values
+ * themselves, 16 or 32 bits each; the separate kerning vector is not read.
+ */
+static int32_t kerx_format6(const GFNT_Reader * r, size_t subtable,
+    size_t num_glyphs, uint32_t left, uint32_t right, bool * bad) {
+  uint32_t flags = gfnt_lr_u32(r, subtable + 12, bad);
+  size_t row_table = subtable + gfnt_lr_u32(r, subtable + 20, bad);
+  size_t column_table = subtable + gfnt_lr_u32(r, subtable + 24, bad);
+  size_t array = subtable + gfnt_lr_u32(r, subtable + 28, bad);
+  unsigned size = (flags & 1u) ? 4 : 2;
+  uint32_t l = 0;
+  uint32_t k = 0;
+  bool outside = false;
+  int32_t value;
+
+  if (*bad) {
+    return 0;
+  }
+  if (!gfnt_aat_lookup(r, row_table, num_glyphs, left, size, &l, bad)
+      || !gfnt_aat_lookup(r, column_table, num_glyphs, right, size, &k, bad)) {
+    return 0;
+  }
+  if (size == 4) {
+    value = (int32_t)gfnt_lr_u32(r, array + 4 * ((size_t)l + k), &outside);
+  }
+  else {
+    value = (int16_t)gfnt_lr_u16(r, array + 2 * ((size_t)l + k), &outside);
+  }
+  return outside ? 0 : value;
+}
+
+static int32_t kerx_pair(const GFNT_Reader * r, size_t subtable,
+    size_t num_glyphs, uint32_t format, uint32_t left, uint32_t right,
+    bool * bad) {
+  switch (format) {
+    case 0:
+      return kerx_format0(r, subtable, left, right, bad);
+    case 2:
+      return kerx_format2(r, subtable, num_glyphs, left, right, bad);
+    case 6:
+      return kerx_format6(r, subtable, num_glyphs, left, right, bad);
+    default:
+      return 0;
+  }
+}
+
+/** Run one pair-kerning subtable over the run. */
+static void kerx_run(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
+    uint32_t format, bool cross, GFNT_LApply * c, GFNT_LBuffer * b, uint32_t kern_mask,
+    bool * bad) {
+  GFNT_LIter it;
+  size_t idx = 0;
+  int32_t carry = 0;
+
+  while (idx < b->len && !*bad) {
+    size_t i = idx;
+    size_t j;
+    int32_t kern;
+
+    if (!(b->info[idx].mask & kern_mask)) {
+      idx++;
+      continue;
+    }
+    gfnt_liter_init(&it, c, false);
+    gfnt_liter_reset(&it, idx, 1);
+    if (!gfnt_liter_next(&it)) {
+      idx++;
+      continue;
+    }
+    j = it.idx;
+    kern = kerx_pair(r, subtable, num_glyphs, format, b->info[i].glyph, b->info[j].glyph,
+        bad);
+    if (cross) {
+      carry += kern;
+      b->pos[j].y_offset += carry;
+    }
+    else if (kern) {
+      int32_t kern1 = kern >> 1;
+      int32_t kern2 = kern - kern1;
+
+      b->pos[i].x_advance += kern1;
+      b->pos[j].x_advance += kern2;
+      b->pos[j].x_offset += kern2;
+    }
+    idx = j;
+  }
+}
+
+GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
+    const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error) {
+  GFNT_Reader table;
+  GFNT_LApply c;
+  GFNT_Result result;
+  size_t cursor = 8;
+  uint32_t tables;
+  uint32_t t;
+  size_t glyphs = 0;
+  bool bad = false;
+
+  result = gfnt_face_table_reader(face, GFNT_TAG_kerx, &table, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  table.error = NULL;
+  (void)gfnt_face_num_glyphs(face, &glyphs, NULL);
+  tables = gfnt_lr_u32(&table, 4, &bad);
+  memset(&c, 0, sizeof c);
+  c.buf = b;
+  c.gdef = gdef;
+  c.lookup_mask = kern_mask;
+  c.lookup_props = GFNT_LF_IGNORE_MARKS;
+  c.is_gpos = true;
+  c.auto_zwnj = true;
+  c.auto_zwj = true;
+  for (t = 0; t < tables && !bad; t++) {
+    uint32_t length = gfnt_lr_u32(&table, cursor, &bad);
+    uint32_t coverage = gfnt_lr_u32(&table, cursor + 4, &bad);
+
+    if (bad || length < 12) {
+      break;
+    }
+    if (!(coverage & (KERX_VERTICAL | KERX_VARIATION | KERX_DESCENDING))) {
+      kerx_run(&table, cursor, glyphs, coverage & 0xFFu, (coverage & KERX_CROSS) != 0,
+          &c, b, kern_mask, &bad);
+    }
+    cursor += length;
+  }
+  if (bad) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_kerx, 0,
+        GFNT_GLYPH_NONE, "the kerx table reads past itself");
+  }
+  return GFNT_OK;
+}

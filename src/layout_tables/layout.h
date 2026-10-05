@@ -301,6 +301,15 @@ GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
     size_t feature_count, GFNT_Error * error);
 void gfnt_morx_remove_deleted(GFNT_LBuffer * buf);
 
+/* --- aat.c ------------------------------------------------------------- */
+
+/**
+ * An AAT lookup table's value for a glyph, as a 16- or 32-bit unit (@p size 2 or
+ * 4); false if it has none.
+ */
+bool gfnt_aat_lookup(const GFNT_Reader * r, size_t lt, size_t num_glyphs,
+    uint32_t glyph, unsigned size, uint32_t * out, bool * bad);
+
 /* --- buffer.c --------------------------------------------------------- */
 
 bool gfnt_lbuf_init(GFNT_LBuffer * b, const GFNT_Allocator * allocator,
@@ -385,6 +394,14 @@ bool gfnt_gsub_is_reverse(uint16_t type);
 
 /** The `kern` table's pair kerning, applied to the run (kern.c). */
 GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
+    const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error);
+
+/**
+ * The `kerx` table (kerx.c). A font that has one is kerned by it alone: the
+ * shaper runs no `GPOS` and reads no `kern`.
+ */
+bool gfnt_kerx_present(const GFNT_Face * face);
+GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error);
 
 void gfnt_gpos_position_start(GFNT_LBuffer * b);

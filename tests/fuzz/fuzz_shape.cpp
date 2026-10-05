@@ -10,7 +10,7 @@
  * alone cannot write the `GDEF` that changes which of its glyphs are skipped.
  *
  * With bit 0x80 of the options the first two thirds are Apple's `morx` and `feat`
- * instead of `GSUB` and `GPOS`.
+ * instead of `GSUB` and `GPOS`; with bit 0x40 they are `kerx` and `kern`.
  *
  * The input is an options byte, a byte that splits the rest between the tables
  * (the first and second thirds, in the order `GSUB`, `GPOS`, `GDEF`: the byte
@@ -209,6 +209,18 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     }
     if (!gpos.empty()) {
       tables.push_back({GFNT_TAG('f', 'e', 'a', 't'), gpos});
+    }
+  }
+  else if (options & 0x40u) {
+    // Pair kerning instead: the first third is `kerx`, the second `kern`.
+    if (!gsub.empty()) {
+      tables.push_back({GFNT_TAG('k', 'e', 'r', 'x'), gsub});
+    }
+    if (!gpos.empty()) {
+      tables.push_back({GFNT_TAG('k', 'e', 'r', 'n'), gpos});
+    }
+    if (!gdef.empty()) {
+      tables.push_back({GFNT_TAG('G', 'D', 'E', 'F'), gdef});
     }
   }
   else {

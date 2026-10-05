@@ -787,10 +787,16 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
     plan->tables[1].present = false;
     plan->tables[1].kern_found = false;
   }
+  // Apple's kerning replaces the font's own `GPOS`, and the `kern` table as well.
+  plan->apply_kerx = gfnt_kerx_present(face);
+  if (plan->apply_kerx) {
+    plan->tables[1].present = false;
+    plan->tables[1].kern_found = false;
+  }
   // Kerning is the table's job when GPOS has none of its own: a font from before
   // OpenType layout, or one whose GPOS carries only marks.
   plan->kern_fallback = !plan->vertical && plan->kern_mask != 0
-      && !plan->tables[1].kern_found;
+      && !plan->tables[1].kern_found && !plan->apply_kerx;
   if (plan->shaper->data_create) {
     plan->shaper_data = plan->shaper->data_create(plan, a);
     if (!plan->shaper_data) {

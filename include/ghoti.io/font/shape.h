@@ -48,7 +48,9 @@
  *     HarfBuzz shapes it for a font that is not variable; at a location in the
  *     design space a vertical run is refused.
  *   * **Apple's tables in part.** A font with `morx` is substituted by it and not
- *     by `GSUB`, as HarfBuzz does; `mort`, `kerx`, `trak` and the rest of AAT are
+ *     by `GSUB`, as HarfBuzz does, and a version 2 `kerx` kerns by its pair
+ *     subtables (formats 0, 2 and 6) in place of `GPOS` and `kern`; `mort`, the state
+ *     machine kerning of `kerx` (formats 1 and 4), `trak` and the rest of AAT are
  *     not read.
  *   * **No device table for a pixel size.** Positions are in font units; a
  *     `VariationIndex` device table is read when a location is given.

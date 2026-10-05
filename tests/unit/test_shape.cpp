@@ -2537,3 +2537,120 @@ TEST(ShapeFallback, BorrowedMarksStackAboveAndBelowTheBaseInChains) {
   }
   gfnt_face_runs_free(&out);
 }
+
+// ---- Apple's kerx ----
+
+namespace {
+
+/** A kerx table of the given version over finished subtables. */
+Bytes kerx_table(const std::vector<Bytes> & subtables, uint16_t version = 2) {
+  Bytes out;
+  gfnttest::put_u16(out, version);
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u32(out, static_cast<uint32_t>(subtables.size()));
+  for (const Bytes & s : subtables) {
+    out.insert(out.end(), s.begin(), s.end());
+  }
+  return out;
+}
+
+Bytes kerx_subtable(uint32_t flags, uint8_t format, const Bytes & body) {
+  Bytes out;
+  gfnttest::put_u32(out, static_cast<uint32_t>(12 + body.size()));
+  gfnttest::put_u32(out, flags | format);
+  gfnttest::put_u32(out, 0);
+  out.insert(out.end(), body.begin(), body.end());
+  return out;
+}
+
+Bytes kerx_pairs(std::vector<std::tuple<uint16_t, uint16_t, int16_t>> pairs,
+    uint32_t flags = 0) {
+  std::sort(pairs.begin(), pairs.end());
+  Bytes body;
+  gfnttest::put_u32(body, static_cast<uint32_t>(pairs.size()));
+  gfnttest::put_u32(body, 0);
+  gfnttest::put_u32(body, 0);
+  gfnttest::put_u32(body, 0);
+  for (const auto & p : pairs) {
+    gfnttest::put_u16(body, std::get<0>(p));
+    gfnttest::put_u16(body, std::get<1>(p));
+    gfnttest::put_u16(body, static_cast<uint16_t>(std::get<2>(p)));
+  }
+  return kerx_subtable(flags, 0, body);
+}
+
+Glyphs kerx_shape(const Bytes & kerx, const std::string & text,
+    const std::string & features = "", const Bytes & kern = {}) {
+  std::vector<gfnttest::Table> tables = {{GFNT_TAG('k', 'e', 'r', 'x'), kerx}};
+  if (!kern.empty()) {
+    tables.push_back({GFNT_TAG('k', 'e', 'r', 'n'), kern});
+  }
+  return shape_bytes(small_font(tables), cps(text), features);
+}
+
+}  // namespace
+
+TEST(ShapeKerx, APairIsSharedBetweenTheTwoGlyphsAndSubtablesAddUp) {
+  Glyphs g = kerx_shape(kerx_table({kerx_pairs({{1, 2, -100}}),
+      kerx_pairs({{1, 2, -30}, {2, 3, -40}})}), "ABC");
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(g[0].x_advance, 435);            // 500 - 65
+  EXPECT_EQ(g[1].x_advance, 415);            // 500 - 65 - 20
+  EXPECT_EQ(g[1].x_offset, -65);
+  EXPECT_EQ(g[2].x_offset, -20);
+  EXPECT_EQ(shape_bytes(small_font({{GFNT_TAG('k', 'e', 'r', 'x'),
+                kerx_table({kerx_pairs({{1, 2, -100}})})}}), cps("AB"), "-kern")[0]
+                .x_advance, 500);
+}
+
+TEST(ShapeKerx, ItReplacesTheKernTableAndOnlyAVersionTwoTableIsRead) {
+  Bytes kern = kern_format0({{1, 2, -20}});
+  EXPECT_EQ(kerx_shape(kerx_table({kerx_pairs({{1, 2, -100}})}), "AB", "", kern)[0]
+                .x_advance, 450);
+  // Any other version is as good as none, and `kern` is used as it would be.
+  EXPECT_EQ(kerx_shape(kerx_table({kerx_pairs({{1, 2, -100}})}, 3), "AB", "",
+                kern)[0].x_advance, 490);
+}
+
+TEST(ShapeKerx, VerticalAndDescendingSubtablesKernNothingInHorizontalText) {
+  EXPECT_EQ(kerx_shape(kerx_table({kerx_pairs({{1, 2, -100}}, 0x80000000u)}),
+                "AB")[0].x_advance, 500);
+  EXPECT_EQ(kerx_shape(kerx_table({kerx_pairs({{1, 2, -100}}, 0x10000000u)}),
+                "AB")[0].x_advance, 500);
+}
+
+TEST(ShapeKerx, ACrossStreamShiftCarriesOnToEveryGlyphAfterIt) {
+  Glyphs g = kerx_shape(kerx_table({kerx_pairs({{1, 2, -100}}, 0x40000000u)}),
+      "ABAB");
+  ASSERT_EQ(g.size(), 4u);
+  EXPECT_EQ(g[0].y_offset, 0);
+  EXPECT_EQ(g[1].y_offset, -100);
+  EXPECT_EQ(g[2].y_offset, -100);
+  EXPECT_EQ(g[3].y_offset, -200);
+  EXPECT_EQ(g[1].x_advance, 500);
+}
+
+TEST(ShapeKerx, ClassSubtablesAddTheTwoClassesToAnIndexIntoTheValues) {
+  // Format 2: left A = 0, B = 2; right B = 0, C = 1: the value at index l + r.
+  Bytes left = lookup6({{1, 0}, {2, 2}});
+  Bytes right = lookup6({{2, 0}, {3, 1}});
+  Bytes values;
+  for (int16_t v : {-100, -60, -20, 40}) {
+    gfnttest::put_u16(values, static_cast<uint16_t>(v));
+  }
+  Bytes body;
+  gfnttest::put_u32(body, 4);
+  gfnttest::put_u32(body, 28);
+  gfnttest::put_u32(body, static_cast<uint32_t>(28 + left.size()));
+  gfnttest::put_u32(body, static_cast<uint32_t>(28 + left.size() + right.size()));
+  body.insert(body.end(), left.begin(), left.end());
+  body.insert(body.end(), right.begin(), right.end());
+  body.insert(body.end(), values.begin(), values.end());
+  Bytes kerx = kerx_table({kerx_subtable(0, 2, body)});
+  EXPECT_EQ(kerx_shape(kerx, "AB")[1].x_offset, -50);   // index 0: -100
+  EXPECT_EQ(kerx_shape(kerx, "BB")[1].x_offset, -10);   // index 2: -20
+  EXPECT_EQ(kerx_shape(kerx, "BC")[1].x_offset, 20);    // index 3: 40
+  // A glyph with no class on either side has no kerning.
+  EXPECT_EQ(kerx_shape(kerx, "CB")[1].x_offset, 0);
+  EXPECT_EQ(kerx_shape(kerx, "AA")[1].x_offset, 0);
+}

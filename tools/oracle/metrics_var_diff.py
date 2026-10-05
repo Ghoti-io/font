@@ -105,7 +105,7 @@ def parse(text):
     thing (fontTools' `none`): they are one answer and are compared as one.
     """
     out = {"advance": {}, "bearing": {}, "line": {}, "variation": None,
-           "usemymetrics": set()}
+           "usemymetrics": set(), "cvt": None}
     for line in text.splitlines():
         words = line.split()
         if line.startswith("variation: "):
@@ -122,6 +122,11 @@ def parse(text):
                 out[kind][glyph] = None
             else:
                 out[kind][glyph] = int(words[3])
+        elif line.startswith("cvt ") and len(words) >= 2:
+            out["cvt"] = None if words[1] == "refused" else \
+                [int(v) for v in words[2:]]
+            if words[1] == "refused":
+                out["cvt"] = "refused"
         elif line.startswith("line ") and len(words) >= 3:
             if words[2] == "refused":
                 out["line"][words[1]] = None
@@ -275,6 +280,16 @@ def compare(path, face, stride, locations, report, histograms, references,
                           ours_["bearing"].get(glyph, "missing"), place)
             for label, want in theirs["line"].items():
                 check(name, "line", label, want, ours_["line"].get(label), place)
+            if name == "fontTools" and theirs["cvt"] is not None:
+                # One comparison per control value, so that the count says how
+                # many values were held to the reference and not how many fonts.
+                got = ours_["cvt"]
+                if not isinstance(got, list) or len(got) != len(theirs["cvt"]):
+                    check(name, "cvt", "values", 0, None, place)
+                else:
+                    for index, want in enumerate(theirs["cvt"]):
+                        check(name, "cvt", "value %d" % index, want,
+                              got[index], place)
     return compared, differed, len(places)
 
 

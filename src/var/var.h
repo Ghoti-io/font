@@ -88,6 +88,9 @@ typedef struct GFNT_Avar {
   size_t * first;
   uint16_t * count;
   size_t axis_count;
+  uint16_t major;        ///< 1, or 2 when the table carries a variation store.
+  uint32_t map_offset;   ///< Version 2: the axis index map, from the table; 0 for none.
+  uint32_t store_offset; ///< Version 2: the item variation store; 0 for none.
 } GFNT_Avar;
 
 /** The `fvar` parser, for ::gfnt_table_cached(). */

@@ -117,7 +117,7 @@ which of them this library takes, and which of those it reads today.
 | | WOFF 1 | **required**, not implemented |
 | | `EBDT`/`EBLC`/`EBSC` strikes; `COLR` v0 + `CPAL` | **wanted**, not implemented |
 | | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | wanted, not implemented; colour bitmaps need `image` |
-| | variations: `fvar`/`avar` (version 1)/`gvar`, `HVAR`/`MVAR` | **implemented** for `glyf` outlines and for advances, side bearings and line metrics (§7.7). `VVAR` (no vertical metrics are read), `cvar`, `STAT`, `FeatureVariations`, and `avar` version 2, are not: a metric the font does not say how to vary is refused, not guessed |
+| | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
 | | WOFF 2 | not here; it waits on Brotli in `compress` |
 | | `CFF2`, AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
@@ -781,14 +781,17 @@ library does not composite gradients: that is a graphics library's job, and
 
 ### 7.7 Variations
 
-`fvar` (axes with tag, range, flags, name; named instances), `avar` version 1
-segment maps (version 2 is `ERR_UNSUPPORTED` until asked for), `gvar` (the
+`fvar` (axes with tag, range, flags, name; named instances), `avar` versions 1 and 2
+(segment maps, then for version 2 an item variation store that moves each axis by a
+function of the others), `gvar` (the
 tuple variation store, shared point numbers, packed deltas, and IUP
 interpolation of unreferenced points), `HVAR` (advance and left-side-bearing
 deltas through the item variation store and delta-set index maps; `VVAR` is not
-read, because no vertical metric is), `MVAR` (the metric tags), `STAT` (axis values
-formats 1-4, for naming an instance, not built), and `GSUB`/`GPOS`
-`FeatureVariations` (not built).
+read, because no vertical metric is), `MVAR` (the metric tags), `cvar` (the control
+values of `cvt `, which is data for a hinting interpreter this library does not have),
+`STAT` (axis value formats 1-4, and which of them name a location) and `GSUB`/`GPOS`
+`FeatureVariations` (which record applies at a location and what it substitutes; the
+feature list and the lookups themselves are not parsed).
 Normalisation: user coordinate to `-1..1` by the axis's min/default/max, then
 `avar`. Every accessor takes a `GFNT_Variation *`.
 
@@ -812,10 +815,16 @@ error anywhere.
   the end of the range and the end itself both end at one; a map in between is
   where they differ, and a test with one is how that was found.
 - **An `avar` that is not a function is refused** (source coordinates that do not
-  strictly increase), as is one whose axis count is not `fvar`'s. Version 2 is
-  `GFNT_ERR_UNSUPPORTED` rather than read as version 1, which would apply the
-  segment maps and silently drop the variation store that re-maps one axis as a
-  function of the others.
+  strictly increase), as is one whose axis count is not `fvar`'s.
+- **`avar` version 2 follows the segment maps with a store** (`src/var/var.c`): each
+  axis is moved by the sum of the deltas its row names, scaled by the *segment maps'*
+  output at every axis, rounded once half away from zero, and clamped to -1..1. The
+  deltas are all read before any is applied - an axis moved by its own delta must not
+  change where the next is read - and a delta's unit is the coordinate's own (2.14).
+  An axis's row is its number, or what the delta-set index map says; fontTools
+  returns "no variation" for an axis past the end of a map where the item variation
+  store's own rule takes the last entry, and this library does the latter, which no
+  font here distinguishes.
 - **A face that cannot read its `avar` still has its axes.** The refusal is the
   mapping's, and normalising is what fails.
 
@@ -902,6 +911,18 @@ decides, and what a reader can get wrong without any error:
   `gvar`'s rules for an invalid one and are evaluated by the same function, because
   two copies of those rules would be two answers the first time one was corrected.
 
+**What one glyph can cost.** The format bounds a glyph at 4,095 tuples and
+`GFNT_Limits::max_outline_points` bounds its points, so the worst a hostile `gvar` can ask
+of one call is 4,095 tuples each naming all 65,000 points: an 8.4 MB table (zero runs
+compress the deltas) and **0.40 s** on this machine, measured by loading that glyph at
+the peak. That was 0.84 s while a tuple that named every point still cleared and
+re-summed three arrays of the glyph's size; it now adds its deltas straight into the sum
+and costs one pass over the tuple's own bytes. A tuple that names *some* points keeps
+the slower path on purpose, because a list may name a point twice and the last delta
+stands, which only a cleared spread can say. The bound is the format's and the cap is
+the caller's; a caller loading outlines from files it does not trust should lower
+`max_outline_points`, which is also what bounds the points.
+
 **Oracles (§14.5, `tools/oracle/var_diff.py`).** The image carries **sixteen
 variable fonts from four producers** - Inter (two axes, `avar`, an italic), Cascadia
 Code (twelve files, with `cvar`), Vazirmatn and Sahel (no `avar`) - because before
@@ -936,6 +957,31 @@ comparisons, 0 disagreements; FreeType differs from this library by one unit in 
 105,444 advances (it rounds each region on its own) and by 2 and 8 units for the two
 `USE_MY_METRICS` glyphs; fontTools agrees exactly once its unrounded delta is rounded
 half away from zero.
+
+**`avar` version 2, `STAT`, `FeatureVariations` and `cvar` (§7.7).** Each is read in
+place at the call, like the item variation stores, and each has a fontTools-written
+fixture (`variable-avar2.ttf`, `variable-stat.ttf`, `variable-featurevars.ttf`,
+`variable-cvar.ttf`) and a differential:
+
+- `avar` version 2 rides `var_diff`: its fixture is one of the synthetic fonts, so
+  normalised coordinates are compared with fontTools (`renormalizeLocation`) and
+  FreeType (to the bit, as for every font) at every planned location. The deltas are
+  in 2.14 units and FreeType agrees with this library's rounding.
+- `STAT` and `FeatureVariations` ride `ttx_diff`: every axis, axis value of all four
+  formats and condition set of all 546 faces is dumped and compared field by field with
+  fontTools. The real fonts carry sixteen `STAT` tables (version 1.1, formats 1 and 3) and 24
+  `FeatureVariations` records; the fixtures add version 1.2, formats 2 and 4 and a
+  record that needs two conditions. The matching rule - the *first* record whose
+  conditions all hold, with and, or and not on the newer condition formats - has no
+  reference that evaluates it, so it is held to hand-worked unit tests and a fuzz
+  property, and the gap is stated here rather than implied away. A condition of format 2
+  (a value varied through `GDEF`) is refused by name.
+- `cvar` rides `metrics_var_diff`: the control values are compared with fontTools'
+  `cvar` tuples summed as floats and rounded once, **15,536 values at every planned
+  location with no difference** - twelve of the sixteen real fonts carry a `cvar` (it
+  was in the corpus all along: Cascadia Code's twelve files). FreeType is not
+  asked: it scales control values to pixels as it applies them, which is a different
+  question.
 
 **FreeType as a reference for metrics needed care too.** It adds `MVAR` deltas to the
 values it keeps and never undoes them, so a face moved to a location and back reports
@@ -2870,7 +2916,7 @@ What that cost in findings:
 
 **Not built:** `CFF2` (§16); `CBDT` and `sbix` (§7.5); colour
 (§7.6);
-`VVAR`/`cvar`/`STAT`/`FeatureVariations` and `avar` version 2 (§7.7); shaping, layout, discovery and the writer; the multi-byte
+`VVAR` and a `FeatureVariations` condition of format 2 (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`
 and WOFF 1. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is

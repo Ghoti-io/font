@@ -208,6 +208,23 @@
 #define gfnt_face_instance_at GHOTIIO_FONT(gfnt_face_instance_at)
 #define gfnt_face_normalize GHOTIIO_FONT(gfnt_face_normalize)
 #define gfnt_face_variation_dump GHOTIIO_FONT(gfnt_face_variation_dump)
+#define gfnt_face_has_stat GHOTIIO_FONT(gfnt_face_has_stat)
+#define gfnt_face_stat_axis_count GHOTIIO_FONT(gfnt_face_stat_axis_count)
+#define gfnt_face_stat_axis_at GHOTIIO_FONT(gfnt_face_stat_axis_at)
+#define gfnt_face_stat_value_count GHOTIIO_FONT(gfnt_face_stat_value_count)
+#define gfnt_face_stat_value_at GHOTIIO_FONT(gfnt_face_stat_value_at)
+#define gfnt_face_stat_value_pair GHOTIIO_FONT(gfnt_face_stat_value_pair)
+#define gfnt_face_stat_elided_fallback GHOTIIO_FONT(gfnt_face_stat_elided_fallback)
+#define gfnt_face_stat_match GHOTIIO_FONT(gfnt_face_stat_match)
+#define gfnt_face_stat_dump GHOTIIO_FONT(gfnt_face_stat_dump)
+#define gfnt_face_feature_variations_count GHOTIIO_FONT(gfnt_face_feature_variations_count)
+#define gfnt_face_feature_variations_match GHOTIIO_FONT(gfnt_face_feature_variations_match)
+#define gfnt_face_feature_substitution_count GHOTIIO_FONT(gfnt_face_feature_substitution_count)
+#define gfnt_face_feature_substitution_at GHOTIIO_FONT(gfnt_face_feature_substitution_at)
+#define gfnt_face_feature_substitution_lookup GHOTIIO_FONT(gfnt_face_feature_substitution_lookup)
+#define gfnt_face_feature_variations_dump GHOTIIO_FONT(gfnt_face_feature_variations_dump)
+#define gfnt_face_cvt_count GHOTIIO_FONT(gfnt_face_cvt_count)
+#define gfnt_face_cvt_values GHOTIIO_FONT(gfnt_face_cvt_values)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

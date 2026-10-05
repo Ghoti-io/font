@@ -335,6 +335,76 @@ def main(argv):
                                              round(high * 16384))
                                   for low, high in sorted(segments.items()))))
 
+    # FeatureVariations of GSUB and GPOS: the conditions as `range axis min max` in
+    # 2.14 integers and the substitutes as the feature and its lookup indices.
+    # Only format 1 conditions are written, which is every one fontTools builds.
+    for layout in ("GSUB", "GPOS"):
+        if layout not in font:
+            continue
+        table = readable(font, layout, out)
+        variations = getattr(getattr(table, "table", None),
+                             "FeatureVariations", None)
+        if variations is None:
+            continue
+        records = variations.FeatureVariationRecord
+        out.write("%s.fv.count\t%d\n" % (layout, len(records)))
+        for r, record in enumerate(records):
+            conditions = (record.ConditionSet.ConditionTable
+                          if record.ConditionSet else [])
+            substitutes = (record.FeatureTableSubstitution.SubstitutionRecord
+                           if record.FeatureTableSubstitution else [])
+            out.write("%s.fv.%d\t%d %d\n"
+                      % (layout, r, len(conditions), len(substitutes)))
+            for c, condition in enumerate(conditions):
+                out.write("%s.fv.%d.cond.%d\trange %d %d %d\n"
+                          % (layout, r, c, condition.AxisIndex,
+                             round(condition.FilterRangeMinValue * 16384),
+                             round(condition.FilterRangeMaxValue * 16384)))
+            for k, substitute in enumerate(substitutes):
+                out.write("%s.fv.%d.sub.%d\tfeature %d lookups%s\n"
+                          % (layout, r, k, substitute.FeatureIndex,
+                             "".join(" %d" % i for i in
+                                     substitute.Feature.LookupListIndex)))
+
+    # STAT, in the integers this library's dump prints: the 16.16 values rounded,
+    # and format 4's pairs as axis:value.
+    if "STAT" in font:
+        stat = readable(font, "STAT", out)
+        if stat is not None:
+            table = stat.table
+            stat_axes = (table.DesignAxisRecord.Axis
+                    if table.DesignAxisRecord else [])
+            stat_values = (table.AxisValueArray.AxisValue
+                      if table.AxisValueArray else [])
+            out.write("STAT.header\t%d %d %d %d\n"
+                      % (table.Version & 0xFFFF, len(stat_axes), len(stat_values),
+                         getattr(table, "ElidedFallbackNameID", 0) or 0))
+            for index, axis in enumerate(stat_axes):
+                out.write("STAT.axis.%d\t%s %d %d\n"
+                          % (index, axis.AxisTag, axis.AxisNameID,
+                             axis.AxisOrdering))
+            for index, value in enumerate(stat_values):
+                def fixed(x):
+                    return round(x * 65536)
+                head = ("format %d flags 0x%04X name %d"
+                        % (value.Format, value.Flags, value.ValueNameID))
+                if value.Format == 1:
+                    rest = " axis %d value %d" % (value.AxisIndex,
+                                                  fixed(value.Value))
+                elif value.Format == 2:
+                    rest = (" axis %d value %d min %d max %d"
+                            % (value.AxisIndex, fixed(value.NominalValue),
+                               fixed(value.RangeMinValue),
+                               fixed(value.RangeMaxValue)))
+                elif value.Format == 3:
+                    rest = (" axis %d value %d linked %d"
+                            % (value.AxisIndex, fixed(value.Value),
+                               fixed(value.LinkedValue)))
+                else:
+                    rest = "".join(" %d:%d" % (r.AxisIndex, fixed(r.Value))
+                                   for r in value.AxisValueRecord)
+                out.write("STAT.value.%d\t%s%s\n" % (index, head, rest))
+
     # Glyph names, from whichever table actually holds them - and where neither
     # does, said rather than invented: fontTools makes up "glyph00012" for a
     # TrueType font with `post` format 3.0, and emitting that would score this

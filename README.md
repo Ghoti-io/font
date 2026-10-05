@@ -14,7 +14,7 @@ This is what the library implements.
 - Which glyph a code point maps to, and how wide that glyph is.
 - A glyph's outline, from `glyf` and `loca`, with composites resolved: every flag, point matching, and all three transform encodings.
 - A glyph's outline from a **charstring**: `CFF ` inside an sfnt, CID-keyed fonts included, with the Type 2 and Type 1 interpreters behind it.
-- A **variable font's design space** — the axes and named instances from `fvar`, `avar` version 1, and the conversion from the coordinates a person types to the normalised ones — and a `glyf` glyph's outline **at a location in it**, moved by `gvar`: every tuple form, inferred points, composite offsets. A **metric at a location** is answered too - an advance from `HVAR` (or, in a font without one, from the phantom points `gvar` carries), a line's extent from `MVAR`, and a side bearing where `HVAR` maps one - and is refused rather than answered with the default's where the font states nothing that says.
+- A **variable font's design space** — the axes and named instances from `fvar`, `avar` (versions 1 and 2), and the conversion from the coordinates a person types to the normalised ones — and a `glyf` glyph's outline **at a location in it**, moved by `gvar`: every tuple form, inferred points, composite offsets. A **metric at a location** is answered too - an advance from `HVAR` (or, in a font without one, from the phantom points `gvar` carries), a line's extent from `MVAR`, and a side bearing where `HVAR` maps one - and is refused rather than answered with the default's where the font states nothing that says. The control values `cvar` moves, the names `STAT` gives a place in the space, and the `GSUB`/`GPOS` `FeatureVariations` record that applies at one are read too.
 - That outline rasterised to 8-bit coverage, at any pixel size and any sub-pixel offset.
 - A **bare `CFF `** font program and a **Type 1** one — `.pfb`, `.pfa` or raw — each a face with no sfnt directory at all, stating its em, its glyph count, its names and its advances out of the program itself.
 - The four **standalone bitmap** containers: PCF, BDF, PSF 1 and 2, and GNU Unifont's `.hex`. Each is a face with one strike and no outlines, and a glyph comes back as pixels with its own box and advance.
@@ -141,6 +141,7 @@ asks which glyph a code point maps to does not link a rasteriser.
 - **`blob.h`** — the bytes of a font, copied or read from a file.
 - **`face.h`** — one font from a blob and an index: the sfnt version, the table directory, collections, and the `GFNT_Variation` every accessor takes.
 - **`variation.h`** — a variable font's axes and named instances, and `gfnt_face_normalize()`, which makes the normalised coordinates every accessor takes out of the ones a person types.
+- **`stat.h`, `featurevar.h`, `cvt.h`** — what a variable font names, replaces and moves besides its outlines: `STAT`'s axes and axis values and which of them name a location; which `FeatureVariations` record applies at one, and the lookups it substitutes; and the `cvt ` control values at a location through `cvar`.
 - **`metrics.h`** — `head`, `hhea`, `OS/2`, `post`, `unitsPerEm`, and per-glyph advances from `hmtx`.
 - **`cmap.h`** — code point to glyph, formats 0, 4, 6 and 12, and which subtable answered.
 - **`name.h`** — name records decoded to UTF-8 by platform, encoding and language.

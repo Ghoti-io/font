@@ -41,10 +41,13 @@
 #include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/core.h>
+#include <ghoti.io/font/cvt.h>
 #include <ghoti.io/font/face.h>
+#include <ghoti.io/font/featurevar.h>
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/name.h>
+#include <ghoti.io/font/stat.h>
 #include <ghoti.io/font/variation.h>
 #include <ghoti.io/font/macros.h>
 

@@ -460,6 +460,110 @@ def mvar_table(store, records, record_size=8):
     return out + store
 
 
+def stat_table(axes, values, minor=2, fallback=2, axis_size=8):
+    """A `STAT` from [(tag, name, ordering)] and a list of raw axis value bytes."""
+    header = 20 if minor >= 1 else 18
+    offsets = header + len(axes) * axis_size
+    out = struct.pack(">HHHHIHI", 1, minor, axis_size, len(axes), header,
+                      len(values), offsets)
+    if minor >= 1:
+        out += struct.pack(">H", fallback)
+    for tag_, name_id, ordering in axes:
+        out += tag_ + struct.pack(">HH", name_id, ordering) + bytes(axis_size - 8)
+    at = 2 * len(values)
+    for value in values:
+        out += struct.pack(">H", at)
+        at += len(value)
+    return out + b"".join(values)
+
+
+def stat_value(fmt, axis, flags, name_id, *fixed):
+    """Format 1 to 3 axis value: format, axis index, flags, name, then 16.16s."""
+    return struct.pack(">HHHH", fmt, axis, flags, name_id) + b"".join(
+        struct.pack(">i", v) for v in fixed)
+
+
+def stat_multi(flags, name_id, pairs):
+    out = struct.pack(">HHHH", 4, len(pairs), flags, name_id)
+    for axis, value in pairs:
+        out += struct.pack(">Hi", axis, value)
+    return out
+
+
+def cond_range(axis, low, high):
+    return struct.pack(">HHhh", 1, axis, low, high)
+
+
+def cond_list(fmt, children):
+    out = struct.pack(">HB", fmt, len(children))
+    at = 3 + 3 * len(children)
+    for child in children:
+        out += at.to_bytes(3, "big")
+        at += len(child)
+    return out + b"".join(children)
+
+
+def cond_not(child):
+    return struct.pack(">H", 5) + (5).to_bytes(3, "big") + child
+
+
+def condition_set(conditions):
+    out = struct.pack(">H", len(conditions))
+    at = 2 + 4 * len(conditions)
+    for condition in conditions:
+        out += struct.pack(">I", at)
+        at += len(condition)
+    return out + b"".join(conditions)
+
+
+def substitution_table(substitutes):
+    out = struct.pack(">HHH", 1, 0, len(substitutes))
+    at = 6 + 6 * len(substitutes)
+    for feature, lookups in substitutes:
+        out += struct.pack(">HI", feature, at)
+        at += 4 + 2 * len(lookups)
+    for feature, lookups in substitutes:
+        out += struct.pack(">HH", 0, len(lookups))
+        out += b"".join(struct.pack(">H", i) for i in lookups)
+    return out
+
+
+def layout_table(records):
+    """A GSUB 1.1 from [(condition set bytes, substitution bytes)]."""
+    at = 8 + 8 * len(records)
+    body = struct.pack(">HHI", 1, 0, len(records))
+    bodies = b""
+    for conditions, substitution in records:
+        body += struct.pack(">II", at, at + len(conditions))
+        at += len(conditions) + len(substitution)
+        bodies += conditions + substitution
+    return struct.pack(">HHHHHI", 1, 1, 0, 0, 0, 14) + body + bodies
+
+
+def cvar_table(tuples, shared_points=None):
+    """A `cvar` from [(peak, data, private points?)] with one axis."""
+    headers = b""
+    serial = shared_points or b""
+    for peak, data, private in tuples:
+        headers += struct.pack(">HHh", len(data), 0x8000 | (0x2000 if private else 0),
+                               peak)
+        serial += data
+    count = len(tuples) | (0x8000 if shared_points else 0)
+    return struct.pack(">HHHH", 1, 0, count, 8 + len(headers)) + headers + serial
+
+
+def avar2_table(maps, store, index_map=b""):
+    out = bytearray(struct.pack(">HHHH", 2, 0, 0, len(maps)))
+    for pairs in maps:
+        out += struct.pack(">H", len(pairs))
+        for source, target in pairs:
+            out += struct.pack(">hh", source, target)
+    base = len(out) + 8
+    out += struct.pack(">II", base if index_map else 0,
+                       base + len(index_map) if store else 0)
+    return bytes(out) + index_map + store
+
+
 def main():
     latin = {
         "head": head(),
@@ -622,6 +726,37 @@ def main():
         write_pair(corpus / ("metvar/%s.seed" % label), 0x00,
                    max(0, min(255, (256 * len(hvar)) // max(1, total))),
                    hvar + mvar)
+
+    # The tables fuzz_vartables reads: options 0x00-0x03 pick the axis count and
+    # bits 4-5 the table (0 STAT, 1 GSUB, 2 cvt and cvar, 3 avar).
+    stat = stat_table([(b"wght", 256, 0), (b"wdth", 257, 1)], [
+        stat_value(1, 0, 0, 10, 400 << 16),
+        stat_value(2, 0, 1, 11, 600 << 16, 550 << 16, 650 << 16),
+        stat_value(3, 1, 2, 12, 100 << 16, 125 << 16),
+        stat_multi(0, 13, [(0, 700 << 16), (1, 75 << 16)])])
+    write_pair(corpus / "vartables/stat.seed", 0x01, 0x00, stat)
+    write_pair(corpus / "vartables/stat-1-0.seed", 0x01, 0x00,
+               stat_table([(b"wght", 256, 0)], [stat_value(1, 0, 0, 10, 0)], 0))
+    layout = layout_table([
+        (condition_set([cond_range(0, 8192, 16384)]),
+         substitution_table([(3, [7, 9])])),
+        (condition_set([cond_list(4, [cond_range(0, -16384, 0),
+                                      cond_not(cond_range(0, 0, 0))])]),
+         substitution_table([(5, []), (6, [1])])),
+        (condition_set([]), substitution_table([(0, [2])]))])
+    write_pair(corpus / "vartables/featurevar-gsub.seed", 0x11, 0x00, layout)
+    write_pair(corpus / "vartables/featurevar-gpos.seed", 0x51, 0x00, layout)
+    cvt = struct.pack(">hhhh", 100, -50, 300, 7)
+    cvar = cvar_table([(16384, bytes([0x03, 10, 0xEC, 0, 7]), False),
+                       (8192, bytes([0x02, 0x01, 0x01, 0x02, 0x01, 40, 0xD8]), True)])
+    write_pair(corpus / "vartables/cvar.seed", 0x20,
+               (256 * len(cvt)) // (len(cvt) + len(cvar)), cvt + cvar)
+    store = ivs_store([[(0, 16384, 16384), (0, 0, 0)], [(0, 0, 0), (0, 16384, 16384)]],
+                      [(False, 2, [0, 1], [[0, 3000], [-2500, 0]])], axis_count=2)
+    write_pair(corpus / "vartables/avar2.seed", 0x31, 0x00,
+               avar2_table([[], []], store, delta_map(0, 0x00, [1, 0])))
+    write_pair(corpus / "vartables/avar2-no-store.seed", 0x31, 0x00,
+               avar2_table([[(-16384, -16384), (0, 0), (16384, 16384)], []], b""))
 
     # Paths for the rasteriser, which reads no font at all.
     write_pair(corpus / "raster/square.seed", 0x00, 0x00, raster_points([

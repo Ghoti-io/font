@@ -49,6 +49,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "../reader/reader.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -147,6 +148,49 @@ GFNT_Result gfnt_gvar_glyph_deltas(const GFNT_Face * face, uint32_t glyph,
     const GFNT_F2Dot14 * coordinates, size_t coordinate_count,
     const GFNT_GvarPoints * points, int64_t * out_x, int64_t * out_y,
     GFNT_Error * error);
+
+/*
+ * The constants of a tuple variation store, which `gvar` and `cvar` share: the
+ * format is one and the two tables differ only in what a delta moves.
+ */
+// The tupleVariationCount word.
+#define GFNT_GVAR_SHARED_POINT_NUMBERS 0x8000u
+#define GFNT_GVAR_COUNT_MASK 0x0FFFu
+// A tuple header's tupleIndex word.
+#define GFNT_GVAR_EMBEDDED_PEAK_TUPLE 0x8000u
+#define GFNT_GVAR_INTERMEDIATE_REGION 0x4000u
+#define GFNT_GVAR_PRIVATE_POINT_NUMBERS 0x2000u
+#define GFNT_GVAR_TUPLE_INDEX_MASK 0x0FFFu
+// A packed delta run's control byte.
+#define GFNT_GVAR_DELTAS_ARE_ZERO 0x80u
+#define GFNT_GVAR_DELTAS_ARE_WORDS 0x40u
+#define GFNT_GVAR_DELTA_RUN_COUNT_MASK 0x3Fu
+// A packed point-number run's control byte.
+#define GFNT_GVAR_POINTS_ARE_WORDS 0x80u
+#define GFNT_GVAR_POINT_RUN_COUNT_MASK 0x7Fu
+
+/**
+ * A packed list of point numbers, as a tuple states which points it moves.
+ *
+ * @param reader Positioned at the list.
+ * @param total How many points a number may name.
+ * @param out_numbers Receives the numbers, in the order read. The caller allocates
+ *   room for @p total.
+ * @param out_count Receives how many, or @p total for the "every point" shorthand.
+ * @param out_all Receives whether the list was that shorthand (a count of zero), in
+ *   which case nothing is stored.
+ * @param table The table the data is in, for the diagnostic.
+ * @param glyph The glyph, or ::GFNT_GLYPH_NONE, for the diagnostic.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, or ::GFNT_ERR_CORRUPT for a list that contradicts itself.
+ */
+GFNT_Result gfnt_tuple_points(GFNT_Reader * reader, size_t total,
+    uint32_t * out_numbers, size_t * out_count, bool * out_all, GFNT_Tag table,
+    uint32_t glyph, GFNT_Error * error);
+
+/** One axis of packed deltas, @p count of them, into @p out; as above. */
+GFNT_Result gfnt_tuple_deltas(GFNT_Reader * reader, size_t count, int32_t * out,
+    GFNT_Tag table, uint32_t glyph, GFNT_Error * error);
 
 /**
  * How much of a region applies at a location, as a scalar with

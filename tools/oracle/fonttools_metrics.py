@@ -39,6 +39,7 @@ import sys
 
 from fontTools.misc.roundTools import otRound
 from fontTools.ttLib import TTFont
+from fontTools.varLib.models import supportScalar
 from fontTools.varLib.varStore import VarStoreInstancer
 
 from fonttools_variation import axes_of, normalised, parse_location
@@ -89,8 +90,8 @@ def main(argv):
         return 0
     for tag, low, default, high in axes_of(font):
         print("axis: %s %r %r %r" % (tag, low, default, high))
-    print("metrics: has HVAR %d, has MVAR %d, has gvar %d" % (
-        "HVAR" in font, "MVAR" in font, "gvar" in font))
+    print("metrics: has HVAR %d, has MVAR %d, has gvar %d, has cvar %d" % (
+        "HVAR" in font, "MVAR" in font, "gvar" in font, "cvar" in font))
     order = font.getGlyphOrder()
     axes = font["fvar"].axes
     mvar = font["MVAR"].table if "MVAR" in font else None
@@ -168,6 +169,23 @@ def main(argv):
                            "tdsc"),
                 line_value(font, instancer, records, "OS/2", "sTypoLineGap",
                            "tlgp")))
+        if "cvt " in font and len(font["cvt "].values) > 0:
+            # The control values: the table's own, moved by `cvar`'s tuples. Each
+            # tuple's scalar is fontTools' own `supportScalar`, the deltas are
+            # summed as floats and **rounded once**, which is the rule this
+            # library follows and the reason the two can be compared.
+            values = list(font["cvt "].values)
+            deltas = [0.0] * len(values)
+            if "cvar" in font and any(used.values()):
+                for variation in font["cvar"].variations:
+                    scalar = supportScalar(used, variation.axes)
+                    if scalar == 0:
+                        continue
+                    for i, delta in enumerate(variation.coordinates):
+                        if delta is not None:
+                            deltas[i] += delta * scalar
+            print("cvt %d %s" % (len(values), " ".join(
+                str(v + half_away(d)) for v, d in zip(values, deltas))))
     return 0
 
 

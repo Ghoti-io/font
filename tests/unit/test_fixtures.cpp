@@ -205,6 +205,10 @@ const std::vector<Entry> & every_fixture() {
       // Nine glyphs, each one encoding choice in `gvar`: see the generator.
       {"variable-gvar.ttf", 9},
       {"variable-hvar.ttf", 9},
+      {"variable-avar2.ttf", 9},
+      {"variable-stat.ttf", 9},
+      {"variable-cvar.ttf", 9},
+      {"variable-featurevars.ttf", 9},
   };
   return names;
 }

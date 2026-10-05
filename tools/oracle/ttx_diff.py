@@ -74,7 +74,7 @@ PATTERNS = [
     # of that table's fields. The result's name distinguishes "the font has no
     # such table" from "it has one and this library would not read it", and the
     # second is the half that has to line up with the reference's `unreadable.`.
-    (r"^(head|hhea|OS/2|post|fvar|avar): absent \((.*)\)$", "declined"),
+    (r"^(head|hhea|OS/2|post|fvar|avar|STAT): absent \((.*)\)$", "declined"),
     (r"^head: version \d+\.\d+, revision 0x([0-9A-F]+), unitsPerEm (\d+), "
      r"flags 0x([0-9A-F]+)$",
      ["head.fontRevision", "head.unitsPerEm", "head.flags"]),
@@ -148,6 +148,15 @@ PATTERNS = [
     (r"^fvar instance (\d+): name (\d+) flags 0x([0-9A-F]+) postscript (\d+) "
      r"coordinates ?(.*)$", "fvar-instance"),
     (r"^avar axis (\d+): \d+ pairs ?(.*)$", "avar-axis"),
+    (r"^(GSUB|GPOS) FeatureVariations: (\d+) records$", "fv-count"),
+    (r"^(GSUB|GPOS) record (\d+): (\d+) conditions, (\d+) substitutions$",
+     "fv-record"),
+    (r"^(GSUB|GPOS) record (\d+) condition (\d+): (.*)$", "fv-condition"),
+    (r"^(GSUB|GPOS) record (\d+) substitution (\d+): (.*)$", "fv-substitution"),
+    (r"^STAT: version 1\.(\d+), (\d+) axes, (\d+) values, fallback (\d+)$",
+     "stat-header"),
+    (r"^STAT axis (\d+): '(.{4})' name (\d+) ordering (\d+)$", "stat-axis"),
+    (r"^STAT value (\d+): (.*)$", "stat-value"),
     (r"^glyph name (\d+): '(.*)'$", "glyphname"),
     (r"^glyph names: none in this font$", "glyphnames-absent"),
     (r"^name record \d+: platform (\d+), encoding (\d+), language (\d+), "
@@ -207,6 +216,30 @@ def parse_ours(text):
             elif keys == "avar-axis":
                 index, pairs = found.groups()
                 values["avar.axis.%d" % int(index)] = pairs
+            elif keys == "fv-count":
+                table, count = found.groups()
+                values["%s.fv.count" % table] = count
+            elif keys == "fv-record":
+                table, record, conditions, substitutions = found.groups()
+                values["%s.fv.%d" % (table, int(record))] = "%s %s" % (
+                    conditions, substitutions)
+            elif keys == "fv-condition":
+                table, record, index, text = found.groups()
+                values["%s.fv.%d.cond.%d" % (table, int(record), int(index))] = text
+            elif keys == "fv-substitution":
+                table, record, index, text = found.groups()
+                values["%s.fv.%d.sub.%d" % (table, int(record), int(index))] = text
+            elif keys == "stat-header":
+                minor, axes, nvalues, fallback = found.groups()
+                values["STAT.header"] = "%s %s %s %s" % (
+                    minor, axes, nvalues, fallback)
+            elif keys == "stat-axis":
+                index, tag, name, ordering = found.groups()
+                values["STAT.axis.%d" % int(index)] = "%s %s %s" % (
+                    tag, name, ordering)
+            elif keys == "stat-value":
+                index, rest = found.groups()
+                values["STAT.value.%d" % int(index)] = rest
             elif keys == "glyphname":
                 index, value = found.groups()
                 values["glyphname.%d" % int(index)] = value
@@ -277,7 +310,7 @@ def agree(key, ours, theirs):
         return int(ours, 16) == int(float(theirs))
     if key.startswith(("name.", "glyphname.")):
         return ours == theirs
-    if key.startswith(("directory.", "cmap.subtable.", "fvar.", "avar.")):
+    if key.startswith(("directory.", "cmap.subtable.", "fvar.", "avar.", "STAT.", "GSUB.", "GPOS.")):
         return ours == theirs
     # Everything else is an integer on both sides; the reference prints some of
     # them as floats where fontTools stores them that way.
@@ -542,6 +575,17 @@ def compare(path, face, report):
         "OS/2 version": ours.get("OS/2.version"),
         "post version": ours.get("post.version"),
     }
+    # STAT, which most real fonts do not carry: say which versions and which axis
+    # value formats the run met, so that a clean total over a corpus with none is
+    # not mistaken for a comparison.
+    shape["GSUB/GPOS FeatureVariations records"] = [
+        key.split(".")[0] for key in ours
+        if ".fv." in key and key.count(".") == 2 and key[-1].isdigit()]
+    if "STAT.header" in ours:
+        shape["STAT version 1.x"] = ours["STAT.header"].split()[0]
+        shape["STAT axis value format"] = [
+            key_value.split()[1] for name, key_value in ours.items()
+            if name.startswith("STAT.value.")]
     # Which Macintosh (encoding, language) pairs this face carried. All 658
     # Macintosh records in the real corpus are (0, Mac Roman), so without the
     # fixtures this axis has exactly one value and seven generated tables go
@@ -665,8 +709,10 @@ def main(argv):
         generated_names += made_up
         theirs_declined += theirs
         for axis, value in shape.items():
-            if value is not None:
-                coverage[axis][value] = coverage[axis].get(value, 0) + 1
+            for each in (value if isinstance(value, list) else [value]):
+                if each is not None:
+                    seen = coverage.setdefault(axis, {})
+                    seen[each] = seen.get(each, 0) + 1
         for pair in pairs:
             mac_coverage[pair] = mac_coverage.get(pair, 0) + 1
         if not quiet:

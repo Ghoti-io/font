@@ -52,22 +52,6 @@
 #include "gvar.h"
 #include "var.h"
 
-// The tupleVariationCount word.
-#define GFNT_GVAR_SHARED_POINT_NUMBERS 0x8000u
-#define GFNT_GVAR_COUNT_MASK 0x0FFFu
-// A tuple header's tupleIndex word.
-#define GFNT_GVAR_EMBEDDED_PEAK_TUPLE 0x8000u
-#define GFNT_GVAR_INTERMEDIATE_REGION 0x4000u
-#define GFNT_GVAR_PRIVATE_POINT_NUMBERS 0x2000u
-#define GFNT_GVAR_TUPLE_INDEX_MASK 0x0FFFu
-// A packed delta run's control byte.
-#define GFNT_GVAR_DELTAS_ARE_ZERO 0x80u
-#define GFNT_GVAR_DELTAS_ARE_WORDS 0x40u
-#define GFNT_GVAR_DELTA_RUN_COUNT_MASK 0x3Fu
-// A packed point-number run's control byte.
-#define GFNT_GVAR_POINTS_ARE_WORDS 0x80u
-#define GFNT_GVAR_POINT_RUN_COUNT_MASK 0x7Fu
-
 GFNT_Result gfnt_gvar_parse(const GFNT_Face * face, void * out, void * context,
     GFNT_Error * error) {
   (void)context;
@@ -237,9 +221,9 @@ static GFNT_Result gfnt_gvar_glyph_range(const GFNT_Gvar * gvar,
  * @param out_all Receives whether the list is the empty-count shorthand for every
  *   point, in which case nothing is stored.
  */
-static GFNT_Result gfnt_gvar_points(GFNT_Reader * reader, size_t total,
-    uint32_t * out_numbers, size_t * out_count, bool * out_all, uint32_t glyph,
-    GFNT_Error * error) {
+GFNT_Result gfnt_tuple_points(GFNT_Reader * reader, size_t total,
+    uint32_t * out_numbers, size_t * out_count, bool * out_all, GFNT_Tag table,
+    uint32_t glyph, GFNT_Error * error) {
   uint8_t first = 0;
   size_t count = 0;
   size_t filled = 0;
@@ -268,7 +252,7 @@ static GFNT_Result gfnt_gvar_points(GFNT_Reader * reader, size_t total,
   }
   if (count > total) {
     // More numbers than there are points: some name one twice, or past the end.
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_GVAR,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table,
         gfnt_reader_tell(reader), glyph,
         "a gvar tuple names more points than the glyph has");
   }
@@ -284,7 +268,7 @@ static GFNT_Result gfnt_gvar_points(GFNT_Reader * reader, size_t total,
     run = (size_t)(control & GFNT_GVAR_POINT_RUN_COUNT_MASK) + 1u;
     words = (control & GFNT_GVAR_POINTS_ARE_WORDS) != 0;
     if (run > count - filled) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_GVAR,
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, table,
           gfnt_reader_tell(reader), glyph,
           "a gvar point-number run is longer than the list it is in");
     }
@@ -309,7 +293,7 @@ static GFNT_Result gfnt_gvar_points(GFNT_Reader * reader, size_t total,
       // Each number is stored as the distance from the one before.
       previous += step;
       if ((size_t)previous >= total) {
-        return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_GVAR,
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, table,
             gfnt_reader_tell(reader), glyph,
             "a gvar tuple names a point the glyph does not have");
       }
@@ -322,8 +306,8 @@ static GFNT_Result gfnt_gvar_points(GFNT_Reader * reader, size_t total,
 }
 
 /** One axis of packed deltas, @p count of them, into @p out. */
-static GFNT_Result gfnt_gvar_deltas(GFNT_Reader * reader, size_t count,
-    int32_t * out, uint32_t glyph, GFNT_Error * error) {
+GFNT_Result gfnt_tuple_deltas(GFNT_Reader * reader, size_t count,
+    int32_t * out, GFNT_Tag table, uint32_t glyph, GFNT_Error * error) {
   size_t filled = 0;
 
   while (filled < count) {
@@ -336,7 +320,7 @@ static GFNT_Result gfnt_gvar_deltas(GFNT_Reader * reader, size_t count,
     }
     run = (size_t)(control & GFNT_GVAR_DELTA_RUN_COUNT_MASK) + 1u;
     if (run > count - filled) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_GVAR,
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, table,
           gfnt_reader_tell(reader), glyph,
           "a gvar delta run is longer than the list it is in");
     }
@@ -622,8 +606,8 @@ GFNT_Result gfnt_gvar_glyph_deltas(const GFNT_Face * face, uint32_t glyph,
   if (shared_points) {
     // The shared list is the first thing in the serialised data, once, and every
     // tuple that does not carry its own uses it.
-    result = gfnt_gvar_points(&serial, total, shared, &shared_count, &shared_all,
-        glyph, error);
+    result = gfnt_tuple_points(&serial, total, shared, &shared_count, &shared_all,
+        GFNT_TAG_GVAR, glyph, error);
     if (result != GFNT_OK) {
       goto done;
     }
@@ -717,8 +701,8 @@ GFNT_Result gfnt_gvar_glyph_deltas(const GFNT_Face * face, uint32_t glyph,
     }
 
     if (private_points) {
-      result = gfnt_gvar_points(&tuple, total, numbers, &named, &all, glyph,
-          error);
+      result = gfnt_tuple_points(&tuple, total, numbers, &named, &all, GFNT_TAG_GVAR,
+          glyph, error);
       if (result != GFNT_OK) {
         goto done;
       }
@@ -729,19 +713,35 @@ GFNT_Result gfnt_gvar_glyph_deltas(const GFNT_Face * face, uint32_t glyph,
       all = !shared_points || shared_all;
       list = shared;
     }
-    result = gfnt_gvar_deltas(&tuple, named, tuple_dx, glyph, error);
+    result = gfnt_tuple_deltas(&tuple, named, tuple_dx, GFNT_TAG_GVAR, glyph, error);
     if (result == GFNT_OK) {
-      result = gfnt_gvar_deltas(&tuple, named, tuple_dy, glyph, error);
+      result = gfnt_tuple_deltas(&tuple, named, tuple_dy, GFNT_TAG_GVAR, glyph, error);
     }
     if (result != GFNT_OK) {
       goto done;
+    }
+
+    if (all) {
+      // Every point is named, so there is nothing to infer and nothing to
+      // overwrite: the deltas go straight into the sum, and the work is one pass
+      // over the tuple's own deltas. A glyph with 4,095 tuples over 65,539 points
+      // is 2.7e8 point-visits at best, and three more passes over all of them for
+      // each tuple - clearing the flags, clearing the spread, adding it in - made
+      // that several times worse. A list that names points explicitly keeps the
+      // slower path, because a list may name one twice and the last delta stands,
+      // which only a cleared spread can say.
+      for (size_t i = 0; i < named; ++i) {
+        acc_x[i] += (int64_t)tuple_dx[i] * scalar;
+        acc_y[i] += (int64_t)tuple_dy[i] * scalar;
+      }
+      continue;
     }
 
     memset(have, 0, total);
     memset(spread_x, 0, total * sizeof *spread_x);
     memset(spread_y, 0, total * sizeof *spread_y);
     for (size_t i = 0; i < named; ++i) {
-      size_t point = all ? i : list[i];
+      size_t point = list[i];
 
       have[point] = 1;
       // A whole number of font units times a fraction is that fraction scaled,
@@ -749,7 +749,7 @@ GFNT_Result gfnt_gvar_glyph_deltas(const GFNT_Face * face, uint32_t glyph,
       spread_x[point] = (int64_t)tuple_dx[i] * scalar;
       spread_y[point] = (int64_t)tuple_dy[i] * scalar;
     }
-    if (!all && points->x && points->y && points->contour_ends) {
+    if (points->x && points->y && points->contour_ends) {
       gfnt_gvar_infer(points, have, spread_x, spread_y);
     }
     for (size_t i = 0; i < total; ++i) {

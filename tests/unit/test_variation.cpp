@@ -40,11 +40,15 @@
 #include "test_helpers.h"
 #include "sfnt_builder.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <vector>
 
+#include <ghoti.io/font/cvt.h>
+#include <ghoti.io/font/featurevar.h>
 #include <ghoti.io/font/outline.h>
+#include <ghoti.io/font/stat.h>
 #include <ghoti.io/font/variation.h>
 
 #include "../../src/glyf/glyf.h"
@@ -486,9 +490,10 @@ TEST(Variation, AnAvarThatIsNotAFunctionOfItsAxisIsRefused) {
     {"source coordinates that decrease",
         build_avar({{{8192, 0}, {0, 100}}}), GFNT_ERR_CORRUPT},
     {"a map that runs past the table", short_map, GFNT_ERR_CORRUPT},
-    // Version 2 re-maps one axis as a function of the others. Read as version 1
-    // it would apply the segment maps and silently drop that.
-    {"avar version 2", build_avar({{}}, 2), GFNT_ERR_UNSUPPORTED},
+    // Version 2 appends two offsets to the maps; one with no room for them is
+    // cut short, and any other major version is not one this library reads.
+    {"avar version 2 with no offsets", build_avar({{}}, 2), GFNT_ERR_CORRUPT},
+    {"avar version 3", build_avar({{}}, 3), GFNT_ERR_UNSUPPORTED},
   };
   for (const Case & test : cases) {
     Variable font(build_fvar({kWeight}, {}), test.avar);
@@ -2504,6 +2509,1190 @@ TEST(Gvar, AVariationWithTooManyCoordinatesIsInvalidForAMetricToo) {
       GFNT_ERR_INVALID);
   ASSERT_NE(font.error.message, nullptr);
 }
+
+// ---------------------------------------------------------------------------
+// avar version 2: an axis moved by a store, as a function of every axis
+// ---------------------------------------------------------------------------
+
+/** An avar 2 over `maps`, with the store and map appended and offsets filled. */
+std::vector<uint8_t> build_avar2(const std::vector<SegmentMap> & maps,
+    const std::vector<uint8_t> & store, const std::vector<uint8_t> & map = {}) {
+  std::vector<uint8_t> out = build_avar(maps, 2);
+  const size_t base = out.size() + 8;
+
+  put_u32(out, map.empty() ? 0u : static_cast<uint32_t>(base));
+  put_u32(out, store.empty() ? 0u
+      : static_cast<uint32_t>(base + map.size()));
+  out.insert(out.end(), map.begin(), map.end());
+  out.insert(out.end(), store.begin(), store.end());
+  return out;
+}
+
+namespace {
+
+// Two axes, wght 100..400..900 and wdth 75..100..125. Region 0 ramps with
+// weight (0 to 1) and ignores width; region 1 ramps with width and ignores
+// weight. Row 0 moves the weight axis by region 1; row 1 moves the width axis by
+// region 0, so each axis is moved by the *other*.
+StoreSpec crossed_store(int32_t weight_by_width, int32_t width_by_weight) {
+  StoreSpec spec;
+
+  spec.axis_count = 2;
+  spec.regions = {
+      {{0, 16384, 16384}, {0, 0, 0}},
+      {{0, 0, 0}, {0, 16384, 16384}},
+  };
+  spec.data = {{false, 2, {0, 1}, {{0, weight_by_width}, {width_by_weight, 0}}}};
+  return spec;
+}
+
+const int32_t kWeight650 = 650 * 65536;
+const int32_t kWidth125 = 125 * 65536;
+
+}  // namespace
+
+TEST(Avar2, AnAxisIsMovedByADeltaThatDependsOnAnotherAxis) {
+  // Weight 650 is 0.5 on its axis. Row 1 is -4000 at region 0, whose scalar is the
+  // weight coordinate: -4000 * 0.5 = -2000, so width 125 (16384) becomes 14384.
+  // Row 0 is zero at this location (weight_by_width 0), so weight stays 8192.
+  Variable font(build_fvar({kWeight, kWidth}, {}),
+      build_avar2({{}, {}}, build_store(crossed_store(0, -4000))));
+  std::vector<GFNT_F2Dot14> out;
+
+  ASSERT_EQ(font.normalise({kWeight650, kWidth125}, &out), GFNT_OK);
+  EXPECT_EQ(out[0], 8192);
+  EXPECT_EQ(out[1], 14384);
+}
+
+TEST(Avar2, EveryDeltaIsReadAtTheLocationBeforeAnyIsApplied) {
+  // Row 0 moves weight by +4096 * (width coordinate 1) = 4096: 8192 -> 12288.
+  // Row 1 moves width by -4000 * (weight coordinate): 0.5 reads 8192, so -2000
+  // and 14384. Had weight's new value (12288, scalar 0.75) been used, width would
+  // be 16384 - 3000 = 13384.
+  Variable font(build_fvar({kWeight, kWidth}, {}),
+      build_avar2({{}, {}}, build_store(crossed_store(4096, -4000))));
+  std::vector<GFNT_F2Dot14> out;
+
+  ASSERT_EQ(font.normalise({kWeight650, kWidth125}, &out), GFNT_OK);
+  EXPECT_EQ(out[0], 12288);
+  EXPECT_EQ(out[1], 14384);
+}
+
+TEST(Avar2, AnIndexMapChoosesWhichRowMovesWhichAxis) {
+  // Entry format 0x00: one-byte entries, one bit of inner index. Axis 0 takes
+  // row 1 and axis 1 takes row 0. Rows are (region 0, region 1): row 0 = {0, 4096},
+  // row 1 = {-4000, 0}. Weight 650 and width 112.5 are both 0.5, so axis 0 is
+  // 8192 - 4000 * 0.5 = 6192 and axis 1 is 8192 + 4096 * 0.5 = 10240.
+  StoreSpec spec = crossed_store(4096, -4000);
+  Variable font(build_fvar({kWeight, kWidth}, {}),
+      build_avar2({{}, {}}, build_store(spec), build_map(0, 0x00, {1, 0})));
+  std::vector<GFNT_F2Dot14> out;
+
+  ASSERT_EQ(font.normalise({kWeight650, fix(112) + 32768}, &out), GFNT_OK);
+  EXPECT_EQ(out[0], 6192);
+  EXPECT_EQ(out[1], 10240);
+}
+
+TEST(Avar2, TheStoreIsReadAtTheSegmentMapsOutputNotTheUsersCoordinate) {
+  // Weight's segment map sends 0.5 to 0.75 (8192 -> 12288). Row 1 then scales by
+  // 0.75: -4000 * 0.75 = -3000, so width 16384 -> 13384.
+  Variable font(build_fvar({kWeight, kWidth}, {}),
+      build_avar2({{{-16384, -16384}, {0, 0}, {8192, 12288}, {16384, 16384}}, {}},
+          build_store(crossed_store(0, -4000))));
+  std::vector<GFNT_F2Dot14> out;
+
+  ASSERT_EQ(font.normalise({kWeight650, kWidth125}, &out), GFNT_OK);
+  EXPECT_EQ(out[0], 12288);
+  EXPECT_EQ(out[1], 13384);
+}
+
+TEST(Avar2, AMovedAxisStopsAtTheEndsOfItsRange) {
+  // Width 75 is -16384; a delta of -30000 * 1.0 would pass it, and it stops.
+  Variable font(build_fvar({kWeight, kWidth}, {}),
+      build_avar2({{}, {}}, build_store(crossed_store(0, -30000))));
+  std::vector<GFNT_F2Dot14> out;
+
+  ASSERT_EQ(font.normalise({fix(900), fix(75)}, &out), GFNT_OK);
+  EXPECT_EQ(out[1], -16384);
+  // And the other end: width 125 is 16384, and a delta of +30000 stops there.
+  Variable up(build_fvar({kWeight, kWidth}, {}),
+      build_avar2({{}, {}}, build_store(crossed_store(0, 30000))));
+
+  ASSERT_EQ(up.normalise({fix(900), fix(125)}, &out), GFNT_OK);
+  EXPECT_EQ(out[1], 16384);
+}
+
+TEST(Avar2, ADeltaRoundsHalfAwayFromZeroInEitherDirection) {
+  // 3 * 0.5 = 1.5 -> 2, and -3 * 0.5 = -1.5 -> -2 (a half-up rounding would give
+  // -1). Width is at its default, so it starts at zero.
+  for (int32_t sign : {1, -1}) {
+    Variable font(build_fvar({kWeight, kWidth}, {}),
+        build_avar2({{}, {}}, build_store(crossed_store(0, 3 * sign))));
+    std::vector<GFNT_F2Dot14> out;
+
+    ASSERT_EQ(font.normalise({kWeight650, fix(100)}, &out), GFNT_OK);
+    EXPECT_EQ(out[1], 2 * sign);
+  }
+}
+
+TEST(Avar2, AnAvar2WithNoStoreIsVersionOnesAnswer) {
+  // Both offsets zero: nothing to add, and the segment maps still apply.
+  Variable font(build_fvar({kWeight, kWidth}, {}),
+      build_avar2({{{-16384, -16384}, {0, 0}, {8192, 12288}, {16384, 16384}}, {}},
+          {}));
+  std::vector<GFNT_F2Dot14> out;
+
+  ASSERT_EQ(font.normalise({kWeight650, kWidth125}, &out), GFNT_OK);
+  EXPECT_EQ(out[0], 12288);
+  EXPECT_EQ(out[1], 16384);
+}
+
+TEST(Avar2, AnAvar2ThatContradictsItselfIsRefused) {
+  std::vector<uint8_t> no_offsets = build_avar({{}, {}}, 2);
+  std::vector<uint8_t> past = build_avar2({{}, {}}, build_store(
+      crossed_store(0, 1)));
+  std::vector<uint8_t> one_axis_store = build_avar2({{}, {}}, build_store([] {
+      StoreSpec spec = crossed_store(0, 1);
+      spec.axis_count = 1;
+      return spec;
+    }()));
+  struct Case {
+    const char * why;
+    std::vector<uint8_t> avar;
+    GFNT_Result expected;
+  };
+
+  // Two axes with empty maps are twelve bytes; the map offset is next and the
+  // store offset after it, at 16. Point the store past the table.
+  past[18] = 0xFF;
+  past[19] = 0xFF;
+  const Case cases[] = {
+      {"no room for the two offsets", no_offsets, GFNT_ERR_CORRUPT},
+      {"a store offset past the table", past, GFNT_ERR_CORRUPT},
+      {"a store of another axis count", one_axis_store, GFNT_ERR_CORRUPT},
+      {"a version other than 1 or 2", build_avar({{}, {}}, 3),
+          GFNT_ERR_UNSUPPORTED},
+  };
+  for (const Case & test : cases) {
+    Variable font(build_fvar({kWeight, kWidth}, {}), test.avar);
+    std::vector<GFNT_F2Dot14> out;
+
+    EXPECT_EQ(font.normalise({kWeight650, kWidth125}, &out), test.expected)
+        << test.why;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// STAT: what a place in the design space is called
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct StatAxisSpec {
+  const char * tag;
+  uint16_t name_id;
+  uint16_t ordering;
+};
+
+using Bytes = std::vector<uint8_t>;
+
+Bytes stat_value1(uint16_t axis, uint16_t flags, uint16_t name, int32_t value) {
+  Bytes out;
+
+  put_u16(out, 1);
+  put_u16(out, axis);
+  put_u16(out, flags);
+  put_u16(out, name);
+  put_u32(out, static_cast<uint32_t>(value));
+  return out;
+}
+
+Bytes stat_value2(uint16_t axis, uint16_t flags, uint16_t name, int32_t nominal,
+    int32_t low, int32_t high) {
+  Bytes out;
+
+  put_u16(out, 2);
+  put_u16(out, axis);
+  put_u16(out, flags);
+  put_u16(out, name);
+  put_u32(out, static_cast<uint32_t>(nominal));
+  put_u32(out, static_cast<uint32_t>(low));
+  put_u32(out, static_cast<uint32_t>(high));
+  return out;
+}
+
+Bytes stat_value3(uint16_t axis, uint16_t flags, uint16_t name, int32_t value,
+    int32_t linked) {
+  Bytes out;
+
+  put_u16(out, 3);
+  put_u16(out, axis);
+  put_u16(out, flags);
+  put_u16(out, name);
+  put_u32(out, static_cast<uint32_t>(value));
+  put_u32(out, static_cast<uint32_t>(linked));
+  return out;
+}
+
+Bytes stat_value4(uint16_t flags, uint16_t name,
+    const std::vector<std::pair<uint16_t, int32_t>> & pairs) {
+  Bytes out;
+
+  put_u16(out, 4);
+  put_u16(out, static_cast<uint16_t>(pairs.size()));
+  put_u16(out, flags);
+  put_u16(out, name);
+  for (const auto & pair : pairs) {
+    put_u16(out, pair.first);
+    put_u32(out, static_cast<uint32_t>(pair.second));
+  }
+  return out;
+}
+
+/** A STAT 1.`minor`; each design axis record is `axis_size` bytes. */
+Bytes build_stat(uint16_t minor, const std::vector<StatAxisSpec> & axes,
+    const std::vector<Bytes> & values, uint16_t fallback = 2,
+    uint16_t axis_size = 8, uint16_t major = 1) {
+  const size_t header = minor >= 1 ? 20 : 18;
+  const size_t offsets = header + axes.size() * axis_size;
+  Bytes out;
+  size_t at = 2 * values.size();
+
+  put_u16(out, major);
+  put_u16(out, minor);
+  put_u16(out, axis_size);
+  put_u16(out, static_cast<uint16_t>(axes.size()));
+  put_u32(out, static_cast<uint32_t>(header));
+  put_u16(out, static_cast<uint16_t>(values.size()));
+  put_u32(out, static_cast<uint32_t>(offsets));
+  if (minor >= 1) {
+    put_u16(out, fallback);
+  }
+  for (const StatAxisSpec & axis : axes) {
+    put_tag(out, axis.tag);
+    put_u16(out, axis.name_id);
+    put_u16(out, axis.ordering);
+    for (size_t i = 8; i < axis_size; ++i) {
+      put_u8(out, 0xEE);
+    }
+  }
+  for (const Bytes & value : values) {
+    put_u16(out, static_cast<uint16_t>(at));
+    at += value.size();
+  }
+  for (const Bytes & value : values) {
+    out.insert(out.end(), value.begin(), value.end());
+  }
+  return out;
+}
+
+/** A face with `fvar` (weight and width) and the given `STAT`, if any. */
+struct Styled {
+  Bytes bytes;
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Error error{};
+
+  explicit Styled(const Bytes & stat) {
+    std::vector<gfnttest::Table> tables = {
+        {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, 0)},
+        {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(1)},
+        {GFNT_TAG('f', 'v', 'a', 'r'), build_fvar({kWeight, kWidth}, {})},
+    };
+    if (!stat.empty()) {
+      tables.push_back({GFNT_TAG('S', 'T', 'A', 'T'), stat});
+    }
+    bytes = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+    EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
+  }
+  ~Styled() {
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+  Styled(const Styled &) = delete;
+  Styled & operator=(const Styled &) = delete;
+
+  /** Which value indices match a location. */
+  std::vector<size_t> match(const std::vector<int32_t> & user,
+      size_t capacity = 16, size_t * total = nullptr) {
+    std::vector<size_t> out(capacity, 999);
+    size_t count = 99;
+
+    EXPECT_EQ(gfnt_face_stat_match(face, user.data(), user.size(), out.data(),
+        capacity, &count, &error), GFNT_OK);
+    if (total) {
+      *total = count;
+    }
+    out.resize(std::min(count, capacity));
+    return out;
+  }
+};
+
+
+// Design axes: weight (0), width (1), and an italic axis (2) that the face has no
+// `fvar` axis for. Values, by index:
+//   0  format 1  weight 400            name 10
+//   1  format 1  weight 700            name 11
+//   2  format 2  weight 600, 550..650  name 12, older sibling
+//   3  format 3  width 100 -> 125      name 13, elidable
+//   4  format 4  weight 700 and width 75   name 14
+//   5  format 1  italic 1              name 15
+//   6  format 4  weight 400 and italic 1   name 16
+Bytes sample_stat() {
+  return build_stat(2, {{"wght", 256, 0}, {"wdth", 257, 1}, {"ital", 258, 2}}, {
+      stat_value1(0, 0, 10, fix(400)),
+      stat_value1(0, 0, 11, fix(700)),
+      stat_value2(0, GFNT_STAT_OLDER_SIBLING, 12, fix(600), fix(550), fix(650)),
+      stat_value3(1, GFNT_STAT_ELIDABLE, 13, fix(100), fix(125)),
+      stat_value4(0, 14, {{0, fix(700)}, {1, fix(75)}}),
+      stat_value1(2, 0, 15, fix(1)),
+      stat_value4(0, 16, {{0, fix(400)}, {2, fix(1)}}),
+  }, 7);
+}
+
+}  // namespace
+
+TEST(Stat, AxesAndValuesAreReadAsTheTableStatesThem) {
+  Styled font(sample_stat());
+  size_t axes = 0;
+  size_t values = 0;
+  GFNT_StatAxis axis;
+  GFNT_StatValue value;
+  uint16_t fallback = 0;
+  uint16_t pair_axis = 0;
+  GFNT_F16Dot16 pair_value = 0;
+
+  ASSERT_TRUE(gfnt_face_has_stat(font.face));
+  ASSERT_EQ(gfnt_face_stat_axis_count(font.face, &axes, &font.error), GFNT_OK);
+  ASSERT_EQ(gfnt_face_stat_value_count(font.face, &values, &font.error), GFNT_OK);
+  EXPECT_EQ(axes, 3u);
+  EXPECT_EQ(values, 7u);
+  ASSERT_EQ(gfnt_face_stat_axis_at(font.face, 1, &axis, &font.error), GFNT_OK);
+  EXPECT_EQ(axis.tag, GFNT_TAG('w', 'd', 't', 'h'));
+  EXPECT_EQ(axis.name_id, 257);
+  EXPECT_EQ(axis.ordering, 1);
+  ASSERT_EQ(gfnt_face_stat_elided_fallback(font.face, &fallback, &font.error),
+      GFNT_OK);
+  EXPECT_EQ(fallback, 7);
+
+  ASSERT_EQ(gfnt_face_stat_value_at(font.face, 0, &value, &font.error), GFNT_OK);
+  EXPECT_EQ(value.format, GFNT_STAT_VALUE);
+  EXPECT_EQ(value.name_id, 10);
+  EXPECT_EQ(value.axis_index, 0);
+  EXPECT_EQ(value.value, fix(400));
+  ASSERT_EQ(gfnt_face_stat_value_at(font.face, 2, &value, &font.error), GFNT_OK);
+  EXPECT_EQ(value.format, GFNT_STAT_RANGE);
+  EXPECT_EQ(value.flags, GFNT_STAT_OLDER_SIBLING);
+  EXPECT_EQ(value.value, fix(600));
+  EXPECT_EQ(value.range_min, fix(550));
+  EXPECT_EQ(value.range_max, fix(650));
+  ASSERT_EQ(gfnt_face_stat_value_at(font.face, 3, &value, &font.error), GFNT_OK);
+  EXPECT_EQ(value.format, GFNT_STAT_LINKED);
+  EXPECT_EQ(value.flags, GFNT_STAT_ELIDABLE);
+  EXPECT_EQ(value.axis_index, 1);
+  EXPECT_EQ(value.value, fix(100));
+  EXPECT_EQ(value.linked_value, fix(125));
+  ASSERT_EQ(gfnt_face_stat_value_at(font.face, 4, &value, &font.error), GFNT_OK);
+  EXPECT_EQ(value.format, GFNT_STAT_MULTI);
+  EXPECT_EQ(value.pair_count, 2u);
+  ASSERT_EQ(gfnt_face_stat_value_pair(font.face, 4, 1, &pair_axis, &pair_value,
+      &font.error), GFNT_OK);
+  EXPECT_EQ(pair_axis, 1);
+  EXPECT_EQ(pair_value, fix(75));
+}
+
+TEST(Stat, ALocationIsNamedByTheValuesItIsAt) {
+  Styled font(sample_stat());
+
+  // Weight 700 and width 75: the plain bold, and the two-axis value.
+  EXPECT_EQ(font.match({fix(700), fix(75)}), (std::vector<size_t>{1, 4}));
+  // Weight 600 is inside value 2's range; width is not given, so it is the
+  // default 100, which is value 3's.
+  EXPECT_EQ(font.match({fix(600)}), (std::vector<size_t>{2, 3}));
+  // No coordinates at all: the default location, 400 and 100.
+  EXPECT_EQ(font.match({}), (std::vector<size_t>{0, 3}));
+  // A range includes both ends and nothing past them.
+  EXPECT_EQ(font.match({fix(550)}), (std::vector<size_t>{2, 3}));
+  EXPECT_EQ(font.match({fix(650)}), (std::vector<size_t>{2, 3}));
+  EXPECT_EQ(font.match({fix(650) + 1}), (std::vector<size_t>{3}));
+  EXPECT_EQ(font.match({fix(550) - 1}), (std::vector<size_t>{3}));
+  // A value is matched exactly: one unit of 16.16 away is not it.
+  EXPECT_EQ(font.match({fix(700) + 1, fix(75)}), (std::vector<size_t>{}));
+}
+
+TEST(Stat, AnAxisTheFaceLacksIsNeverMatched) {
+  // Values 5 and 6 are on the italic axis, which `fvar` does not have, so there
+  // is no coordinate to be at - not even at the default, where value 6's weight
+  // half would match.
+  Styled font(sample_stat());
+
+  for (size_t index : font.match({})) {
+    EXPECT_NE(index, 5u);
+    EXPECT_NE(index, 6u);
+  }
+}
+
+TEST(Stat, AMatchCountsPastTheCapacityItWasGiven) {
+  Styled font(sample_stat());
+  size_t total = 0;
+  size_t count = 0;
+
+  EXPECT_EQ(font.match({fix(600)}, 1, &total), (std::vector<size_t>{2}));
+  EXPECT_EQ(total, 2u);
+  ASSERT_EQ(gfnt_face_stat_match(font.face, nullptr, 0, nullptr, 0, &count,
+      &font.error), GFNT_OK);
+  EXPECT_EQ(count, 2u);
+}
+
+TEST(Stat, ALongerDesignAxisRecordIsSkippedOver) {
+  // Records may state more than the eight bytes this library reads.
+  Styled font(build_stat(1, {{"wght", 256, 0}, {"wdth", 257, 1}},
+      {stat_value1(1, 0, 20, fix(75))}, 3, 12));
+  GFNT_StatAxis axis;
+
+  ASSERT_EQ(gfnt_face_stat_axis_at(font.face, 1, &axis, &font.error), GFNT_OK);
+  EXPECT_EQ(axis.tag, GFNT_TAG('w', 'd', 't', 'h'));
+  EXPECT_EQ(axis.ordering, 1);
+  EXPECT_EQ(font.match({fix(400), fix(75)}), (std::vector<size_t>{0}));
+}
+
+TEST(Stat, AVersionOnePointZeroHasNoFallbackName) {
+  Styled font(build_stat(0, {{"wght", 256, 0}}, {stat_value1(0, 0, 10, fix(400))}));
+  uint16_t fallback = 0;
+
+  EXPECT_EQ(gfnt_face_stat_elided_fallback(font.face, &fallback, &font.error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(font.match({}), (std::vector<size_t>{0}));
+}
+
+TEST(Stat, AFaceWithNoStatSaysSo) {
+  Styled font({});
+  size_t count = 0;
+
+  EXPECT_FALSE(gfnt_face_has_stat(font.face));
+  EXPECT_EQ(gfnt_face_stat_axis_count(font.face, &count, &font.error),
+      GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(gfnt_face_stat_match(font.face, nullptr, 0, nullptr, 0, &count,
+      &font.error), GFNT_ERR_UNSUPPORTED);
+}
+
+TEST(Stat, IndicesPastTheTablesCountsAreRefusedAsInvalid) {
+  Styled font(sample_stat());
+  GFNT_StatAxis axis;
+  GFNT_StatValue value;
+  uint16_t pair_axis = 0;
+  GFNT_F16Dot16 pair_value = 0;
+
+  EXPECT_EQ(gfnt_face_stat_axis_at(font.face, 3, &axis, &font.error),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_stat_value_at(font.face, 7, &value, &font.error),
+      GFNT_ERR_INVALID);
+  // A pair of a value that has none, and one past the end of a value that has two.
+  EXPECT_EQ(gfnt_face_stat_value_pair(font.face, 0, 0, &pair_axis, &pair_value,
+      &font.error), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_stat_value_pair(font.face, 4, 2, &pair_axis, &pair_value,
+      &font.error), GFNT_ERR_INVALID);
+}
+
+TEST(Stat, ATableThatContradictsItselfIsRefused) {
+  struct Case {
+    const char * why;
+    Bytes stat;
+    GFNT_Result expected;
+  };
+  Bytes bad_format = build_stat(0, {{"wght", 256, 0}}, {stat_value1(0, 0, 10, 0)});
+  Bytes cut = build_stat(0, {{"wght", 256, 0}}, {stat_value2(0, 0, 10, 0, 0, 0)});
+  Bytes short_header = build_stat(0, {{"wght", 256, 0}}, {});
+  Bytes cut_pairs = build_stat(2, {{"wght", 256, 0}},
+      {stat_value4(0, 10, {{0, 0}, {0, 0}})});
+
+  // The one value starts at the end of the offsets (18 + 8 + 2): its format is the
+  // first two bytes of it.
+  bad_format[28] = 0;
+  bad_format[29] = 9;
+  cut.resize(cut.size() - 3);
+  short_header.resize(10);
+  cut_pairs.resize(cut_pairs.size() - 2);
+  const Case cases[] = {
+      {"an axis value of format 9", bad_format, GFNT_ERR_CORRUPT},
+      {"a format 2 value cut short", cut, GFNT_ERR_CORRUPT},
+      {"a header cut short", short_header, GFNT_ERR_CORRUPT},
+      {"a format 4 value with its last pair cut", cut_pairs, GFNT_ERR_CORRUPT},
+      {"a design axis record too small for its fields",
+          build_stat(0, {{"wght", 256, 0}}, {}, 2, 4), GFNT_ERR_CORRUPT},
+      {"a value on a design axis the table lacks",
+          build_stat(0, {{"wght", 256, 0}}, {stat_value1(1, 0, 10, 0)}),
+          GFNT_ERR_CORRUPT},
+      {"a pair on a design axis the table lacks",
+          build_stat(2, {{"wght", 256, 0}}, {stat_value4(0, 10, {{5, 0}})}),
+          GFNT_ERR_CORRUPT},
+      {"version 2", build_stat(0, {{"wght", 256, 0}}, {}, 2, 8, 2),
+          GFNT_ERR_UNSUPPORTED},
+  };
+  for (const Case & test : cases) {
+    Styled font(test.stat);
+    size_t axes = 0;
+    size_t values = 0;
+    GFNT_StatValue value;
+    GFNT_Result result = gfnt_face_stat_axis_count(font.face, &axes, &font.error);
+
+    if (result == GFNT_OK) {
+      result = gfnt_face_stat_value_count(font.face, &values, &font.error);
+    }
+    for (size_t i = 0; result == GFNT_OK && i < values; ++i) {
+      result = gfnt_face_stat_value_at(font.face, i, &value, &font.error);
+    }
+    EXPECT_EQ(result, test.expected) << test.why;
+    if (result != GFNT_OK) {
+      EXPECT_EQ(font.error.table, GFNT_TAG('S', 'T', 'A', 'T')) << test.why;
+    }
+  }
+}
+
+TEST(Stat, ADumpHasOneLinePerAxisAndPerValue) {
+  Styled font(sample_stat());
+  char * text = nullptr;
+  size_t size = 0;
+  FILE * stream = open_memstream(&text, &size);
+
+  ASSERT_NE(stream, nullptr);
+  ASSERT_EQ(gfnt_face_stat_dump(font.face, stream), GFNT_OK);
+  fclose(stream);
+  const std::string dump(text, size);
+  free(text);
+
+  EXPECT_NE(dump.find("STAT: version 1.2, 3 axes, 7 values, fallback 7\n"),
+      std::string::npos);
+  EXPECT_NE(dump.find("STAT axis 2: 'ital' name 258 ordering 2\n"),
+      std::string::npos);
+  EXPECT_NE(dump.find("STAT value 2: format 2 flags 0x0001 name 12 axis 0 value "
+      "39321600 min 36044800 max 42598400\n"), std::string::npos);
+  EXPECT_NE(dump.find("STAT value 4: format 4 flags 0x0000 name 14 0:45875200 "
+      "1:4915200\n"), std::string::npos);
+}
+
+
+// ---------------------------------------------------------------------------
+// FeatureVariations: which record applies at a location
+// ---------------------------------------------------------------------------
+
+namespace {
+
+Bytes put24(uint32_t value) {
+  return {static_cast<uint8_t>(value >> 16), static_cast<uint8_t>(value >> 8),
+      static_cast<uint8_t>(value)};
+}
+
+/** Format 1: axis `axis` between `low` and `high`, inclusive, in 2.14. */
+Bytes cond_range(uint16_t axis, int16_t low, int16_t high) {
+  Bytes out;
+
+  put_u16(out, 1);
+  put_u16(out, axis);
+  put_s16(out, low);
+  put_s16(out, high);
+  return out;
+}
+
+/** Format 3 (and) or 4 (or): the children follow the offsets. */
+Bytes cond_list(uint16_t format, const std::vector<Bytes> & children) {
+  Bytes out;
+  size_t at = 3 + 3 * children.size();
+
+  put_u16(out, format);
+  put_u8(out, static_cast<uint8_t>(children.size()));
+  for (const Bytes & child : children) {
+    const Bytes offset = put24(static_cast<uint32_t>(at));
+
+    out.insert(out.end(), offset.begin(), offset.end());
+    at += child.size();
+  }
+  for (const Bytes & child : children) {
+    out.insert(out.end(), child.begin(), child.end());
+  }
+  return out;
+}
+
+/** Format 5: the child, negated, at offset 5. */
+Bytes cond_not(const Bytes & child) {
+  Bytes out;
+
+  put_u16(out, 5);
+  const Bytes offset = put24(5);
+  out.insert(out.end(), offset.begin(), offset.end());
+  out.insert(out.end(), child.begin(), child.end());
+  return out;
+}
+
+Bytes condition_set(const std::vector<Bytes> & conditions) {
+  Bytes out;
+  size_t at = 2 + 4 * conditions.size();
+
+  put_u16(out, static_cast<uint16_t>(conditions.size()));
+  for (const Bytes & condition : conditions) {
+    put_u32(out, static_cast<uint32_t>(at));
+    at += condition.size();
+  }
+  for (const Bytes & condition : conditions) {
+    out.insert(out.end(), condition.begin(), condition.end());
+  }
+  return out;
+}
+
+struct Substitute {
+  uint16_t feature;
+  std::vector<uint16_t> lookups;
+};
+
+Bytes substitution_table(const std::vector<Substitute> & substitutes) {
+  Bytes out;
+  size_t at = 6 + 6 * substitutes.size();
+
+  put_u16(out, 1);
+  put_u16(out, 0);
+  put_u16(out, static_cast<uint16_t>(substitutes.size()));
+  for (const Substitute & substitute : substitutes) {
+    put_u16(out, substitute.feature);
+    put_u32(out, static_cast<uint32_t>(at));
+    at += 4 + 2 * substitute.lookups.size();
+  }
+  for (const Substitute & substitute : substitutes) {
+    put_u16(out, 0);
+    put_u16(out, static_cast<uint16_t>(substitute.lookups.size()));
+    for (uint16_t lookup : substitute.lookups) {
+      put_u16(out, lookup);
+    }
+  }
+  return out;
+}
+
+struct VariationRecord {
+  Bytes conditions;   ///< Empty with `null_conditions`: a null offset.
+  Bytes substitution;
+  bool null_conditions = false;
+  bool null_substitution = false;
+};
+
+/** A GSUB (or GPOS) 1.`minor` whose FeatureVariations holds the records. */
+Bytes build_layout(const std::vector<VariationRecord> & records,
+    uint16_t minor = 1, uint16_t major = 1) {
+  Bytes out;
+  Bytes variations;
+  size_t at = 8 + 8 * records.size();
+
+  put_u16(variations, 1);
+  put_u16(variations, 0);
+  put_u32(variations, static_cast<uint32_t>(records.size()));
+  for (const VariationRecord & record : records) {
+    put_u32(variations, record.null_conditions ? 0u : static_cast<uint32_t>(at));
+    at += record.null_conditions ? 0 : record.conditions.size();
+    put_u32(variations,
+        record.null_substitution ? 0u : static_cast<uint32_t>(at));
+    at += record.null_substitution ? 0 : record.substitution.size();
+  }
+  for (const VariationRecord & record : records) {
+    if (!record.null_conditions) {
+      variations.insert(variations.end(), record.conditions.begin(),
+          record.conditions.end());
+    }
+    if (!record.null_substitution) {
+      variations.insert(variations.end(), record.substitution.begin(),
+          record.substitution.end());
+    }
+  }
+  put_u16(out, major);
+  put_u16(out, minor);
+  put_u16(out, 0);
+  put_u16(out, 0);
+  put_u16(out, 0);
+  if (minor >= 1) {
+    put_u32(out, 14);
+    out.insert(out.end(), variations.begin(), variations.end());
+  }
+  return out;
+}
+
+/** A face with the given table under the given tag. */
+struct Laid {
+  Bytes bytes;
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Error error{};
+
+  Laid(const Bytes & table, const char * tag = "GSUB") {
+    std::vector<gfnttest::Table> tables = {
+        {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, 0)},
+        {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(1)},
+    };
+    if (!table.empty()) {
+      tables.push_back({GFNT_TAG(tag[0], tag[1], tag[2], tag[3]), table});
+    }
+    bytes = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+    EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
+        GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
+  }
+  ~Laid() {
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+  Laid(const Laid &) = delete;
+  Laid & operator=(const Laid &) = delete;
+
+  /** The matching record's index, or -1 for none. */
+  long match(const std::vector<int16_t> & coordinates,
+      GFNT_Tag tag = GFNT_TAG('G', 'S', 'U', 'B')) {
+    size_t record = 12345;
+
+    EXPECT_EQ(gfnt_face_feature_variations_match(face, tag,
+        coordinates.data(), coordinates.size(), &record, &error), GFNT_OK);
+    return record == GFNT_FEATURE_VARIATIONS_NONE ? -1
+                                                   : static_cast<long>(record);
+  }
+};
+
+const GFNT_Tag kGsub = GFNT_TAG('G', 'S', 'U', 'B');
+
+const Bytes kSubst = substitution_table({{3, {7, 9}}});
+
+}  // namespace
+
+TEST(FeatureVariations, TheFirstRecordWhoseConditionsAllHoldApplies) {
+  Laid font(build_layout({
+      {condition_set({cond_range(0, 8192, 16384)}), kSubst},
+      {condition_set({cond_range(0, 0, 16384)}), kSubst},
+      {condition_set({}), kSubst},
+  }));
+
+  // Both of the first two hold at 12000; the first is the answer.
+  EXPECT_EQ(font.match({12000}), 0);
+  EXPECT_EQ(font.match({4000}), 1);
+  // Only the empty set holds below zero, and an empty set holds everywhere.
+  EXPECT_EQ(font.match({-100}), 2);
+}
+
+TEST(FeatureVariations, ARangeIncludesBothEndsAndNothingPastThem) {
+  Laid font(build_layout({{condition_set({cond_range(0, 1000, 2000)}), kSubst}}));
+
+  EXPECT_EQ(font.match({1000}), 0);
+  EXPECT_EQ(font.match({2000}), 0);
+  EXPECT_EQ(font.match({999}), -1);
+  EXPECT_EQ(font.match({2001}), -1);
+}
+
+TEST(FeatureVariations, EveryConditionOfASetHasToHold) {
+  Laid font(build_layout({{condition_set(
+      {cond_range(0, 8192, 16384), cond_range(1, 0, 16384)}), kSubst}}));
+
+  EXPECT_EQ(font.match({10000, 0}), 0);
+  EXPECT_EQ(font.match({10000, -1}), -1);
+  EXPECT_EQ(font.match({100, 5}), -1);
+}
+
+TEST(FeatureVariations, AnAxisPastTheCoordinatesGivenIsAtZero) {
+  Laid font(build_layout({{condition_set({cond_range(1, 0, 0)}), kSubst},
+      {condition_set({cond_range(1, 1, 16384)}), kSubst}}));
+
+  EXPECT_EQ(font.match({}), 0);
+  EXPECT_EQ(font.match({5000}), 0);
+  EXPECT_EQ(font.match({5000, 100}), 1);
+}
+
+TEST(FeatureVariations, AndOrAndNotCombineConditions) {
+  const Bytes low = cond_range(0, -16384, 0);
+  const Bytes high = cond_range(0, 8192, 16384);
+  Laid font(build_layout({
+      // The extremes: or of the two ends.
+      {condition_set({cond_list(4, {low, high})}), kSubst},
+      // Not low, and not high: the middle.
+      {condition_set({cond_list(3, {cond_not(low), cond_not(high)})}), kSubst},
+  }));
+
+  EXPECT_EQ(font.match({-16384}), 0);
+  EXPECT_EQ(font.match({16384}), 0);
+  EXPECT_EQ(font.match({4000}), 1);
+  // Zero is in `low`'s range, so it is an extreme and not the middle.
+  EXPECT_EQ(font.match({0}), 0);
+  // An and of nothing holds and an or of nothing does not.
+  Laid empty(build_layout({
+      {condition_set({cond_list(4, {})}), kSubst},
+      {condition_set({cond_list(3, {})}), kSubst},
+  }));
+  EXPECT_EQ(empty.match({0}), 1);
+}
+
+TEST(FeatureVariations, ANullConditionSetOrSubstitutionIsStillARecord) {
+  VariationRecord bare;
+
+  bare.null_conditions = true;
+  bare.null_substitution = true;
+  Laid font(build_layout({bare}));
+  size_t count = 99;
+
+  EXPECT_EQ(font.match({123}), 0);
+  ASSERT_EQ(gfnt_face_feature_substitution_count(font.face, kGsub, 0, &count,
+      &font.error), GFNT_OK);
+  EXPECT_EQ(count, 0u);
+}
+
+TEST(FeatureVariations, ASubstitutionNamesTheFeatureAndTheLookupsThatReplaceIt) {
+  Laid font(build_layout({{condition_set({}),
+      substitution_table({{3, {7, 9}}, {5, {}}, {200, {1}}})}}));
+  size_t count = 0;
+  uint16_t feature = 0;
+  size_t lookups = 0;
+  uint16_t lookup = 0;
+
+  ASSERT_EQ(gfnt_face_feature_substitution_count(font.face, kGsub, 0, &count,
+      &font.error), GFNT_OK);
+  EXPECT_EQ(count, 3u);
+  ASSERT_EQ(gfnt_face_feature_substitution_at(font.face, kGsub, 0, 0, &feature,
+      &lookups, &font.error), GFNT_OK);
+  EXPECT_EQ(feature, 3);
+  EXPECT_EQ(lookups, 2u);
+  ASSERT_EQ(gfnt_face_feature_substitution_lookup(font.face, kGsub, 0, 0, 1,
+      &lookup, &font.error), GFNT_OK);
+  EXPECT_EQ(lookup, 9);
+  ASSERT_EQ(gfnt_face_feature_substitution_at(font.face, kGsub, 0, 1, &feature,
+      &lookups, &font.error), GFNT_OK);
+  EXPECT_EQ(feature, 5);
+  EXPECT_EQ(lookups, 0u);
+  ASSERT_EQ(gfnt_face_feature_substitution_at(font.face, kGsub, 0, 2, &feature,
+      &lookups, &font.error), GFNT_OK);
+  EXPECT_EQ(feature, 200);
+  // Past the ends of what the table has.
+  EXPECT_EQ(gfnt_face_feature_substitution_at(font.face, kGsub, 0, 3, &feature,
+      &lookups, &font.error), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_feature_substitution_lookup(font.face, kGsub, 0, 0, 2,
+      &lookup, &font.error), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_feature_substitution_count(font.face, kGsub, 1, &count,
+      &font.error), GFNT_ERR_INVALID);
+}
+
+TEST(FeatureVariations, GposIsReadTheSameWayAndAVersionOnePointZeroHasNone) {
+  Laid gpos(build_layout({{condition_set({cond_range(0, 5, 10)}), kSubst}}),
+      "GPOS");
+  Laid plain(build_layout({}, 0));
+  size_t count = 99;
+
+  EXPECT_EQ(gpos.match({7}, GFNT_TAG('G', 'P', 'O', 'S')), 0);
+  ASSERT_EQ(gfnt_face_feature_variations_count(plain.face, kGsub, &count,
+      &plain.error), GFNT_OK);
+  EXPECT_EQ(count, 0u);
+  EXPECT_EQ(plain.match({7}), -1);
+}
+
+TEST(FeatureVariations, ATableTheFaceLacksOrAnotherTagIsRefused) {
+  Laid none({});
+  size_t count = 0;
+
+  EXPECT_EQ(gfnt_face_feature_variations_count(none.face, kGsub, &count,
+      &none.error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(gfnt_face_feature_variations_count(none.face,
+      GFNT_TAG('G', 'D', 'E', 'F'), &count, &none.error), GFNT_ERR_INVALID);
+}
+
+TEST(FeatureVariations, ATableThatContradictsItselfOrIsBeyondThisLibraryIsRefused) {
+  struct Case {
+    const char * why;
+    Bytes table;
+    GFNT_Result expected;
+  };
+  Bytes format2;
+  Bytes format9;
+  Bytes self_not;
+  Bytes cut_records = build_layout({{condition_set({}), kSubst}});
+  Bytes cut_offsets = build_layout({{condition_set({cond_range(0, 0, 1)}),
+      kSubst}});
+  Bytes cut_substitution = build_layout({{condition_set({}), kSubst}});
+
+  put_u16(format2, 2);
+  put_u16(format2, 0);
+  put_u32(format2, 0);
+  put_u16(format9, 9);
+  // A not whose child is itself: offset 0 from its own start.
+  put_u16(self_not, 5);
+  self_not.push_back(0);
+  self_not.push_back(0);
+  self_not.push_back(0);
+  // The record count says 5 and the table holds one.
+  cut_records[14 + 7] = 5;
+  // The ConditionSet starts after the header (14), the FeatureVariations header
+  // and its one record (16): point its one condition's offset past the table.
+  cut_offsets[14 + 16 + 2] = 0x7F;
+  // The substitution offset in the record, past the table.
+  cut_substitution[14 + 8 + 6] = 0x7F;
+  const Case cases[] = {
+      {"a format 2 condition", build_layout(
+          {{condition_set({format2}), kSubst}}), GFNT_ERR_UNSUPPORTED},
+      {"a condition of format 9", build_layout(
+          {{condition_set({format9}), kSubst}}), GFNT_ERR_UNSUPPORTED},
+      {"a condition that is its own child", build_layout(
+          {{condition_set({self_not}), kSubst}}), GFNT_ERR_LIMIT},
+      {"records that run past the table", cut_records, GFNT_ERR_CORRUPT},
+      {"a condition cut off", cut_offsets, GFNT_ERR_CORRUPT},
+      {"a layout table of version 2", build_layout({}, 0, 2),
+          GFNT_ERR_UNSUPPORTED},
+      {"a layout table with no room for the offset", Bytes{0, 1, 0, 1, 0, 0},
+          GFNT_ERR_CORRUPT},
+  };
+  for (const Case & test : cases) {
+    Laid font(test.table);
+    size_t record = 0;
+
+    EXPECT_EQ(gfnt_face_feature_variations_match(font.face, kGsub, nullptr, 0,
+        &record, &font.error), test.expected) << test.why;
+  }
+  // A substitution offset past the table is found when the substitution is read.
+  Laid font(cut_substitution);
+  size_t count = 0;
+
+  EXPECT_NE(gfnt_face_feature_substitution_count(font.face, kGsub, 0, &count,
+      &font.error), GFNT_OK);
+}
+
+TEST(FeatureVariations, ADumpPrintsTheConditionTreeAndTheSubstitutes) {
+  Laid font(build_layout({{condition_set({
+      cond_range(0, 8192, 16384),
+      cond_list(4, {cond_range(1, -1, 1), cond_not(cond_range(0, 0, 0))})}),
+      substitution_table({{3, {7, 9}}})}}));
+  char * text = nullptr;
+  size_t size = 0;
+  FILE * stream = open_memstream(&text, &size);
+
+  ASSERT_NE(stream, nullptr);
+  ASSERT_EQ(gfnt_face_feature_variations_dump(font.face, kGsub, stream), GFNT_OK);
+  fclose(stream);
+  const std::string dump(text, size);
+  free(text);
+
+  EXPECT_EQ(dump,
+      "GSUB FeatureVariations: 1 records\n"
+      "GSUB record 0: 2 conditions, 1 substitutions\n"
+      "GSUB record 0 condition 0: range 0 8192 16384\n"
+      "GSUB record 0 condition 1: or(range 1 -1 1,not(range 0 0 0))\n"
+      "GSUB record 0 substitution 0: feature 3 lookups 7 9\n");
+}
+
+
+// ---------------------------------------------------------------------------
+// cvt and cvar: control values at a location
+// ---------------------------------------------------------------------------
+
+namespace {
+
+gfnttest::Table cvt_table(const std::vector<int16_t> & values) {
+  Bytes out;
+
+  for (int16_t value : values) {
+    put_s16(out, value);
+  }
+  return {GFNT_TAG('c', 'v', 't', ' '), out};
+}
+
+/** A `cvar` from tuples written as for `gvar`; its data offset is from its own start. */
+Bytes build_cvar(const std::vector<Tuple> & tuples,
+    const Bytes & shared_points = {}, bool shared = false, uint16_t major = 1) {
+  Bytes data = glyph_variation_data(tuples, shared_points, shared);
+  Bytes out;
+
+  put_u16(out, major);
+  put_u16(out, 0);
+  // `GlyphVariationData` counts its offset from its own start, and the cvar's
+  // header is four bytes longer.
+  {
+    const uint16_t offset = static_cast<uint16_t>(((data[2] << 8) | data[3]) + 4);
+
+    data[2] = static_cast<uint8_t>(offset >> 8);
+    data[3] = static_cast<uint8_t>(offset & 0xFF);
+  }
+  out.insert(out.end(), data.begin(), data.end());
+  return out;
+}
+
+Tuple cvar_tuple(int16_t peak, const Bytes & data, bool private_points = false) {
+  Tuple tuple;
+
+  tuple.peak = {peak};
+  tuple.data = data;
+  tuple.private_points = private_points;
+  return tuple;
+}
+
+/** A face with one axis, the given `cvt ` and `cvar`. */
+struct Controlled {
+  Moving font;
+
+  Controlled(const std::vector<int16_t> & values, const Bytes & cvar)
+      : font({square()}, {}, 1,
+            [&] {
+              std::vector<gfnttest::Table> extra = {cvt_table(values)};
+              if (!cvar.empty()) {
+                extra.push_back({GFNT_TAG('c', 'v', 'a', 'r'), cvar});
+              }
+              return extra;
+            }()) {}
+
+  std::vector<int32_t> at(const std::vector<GFNT_F2Dot14> & coordinates,
+      GFNT_Result * result = nullptr) {
+    size_t count = 0;
+    std::vector<int32_t> out(8, 12345);
+    GFNT_Variation variation{coordinates.data(), coordinates.size()};
+
+    EXPECT_EQ(gfnt_face_cvt_count(font.face, &count, &font.error), GFNT_OK);
+    gfnt_error_clear(&font.error);
+    GFNT_Result got = gfnt_face_cvt_values(font.face,
+        coordinates.empty() ? nullptr : &variation, out.data(), out.size(),
+        &font.error);
+    if (result) {
+      *result = got;
+    }
+    out.resize(count);
+    return out;
+  }
+};
+
+const std::vector<int16_t> kCvt = {100, -50, 300, 7};
+
+}  // namespace
+
+TEST(Cvar, ADefaultLocationIsTheCvtTablesOwnValues) {
+  Controlled font(kCvt, build_cvar({cvar_tuple(0x4000,
+      {0x03, 10, 0xEC, 0, 7})}));
+
+  EXPECT_EQ(font.at({}), (std::vector<int32_t>{100, -50, 300, 7}));
+  EXPECT_EQ(font.at({0}), (std::vector<int32_t>{100, -50, 300, 7}));
+}
+
+TEST(Cvar, ATupleThatNamesEveryValueMovesEachByItsDeltaScaled) {
+  // Deltas 10, -20, 0, 7 (a run of four bytes is control 0x03).
+  Controlled font(kCvt, build_cvar({cvar_tuple(0x4000,
+      {0x03, 10, 0xEC, 0, 7})}));
+
+  EXPECT_EQ(font.at({16384}), (std::vector<int32_t>{110, -70, 300, 14}));
+  // Half: 5, -10, 0 and 3.5, which rounds half away from zero to 4.
+  EXPECT_EQ(font.at({8192}), (std::vector<int32_t>{105, -60, 300, 11}));
+  // The other side of the default is outside the tuple's region.
+  EXPECT_EQ(font.at({-16384}), (std::vector<int32_t>{100, -50, 300, 7}));
+}
+
+TEST(Cvar, ANegativeHalfRoundsAwayFromZeroToo) {
+  // -7 * 0.5 = -3.5 -> -4, so 7 becomes 3. Half-up would give 4.
+  Controlled font(kCvt, build_cvar({cvar_tuple(0x4000,
+      {0x03, 0, 0, 0, 0xF9})}));
+
+  EXPECT_EQ(font.at({8192}), (std::vector<int32_t>{100, -50, 300, 3}));
+}
+
+TEST(Cvar, PrivatePointNumbersNameWhichValuesAreMoved) {
+  // Points 1 and 3: a count of 2, one run of two bytes (control 0x01), and each
+  // number as the distance from the last - 1, then 2. Deltas +40 and -40. A value
+  // the tuple does not name is not interpolated: control values have no contours.
+  Controlled font(kCvt, build_cvar({cvar_tuple(0x4000,
+      {0x02, 0x01, 0x01, 0x02, 0x01, 40, 0xD8}, true)}));
+
+  EXPECT_EQ(font.at({16384}), (std::vector<int32_t>{100, -10, 300, -33}));
+}
+
+TEST(Cvar, SharedPointNumbersAreUsedByATupleThatStatesNone) {
+  // Shared points 0 and 2 (count 2, a run of two bytes: 0, then +2).
+  Controlled font(kCvt, build_cvar({cvar_tuple(0x4000, {0x01, 100, 0x9C})},
+      {0x02, 0x01, 0x00, 0x02}, true));
+
+  EXPECT_EQ(font.at({16384}), (std::vector<int32_t>{200, -50, 200, 7}));
+}
+
+TEST(Cvar, TheDeltasOfEveryApplicableTupleAreSummedBeforeTheyAreRounded) {
+  // Two tuples of +3 on the first value. At half each is 1.5, which would round
+  // to 2 apiece and 4 together; the sum is exactly 3.
+  Controlled font(kCvt, build_cvar({
+      cvar_tuple(0x4000, {0x03, 3, 0, 0, 0}),
+      cvar_tuple(0x4000, {0x03, 3, 0, 0, 0})}));
+
+  EXPECT_EQ(font.at({8192})[0], 103);
+}
+
+TEST(Cvar, AnIntermediateRegionScalesFromItsOwnEdges) {
+  // From 0 up to a peak at 0.5 and down to 1.0. At 0.75 the scalar is 0.5.
+  Tuple tuple = cvar_tuple(8192, {0x03, 20, 0, 0, 0});
+
+  tuple.start = {0};
+  tuple.end = {16384};
+  Controlled font(kCvt, build_cvar({tuple}));
+
+  EXPECT_EQ(font.at({8192})[0], 120);
+  EXPECT_EQ(font.at({12288})[0], 110);
+  EXPECT_EQ(font.at({16384})[0], 100);
+}
+
+TEST(Cvar, AFaceWithNoCvarOrNoCvtHasValuesThatDoNotVary) {
+  Controlled none(kCvt, {});
+  Controlled empty({}, build_cvar({}));
+
+  EXPECT_EQ(none.at({16384}), (std::vector<int32_t>{100, -50, 300, 7}));
+  EXPECT_EQ(empty.at({16384}), std::vector<int32_t>{});
+}
+
+TEST(Cvar, ACvarIsNotReadAtTheDefaultLocation) {
+  // Version 2, which this library refuses - but the default location never asks.
+  Controlled font(kCvt, build_cvar({}, {}, false, 2));
+  GFNT_Result result = GFNT_OK;
+
+  EXPECT_EQ(font.at({0}, &result), (std::vector<int32_t>{100, -50, 300, 7}));
+  EXPECT_EQ(result, GFNT_OK);
+  font.at({16384}, &result);
+  EXPECT_EQ(result, GFNT_ERR_UNSUPPORTED);
+}
+
+TEST(Cvar, ATableThatContradictsItselfIsRefused) {
+  struct Case {
+    const char * why;
+    Bytes cvar;
+  };
+  Tuple no_peak;
+
+  no_peak.shared_index = 0;
+  no_peak.data = {0x03, 1, 1, 1, 1};
+  Bytes cut = build_cvar({cvar_tuple(0x4000, {0x03, 1, 1, 1, 1})});
+  cut.resize(cut.size() - 2);
+  Bytes short_header = {0, 1, 0, 0, 0};
+  const Case cases[] = {
+      {"a tuple with no embedded peak", build_cvar({no_peak})},
+      {"a point past the last value", build_cvar({cvar_tuple(0x4000,
+          {0x01, 0x00, 9, 0x00, 1, 0x00, 1}, true)})},
+      {"more points than values", build_cvar({cvar_tuple(0x4000,
+          {0x05}, true)})},
+      {"a tuple whose data is cut short", cut},
+      {"a header cut short", short_header},
+  };
+  for (const Case & test : cases) {
+    Controlled font(kCvt, test.cvar);
+    GFNT_Result result = GFNT_OK;
+
+    font.at({16384}, &result);
+    EXPECT_EQ(result, GFNT_ERR_CORRUPT) << test.why;
+    EXPECT_EQ(font.font.error.table, GFNT_TAG('c', 'v', 'a', 'r')) << test.why;
+  }
+}
+
+TEST(Cvar, AnOutputTooSmallOrAVariationWithTooManyCoordinatesIsInvalid) {
+  Controlled font(kCvt, build_cvar({cvar_tuple(0x4000, {0x03, 1, 1, 1, 1})}));
+  int32_t out[2];
+  GFNT_F2Dot14 coords[2] = {1, 1};
+  GFNT_Variation too_many{coords, 2};
+  int32_t full[4];
+
+  EXPECT_EQ(gfnt_face_cvt_values(font.font.face, nullptr, out, 2,
+      &font.font.error), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_cvt_values(font.font.face, &too_many, full, 4,
+      &font.font.error), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_cvt_values(nullptr, nullptr, full, 4, nullptr),
+      GFNT_ERR_INVALID);
+}
+
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

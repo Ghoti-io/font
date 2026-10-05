@@ -146,6 +146,29 @@ int main(int argc, char ** argv) {
       }
     }
   }
+  // `STAT`, which names the places in the design space. A face without one
+  // prints nothing, as the reference does.
+  if (gfnt_face_has_stat(face)) {
+    result = gfnt_face_stat_dump(face, stdout);
+    if (result != GFNT_OK) {
+      printf("STAT: absent (%s)\n", gfnt_result_string(result));
+    }
+  }
+  // What a variable font's layout tables replace at a location. A table with no
+  // FeatureVariations prints nothing, and so does the reference.
+  {
+    static const char * layout[] = {"GSUB", "GPOS"};
+
+    for (size_t i = 0; i < 2; ++i) {
+      GFNT_Tag tag = GFNT_TAG(layout[i][0], layout[i][1], layout[i][2],
+          layout[i][3]);
+
+      if (gfnt_face_feature_variations_dump(face, tag, stdout) != GFNT_OK
+          && gfnt_face_has_table(face, tag)) {
+        printf("%s FeatureVariations: absent (unreadable)\n", layout[i]);
+      }
+    }
+  }
   // The `post` glyph names, last because they are the longest section. A font
   // with none says so on a line of its own (see the dump), because a
   // differential reads silence as agreement.

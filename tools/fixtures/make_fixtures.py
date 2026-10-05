@@ -1168,6 +1168,115 @@ def _var_store(rows_by_data):
     return builder.buildVarStore(regions, datas)
 
 
+# What `avar` version 2 says in `variable-avar2.ttf`: each axis is moved by a delta
+# that is a function of the others, in 2.14 units (16384 is the whole axis). Three
+# regions: wght ramping up, wdth ramping up, and wght ramping *down* so that the
+# negative half of an axis is exercised too.
+AVAR2_REGIONS = [{"wght": (0.0, 1.0, 1.0)}, {"wdth": (0.0, 1.0, 1.0)},
+                 {"wght": (-1.0, -1.0, 0.0)}]
+# Two rows, (R0, R1, R2) each: row 0 moves the *width* axis by weight, row 1 moves
+# the *weight* axis by width. The index map sends axis 0 (weight) to row 1 and
+# axis 1 (width) to row 0, so the map is what chooses - a reader that took the axis
+# number as the row would swap them.
+AVAR2_ROWS = [(-2500, 0, 800), (0, 3000, 0)]
+
+
+def build_variable_avar2(out):
+    """`variable-gvar.ttf`'s font with an `avar` version 2: a store and a map."""
+    from fontTools.ttLib.tables import otTables as ot
+    from fontTools.varLib import builder
+
+    fb = _variable_font("Variable Avar2")
+    avar = fb.font["avar"]
+    avar.majorVersion = 2
+    avar.minorVersion = 0
+    table = avar.table = ot.avar()
+    regions = builder.buildVarRegionList(AVAR2_REGIONS, ["wght", "wdth"])
+    data = builder.buildVarData([0, 1, 2], [list(r) for r in AVAR2_ROWS],
+                                optimize=False)
+    table.VarStore = builder.buildVarStore(regions, [data])
+    table.VarIdxMap = builder.buildDeltaSetIndexMap([(0 << 16) | 1,
+                                                     (0 << 16) | 0])
+    pin(fb)
+    fb.save(out)
+
+
+def build_variable_stat(out):
+    """`variable-gvar.ttf`'s font with a `STAT` of all four axis value formats."""
+    from fontTools.otlLib.builder import buildStatTable
+
+    fb = _variable_font("Variable Stat")
+    buildStatTable(fb.font, [
+        {"tag": "wght", "name": "Weight", "ordering": 0, "values": [
+            # Format 3, elidable, linked to Bold: how Regular is stated.
+            {"value": 400, "name": "Regular", "flags": 0x2, "linkedValue": 700},
+            # Format 1.
+            {"value": 700, "name": "Bold"},
+            # Format 2: 550 to 650 around a nominal 600.
+            {"nominalValue": 600, "rangeMinValue": 550, "rangeMaxValue": 650,
+             "name": "Semibold", "flags": 0x1},
+        ]},
+        {"tag": "wdth", "name": "Width", "ordering": 1, "values": [
+            {"value": 100, "name": "Normal", "flags": 0x2},
+            {"value": 75, "name": "Condensed"},
+        ]},
+    ], locations=[
+        # Format 4: both axes at once.
+        {"name": "Bold Condensed", "location": {"wght": 700, "wdth": 75}},
+    ], elidedFallbackName=2)
+    pin(fb)
+    fb.save(out)
+
+
+def build_variable_featurevars(out):
+    """`variable-gvar.ttf`'s font with a GSUB whose `rvrn` varies with the axes."""
+    from fontTools.varLib.featureVars import addFeatureVariations
+
+    fb = _variable_font("Variable FeatureVariations")
+    # Bounds are normalised coordinates, after avar. Three records, in the order a
+    # location is matched against them: the upper half of weight; the lighter
+    # half of weight *and* the wider half of width (two conditions that both have
+    # to hold); and the narrower half of width alone.
+    addFeatureVariations(fb.font, [
+        ([{"wght": (0.5, 1.0)}], {"bar": "dot"}),
+        ([{"wght": (-1.0, -0.5), "wdth": (0.25, 1.0)}], {"tri": "ring"}),
+        ([{"wdth": (-1.0, -0.5)}], {"bar": "acc", "tri": "acc2"}),
+    ], featureTag="rvrn")
+    pin(fb)
+    fb.save(out)
+
+
+def build_variable_cvar(out):
+    """`variable-gvar.ttf`'s font with a `cvt ` and a `cvar` that moves it."""
+    from array import array
+
+    from fontTools.ttLib.tables.TupleVariation import TupleVariation
+
+    fb = _variable_font("Variable Cvar")
+    font = fb.font
+    cvt = font["cvt "] = newTable("cvt ")
+    cvt.values = array("h", [100, -50, 300, 7, 0, 1000, -3, 42])
+    cvar = font["cvar"] = newTable("cvar")
+    cvar.version = 1
+    cvar.variations = [
+        # Every value: the weight ramp up to 1.
+        TupleVariation({"wght": (0.0, 1.0, 1.0)},
+                       [10, -20, 0, 7, 3, -9, 5, 1]),
+        # Some values only, so the tuple names points: the width ramp, which
+        # moves values 1, 3 and 6 and leaves the rest where they are.
+        TupleVariation({"wdth": (0.0, 1.0, 1.0)},
+                       [None, 40, None, -15, None, None, 12, None]),
+        # An intermediate region on weight, peaking in the lighter half, and a
+        # two-axis corner, so that both kinds of scalar are in one table.
+        TupleVariation({"wght": (-1.0, -0.5, 0.0)},
+                       [-8, None, 25, None, None, 6, None, -2]),
+        TupleVariation({"wght": (0.0, 1.0, 1.0), "wdth": (-1.0, -1.0, 0.0)},
+                       [None, None, None, None, 9, None, None, -30]),
+    ]
+    pin(fb)
+    fb.save(out)
+
+
 def build_variable_hvar(out):
     """`variable-gvar.ttf` with `HVAR` (advance and bearing mappings) and `MVAR`."""
     from fontTools.ttLib.tables import otTables as ot
@@ -3878,6 +3987,24 @@ FIXTURES = {
         "bearing mapping that shares three rows among nine glyphs, over two "
         "regions - and MVAR carrying the hhea, window and typographic ascent, "
         "descent and gap, all written by fontTools"),
+    "variable-avar2.ttf": (build_variable_avar2,
+        "variable-gvar.ttf's font with an avar version 2: segment maps, then a "
+        "variation store of three regions (weight up, width up, weight down) "
+        "that moves each axis as a function of the others, and an index map "
+        "that sends the weight axis to the second row and the width axis to the "
+        "first, written by fontTools"),
+    "variable-stat.ttf": (build_variable_stat,
+        "variable-gvar.ttf's font with a STAT version 1.2 holding every axis "
+        "value format: a linked value (elidable), a plain value, a range around "
+        "a nominal value, and a value on two axes at once, written by fontTools"),
+    "variable-featurevars.ttf": (build_variable_featurevars,
+        "variable-gvar.ttf's font with a GSUB 1.1 whose FeatureVariations has "
+        "three records: one condition, two that must both hold, and a "
+        "substitution of two glyphs; written by fontTools"),
+    "variable-cvar.ttf": (build_variable_cvar,
+        "variable-gvar.ttf's font with a cvt table of eight values and a cvar of "
+        "four tuples: every value, a sparse list, an intermediate region and a "
+        "two-axis corner, written by fontTools"),
     "variable-gvar.ttf": (build_variable_gvar,
         "fvar, avar and gvar written by fontTools: two axes (one hidden), three "
         "named instances (one with a PostScript name), a bent avar on one axis "

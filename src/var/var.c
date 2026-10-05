@@ -37,6 +37,9 @@
 #include <string.h>
 #include "../core/fixed.h"
 #include "../tables/tables.h"
+#include "../reader/reader.h"
+#include "gvar.h"
+#include "ivs.h"
 #include "var.h"
 
 GFNT_Result gfnt_fvar_parse(const GFNT_Face * face, void * out, void * context,
@@ -248,14 +251,11 @@ GFNT_Result gfnt_avar_parse(const GFNT_Face * face, void * out, void * context,
   }
   (void)minor;
   (void)reserved;
-  if (major != 1) {
-    // Version 2 adds a variation store that re-maps an axis as a function of the
-    // others. Reading it as version 1 would apply the segment maps and silently
-    // drop that, which is a different design space and no error.
+  if (major != 1 && major != 2) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_AVAR, 0,
-        GFNT_GLYPH_NONE, "an avar version other than 1, which this library does "
-        "not read");
+        GFNT_GLYPH_NONE, "an avar version other than 1 or 2");
   }
+  avar->major = major;
   if (axis_count != fvar->axis_count) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_AVAR, 6,
         GFNT_GLYPH_NONE, "an avar's axis count is not the fvar's");
@@ -329,6 +329,13 @@ GFNT_Result gfnt_avar_parse(const GFNT_Face * face, void * out, void * context,
       }
       filled += 1;
     }
+  }
+  if (major == 2
+      && (gfnt_read_u32(&reader, &avar->map_offset) != GFNT_OK
+          || gfnt_read_u32(&reader, &avar->store_offset) != GFNT_OK)) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_AVAR,
+        gfnt_reader_tell(&reader), GFNT_GLYPH_NONE,
+        "an avar version 2 with no room for its two offsets");
   }
   return GFNT_OK;
 }
@@ -568,6 +575,73 @@ static int32_t gfnt_avar_map(const GFNT_Avar * avar, size_t axis, int32_t value)
   }
 }
 
+/**
+ * `avar` version 2: each axis moved by a delta that is a function of every axis.
+ *
+ * The deltas are all read at the location the segment maps produced, before any
+ * is applied - an axis moved by its own delta must not change where the next one
+ * is read - and each is rounded once, half away from zero, in 2.14 units: the
+ * store's integers are the same units as the coordinates they move.
+ */
+static GFNT_Result gfnt_avar_variate(const GFNT_Face * face,
+    const GFNT_Avar * avar, GFNT_F2Dot14 * coordinates, size_t count,
+    GFNT_Error * error) {
+  GFNT_Reader table;
+  GFNT_Reader map;
+  GFNT_Reader store;
+  int32_t * deltas;
+  GFNT_Result result;
+
+  if (avar->major < 2 || avar->store_offset == 0 || count == 0) {
+    return GFNT_OK;
+  }
+  result = gfnt_face_table_reader(face, GFNT_TAG_AVAR, &table, error);
+  if (result == GFNT_OK) {
+    result = gfnt_reader_sub(&table, avar->store_offset, GFNT_READER_REST,
+        &store);
+  }
+  if (result == GFNT_OK && avar->map_offset != 0) {
+    result = gfnt_reader_sub(&table, avar->map_offset, GFNT_READER_REST, &map);
+  }
+  if (result != GFNT_OK) {
+    return result;
+  }
+  deltas = face->allocator->calloc_fn(face->allocator->ctx, count,
+      sizeof *deltas);
+  if (!deltas) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_AVAR, 0,
+        GFNT_GLYPH_NONE, "no memory for the avar axis deltas");
+  }
+  for (size_t i = 0; i < count; ++i) {
+    uint32_t outer = 0;
+    uint32_t inner = (uint32_t)i;
+    int64_t delta = 0;
+
+    if (avar->map_offset != 0) {
+      result = gfnt_ivs_map(&map, GFNT_TAG_AVAR, (uint32_t)i, &outer, &inner,
+          error);
+    }
+    if (result == GFNT_OK) {
+      result = gfnt_ivs_delta(face, &store, GFNT_TAG_AVAR, coordinates, count,
+          outer, inner, &delta, error);
+    }
+    if (result != GFNT_OK) {
+      face->allocator->free_fn(face->allocator->ctx, deltas);
+      return result;
+    }
+    deltas[i] = (int32_t)gfnt_round_shift(gfnt_clamp64(delta),
+        GFNT_GVAR_FRACTION_BITS);
+  }
+  for (size_t i = 0; i < count; ++i) {
+    int64_t moved = (int64_t)coordinates[i] + deltas[i];
+
+    coordinates[i] = (GFNT_F2Dot14)(moved > 16384 ? 16384
+        : moved < -16384 ? -16384 : moved);
+  }
+  face->allocator->free_fn(face->allocator->ctx, deltas);
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_face_normalize(const GFNT_Face * face,
     const GFNT_F16Dot16 * user_coordinates, size_t count,
     GFNT_F2Dot14 * out_coordinates, size_t capacity, GFNT_Error * error) {
@@ -613,6 +687,10 @@ GFNT_Result gfnt_face_normalize(const GFNT_Face * face,
       narrow = -16384;
     }
     out_coordinates[i] = (GFNT_F2Dot14)narrow;
+  }
+  if (avar) {
+    return gfnt_avar_variate(face, avar, out_coordinates, fvar->axis_count,
+        error);
   }
   return GFNT_OK;
 }

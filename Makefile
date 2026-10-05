@@ -661,7 +661,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Fuzz commands
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
-.PHONY: fuzz-metvar fuzz-run-metvar
+.PHONY: fuzz-metvar fuzz-run-metvar fuzz-vartables fuzz-run-vartables
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
@@ -1130,7 +1130,8 @@ TIER0_FILES := include/ghoti.io/font/core.h include/ghoti.io/font/blob.h \
 	include/ghoti.io/font/face.h include/ghoti.io/font/metrics.h \
 	include/ghoti.io/font/cmap.h include/ghoti.io/font/name.h \
 	include/ghoti.io/font/glyph.h include/ghoti.io/font/bitmap.h \
-	include/ghoti.io/font/color.h include/ghoti.io/font/variation.h \
+	include/ghoti.io/font/color.h include/ghoti.io/font/variation.h include/ghoti.io/font/stat.h include/ghoti.io/font/featurevar.h \
+	include/ghoti.io/font/cvt.h \
 	include/ghoti.io/font/font.h include/ghoti.io/font/allocator.h \
 	src/core/*.c src/core/*.h src/reader/*.c src/reader/*.h src/blob/*.c src/blob/*.h \
 	src/sfnt/*.c src/sfnt/*.h src/woff/*.c src/woff/*.h src/tables/*.c src/tables/*.h \
@@ -1661,6 +1662,13 @@ $(eval $(call fuzz-rule,fuzz_variation,variation))
 # gives one answer, which is what a metric - a number nobody can see is wrong -
 # needs and what no sanitizer sees.
 $(eval $(call fuzz-rule,fuzz_metvar,metvar))
+# fuzz_vartables takes the four tables that name or vary a font without moving a
+# point - `STAT`, `FeatureVariations`, `cvt `/`cvar` and a version 2 `avar` - one at
+# a time, the options byte choosing which. They are read in place on every call, so
+# the properties it checks are the ones that only hold if nothing is kept: asking
+# twice answers once, a count agrees with a listing, and a location that moves
+# nothing returns the table's own values.
+$(eval $(call fuzz-rule,fuzz_vartables,vartables))
 # fuzz_cff takes the whole `CFF ` table, because a CFF is a nest of offsets that
 # point at each other - the Top DICT at the charset and the CharStrings INDEX, the
 # Private DICT at its local subroutines *relative to itself* - and a fuzzer given
@@ -1690,7 +1698,7 @@ $(eval $(call fuzz-rule,fuzz_type1,type1))
 # input either.
 $(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
 
-FUZZERS := sfnt cmap glyf raster cff charstring type1 bitmap gvar variation metvar
+FUZZERS := sfnt cmap glyf raster cff charstring type1 bitmap gvar variation metvar vartables
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

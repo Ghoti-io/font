@@ -41,7 +41,7 @@ import sys
 from fontTools.misc.roundTools import otRound
 from fontTools.pens.basePen import BasePen
 from fontTools.ttLib import TTFont
-from fontTools.varLib.models import normalizeValue, piecewiseLinearMap
+from fontTools.varLib.models import normalizeValue
 
 from fonttools_outlines import flattened
 
@@ -101,7 +101,11 @@ def parse_location(text):
 
 
 def normalised(font, user):
-    """The location in -1..1 after `avar`, from fontTools' own functions."""
+    """The location in -1..1 after `avar`, from fontTools' own functions.
+
+    A version 2 `avar` is `renormalizeLocation()`'s job: the segment maps and then
+    the store, which only that method knows the order of.
+    """
     fvar = font["fvar"]
     avar = font["avar"] if "avar" in font else None
     result = {}
@@ -110,9 +114,9 @@ def normalised(font, user):
         value = max(axis.minValue, min(axis.maxValue, value))
         normal = normalizeValue(value, (axis.minValue, axis.defaultValue,
                                         axis.maxValue))
-        if avar is not None:
-            normal = piecewiseLinearMap(normal, avar.segments[axis.axisTag])
         result[axis.axisTag] = normal
+    if avar is not None:
+        return avar.renormalizeLocation(result, font, dropZeroes=False)
     return result
 
 

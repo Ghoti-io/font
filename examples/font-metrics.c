@@ -21,8 +21,8 @@
 /**
  * @file
  *
- * Print every glyph's advance and side bearing, and the line metrics, at a
- * location in a variable font's design space.
+ * Print every glyph's advance and side bearing, the line metrics, and the
+ * control values, at a location in a variable font's design space.
  *
  * Usage: font-metrics <font> [face-index] [stride] [first] [location]
  *
@@ -199,6 +199,33 @@ int main(int argc, char ** argv) {
   print_line(face, "hhea", GFNT_LINE_METRICS_HHEA, location ? &variation : NULL);
   print_line(face, "win", GFNT_LINE_METRICS_WIN, location ? &variation : NULL);
   print_line(face, "typo", GFNT_LINE_METRICS_TYPO, location ? &variation : NULL);
+  {
+    // The control values, which `cvar` moves. A face with none prints nothing.
+    size_t count = 0;
+
+    if (gfnt_face_cvt_count(face, &count, NULL) == GFNT_OK && count > 0) {
+      int32_t * values = malloc(count * sizeof *values);
+      GFNT_Result result;
+
+      if (!values) {
+        fprintf(stderr, "no memory\n");
+        return 1;
+      }
+      result = gfnt_face_cvt_values(face, location ? &variation : NULL, values,
+          count, NULL);
+      if (result == GFNT_OK) {
+        printf("cvt %zu", count);
+        for (size_t i = 0; i < count; ++i) {
+          printf(" %ld", (long)values[i]);
+        }
+        printf("\n");
+      }
+      else {
+        printf("cvt refused %s\n", gfnt_result_string(result));
+      }
+      free(values);
+    }
+  }
   gfnt_face_free(face);
   gfnt_blob_destroy(blob);
   return 0;

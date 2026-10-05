@@ -28,8 +28,8 @@
  * The example the README's snippet is taken from, and the quickest way to run
  * the reader against a font on the machine rather than against a fixture this
  * library built for itself. It prints the directory, the tables it can parse,
- * the `cmap` and `name` records, and for each codepoint named on the command
- * line the glyph and its advance.
+ * the `cmap` and `name` records, a variable font's axes and named instances, and
+ * for each codepoint named on the command line the glyph and its advance.
  */
 
 #include <inttypes.h>
@@ -68,6 +68,66 @@ static void print_name(const GFNT_Face * face, const char * label,
     return;
   }
   printf("%s: (%s)\n", label, gfnt_result_string(result));
+}
+
+/** The name a `name` ID stands for, or a placeholder; the caller frees nothing. */
+static void print_named(const GFNT_Face * face, uint16_t name_id, char * buffer,
+    size_t size) {
+  char * text = NULL;
+
+  buffer[0] = '\0';
+  if (gfnt_face_name(face, name_id, GFNT_LANGUAGE_ANY, NULL, &text, NULL, NULL)
+      == GFNT_OK) {
+    snprintf(buffer, size, "%s", text);
+    gfnt_name_free(NULL, text);
+  }
+}
+
+/** A variable font's design space: its axes, and its named instances. */
+static void print_variation(const GFNT_Face * face) {
+  size_t axes = 0;
+  size_t instances = 0;
+  GFNT_Error error;
+  char name[128];
+
+  if (!gfnt_face_is_variable(face)) {
+    return;
+  }
+  if (gfnt_face_axis_count(face, &axes, &error) != GFNT_OK
+      || gfnt_face_instance_count(face, &instances, &error) != GFNT_OK) {
+    printf("variable: (%s)\n", gfnt_result_string(error.result));
+    return;
+  }
+  printf("variable: %zu axes, %zu named instances\n", axes, instances);
+  for (size_t i = 0; i < axes; ++i) {
+    GFNT_Axis axis;
+    char tag[5];
+
+    if (gfnt_face_axis_at(face, i, &axis, &error) != GFNT_OK) {
+      printf("axis %zu: (%s)\n", i, gfnt_result_string(error.result));
+      continue;
+    }
+    gfnt_tag_string(axis.tag, tag);
+    print_named(face, axis.name_id, name, sizeof name);
+    printf("axis %zu: %s  %g .. %g .. %g  %s%s\n", i, tag,
+        axis.min / 65536.0, axis.def / 65536.0, axis.max / 65536.0,
+        name[0] ? name : "(no name)",
+        (axis.flags & GFNT_AXIS_HIDDEN) ? "  (hidden)" : "");
+  }
+  for (size_t i = 0; i < instances; ++i) {
+    GFNT_NamedInstance instance;
+
+    if (gfnt_face_instance_at(face, i, &instance, &error) != GFNT_OK) {
+      printf("instance %zu: (%s)\n", i, gfnt_result_string(error.result));
+      continue;
+    }
+    print_named(face, instance.name_id, name, sizeof name);
+    printf("instance %zu: %s ", i, name[0] ? name : "(no name)");
+    for (size_t k = 0; k < instance.coordinate_count; ++k) {
+      printf(" %g", instance.coordinates[k] / 65536.0);
+    }
+    printf("\n");
+  }
 }
 
 int main(int argc, char ** argv) {
@@ -145,6 +205,8 @@ int main(int argc, char ** argv) {
     printf("line: ascent %d, descent %d, gap %d, from %s\n", metrics.ascent,
         metrics.descent, metrics.line_gap, sources[metrics.source]);
   }
+
+  print_variation(face);
 
   if (gfnt_face_cmap_best(face, &subtable, &error) == GFNT_OK) {
     gfnt_face_cmap_dump(face, stdout);

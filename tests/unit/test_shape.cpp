@@ -2759,6 +2759,129 @@ Bytes kerx_contextual(const std::vector<int16_t> & values, uint16_t action,
 
 }  // namespace
 
+namespace {
+
+/**
+ * An attachment subtable: classes A = 4 and B = 5; A is marked and B hangs from
+ * it by the action at index 0. A coordinate action (kind 2) puts point
+ * (@p mark_x, @p mark_y) of the mark on point (@p curr_x, @p curr_y) of B; an
+ * anchor action (kind 1) names anchor @p mark_x of the mark and @p mark_y of B.
+ */
+Bytes kerx_attachment(int16_t mark_x, int16_t mark_y, int16_t curr_x,
+    int16_t curr_y, uint32_t flags = 0, uint32_t kind = 2) {
+  Bytes classes;
+  for (uint16_t v : std::initializer_list<uint16_t>{8, 1, 2, 4, 5}) {
+    gfnttest::put_u16(classes, v);
+  }
+  Bytes states;
+  for (uint16_t e : std::initializer_list<uint16_t>{0, 0, 0, 0, 1, 0,
+                      0, 0, 0, 0, 1, 2}) {
+    gfnttest::put_u16(states, e);
+  }
+  Bytes entries;
+  for (uint16_t e : std::initializer_list<uint16_t>{0, 0, 0xFFFF,
+                      1, 0x8000, 0xFFFF, 0, 0, 0}) {
+    gfnttest::put_u16(entries, e);
+  }
+  // Coordinates are four numbers; anchor points are two point numbers.
+  Bytes actions;
+  const std::vector<int16_t> numbers = kind == 2
+      ? std::vector<int16_t>{mark_x, mark_y, curr_x, curr_y}
+      : std::vector<int16_t>{mark_x, mark_y};
+  for (int16_t v : numbers) {
+    gfnttest::put_u16(actions, static_cast<uint16_t>(v));
+  }
+  for (Bytes * part : {&classes, &states, &entries}) {
+    while (part->size() % 4) {
+      part->push_back(0);
+    }
+  }
+  const uint32_t at_classes = 20;
+  const uint32_t at_states = at_classes + static_cast<uint32_t>(classes.size());
+  const uint32_t at_entries = at_states + static_cast<uint32_t>(states.size());
+  const uint32_t at_actions = at_entries + static_cast<uint32_t>(entries.size());
+  Bytes body;
+  for (uint32_t v : {6u, at_classes, at_states, at_entries,
+                     (kind << 30) | at_actions}) {
+    gfnttest::put_u32(body, v);
+  }
+  for (const Bytes * part : {&classes, &states, &entries, &actions}) {
+    body.insert(body.end(), part->begin(), part->end());
+  }
+  return kerx_subtable(flags, 4, body);
+}
+
+}  // namespace
+
+TEST(ShapeKerx, AnAttachmentSubtableHangsAGlyphFromTheMarkedOne) {
+  Bytes kerx = kerx_table({kerx_attachment(100, 50, 10, 20)});
+  Glyphs g = kerx_shape(kerx, "AB");
+  ASSERT_EQ(g.size(), 2u);
+  // Point (100, 50) of A on point (10, 20) of B: B moves by the difference, less
+  // the advance of A, which the pen has passed.
+  EXPECT_EQ(g[1].x_offset, 90 - g[0].x_advance);
+  EXPECT_EQ(g[1].y_offset, 30);
+  // With nothing marked first, nothing hangs.
+  EXPECT_EQ(kerx_shape(kerx, "BA")[1].y_offset, 0);
+  // Cross-stream, each glyph then rides on those before it.
+  Glyphs c = kerx_shape(kerx_table({kerx_attachment(100, 50, 10, 20,
+      0x40000000u)}), "ABAB");
+  EXPECT_EQ(c[1].y_offset, 30);
+  EXPECT_EQ(c[2].y_offset, 30);
+  EXPECT_EQ(c[3].y_offset, 60);
+}
+
+TEST(ShapeKerx, AnAttachmentCanNameAnchorsOfTheAnkrTable) {
+  // Glyph 1 has anchors (10, 20) and (30, 40); glyph 2 has (5, 6) and (7, 8). The
+  // lookup is a format 8 array from glyph 1, each value an offset into the data.
+  Bytes lookup;
+  for (uint16_t v : std::initializer_list<uint16_t>{8, 1, 2, 0, 12}) {
+    gfnttest::put_u16(lookup, v);
+  }
+  Bytes data;
+  for (uint32_t v : {2u, 0x000A0014u, 0x001E0028u, 2u, 0x00050006u, 0x00070008u}) {
+    gfnttest::put_u32(data, v);
+  }
+  Bytes ankr;
+  gfnttest::put_u16(ankr, 0);
+  gfnttest::put_u16(ankr, 0);
+  gfnttest::put_u32(ankr, 12);
+  gfnttest::put_u32(ankr, static_cast<uint32_t>(12 + lookup.size()));
+  ankr.insert(ankr.end(), lookup.begin(), lookup.end());
+  ankr.insert(ankr.end(), data.begin(), data.end());
+  // Anchor 1 of the mark on anchor 0 of B: (30, 40) less (5, 6).
+  std::vector<gfnttest::Table> tables = {
+      {GFNT_TAG('k', 'e', 'r', 'x'), kerx_table({kerx_attachment(1, 0, 0, 0, 0, 1)})},
+      {GFNT_TAG('a', 'n', 'k', 'r'), ankr}};
+  Glyphs g = shape_bytes(small_font(tables), cps("AB"), "");
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[1].x_offset, 25 - g[0].x_advance);
+  EXPECT_EQ(g[1].y_offset, 34);
+}
+
+TEST(ShapeKerx, WithTuplesAValueIsTheOffsetOfTheFirstOfAListOfThem) {
+  // One pair, A B, whose value is the offset of two tuples, -100 and -10.
+  Bytes body;
+  gfnttest::put_u32(body, 1);
+  gfnttest::put_u32(body, 0);
+  gfnttest::put_u32(body, 0);
+  gfnttest::put_u32(body, 0);
+  gfnttest::put_u16(body, 1);
+  gfnttest::put_u16(body, 2);
+  gfnttest::put_u16(body, 12 + 16 + 6);  // from the start of the subtable
+  gfnttest::put_u16(body, static_cast<uint16_t>(-100));
+  gfnttest::put_u16(body, static_cast<uint16_t>(-10));
+  Bytes sub;
+  gfnttest::put_u32(sub, static_cast<uint32_t>(12 + body.size()));
+  gfnttest::put_u32(sub, 0);
+  gfnttest::put_u32(sub, 2);  // two tuples
+  sub.insert(sub.end(), body.begin(), body.end());
+  Glyphs g = kerx_shape(kerx_table({sub}), "AB");
+  EXPECT_EQ(g[1].x_offset, -50);
+  Glyphs plain = kerx_shape(kerx_table({kerx_pairs({{1, 2, -100}})}), "AB");
+  EXPECT_EQ(g[0].x_advance, plain[0].x_advance);
+}
+
 TEST(ShapeKerx, AStateMachineAppliesItsValuesFromTheTopOfTheStack) {
   // The first value is for the glyph on top; one with its low bit set is the last.
   Bytes kerx = kerx_table({kerx_contextual({-10, -21, -30}, 0)});

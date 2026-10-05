@@ -793,7 +793,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
       buf.pos[i].y_offset = 0;
     }
   }
-  if (plan.tables[1].present) {
+  if (plan.tables[1].present || buf.has_attachment) {
     gfnt_gpos_position_finish_offsets(&buf, native_rtl, vertical);
   }
   // A font with no `GPOS` does not say where a mark goes, so the shaper does.

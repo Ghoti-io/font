@@ -38,6 +38,7 @@
 #include "../sfnt/sfnt.h"
 
 #define GFNT_TAG_kerx GFNT_TAG('k', 'e', 'r', 'x')
+#define GFNT_TAG_ankr GFNT_TAG('a', 'n', 'k', 'r')
 
 #define KERX_VERTICAL   0x80000000u
 #define KERX_CROSS      0x40000000u
@@ -150,19 +151,39 @@ static int32_t kerx_format6(const GFNT_Reader * r, size_t subtable,
   return outside ? 0 : value;
 }
 
+/**
+ * A subtable with tuples (variation data) holds in place of each value the
+ * offset, from the start of the subtable, of a list of values; the first is the
+ * one used, as no variation is applied. A value that points outside is nothing.
+ */
+static int32_t kerx_tuple(const GFNT_Reader * r, size_t subtable, int32_t value) {
+  bool outside = false;
+  int32_t first = (int16_t)gfnt_lr_u16(r, subtable + (size_t)(uint32_t)value,
+      &outside);
+
+  return outside ? 0 : first;
+}
+
 static int32_t kerx_pair(const GFNT_Reader * r, size_t subtable,
     size_t num_glyphs, uint32_t format, uint32_t left, uint32_t right,
-    bool * bad) {
+    bool tuples, bool * bad) {
+  int32_t value;
+
   switch (format) {
     case 0:
-      return kerx_format0(r, subtable, left, right, bad);
+      value = kerx_format0(r, subtable, left, right, bad);
+      break;
     case 2:
-      return kerx_format2(r, subtable, num_glyphs, left, right, bad);
+      value = kerx_format2(r, subtable, num_glyphs, left, right, bad);
+      break;
     case 6:
-      return kerx_format6(r, subtable, num_glyphs, left, right, bad);
+      value = kerx_format6(r, subtable, num_glyphs, left, right, bad);
+      break;
     default:
       return 0;
   }
+  return tuples && value ? kerx_tuple(r, subtable, (int32_t)(uint16_t)value)
+      : value;
 }
 
 /**
@@ -280,6 +301,157 @@ static void kerx_format1(const GFNT_Reader * r, size_t subtable, size_t num_glyp
 }
 
 /**
+ * Anchor point @p index of @p glyph from the `ankr` table, or (0, 0) where the
+ * table, the glyph or the point is not there, as HarfBuzz has it.
+ */
+static void kerx_anchor(const GFNT_Reader * ankr, bool have, size_t num_glyphs,
+    uint32_t glyph, uint32_t index, int32_t * x, int32_t * y) {
+  bool bad = false;
+  uint32_t offset = 0;
+
+  *x = 0;
+  *y = 0;
+  if (!have) {
+    return;
+  }
+  if (!gfnt_aat_lookup(ankr, gfnt_lr_u32(ankr, 4, &bad), num_glyphs, glyph, 2,
+          &offset, &bad) || bad) {
+    return;
+  }
+  {
+    size_t data = (size_t)gfnt_lr_u32(ankr, 8, &bad) + offset;
+    uint32_t count = gfnt_lr_u32(ankr, data, &bad);
+
+    if (bad || index >= count) {
+      return;
+    }
+    *x = (int16_t)gfnt_lr_u16(ankr, data + 4 + 4 * (size_t)index, &bad);
+    *y = (int16_t)gfnt_lr_u16(ankr, data + 6 + 4 * (size_t)index, &bad);
+    if (bad) {
+      *x = 0;
+      *y = 0;
+    }
+  }
+}
+
+/**
+ * An attachment (format 4) subtable: a state machine that marks a glyph and then
+ * hangs a later one from it, putting a point of the one on a point of the other.
+ * The points are named as numbers in the table (coordinates) or as anchors of the
+ * `ankr` table; points of the glyphs' outlines are not read.
+ */
+static void kerx_format4(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
+    const GFNT_Reader * ankr, bool have_ankr, GFNT_LBuffer * b, bool * bad) {
+  size_t base = subtable + 12;
+  uint32_t classes = gfnt_lr_u32(r, base, bad);
+  size_t class_table = base + gfnt_lr_u32(r, base + 4, bad);
+  size_t state_array = base + gfnt_lr_u32(r, base + 8, bad);
+  size_t entry_table = base + gfnt_lr_u32(r, base + 12, bad);
+  uint32_t control = gfnt_lr_u32(r, base + 16, bad);
+  uint32_t kind = control >> 30;
+  size_t actions = base + (control & 0x00FFFFFFu);
+  uint32_t state = 0;
+  bool mark_set = false;
+  size_t mark = 0;
+  int64_t ops = (int64_t)b->len * 64;
+
+  if (ops < 16384) {
+    ops = 16384;
+  }
+  b->idx = 0;
+  while (!*bad) {
+    uint32_t klass = 0;
+    size_t entry;
+    uint32_t index;
+    uint16_t new_state;
+    uint16_t flags;
+    uint16_t action;
+
+    if (b->idx < b->len) {
+      uint32_t glyph = b->info[b->idx].glyph;
+      uint32_t value = 0;
+
+      if (glyph == 0xFFFFu) {
+        klass = 2;
+      }
+      else if (!gfnt_aat_lookup(r, class_table, num_glyphs, glyph, 2, &value,
+                   bad)) {
+        klass = 1;
+      }
+      else {
+        klass = value;
+      }
+    }
+    if (klass >= classes) {
+      klass = 1;
+    }
+    index = gfnt_lr_u16(r, state_array + 2 * ((size_t)state * classes + klass),
+        bad);
+    entry = entry_table + 6 * (size_t)index;
+    new_state = (uint16_t)gfnt_lr_u16(r, entry, bad);
+    flags = (uint16_t)gfnt_lr_u16(r, entry + 2, bad);
+    action = (uint16_t)gfnt_lr_u16(r, entry + 4, bad);
+    if (*bad) {
+      return;
+    }
+    if (mark_set && action != 0xFFFFu && b->idx < b->len && kind != 0) {
+      size_t at = actions + (kind == 2 ? 8 : 4) * (size_t)action;
+      int32_t mark_x;
+      int32_t mark_y;
+      int32_t curr_x;
+      int32_t curr_y;
+
+      if (kind == 2) {
+        mark_x = (int16_t)gfnt_lr_u16(r, at, bad);
+        mark_y = (int16_t)gfnt_lr_u16(r, at + 2, bad);
+        curr_x = (int16_t)gfnt_lr_u16(r, at + 4, bad);
+        curr_y = (int16_t)gfnt_lr_u16(r, at + 6, bad);
+      }
+      else {
+        uint32_t mark_point = gfnt_lr_u16(r, at, bad);
+        uint32_t curr_point = gfnt_lr_u16(r, at + 2, bad);
+
+        kerx_anchor(ankr, have_ankr, num_glyphs, b->info[mark].glyph, mark_point,
+            &mark_x, &mark_y);
+        kerx_anchor(ankr, have_ankr, num_glyphs, b->info[b->idx].glyph,
+            curr_point, &curr_x, &curr_y);
+      }
+      if (!*bad) {
+        GFNT_LPos * o = &b->pos[b->idx];
+
+        o->x_offset = mark_x - curr_x;
+        o->y_offset = mark_y - curr_y;
+        o->attach_type = GFNT_ATTACH_MARK;
+        o->attach_chain = (int32_t)((int64_t)mark - (int64_t)b->idx);
+        b->has_attachment = true;
+      }
+    }
+    if (flags & 0x8000u) {
+      mark_set = true;
+      mark = b->idx;
+    }
+    state = new_state;
+    if (b->idx >= b->len) {
+      break;
+    }
+    if (!(flags & 0x4000u) || ops-- <= 0) {
+      b->idx++;
+    }
+  }
+}
+
+/** Every glyph's vertical offset becomes the sum of its own and those before it. */
+static void kerx_sum_offsets(GFNT_LBuffer * b) {
+  int32_t run = 0;
+  size_t i;
+
+  for (i = 0; i < b->len; i++) {
+    run += b->pos[i].y_offset;
+    b->pos[i].y_offset = run;
+  }
+}
+
+/**
  * Every glyph rides on the one before it, so a shift of one carries on to all the
  * glyphs after it, except that a glyph set apart starts again from nothing.
  */
@@ -300,7 +472,7 @@ static void kerx_sum_shifts(GFNT_LBuffer * b) {
 
 /** Run one pair-kerning subtable over the run. */
 static void kerx_run(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
-    uint32_t format, bool cross, GFNT_LApply * c, GFNT_LBuffer * b, uint32_t kern_mask,
+    uint32_t format, bool cross, bool tuples, GFNT_LApply * c, GFNT_LBuffer * b, uint32_t kern_mask,
     bool * bad) {
   GFNT_LIter it;
   size_t idx = 0;
@@ -322,8 +494,8 @@ static void kerx_run(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
       continue;
     }
     j = it.idx;
-    kern = kerx_pair(r, subtable, num_glyphs, format, b->info[i].glyph, b->info[j].glyph,
-        bad);
+    kern = kerx_pair(r, subtable, num_glyphs, format, b->info[i].glyph,
+        b->info[j].glyph, tuples, bad);
     if (cross) {
       carry += kern;
       b->pos[j].y_offset += carry;
@@ -343,6 +515,8 @@ static void kerx_run(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
 GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error) {
   GFNT_Reader table;
+  GFNT_Reader ankr;
+  bool have_ankr = false;
   GFNT_LApply c;
   GFNT_Result result;
   size_t cursor = 8;
@@ -356,6 +530,11 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     return result;
   }
   table.error = NULL;
+  if (gfnt_face_has_table(face, GFNT_TAG_ankr)
+      && gfnt_face_table_reader(face, GFNT_TAG_ankr, &ankr, NULL) == GFNT_OK) {
+    ankr.error = NULL;
+    have_ankr = true;
+  }
   (void)gfnt_face_num_glyphs(face, &glyphs, NULL);
   tables = gfnt_lr_u32(&table, 4, &bad);
   memset(&c, 0, sizeof c);
@@ -373,7 +552,7 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     if (bad || length < 12) {
       break;
     }
-    if (!(coverage & (KERX_VERTICAL | KERX_VARIATION))) {
+    if (!(coverage & KERX_VERTICAL)) {
       uint32_t format = coverage & 0xFFu;
 
       if (format == 1) {
@@ -391,9 +570,18 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
           kerx_sum_shifts(b);
         }
       }
+      else if (format == 4) {
+        // The descending flag is not read here: the glyphs are met in order.
+        kerx_format4(&table, cursor, glyphs, &ankr, have_ankr, b, &bad);
+        if (coverage & KERX_CROSS) {
+          // The glyphs are put where they hang, then each rides on the ones before.
+          gfnt_gpos_position_finish_offsets(b, false, false);
+          kerx_sum_offsets(b);
+        }
+      }
       else if (!(coverage & KERX_DESCENDING)) {
         kerx_run(&table, cursor, glyphs, format, (coverage & KERX_CROSS) != 0,
-            &c, b, kern_mask, &bad);
+            gfnt_lr_u32(&table, cursor + 8, &bad) != 0, &c, b, kern_mask, &bad);
       }
     }
     cursor += length;

@@ -687,7 +687,7 @@ struct Moving {
   /** The outline's points in 26.6, or a failure's result through @p result. */
   Points points(uint32_t glyph, const std::vector<GFNT_F2Dot14> & coordinates,
       GFNT_Result * result = nullptr) {
-    GFNT_Variation variation{coordinates.data(), coordinates.size()};
+    GFNT_Variation variation{coordinates.data(), coordinates.size(), GFNT_DELTA_ROUND_HALF_UP };
     GFNT_Outline * outline = nullptr;
     Points out;
 
@@ -1139,7 +1139,7 @@ TEST(Gvar, AVariationOnAFaceThatCannotHonourItIsRefusedRatherThanIgnored) {
   // Coordinates promised and not given.
   {
     Moving font({square()}, build_gvar(spec));
-    GFNT_Variation variation{nullptr, 1};
+    GFNT_Variation variation{nullptr, 1, GFNT_DELTA_ROUND_HALF_UP };
     GFNT_Outline * outline = nullptr;
 
     EXPECT_EQ(gfnt_face_glyph_outline(font.face, 0, &variation, nullptr,
@@ -1165,7 +1165,7 @@ TEST(Gvar, AFaceWithNoDesignSpaceTakesNoCoordinates) {
   GFNT_Face * face = nullptr;
   GFNT_Outline * outline = nullptr;
   GFNT_F2Dot14 coordinate = 16384;
-  GFNT_Variation variation{&coordinate, 1};
+  GFNT_Variation variation{&coordinate, 1, GFNT_DELTA_ROUND_HALF_UP };
 
   ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
       GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
@@ -1621,8 +1621,8 @@ TEST(Gvar, ACharstringFaceWithAnFvarIsRefusedByNameForARealLocation) {
   GFNT_Error error{};
   GFNT_F2Dot14 zero = 0;
   GFNT_F2Dot14 moved = 16384;
-  GFNT_Variation at_default{&zero, 1};
-  GFNT_Variation elsewhere{&moved, 1};
+  GFNT_Variation at_default{&zero, 1, GFNT_DELTA_ROUND_HALF_UP };
+  GFNT_Variation elsewhere{&moved, 1, GFNT_DELTA_ROUND_HALF_UP };
 
   ASSERT_EQ(gfnt_blob_create_memory(font.data(), font.size(), GFNT_BLOB_BORROWED,
       nullptr, nullptr, &blob, nullptr), GFNT_OK);
@@ -1682,7 +1682,7 @@ TEST(Gvar, ARealFixtureReadsAndMovesAndTheDefaultIsTheStoredGlyph) {
   // `tri` is glyph 2. At weight 700 its single-point tuple (peak +1) applies at
   // 0.8 and moves the whole contour up by 80; the tuple on the other side of the
   // axis does not reach.
-  GFNT_Variation variation{normalised, 2};
+  GFNT_Variation variation{normalised, 2, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_Outline * outline = nullptr;
   GFNT_Point at;
 
@@ -1859,7 +1859,7 @@ TEST(Gvar, AGlyphAppendedToAnOutlineThatAlreadyHasPointsIsInferredFromItsOwn) {
   Moving font({square()}, build_gvar(spec));
   GFNT_Outline * outline = nullptr;
   const GFNT_F2Dot14 coordinate = 16384;
-  const GFNT_Variation variation{&coordinate, 1};
+  const GFNT_Variation variation{&coordinate, 1, GFNT_DELTA_ROUND_HALF_UP };
 
   ASSERT_EQ(gfnt_outline_create(nullptr, &outline, nullptr), GFNT_OK);
   ASSERT_EQ(gfnt_glyf_load(font.face, 0, &variation, outline, &font.error),
@@ -2053,10 +2053,13 @@ struct Metric : Moving {
             extra) {
   }
 
+  /** How a halfway delta rounds; the library's default unless a test sets it. */
+  GFNT_DeltaRounding rounding = GFNT_DELTA_ROUND_HALF_UP;
+
   /** The advance at one weight, or the failing result through @p result. */
   int32_t advance(uint32_t glyph, GFNT_F2Dot14 coordinate,
       GFNT_Result * result = nullptr) {
-    const GFNT_Variation variation{&coordinate, 1};
+    const GFNT_Variation variation{&coordinate, 1, rounding };
     int32_t value = -1;
     GFNT_Result got = gfnt_face_glyph_advance(face, glyph, &variation, &value,
         &error);
@@ -2090,13 +2093,23 @@ TEST(Hvar, AnAdvanceIsTheDefaultsPlusTheScaledDeltaOfItsRow) {
   EXPECT_EQ(font.advance(0, -16384), 500);
 }
 
-TEST(Hvar, ARoundedNegativeDeltaRoundsAwayFromZeroToo) {
-  // -7 * 0.5 = -3.5 -> -4, so 500 - 4. Truncation or floor would give 497 or 496
-  // in the wrong places; the rule is the same one every other delta follows.
+TEST(Hvar, ANegativeTieFollowsTheRoundingTheCallerChose) {
+  // -7 * 0.5 = -3.5. Half up (the default, HarfBuzz and fontTools) is -3, so 497;
+  // half away from zero (FreeType) is -4, so 496. A positive tie is the same in
+  // both: +7 * 0.5 = 3.5 is 4.
   Metric font(1, {hvar_table(build_hvar(build_store(one_region_store({
       {false, 1, {0}, {{-7}}}}))))});
 
+  EXPECT_EQ(font.advance(0, 8192), 497);
+  font.rounding = GFNT_DELTA_ROUND_HALF_AWAY;
   EXPECT_EQ(font.advance(0, 8192), 496);
+
+  Metric positive(1, {hvar_table(build_hvar(build_store(one_region_store({
+      {false, 1, {0}, {{7}}}}))))});
+
+  EXPECT_EQ(positive.advance(0, 8192), 504);
+  positive.rounding = GFNT_DELTA_ROUND_HALF_AWAY;
+  EXPECT_EQ(positive.advance(0, 8192), 504);
 }
 
 TEST(Hvar, AnAdvanceMapPicksTheRowAndTheLastEntryRepeats) {
@@ -2163,7 +2176,7 @@ TEST(Hvar, WideDeltasAreFourBytesAndMixedRowsAreWordsThenBytes) {
 TEST(Hvar, ABearingNeedsItsOwnMappingAndTheTableSaysNothingWithoutOne) {
   StoreSpec spec = one_region_store({{false, 1, {0}, {{100}, {-50}}}});
   const GFNT_F2Dot14 one = 16384;
-  const GFNT_Variation at{&one, 1};
+  const GFNT_Variation at{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
   int32_t value = 99;
   Metric without(2, {hvar_table(build_hvar(build_store(spec)))});
   Metric with(2, {hvar_table(build_hvar(build_store(spec), {},
@@ -2195,7 +2208,7 @@ TEST(Hvar, AMetricAtTheDefaultNeverReadsTheTable) {
   // default instance is answered from hmtx and nothing else is looked at.
   Metric font(1, {hvar_table(std::vector<uint8_t>(3, 0xFF))});
   const GFNT_F2Dot14 zero = 0;
-  const GFNT_Variation at{&zero, 1};
+  const GFNT_Variation at{&zero, 1, GFNT_DELTA_ROUND_HALF_UP };
   int32_t value = -1;
 
   EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, &at, &value, &font.error),
@@ -2310,9 +2323,9 @@ TEST(Hvar, WithoutHvarTheAdvanceFollowsTheDifferenceOfTheFirstTwoPhantomPoints) 
 TEST(Hvar, ThePhantomDeltaIsRoundedOnceAfterTheTwoAreCombined) {
   // Left -21, right +30 at half weight: (30 + 21) / 2 = 25.5, which is 26. Rounding
   // each (-10.5 -> -11, 15) and then subtracting would give 26 as well, so the
-  // distinguishing case is the other sign: left +21, right -30 is -25.5 -> -26,
-  // while rounding each (10.5 -> 11, -15) gives -26 too. They agree; what this
-  // pins is the half-away direction on a negative sum.
+  // distinguishing case is the other sign: left +21, right -30 is -25.5, which is
+  // -25 half up and -26 half away. What this pins is that the tie is decided
+  // once, on the sum, in the caller's direction.
   Tuple tuple;
 
   tuple.peak = {16384};
@@ -2321,6 +2334,8 @@ TEST(Hvar, ThePhantomDeltaIsRoundedOnceAfterTheTwoAreCombined) {
   spec.glyphs = {glyph_variation_data({tuple})};
   Metric font(1, {}, build_gvar(spec));
 
+  EXPECT_EQ(font.advance(0, 8192), 475);
+  font.rounding = GFNT_DELTA_ROUND_HALF_AWAY;
   EXPECT_EQ(font.advance(0, 8192), 474);
 }
 
@@ -2352,7 +2367,7 @@ TEST(Hvar, AnEmptyGlyphHasPhantomPointsToo) {
   spec.glyphs = {glyph_variation_data({tuple})};
   Moving font({std::vector<uint8_t>{}}, build_gvar(spec));
   const GFNT_F2Dot14 one = 16384;
-  const GFNT_Variation at{&one, 1};
+  const GFNT_Variation at{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
   int32_t value = -1;
 
   ASSERT_EQ(gfnt_face_glyph_advance(font.face, 0, &at, &value, &font.error),
@@ -2375,7 +2390,7 @@ TEST(Hvar, ACompositeCountsItsComponentsAsItsPoints) {
   spec.glyphs = {glyph_variation_data({}), glyph_variation_data({tuple})};
   Moving font({square(), composite}, build_gvar(spec));
   const GFNT_F2Dot14 one = 16384;
-  const GFNT_Variation at{&one, 1};
+  const GFNT_Variation at{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
   int32_t value = -1;
 
   ASSERT_EQ(gfnt_face_glyph_advance(font.face, 1, &at, &value, &font.error),
@@ -2395,8 +2410,8 @@ TEST(Mvar, ALineMetricMovesByItsOwnTagAndOthersStayPut) {
       {{"hasc", 0, 0}, {"hdsc", 0, 1}}))});
   const GFNT_F2Dot14 one = 16384;
   const GFNT_F2Dot14 half = 8192;
-  const GFNT_Variation at_one{&one, 1};
-  const GFNT_Variation at_half{&half, 1};
+  const GFNT_Variation at_one{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
+  const GFNT_Variation at_half{&half, 1, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_LineMetrics line{};
 
   ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA, &at_one,
@@ -2405,10 +2420,15 @@ TEST(Mvar, ALineMetricMovesByItsOwnTagAndOthersStayPut) {
   EXPECT_EQ(line.descent, -225);
   EXPECT_EQ(line.line_gap, 0);
   EXPECT_EQ(line.source, GFNT_LINE_METRICS_HHEA);
-  // 40 * 1/2 = 20; -25 * 1/2 = -12.5 -> -13.
+  // 40 * 1/2 = 20; -25 * 1/2 = -12.5, which is -12 half up (the default).
   ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA, &at_half,
       &line, &font.error), GFNT_OK);
   EXPECT_EQ(line.ascent, 820);
+  EXPECT_EQ(line.descent, -212);
+  const GFNT_Variation away{&half, 1, GFNT_DELTA_ROUND_HALF_AWAY };
+
+  ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA, &away,
+      &line, &font.error), GFNT_OK);
   EXPECT_EQ(line.descent, -213);
 }
 
@@ -2420,7 +2440,7 @@ TEST(Mvar, TheWindowDescentIsStoredPositiveSoItsDeltaIsSubtracted) {
       {{"hcla", 0, 0}, {"hcld", 0, 1}})),
       {GFNT_TAG('O', 'S', '/', '2'), gfnttest::build_os2()}});
   const GFNT_F2Dot14 one = 16384;
-  const GFNT_Variation at{&one, 1};
+  const GFNT_Variation at{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_LineMetrics line{};
 
   ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_WIN, &at, &line,
@@ -2436,7 +2456,7 @@ TEST(Mvar, TheTypographicMetricsHaveTheirOwnThreeTags) {
       {{"tasc", 0, 0}, {"tdsc", 0, 1}, {"tlgp", 0, 2}})),
       {GFNT_TAG('O', 'S', '/', '2'), gfnttest::build_os2()}});
   const GFNT_F2Dot14 one = 16384;
-  const GFNT_Variation at{&one, 1};
+  const GFNT_Variation at{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_LineMetrics line{};
 
   ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_TYPO, &at, &line,
@@ -2450,7 +2470,7 @@ TEST(Mvar, AFontWithNoMvarHasLineMetricsThatDoNotMove) {
   // The specification's statement, and not a refusal: no table is no change.
   Metric font(1, {});
   const GFNT_F2Dot14 one = 16384;
-  const GFNT_Variation at{&one, 1};
+  const GFNT_Variation at{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_LineMetrics line{};
 
   ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA, &at, &line,
@@ -2466,7 +2486,7 @@ TEST(Mvar, ALongerRecordIsSkippedByItsStatedSizeAndAShorterOneIsCorrupt) {
   Metric shorter(1, {mvar_table(build_mvar(build_store(spec),
       {{"hasc", 0, 0}}, 4))});
   const GFNT_F2Dot14 one = 16384;
-  const GFNT_Variation at{&one, 1};
+  const GFNT_Variation at{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_LineMetrics line{};
 
   ASSERT_EQ(gfnt_face_line_metrics(longer.face, GFNT_LINE_METRICS_HHEA, &at,
@@ -2485,7 +2505,7 @@ TEST(Mvar, ATableThatContradictsItselfIsCorruptOnlyWhereTheTagIsAsked) {
   Metric no_store(1, {mvar_table(build_mvar({}, {{"hasc", 0, 0}}))});
   Metric truncated(1, {mvar_table(std::vector<uint8_t>(6, 0))});
   const GFNT_F2Dot14 one = 16384;
-  const GFNT_Variation at{&one, 1};
+  const GFNT_Variation at{&one, 1, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_LineMetrics line{};
 
   EXPECT_EQ(gfnt_face_line_metrics(bad_index.face, GFNT_LINE_METRICS_HHEA, &at,
@@ -2502,7 +2522,7 @@ TEST(Mvar, ATableThatContradictsItselfIsCorruptOnlyWhereTheTagIsAsked) {
 TEST(Gvar, AVariationWithTooManyCoordinatesIsInvalidForAMetricToo) {
   Metric font(1, {});
   const GFNT_F2Dot14 many[2] = {16384, 16384};
-  const GFNT_Variation too_many{many, 2};
+  const GFNT_Variation too_many{many, 2, GFNT_DELTA_ROUND_HALF_UP };
   int32_t value = -1;
 
   EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, &too_many, &value, &font.error),
@@ -3536,11 +3556,13 @@ struct Controlled {
               return extra;
             }()) {}
 
+  GFNT_DeltaRounding rounding = GFNT_DELTA_ROUND_HALF_UP;
+
   std::vector<int32_t> at(const std::vector<GFNT_F2Dot14> & coordinates,
       GFNT_Result * result = nullptr) {
     size_t count = 0;
     std::vector<int32_t> out(8, 12345);
-    GFNT_Variation variation{coordinates.data(), coordinates.size()};
+    GFNT_Variation variation{coordinates.data(), coordinates.size(), rounding };
 
     EXPECT_EQ(gfnt_face_cvt_count(font.face, &count, &font.error), GFNT_OK);
     gfnt_error_clear(&font.error);
@@ -3579,11 +3601,14 @@ TEST(Cvar, ATupleThatNamesEveryValueMovesEachByItsDeltaScaled) {
   EXPECT_EQ(font.at({-16384}), (std::vector<int32_t>{100, -50, 300, 7}));
 }
 
-TEST(Cvar, ANegativeHalfRoundsAwayFromZeroToo) {
-  // -7 * 0.5 = -3.5 -> -4, so 7 becomes 3. Half-up would give 4.
+TEST(Cvar, ANegativeTieFollowsTheRoundingTheCallerChose) {
+  // -7 * 0.5 = -3.5: -3 half up (the default), so 7 becomes 4; -4 half away from
+  // zero, so 7 becomes 3.
   Controlled font(kCvt, build_cvar({cvar_tuple(0x4000,
       {0x03, 0, 0, 0, 0xF9})}));
 
+  EXPECT_EQ(font.at({8192}), (std::vector<int32_t>{100, -50, 300, 4}));
+  font.rounding = GFNT_DELTA_ROUND_HALF_AWAY;
   EXPECT_EQ(font.at({8192}), (std::vector<int32_t>{100, -50, 300, 3}));
 }
 
@@ -3682,7 +3707,7 @@ TEST(Cvar, AnOutputTooSmallOrAVariationWithTooManyCoordinatesIsInvalid) {
   Controlled font(kCvt, build_cvar({cvar_tuple(0x4000, {0x03, 1, 1, 1, 1})}));
   int32_t out[2];
   GFNT_F2Dot14 coords[2] = {1, 1};
-  GFNT_Variation too_many{coords, 2};
+  GFNT_Variation too_many{coords, 2, GFNT_DELTA_ROUND_HALF_UP };
   int32_t full[4];
 
   EXPECT_EQ(gfnt_face_cvt_values(font.font.face, nullptr, out, 2,

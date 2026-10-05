@@ -112,6 +112,20 @@ static inline int64_t gfnt_round_shift(int64_t product, int shift) {
 }
 
 /**
+ * Divide by 2^shift, a tie going the way the caller's ::GFNT_DeltaRounding says.
+ *
+ * @param mode ::GFNT_DELTA_ROUND_HALF_UP (floor of x + half) or anything else for
+ *   half away from zero.
+ */
+static inline int64_t gfnt_round_shift_mode(int64_t product, int shift,
+    int mode) {
+  if (mode == 0) {
+    return (product + ((int64_t)1 << (shift - 1))) >> shift;
+  }
+  return gfnt_round_shift(product, shift);
+}
+
+/**
  * Divide, rounding half away from zero, with both signs handled explicitly.
  */
 static inline int64_t gfnt_round_div(int64_t numerator, int64_t denominator) {

@@ -36,6 +36,9 @@
  *   --location <list>   a location in a variable font's design space, as
  *                       `wght=700,wdth=90`, in user coordinates; axes not named
  *                       stay at their default
+ *   --rounding <rule>   how a variation delta exactly halfway between two units
+ *                       rounds: `half-up` (the default; HarfBuzz, fontTools) or
+ *                       `half-away` (FreeType)
  *   --layout            print the face's GSUB and GPOS (scripts, features,
  *                       lookup types) and stop; <text> is not needed
  *
@@ -191,6 +194,7 @@ int main(int argc, char ** argv) {
   const char * location = NULL;
   GFNT_F2Dot14 normalised[64];
   GFNT_Variation variation;
+  GFNT_DeltaRounding rounding = GFNT_DELTA_ROUND_HALF_UP;
   int arg;
 
   memset(&options, 0, sizeof options);
@@ -214,6 +218,20 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[arg], "--location") == 0 && arg + 1 < argc) {
       location = argv[++arg];
+    }
+    else if (strcmp(argv[arg], "--rounding") == 0 && arg + 1 < argc) {
+      const char * rule = argv[++arg];
+
+      if (strcmp(rule, "half-up") == 0) {
+        rounding = GFNT_DELTA_ROUND_HALF_UP;
+      }
+      else if (strcmp(rule, "half-away") == 0) {
+        rounding = GFNT_DELTA_ROUND_HALF_AWAY;
+      }
+      else {
+        fprintf(stderr, "--rounding is half-up or half-away\n");
+        return 2;
+      }
     }
     else if (strcmp(argv[arg], "--batch") == 0) {
       batch = true;
@@ -374,6 +392,7 @@ int main(int argc, char ** argv) {
     }
     variation.coords = normalised;
     variation.count = axes;
+    variation.delta_rounding = rounding;
     options.variation = &variation;
   }
   if (batch) {

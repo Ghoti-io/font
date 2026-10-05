@@ -178,9 +178,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     return 0;
   }
 
-  const GFNT_Variation at_location{coordinates, axes};
+  const GFNT_Variation at_location{coordinates, axes, GFNT_DELTA_ROUND_HALF_UP };
   const GFNT_F2Dot14 zero[4] = {0, 0, 0, 0};
-  const GFNT_Variation at_default{zero, axes};
+  const GFNT_Variation at_default{zero, axes, GFNT_DELTA_ROUND_HALF_UP };
 
   for (uint32_t glyph = 0; glyph < glyphs.size(); ++glyph) {
     GFNT_Outline * plain = nullptr;

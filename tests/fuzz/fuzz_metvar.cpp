@@ -148,7 +148,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
       GFNT_LINE_METRICS_HHEA};
 
   for (const auto & place : places) {
-    const GFNT_Variation at{place, axes};
+    const GFNT_Variation at{place, axes, GFNT_DELTA_ROUND_HALF_UP };
     bool still = true;
 
     for (size_t i = 0; i < axes; ++i) {

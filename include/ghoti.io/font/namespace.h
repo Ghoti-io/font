@@ -79,6 +79,7 @@
 #define GFNT_StrikePolicy GHOTIIO_FONT(GFNT_StrikePolicy)
 #define GFNT_Tag GHOTIIO_FONT(GFNT_Tag)
 #define GFNT_Variation GHOTIIO_FONT(GFNT_Variation)
+#define GFNT_DeltaRounding GHOTIIO_FONT(GFNT_DeltaRounding)
 #define GFNT_Axis GHOTIIO_FONT(GFNT_Axis)
 #define GFNT_NamedInstance GHOTIIO_FONT(GFNT_NamedInstance)
 

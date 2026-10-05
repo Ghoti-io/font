@@ -227,7 +227,7 @@ void exercise_cvt(const GFNT_Face * face, const std::vector<uint8_t> & cvt,
     check(plain[i] == static_cast<int16_t>((cvt[2 * i] << 8) | cvt[2 * i + 1]));
   }
   for (const auto & place : kPlaces) {
-    const GFNT_Variation at{place, axes};
+    const GFNT_Variation at{place, axes, GFNT_DELTA_ROUND_HALF_UP };
     bool still = true;
 
     for (size_t i = 0; i < axes; ++i) {

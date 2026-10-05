@@ -357,7 +357,7 @@ struct Cff2Face {
   /** The outline's points in whole units, or the failure through @p result. */
   Points points(uint32_t glyph, const std::vector<GFNT_F2Dot14> & coordinates = {},
       GFNT_Result * result = nullptr) {
-    GFNT_Variation variation{coordinates.data(), coordinates.size()};
+    GFNT_Variation variation{coordinates.data(), coordinates.size(), GFNT_DELTA_ROUND_HALF_UP };
     GFNT_Outline * outline = nullptr;
     Points out;
 
@@ -816,7 +816,7 @@ TEST(Cff2, WithNoHvarAnAdvanceDoesNotMoveBecauseNothingElseCouldMoveIt) {
   spec.glyphs = {Cs(), square(10, 10, -10)};
   Cff2Face font(spec);
   int32_t advance = 0;
-  const GFNT_Variation at{kMax.data(), kMax.size()};
+  const GFNT_Variation at{kMax.data(), kMax.size(), GFNT_DELTA_ROUND_HALF_UP };
 
   ASSERT_EQ(font.load, GFNT_OK);
   ASSERT_EQ(gfnt_face_glyph_advance(font.face, 1, &at, &advance, &font.error),

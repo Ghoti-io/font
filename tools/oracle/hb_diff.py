@@ -72,9 +72,6 @@ GAPS = {
     "bidi and vertical text": "one direction, horizontal, per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
-    "variation rounding": "a variation delta that is exactly a half rounds up "
-                          "in HarfBuzz and away from zero here: a unit for an "
-                          "advance and a unit for a kern, and no more",
 }
 
 LATIN = [
@@ -376,31 +373,7 @@ def has_aat(font):
     return "table 'morx'" in finished.stdout or "table 'kerx'" in finished.stdout
 
 
-def within_rounding(want, got):
-    """Whether two answers differ only by the rounding of a variation delta.
-
-    At a location between a variable font's corners a variation delta is a
-    fraction of a unit - an advance, a kern, an anchor. The two sides round it
-    differently *where it is exactly a half*: HarfBuzz (and fontTools) round half
-    up, so -37.5 is -37, and this library rounds half away from zero, so it is
-    -38 (design.md section 5.2, which believed HarfBuzz did the same; at Inter's
-    opsz=23 every one of 23 negative ties went HarfBuzz's way, and every
-    non-tie agreed). An advance is a delta from `HVAR` and a kern may be another,
-    so a glyph can be two units apart and no more. Glyphs and clusters are never
-    allowed to differ. The corners of the design space, where every scalar is 0 or
-    1 and there is nothing to round, are held exactly.
-    """
-    if len(want) != len(got):
-        return False
-    for a, b in zip(want, got):
-        if a[0] != b[0] or a[1] != b[1]:
-            return False
-        if any(abs(x - y) > 2 for x, y in zip(a[2:], b[2:])):
-            return False
-    return True
-
-
-def classify(text, want, got, mark_feature, aat=False, varied=False):
+def classify(text, want, got, mark_feature, aat=False):
     """Which known gap, if any, explains a disagreement - or None.
 
     These are the things HarfBuzz does that this library does not (see GAPS and
@@ -415,8 +388,6 @@ def classify(text, want, got, mark_feature, aat=False, varied=False):
     """
     if aat:
         return "AAT layout"
-    if varied and within_rounding(want, got):
-        return "variation rounding"
     codepoints = [ord(c) for c in text]
     for glyph in got:
         cluster = glyph[1]
@@ -603,9 +574,7 @@ def main(argv):
                 gpos_of[font] = has_gpos_mark(font)
             if font not in aat_of:
                 aat_of[font] = has_aat(font)
-            gap = classify(text, want, got, gpos_of[font], aat_of[font],
-                           bool(len(group) > 7 and group[7])
-                           and cases_for(font) is None)
+            gap = classify(text, want, got, gpos_of[font], aat_of[font])
             if gap:
                 known[gap] = known.get(gap, 0) + 1
                 continue

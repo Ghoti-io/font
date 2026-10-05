@@ -105,6 +105,30 @@ typedef struct GFNT_Face GFNT_Face;
 #define GFNT_FLAVOUR_HEX GFNT_TAG('H', 'E', 'X', ' ')
 
 /**
+ * @brief How a variation delta that is exactly halfway between two whole units rounds.
+ *
+ * The OpenType specification does not say. It fixes the rounding of a float to
+ * 16.16 (half up) and of 16.16 to 2.14 (half up), and then states that, apart
+ * from those, it "has no other requirements for instance coordinates, scaled
+ * deltas or derived instance values to be rounded" (Font Variations overview,
+ * "Coordinate Scales and Normalization"). Implementations differ: HarfBuzz and
+ * fontTools round half up, FreeType half away from zero. The two agree on every
+ * value that is not an exact tie and on every positive tie; they differ on a
+ * negative one, where -37.5 is -37 half up and -38 half away.
+ *
+ * Applies where a *final* delta becomes a whole number of font units: an
+ * advance or bearing (`HVAR`, `MVAR`), a `cvt ` value (`cvar`), and a `GPOS`
+ * device-table adjustment. Intermediate divisions, the 2.14 normalisation and
+ * glyph outlines are unchanged by it.
+ */
+typedef enum GFNT_DeltaRounding {
+  /** Half up, towards positive infinity: HarfBuzz and fontTools. The default. */
+  GFNT_DELTA_ROUND_HALF_UP = 0,
+  /** Half away from zero: FreeType's rule. */
+  GFNT_DELTA_ROUND_HALF_AWAY = 1,
+} GFNT_DeltaRounding;
+
+/**
  * @brief A point in a variable font's design space.
  *
  * Normalised axis coordinates in 2.14, in `fvar` order, each in -1..1 after
@@ -119,6 +143,8 @@ typedef struct GFNT_Face GFNT_Face;
 typedef struct GFNT_Variation {
   const GFNT_F2Dot14 * coords; ///< Normalised coordinates, or NULL.
   size_t count;                ///< How many axes @p coords covers.
+  /** How a delta that lands exactly halfway is rounded; zero is the default. */
+  GFNT_DeltaRounding delta_rounding;
 } GFNT_Variation;
 
 /**

@@ -413,9 +413,11 @@ static GFNT_Result gfnt_metrics_moved(const GFNT_Face * face, uint32_t glyph,
  * @param delta From ::gfnt_hvar_delta() or ::gfnt_mvar_delta(), with
  *   ::GFNT_GVAR_FRACTION_BITS fractional bits.
  */
-static int32_t gfnt_metrics_add(int64_t base, int64_t delta) {
+static int32_t gfnt_metrics_add(int64_t base, int64_t delta,
+    const GFNT_Variation * variation) {
   return gfnt_saturate32(base
-      + gfnt_round_shift(gfnt_clamp64(delta), GFNT_GVAR_FRACTION_BITS));
+      + gfnt_round_shift_mode(gfnt_clamp64(delta), GFNT_GVAR_FRACTION_BITS,
+          variation->delta_rounding));
 }
 
 /**
@@ -511,7 +513,7 @@ GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face, uint32_t glyph,
     if (result != GFNT_OK) {
       return result;
     }
-    *out_advance = gfnt_metrics_add(advance, delta);
+    *out_advance = gfnt_metrics_add(advance, delta, variation);
     return GFNT_OK;
   }
   *out_advance = (int32_t)advance;
@@ -562,7 +564,7 @@ GFNT_Result gfnt_face_glyph_side_bearing(const GFNT_Face * face, uint32_t glyph,
     if (result != GFNT_OK) {
       return result;
     }
-    *out_bearing = gfnt_metrics_add(bearing, delta);
+    *out_bearing = gfnt_metrics_add(bearing, delta, variation);
     return GFNT_OK;
   }
   *out_bearing = bearing;
@@ -686,7 +688,7 @@ static GFNT_Result gfnt_line_metric_vary(const GFNT_Face * face, GFNT_Tag tag,
   if (result != GFNT_OK) {
     return result;
   }
-  *value = gfnt_metrics_add(*value, sign * delta);
+  *value = gfnt_metrics_add(*value, sign * delta, variation);
   return GFNT_OK;
 }
 

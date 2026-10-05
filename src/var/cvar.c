@@ -291,7 +291,8 @@ GFNT_Result gfnt_face_cvt_values(const GFNT_Face * face,
   if (result == GFNT_OK) {
     for (size_t i = 0; i < count; ++i) {
       int64_t moved = (int64_t)out_values[i]
-          + gfnt_round_shift(gfnt_clamp64(acc[i]), GFNT_GVAR_FRACTION_BITS);
+          + gfnt_round_shift_mode(gfnt_clamp64(acc[i]),
+              GFNT_GVAR_FRACTION_BITS, variation->delta_rounding);
 
       out_values[i] = (int32_t)(moved > INT32_MAX ? INT32_MAX
           : moved < INT32_MIN ? INT32_MIN : moved);

@@ -898,15 +898,23 @@ decides, and what a reader can get wrong without any error:
   `usWinDescent` is stored positive); a font with no `MVAR`, or one that does not list
   a tag, **has no change in that metric**, which is the specification's statement and
   not a refusal. The default instance never reads any of these tables.
-- **The delta is exact and is rounded once, half away from zero.** It is carried to
-  `GFNT_GVAR_FRACTION_BITS` fractional bits like a point's, summed over every region
-  at that width, and rounded to a whole unit when it is added to the stored value.
-  That is `FT_MulDiv`'s rule and HarfBuzz's; fontTools' `otRound` is half *up*, so
-  the two differ on exactly the negative halves (a delta of -2.5 is -3 here and -2
-  there), which Inter's `opsz` axis reaches because its range puts a scalar of
-  exactly a half in the middle. The differential compares fontTools' *unrounded*
-  delta, rounded this library's way, so that the arithmetic is fontTools' and only
-  the last step is not.
+- **The delta is exact and is rounded once, and the tie is the caller's to choose.**
+  It is carried to `GFNT_GVAR_FRACTION_BITS` fractional bits like a point's, summed
+  over every region at that width, and rounded to a whole unit when it is added to
+  the stored value. The specification does not say how: it fixes float to 16.16 and
+  16.16 to 2.14 as half up, then states that it "has no other requirements for
+  instance coordinates, scaled deltas or derived instance values to be rounded"
+  (Font Variations overview, "Coordinate Scales and Normalization"). Readers
+  differ only on a negative tie (a delta of -2.5): HarfBuzz and fontTools
+  (`otRound`) give -2, FreeType (`FT_MulDiv`) gives -3. So `GFNT_Variation` carries
+  `delta_rounding`: `GFNT_DELTA_ROUND_HALF_UP` (zero, the default, the majority and
+  the specification's own convention for the roundings it does state) or
+  `GFNT_DELTA_ROUND_HALF_AWAY`. It applies where a *final* delta becomes whole
+  units - an advance or bearing (`HVAR`, `MVAR`), a `cvt ` value (`cvar`), a `GPOS`
+  device adjustment (each anchor coordinate is rounded before the two anchors are
+  subtracted, as HarfBuzz does). The arithmetic before that point, the 2.14
+  conversion and glyph outlines keep §5.2's half-away rule. The differential
+  against HarfBuzz holds the default exactly, with no allowance.
 - **`USE_MY_METRICS` is not applied, and FreeType does.** A composite glyph with a
   component flagged for it takes its advance, in FreeType, from that component. `HVAR`
   (and fontTools, and HarfBuzz, and this library) take it from the composite's own

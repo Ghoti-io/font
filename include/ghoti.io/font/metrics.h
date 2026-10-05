@@ -330,7 +330,8 @@ GFNT_API bool gfnt_face_num_glyphs_disagreement(const GFNT_Face * face,
  * @param variation The instance, or NULL for the default. At a location other
  *   than the default the advance is `HVAR`'s delta for the glyph added to
  *   `hmtx`'s - or, in a font with no `HVAR`, the difference of the first two
- *   phantom points `gvar` carries - rounded once, half away from zero. A
+ *   phantom points `gvar` carries - rounded once, a tie going as
+ *   ::GFNT_Variation.delta_rounding says (half up by default). A
  *   composite glyph's own row is used, whatever its `USE_MY_METRICS` component
  *   says.
  * @param out_advance Receives the advance in font units. Written only on

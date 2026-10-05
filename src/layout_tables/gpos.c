@@ -45,10 +45,10 @@
 #define GFNT_VF_Y_ADV_DEVICE 0x0080u
 #define GFNT_VF_DEVICES 0x00F0u
 
-/** A 16.16 value rounded to a whole unit, half away from zero. */
-static int32_t gfnt_gpos_round(int64_t value) {
-  return (int32_t)(value >= 0 ? (value + 0x8000) >> 16
-                              : -((-value + 0x8000) >> 16));
+/** A 16.16 value rounded to a whole unit, a tie going as the location says. */
+static int32_t gfnt_gpos_round(const GFNT_LApply * c, int64_t value) {
+  return (int32_t)gfnt_round_shift_mode(value, 16,
+      c->variation ? c->variation->delta_rounding : 0);
 }
 
 static void gfnt_gpos_fault(GFNT_LApply * c, size_t offset) {
@@ -101,7 +101,7 @@ static int64_t gfnt_gpos_device_delta(GFNT_LApply * c, size_t device) {
     return 0;
   }
   // The store's sum has 24 fractional bits; positions carry 16.
-  return gfnt_round_shift(delta, 8);
+  return gfnt_round_shift_mode(delta, 8, c->variation->delta_rounding);
 }
 
 /** Add one value record to a glyph's position: HarfBuzz's apply_value(). */
@@ -134,17 +134,17 @@ static bool gfnt_gpos_apply_value(GFNT_LApply * c, uint32_t format, size_t base,
   }
   if (format & GFNT_VF_DEVICES) {
     if (format & GFNT_VF_X_PLA_DEVICE) {
-      pos->x_offset += gfnt_gpos_round(gfnt_gpos_device_delta(c,
+      pos->x_offset += gfnt_gpos_round(c, gfnt_gpos_device_delta(c,
           gfnt_l_rel(base, gfnt_lu16(c, values))));
       values += 2;
     }
     if (format & GFNT_VF_Y_PLA_DEVICE) {
-      pos->y_offset += gfnt_gpos_round(gfnt_gpos_device_delta(c,
+      pos->y_offset += gfnt_gpos_round(c, gfnt_gpos_device_delta(c,
           gfnt_l_rel(base, gfnt_lu16(c, values))));
       values += 2;
     }
     if (format & GFNT_VF_X_ADV_DEVICE) {
-      pos->x_advance += gfnt_gpos_round(gfnt_gpos_device_delta(c,
+      pos->x_advance += gfnt_gpos_round(c, gfnt_gpos_device_delta(c,
           gfnt_l_rel(base, gfnt_lu16(c, values))));
       values += 2;
     }
@@ -169,8 +169,13 @@ static void gfnt_gpos_anchor(GFNT_LApply * c, size_t anchor, int64_t * x,
   *x = (int64_t)gfnt_ls16(c, anchor + 2) * 65536;
   *y = (int64_t)gfnt_ls16(c, anchor + 4) * 65536;
   if (format == 3) {
-    *x += gfnt_gpos_device_delta(c, gfnt_l_rel(anchor, gfnt_lu16(c, anchor + 6)));
-    *y += gfnt_gpos_device_delta(c, gfnt_l_rel(anchor, gfnt_lu16(c, anchor + 8)));
+    // Each coordinate's delta is a whole number of units before the two anchors
+    // are subtracted, as in HarfBuzz: rounding the difference instead lands a
+    // unit away whenever both deltas are fractional.
+    *x += (int64_t)gfnt_gpos_round(c, gfnt_gpos_device_delta(c,
+        gfnt_l_rel(anchor, gfnt_lu16(c, anchor + 6)))) * 65536;
+    *y += (int64_t)gfnt_gpos_round(c, gfnt_gpos_device_delta(c,
+        gfnt_l_rel(anchor, gfnt_lu16(c, anchor + 8)))) * 65536;
   }
   else if (format != 1 && format != 2) {
     gfnt_gpos_fault(c, anchor);
@@ -380,16 +385,16 @@ static bool gfnt_gpos_cursive(GFNT_LApply * c, size_t sub) {
   gfnt_gpos_anchor(c, exit_anchor, &exit_x, &exit_y);
   gfnt_gpos_anchor(c, entry, &entry_x, &entry_y);
   if (!c->rtl) {
-    b->pos[i].x_advance = gfnt_gpos_round(exit_x) + b->pos[i].x_offset;
-    d = gfnt_gpos_round(entry_x) + b->pos[j].x_offset;
+    b->pos[i].x_advance = gfnt_gpos_round(c, exit_x) + b->pos[i].x_offset;
+    d = gfnt_gpos_round(c, entry_x) + b->pos[j].x_offset;
     b->pos[j].x_advance -= d;
     b->pos[j].x_offset -= d;
   }
   else {
-    d = gfnt_gpos_round(exit_x) + b->pos[i].x_offset;
+    d = gfnt_gpos_round(c, exit_x) + b->pos[i].x_offset;
     b->pos[i].x_advance -= d;
     b->pos[i].x_offset -= d;
-    b->pos[j].x_advance = gfnt_gpos_round(entry_x) + b->pos[j].x_offset;
+    b->pos[j].x_advance = gfnt_gpos_round(c, entry_x) + b->pos[j].x_offset;
   }
   // The cross-direction adjustment: attach the child to the parent. Which of the
   // two glyphs is which depends on the lookup's right-to-left flag, because the
@@ -413,7 +418,7 @@ static bool gfnt_gpos_cursive(GFNT_LApply * c, size_t sub) {
   b->pos[child].attach_type = GFNT_ATTACH_CURSIVE;
   b->pos[child].attach_chain = (int32_t)((int64_t)parent - (int64_t)child);
   b->has_attachment = true;
-  b->pos[child].y_offset = gfnt_gpos_round(y_offset);
+  b->pos[child].y_offset = gfnt_gpos_round(c, y_offset);
   // If the parent was attached to the child, separate them.
   if (b->pos[parent].attach_chain == -b->pos[child].attach_chain) {
     b->pos[parent].attach_chain = 0;
@@ -461,8 +466,8 @@ static bool gfnt_gpos_mark_attach(GFNT_LApply * c, size_t mark_array,
   gfnt_gpos_anchor(c, mark_anchor, &mark_x, &mark_y);
   gfnt_gpos_anchor(c, glyph_anchor, &base_x, &base_y);
   o = &b->pos[b->idx];
-  o->x_offset = gfnt_gpos_round(base_x - mark_x);
-  o->y_offset = gfnt_gpos_round(base_y - mark_y);
+  o->x_offset = gfnt_gpos_round(c, base_x - mark_x);
+  o->y_offset = gfnt_gpos_round(c, base_y - mark_y);
   o->attach_type = GFNT_ATTACH_MARK;
   o->attach_chain = (int32_t)((int64_t)glyph_pos - (int64_t)b->idx);
   b->has_attachment = true;

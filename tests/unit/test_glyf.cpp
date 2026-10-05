@@ -841,7 +841,7 @@ TEST(Glyf, VariationCoordinatesOnAFaceWithNoAxesAreTheCallersMistake) {
   // of *this* face, and `test_variation.cpp` covers the faces that can honour it.
   Font font("outline-simple.ttf");
   GFNT_F2Dot14 coords[1] = {0};
-  GFNT_Variation variation{coords, 1};
+  GFNT_Variation variation{coords, 1, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_Outline * outline = nullptr;
   GFNT_Error error{};
 

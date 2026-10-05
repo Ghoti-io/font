@@ -329,6 +329,7 @@ int main(int argc, char ** argv) {
     }
     variation.coords = normalised;
     variation.count = axes;
+    variation.delta_rounding = GFNT_DELTA_ROUND_HALF_UP;
     options.variation = &variation;
   }
   memset(&run, 0, sizeof run);

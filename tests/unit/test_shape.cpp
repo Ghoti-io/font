@@ -205,7 +205,7 @@ GFNT_Result shape(const Font & font, const std::vector<uint32_t> & text,
   options.feature_count = features.size();
   std::vector<GFNT_F2Dot14> coordinates =
       normalised_location(font.face, request.location);
-  GFNT_Variation located{coordinates.data(), coordinates.size()};
+  GFNT_Variation located{coordinates.data(), coordinates.size(), GFNT_DELTA_ROUND_HALF_UP };
   if (!coordinates.empty()) {
     options.variation = &located;
   }

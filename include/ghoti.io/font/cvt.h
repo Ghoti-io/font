@@ -32,8 +32,8 @@
  * interpreter of its own or wants to inspect the font.
  *
  * Values are whole font units. A control value at a location is the default plus
- * the sum of every applicable tuple's delta, scaled and rounded **once**, half away
- * from zero.
+ * the sum of every applicable tuple's delta, scaled and rounded **once**, a tie going
+ * as ::GFNT_Variation.delta_rounding says (half up by default).
  *
  * Reference: OpenType Specification 1.9, "cvt - Control Value Table" and "cvar -
  * CVT Variations Table".

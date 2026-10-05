@@ -86,7 +86,7 @@ int main(int argc, char ** argv) {
   const char * location = NULL;
   GFNT_F16Dot16 user[64];
   GFNT_F2Dot14 normalised[64];
-  GFNT_Variation variation = { NULL, 0 };
+  GFNT_Variation variation = { NULL, 0, GFNT_DELTA_ROUND_HALF_UP };
   GFNT_Blob * blob = NULL;
   GFNT_Face * face = NULL;
   GFNT_Error error;

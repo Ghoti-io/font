@@ -195,7 +195,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         (void)gfnt_face_glyph_charstring_metrics(face, index, &metrics, &error);
       }
       for (const auto & place : places) {
-        const GFNT_Variation at{place, axes};
+        const GFNT_Variation at{place, axes, GFNT_DELTA_ROUND_HALF_UP };
         bool still = true;
 
         for (size_t i = 0; i < axes; ++i) {

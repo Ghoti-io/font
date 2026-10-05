@@ -156,6 +156,8 @@ static void hangul_preprocess(GFNT_ShapeCtx * ctx, GFNT_LInfo ** chars,
             out[k] = out[k - 1];
           }
           out[start] = tone;
+          // What the tone mark passed is one cluster with it.
+          gfnt_merge_clusters(out, w, start, end + 1);
         }
       }
       else if (hangul_has_glyph(ctx, 0x25CC)) {

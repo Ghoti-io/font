@@ -1859,4 +1859,58 @@ TEST(ShapeHangul, JamoBecomeTheSyllableTheFontHasAndStayJamoWhenItHasNone) {
   // A tone mark with width goes in front of its syllable.
   ASSERT_EQ(shape(composed, V{0xD55C, 0x302E}, request, &g), GFNT_OK);
   EXPECT_EQ(ids(g), (V{6, 2}));
+  // And in a run written right to left, where the tone mark came first, it and
+  // the syllable are one cluster, as HarfBuzz has them.
+  request.rtl = true;
+  ASSERT_EQ(shape(composed, V{0x302F, 0xD55C}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].cluster, g[1].cluster);
+}
+
+TEST(ShapeAllocation, EveryAllocationRefusedInTurnInTheScriptShapersToo) {
+  struct Case {
+    const char * script;
+    std::vector<std::pair<uint32_t, uint16_t>> cmap;
+    std::vector<uint32_t> text;
+  };
+  const std::vector<Case> cases = {
+      {"deva", {{0x915, 2}, {0x93F, 3}, {0x94D, 4}, {0x930, 5}, {0x25CC, 6},
+          {0x200D, 7}}, {0x930, 0x94D, 0x915, 0x93F, 0x94D, 0x200D, 0x93F, 0x93F}},
+      {"java", {{0xA98F, 2}, {0xA9BA, 3}, {0xA9B4, 4}, {0xA9C0, 5}, {0x25CC, 6}},
+          {0xA9B4, 0xA98F, 0xA9BA, 0xA9C0, 0xA9C0, 0x200C}},
+      {"khmr", {{0x1780, 2}, {0x17C1, 3}, {0x17D2, 4}, {0x179A, 5}, {0x25CC, 6}},
+          {0x1780, 0x17D2, 0x179A, 0x17C1, 0x17C1, 0x17D2}},
+      {"mymr", {{0x1000, 2}, {0x1031, 3}, {0x103C, 4}, {0x1039, 5}, {0x25CC, 6}},
+          {0x1000, 0x103C, 0x1031, 0x1039, 0x1000, 0x103C}},
+      {"hang", {{0xD55C, 2}, {0x1112, 3}, {0x1161, 4}, {0x11AB, 5}, {0x302E, 6}},
+          {0x1112, 0x1161, 0x11AB, 0xD558, 0x11AB, 0x302E}},
+      {"thai", {{0xE01, 2}, {0xE33, 3}, {0xE4D, 4}, {0xE32, 5}, {0xE48, 6}},
+          {0xE01, 0xE48, 0xE33, 0xE01, 0xE33}},
+  };
+  for (const auto & c : cases) {
+    Font font(small_font({}, 8, c.cmap));
+    Request request;
+    size_t requests = 0;
+    request.script = c.script;
+    {
+      gfnttest::FailingAllocator counting(static_cast<size_t>(-1));
+      Glyphs g;
+      ASSERT_EQ(shape(font, c.text, request, &g, nullptr, counting.get()),
+          GFNT_OK) << c.script;
+      requests = counting.requests();
+      EXPECT_EQ(counting.live(), 0u) << c.script;
+    }
+    ASSERT_GT(requests, 0u) << c.script;
+    for (size_t fail = 0; fail < requests; ++fail) {
+      gfnttest::FailingAllocator failing(fail);
+      Glyphs g;
+      GFNT_Result result = shape(font, c.text, request, &g, nullptr,
+          failing.get());
+      EXPECT_TRUE(result == GFNT_OK || result == GFNT_ERR_OOM)
+          << c.script << ": " << gfnt_result_string(result)
+          << " failing request " << fail;
+      EXPECT_EQ(failing.live(), 0u) << c.script << ": request " << fail
+          << " leaked";
+    }
+  }
 }

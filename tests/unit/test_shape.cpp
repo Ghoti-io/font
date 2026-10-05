@@ -2870,4 +2870,8 @@ TEST(ShapeKhmer, ACoengWithNoConsonantAfterItIsABrokenClusterUnlessItFollowsOne)
   EXPECT_EQ(ids(g), (V{5, 3}));
   ASSERT_EQ(shape(font, V{0x1780, 0x17B6, 0x17D2}, request, &g), GFNT_OK);
   EXPECT_EQ(ids(g), (V{2, 4, 5, 3}));
+  // The trailing coeng ends the syllable, so a vowel after it starts a broken
+  // one and is given its own circle.
+  ASSERT_EQ(shape(font, V{0x1780, 0x17D2, 0x17B6}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 3, 5, 4}));
 }

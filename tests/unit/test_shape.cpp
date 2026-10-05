@@ -2401,6 +2401,21 @@ TEST(ShapeMorx, FeaturesSelectSubtablesFirstRequestWinsAndRangesAreHonoured) {
   EXPECT_EQ(morx_run(font, "BB", "liga[1:2]"), (P{{2, 0}, {31, 1}}));
 }
 
+TEST(ShapeMorx, FeaturesWithNoOpenTypeTwinMapToTheirSettingsAndSmcpToTwo) {
+  // hist is setting 0 of type 40; smcp is setting 1 of type 37 and also setting
+  // 3 of type 3. Flag 1 is on by default; the others each turn one on.
+  std::vector<MorxFeature> features = {{40, 0, 0x2, 0xFFFFFFFF},
+      {37, 1, 0x4, 0xFFFFFFFF}, {3, 3, 0x8, 0xFFFFFFFF}};
+  Bytes font = morx_font(morx_table(1, features,
+      {morx_subtable(4, 0, 1, lookup6({{1, 30}})),
+       morx_subtable(4, 0, 2, lookup6({{2, 31}})),
+       morx_subtable(4, 0, 4, lookup6({{3, 32}})),
+       morx_subtable(4, 0, 8, lookup6({{4, 33}}))}),
+      feat_table({{3, {3}}, {37, {1}}, {40, {0}}}));
+  EXPECT_EQ(morx_run(font, "BCD", "hist"), (P{{31, 0}, {3, 1}, {4, 2}}));
+  EXPECT_EQ(morx_run(font, "BCD", "smcp"), (P{{2, 0}, {32, 1}, {33, 2}}));
+}
+
 TEST(ShapeMorx, ItReplacesTheScriptsOwnShaperAndNoClassIsMadeUpForAMark) {
   // A mark of an Arabic run keeps its advance: no class is made up for it and no
   // script shaper reorders or joins; the font's tables do it all.

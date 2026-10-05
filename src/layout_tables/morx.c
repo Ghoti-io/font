@@ -483,6 +483,7 @@ static void noncontextual(Ctx * c, size_t body) {
 
 /* --- the feature mapping --------------------------------------------------- */
 
+// A disable of 0xFFFF names no setting: the feature has nothing to turn off there.
 typedef struct Mapping {
   const char tag[5];
   uint16_t type, enable, disable;
@@ -513,6 +514,10 @@ static const Mapping mappings[] = {
   {"swsh", 36, 2, 3}, {"titl", 19, 4, 0}, {"tnam", 20, 14, 16},
   {"tnum", 6, 0, 4}, {"trad", 20, 0, 16}, {"twid", 22, 3, 7},
   {"unic", 3, 14, 15},  {"vert", 4, 0, 1},
+  {"expt", 20, 10, 16}, {"hist", 40, 0, 1}, {"hojo", 20, 12, 16},
+  {"jp04", 20, 11, 16}, {"jp78", 20, 2, 16}, {"jp83", 20, 3, 16},
+  {"jp90", 20, 4, 16}, {"pkna", 22, 0, 7}, {"valt", 22, 5, 7},
+  {"vrtr", 4, 2, 3}, {"smcp", 3, 3, 0xFFFF},
   {"vhal", 22, 6, 7}, {"vkna", 34, 2, 3}, {"vpal", 22, 5, 7},
   {"vrt2", 4, 0, 1}, {"zero", 14, 4, 5},
 };
@@ -568,43 +573,49 @@ static size_t collect_wanted(const GFNT_Face * face,
   }
   for (i = 0; i < count && n < MAX_WANTED; i++) {
     char tag[5];
-    size_t k;
-    uint16_t type;
-    uint16_t setting;
-    bool exclusive = false;
-    bool found = false;
+    size_t k = 0;
+    bool aalt;
 
     tag[0] = (char)(features[i].tag >> 24);
     tag[1] = (char)(features[i].tag >> 16);
     tag[2] = (char)(features[i].tag >> 8);
     tag[3] = (char)features[i].tag;
     tag[4] = 0;
-    if (!memcmp(tag, "aalt", 4)) {
-      type = 17;
-      setting = (uint16_t)features[i].value;
-    }
-    else {
-      for (k = 0; k < sizeof mappings / sizeof mappings[0]; k++) {
-        if (!memcmp(mappings[k].tag, tag, 4)) {
-          found = true;
+    aalt = !memcmp(tag, "aalt", 4);
+    // A feature may be several AAT settings, one entry of the table for each.
+    while (n < MAX_WANTED) {
+      uint16_t type;
+      uint16_t setting;
+      bool exclusive = false;
+
+      if (aalt) {
+        type = 17;
+        setting = (uint16_t)features[i].value;
+      }
+      else {
+        while (k < sizeof mappings / sizeof mappings[0]
+            && memcmp(mappings[k].tag, tag, 4)) {
+          k++;
+        }
+        if (k == sizeof mappings / sizeof mappings[0]) {
           break;
         }
+        type = mappings[k].type;
+        setting = features[i].value ? mappings[k].enable : mappings[k].disable;
+        k++;
       }
-      if (!found) {
-        continue;
+      if (feat_type(&feat, type, &exclusive)) {
+        out[n].type = type;
+        out[n].setting = setting;
+        out[n].exclusive = exclusive;
+        out[n].start = features[i].start;
+        out[n].end = features[i].end;
+        n++;
       }
-      type = mappings[k].type;
-      setting = features[i].value ? mappings[k].enable : mappings[k].disable;
+      if (aalt) {
+        break;
+      }
     }
-    if (!feat_type(&feat, type, &exclusive)) {
-      continue;
-    }
-    out[n].type = type;
-    out[n].setting = setting;
-    out[n].exclusive = exclusive;
-    out[n].start = features[i].start;
-    out[n].end = features[i].end;
-    n++;
   }
   return n;
 }

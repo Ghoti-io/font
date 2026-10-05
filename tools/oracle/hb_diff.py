@@ -28,12 +28,12 @@ What it runs, per font and per group of (script, language, features):
 
 **What it can and cannot see.** The strings are chosen to be the ones the default
 shaper's own pipeline decides: kerning pairs, ligature candidates, accented
-letters, marks with no precomposed form, numerals, punctuation. Scripts that need
-a script shaper of their own (Arabic, the Indic scripts, Hangul) are *not* in the
-corpus, because HarfBuzz would shape them with a shaper this library does not
-have, and a comparison where one side declines to do the work is not a comparison.
-They are listed in `GAPS` below, with what is missing, so that the absence is a
-statement and not an omission.
+letters, marks with no precomposed form, numerals, punctuation. A script that needs
+a shaper of its own is held to HarfBuzz too, with texts made from the characters
+each font has (the `auto` groups, which find the syllables a font can draw) and,
+where a script's shaper works on what the font has and not on the text alone
+(Hangul), a group of its own. What is still missing is listed in `GAPS` below, so
+that the absence is a statement and not an omission.
 
 A refusal on this library's side is counted and listed, never skipped: a font this
 library will not shape is a font whose strings are in the denominator.
@@ -66,7 +66,6 @@ GAPS = {
     "bidi and vertical text": "one direction, horizontal, per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
-    "script shaper not written": "Hangul, whose jamo this library does not compose",
     "Indic character details": "a handful of characters in Gujarati, Oriya and Telugu "
                                "that HarfBuzz sorts or syllabifies differently from "
                                "the Unicode data: found by the generated texts, not "
@@ -87,11 +86,10 @@ INDIC_DETAIL_SCRIPTS = set("gujr orya telu".split())
 # The Universal Shaping Engine scripts in which a few characters still differ.
 USE_DETAIL_SCRIPTS = set("gran java sind mong tavt tirh".split())
 
-# Scripts whose shaper this library has not got: only Hangul, which the corpus
-# reaches through three fonts. A text in one of them is generated from
-# the font (`auto` groups) and shaped as if it were Latin, and the differential
-# holds the scripts that have a shaper.
-UNSHAPED_SCRIPTS = set(["hang"])
+# Scripts whose shaper this library has not got: none. A text in one of them would
+# be generated from the font (`auto` groups) and shaped as if it were Latin, and the
+# differential holds the scripts that have a shaper.
+UNSHAPED_SCRIPTS = set()
 
 # Fixtures whose outlines are of a kind HarfBuzz does not read. A mark is placed
 # against its base's box when the font has no GPOS, and the box is the one thing
@@ -188,6 +186,17 @@ LAO = [
     "\u0eab\u0ebc\u0ea7\u0e87 \u0e9e\u0eb0\u0e9a\u0eb2\u0e87 \u0eab\u0ea1\u0eb2 \u0eab\u0e99\u0eb2 \u0eab\u0ea5\u0eb2",
     "\u0e81\u0ebb\u0e99 \u0e81\u0eb8 \u0e81\u0eb9 \u0e81\u0ec8\u0eb2 \u0e81\u0eb9\u0ec9",
 ]
+HANGUL = [
+    # Precomposed, fully decomposed, and the half-way forms in between.
+    "\ud55c\uae00 \uc548\ub155\ud558\uc138\uc694",
+    "\u1112\u1161\u11ab \u1100\u1173\u11af \u110b\u1161\u11ab\u1102\u1167\u11bc",
+    "\ud558\u11ab \uac00\u11a8 \ud55c\u11ab \uac01\u11a8 \ud558\u11ab\u11ab",
+    "\u1100\u1161 \u1112\u1161\u1100 \u1100\u1100\u1161 \u1161\u11a8 \u11a8",
+    "\u1100\u1161\u11a8\u11a8 \ud558\u1161 \uac00\u1161\u11a8",
+    # Tone marks, with a syllable and without.
+    "\ud55c\u302e \ud55c\u302f \u302e \u1112\u1161\u11ab\u302e \u302f\u1100\u1161",
+    "abc \ud55c\uae00 123 \u1112\u1161\u11ab",
+]
 GREEK = [
     "Αλφάβητο Τάξη Υ ωΩ",
     "ΑΒΓΔΕ αβγδε ΤΑ ΓΑ",
@@ -224,6 +233,7 @@ GROUPS = [
     ("thaana", "Thaa", "thaa", None, "", "", THAANA, "", 0x780),
     ("thai", "Thai", "thai", None, "", "", THAI, "", 0xe01),
     ("lao", "Laoo", "lao ", None, "", "", LAO, "", 0xe81),
+    ("hangul", "Hang", "hang", None, "", "", HANGUL, "", 0xac00),
     ("greek", "Grek", "grek", None, "", "", GREEK),
     ("cyrillic", "Cyrl", "cyrl", None, "", "", CYRILLIC),
 ]

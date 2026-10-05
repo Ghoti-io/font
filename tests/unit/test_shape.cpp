@@ -1836,3 +1836,27 @@ TEST(ShapeMyanmar, TheLeftVowelAndTheMedialRaGoBeforeTheConsonant) {
   std::vector<uint32_t> out = ids(g);
   EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 0);
 }
+
+TEST(ShapeHangul, JamoBecomeTheSyllableTheFontHasAndStayJamoWhenItHasNone) {
+  // HAN 2, the jamo HIEUH 3, A 4, NIEUN 5, the tone mark 6.
+  Font composed(small_font({}, 8, {{0xD55C, 2}, {0x1112, 3}, {0x1161, 4},
+      {0x11AB, 5}, {0x302E, 6}}));
+  Font jamo_only(small_font({}, 8, {{0x1112, 3}, {0x1161, 4}, {0x11AB, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "hang";
+  ASSERT_EQ(shape(composed, V{0x1112, 0x1161, 0x11AB}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2}));
+  EXPECT_EQ(g[0].cluster, 0u);
+  // The syllable and a trailing jamo make the syllable with it.
+  ASSERT_EQ(shape(composed, V{0xD558, 0x11AB}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2}));
+  // A font with only the jamo keeps them, and a syllable it lacks is taken apart.
+  ASSERT_EQ(shape(jamo_only, V{0x1112, 0x1161, 0x11AB}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 4, 5}));
+  ASSERT_EQ(shape(jamo_only, V{0xD55C}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 4, 5}));
+  // A tone mark with width goes in front of its syllable.
+  ASSERT_EQ(shape(composed, V{0xD55C, 0x302E}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{6, 2}));
+}

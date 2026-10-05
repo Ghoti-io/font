@@ -209,6 +209,7 @@ extern const GFNT_Shaper gfnt_shaper_use;
 extern const GFNT_Shaper gfnt_shaper_indic;
 extern const GFNT_Shaper gfnt_shaper_khmer;
 extern const GFNT_Shaper gfnt_shaper_myanmar;
+extern const GFNT_Shaper gfnt_shaper_hangul;
 
 /** The joining masks the Arabic shaper sets, for a shaper that borrows them. */
 void * gfnt_arabic_masks_create(const GFNT_Plan * plan,

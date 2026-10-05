@@ -95,7 +95,7 @@ field's, and font engineering has a long list.
 | M14 | `.notdef` treated as an error | Callers that crash on glyph 0 | Glyph 0 always exists; the library synthesises a box if the font has none (§5.4) |
 | M15 | `name` records decoded without regard to platform and encoding IDs | Family names in Mac Roman read as Latin-1; UTF-16BE read as bytes | Decoded by `(platform, encoding, language)` to UTF-8 with a documented preference order (§7.2) |
 | M16 | Kerning applied twice - from `kern` and from GPOS | Fonts carrying both for compatibility | GPOS `kern` disables the `kern` table, as HarfBuzz does (§9.4) |
-| M17 | Advance widths from `hmtx` on a variable font at a non-default instance | Text that reflows when the weight changes | Every metric accessor takes a `GFNT_Variation *`; `HVAR`/`VVAR`/`MVAR` are consulted (§7.7) |
+| M17 | Advance widths from `hmtx` on a variable font at a non-default instance | Text that reflows when the weight changes | Every metric accessor takes a `GFNT_Variation *`; `HVAR`/`MVAR` are consulted, and the phantom points `gvar` carries when a font has no `HVAR` (§7.7); there is no `VVAR` because no vertical metric is read |
 | M18 | Sign conventions mixed between tables | `hhea` descender negative, `usWinDescent` positive, CFF `FontBBox` y-up | One convention in the API: y-up, ascent positive, descent negative, in every function (§5.5) |
 | M19 | The same Han codepoint rendered with the wrong regional form | `locl` ignored; no language tag | Shaping takes a language; the OpenType language-system registry is vendored (§9.5) |
 | M20 | A writer whose checksums, padding or table order are wrong | Passes every reader that ignores them (most) and fails the ones that do not, which is how it ships | Every written font is read back by this library and by fontTools and FreeType before the writer is trusted (§12.5) |
@@ -117,7 +117,7 @@ which of them this library takes, and which of those it reads today.
 | | WOFF 1 | **required**, not implemented |
 | | `EBDT`/`EBLC`/`EBSC` strikes; `COLR` v0 + `CPAL` | **wanted**, not implemented |
 | | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | wanted, not implemented; colour bitmaps need `image` |
-| | variations: `fvar`/`avar` (version 1)/`gvar` | **implemented** for `glyf` outlines (§7.7). `HVAR`/`VVAR`/`MVAR`/`cvar`/`STAT`, and `avar` version 2, are not: a metric at a location is refused, not guessed |
+| | variations: `fvar`/`avar` (version 1)/`gvar`, `HVAR`/`MVAR` | **implemented** for `glyf` outlines and for advances, side bearings and line metrics (§7.7). `VVAR` (no vertical metrics are read), `cvar`, `STAT`, `FeatureVariations`, and `avar` version 2, are not: a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS`/`BASE`/`JSTF` | **required**, not implemented |
 | | WOFF 2 | not here; it waits on Brotli in `compress` |
 | | `CFF2`, AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
@@ -784,10 +784,11 @@ library does not composite gradients: that is a graphics library's job, and
 `fvar` (axes with tag, range, flags, name; named instances), `avar` version 1
 segment maps (version 2 is `ERR_UNSUPPORTED` until asked for), `gvar` (the
 tuple variation store, shared point numbers, packed deltas, and IUP
-interpolation of unreferenced points), `HVAR`/`VVAR` (advance, side bearing
-and top-side-bearing deltas through the item variation store and delta-set
-index maps), `MVAR` (the metric tags), `STAT` (axis values formats 1-4, for
-naming an instance), and `GSUB`/`GPOS` `FeatureVariations`.
+interpolation of unreferenced points), `HVAR` (advance and left-side-bearing
+deltas through the item variation store and delta-set index maps; `VVAR` is not
+read, because no vertical metric is), `MVAR` (the metric tags), `STAT` (axis values
+formats 1-4, for naming an instance, not built), and `GSUB`/`GPOS`
+`FeatureVariations` (not built).
 Normalisation: user coordinate to `-1..1` by the axis's min/default/max, then
 `avar`. Every accessor takes a `GFNT_Variation *`.
 
@@ -868,11 +869,38 @@ decides, and what a reader can get wrong without any error:
   not depend on which glyph a caller tried first. The outline accessors and the
   metric accessors share the function, because "all zeros is the default" is a rule
   and a rule held in two places is two.
-- **Metrics at a location are refused, not defaulted.** Nothing reads `HVAR`, `MVAR`
-  or the phantom points `gvar` carries, so an advance at weight 900 would be weight
-  400's, quietly. A caller who draws and measures at one location is told which of
-  the two it cannot have. This is the next piece of the variation work and the reason
-  M17 is still open.
+- **A metric at a location is `HVAR`, `MVAR`, or the phantom points, and is refused
+  where none of them says.** An advance is the stored one plus `HVAR`'s delta for the
+  glyph (through its advance mapping, or by glyph number when it has none); in a font
+  with **no `HVAR`** it is the difference of `gvar`'s first two phantom points, which
+  is FreeType's order and fontTools'; with neither it is `ERR_UNSUPPORTED`. A left
+  side bearing is the stored one plus `HVAR`'s bearing mapping, and is refused when
+  there is none - the bearing then follows the outline, and answering it would mean
+  loading the varied outline's box for a call that does not otherwise load one. A
+  line's extent is `MVAR`'s delta for the tag of the metric the policy chose (`hasc`,
+  `hdsc`, `hlgp` for `hhea`; `tasc`, `tdsc`, `tlgp` for the typographic metrics;
+  `hcla`, `hcld` for the window ones, the descent's delta *subtracted* because
+  `usWinDescent` is stored positive); a font with no `MVAR`, or one that does not list
+  a tag, **has no change in that metric**, which is the specification's statement and
+  not a refusal. The default instance never reads any of these tables.
+- **The delta is exact and is rounded once, half away from zero.** It is carried to
+  `GFNT_GVAR_FRACTION_BITS` fractional bits like a point's, summed over every region
+  at that width, and rounded to a whole unit when it is added to the stored value.
+  That is `FT_MulDiv`'s rule and HarfBuzz's; fontTools' `otRound` is half *up*, so
+  the two differ on exactly the negative halves (a delta of -2.5 is -3 here and -2
+  there), which Inter's `opsz` axis reaches because its range puts a scalar of
+  exactly a half in the middle. The differential compares fontTools' *unrounded*
+  delta, rounded this library's way, so that the arithmetic is fontTools' and only
+  the last step is not.
+- **`USE_MY_METRICS` is not applied, and FreeType does.** A composite glyph with a
+  component flagged for it takes its advance, in FreeType, from that component. `HVAR`
+  (and fontTools, and HarfBuzz, and this library) take it from the composite's own
+  row. Sahel has two such glyphs whose rows differ from their component's, by 2 and 8
+  units at the extremes; the differential counts them under their own name.
+- **The item variation store is read in place.** A lookup touches one row, so nothing
+  is parsed ahead of it and nothing is cached on the face. Its regions follow
+  `gvar`'s rules for an invalid one and are evaluated by the same function, because
+  two copies of those rules would be two answers the first time one was corrected.
 
 **Oracles (§14.5, `tools/oracle/var_diff.py`).** The image carries **sixteen
 variable fonts from four producers** - Inter (two axes, `avar`, an italic), Cascadia
@@ -891,6 +919,31 @@ run between two corners, named points in two contours, an intermediate region, a
 two-axis corner, shared and embedded peaks, a composite whose offsets move (one
 point-matched), a composite of a composite, and a glyph with no contours that varies
 only in its phantom points.
+
+**Metrics at a location have a second differential (`tools/oracle/metrics_var_diff.py`,
+`make check-oracle-metrics`),** over the same fonts at the same planned locations, with
+both references handed this library's normalised coordinates. fontTools is asked every
+advance, every left bearing and every line metric; FreeType every advance and the
+`hhea` and window metrics. **What the real fonts can show is narrow and the report says
+so:** all sixteen have `HVAR` with an advance mapping and none has a bearing mapping or
+lacks `HVAR`, and the only `MVAR` (Inter's) carries no tag that moves a line, so they
+show advances through `HVAR` agreeing to the unit and line metrics *not* moving. The
+three cases they cannot reach - an advance from phantom points, a bearing mapping, and
+`MVAR` records that do move a line - are in `tests/data/fonts/variable-hvar.ttf`
+(and `variable-gvar.ttf`, whose glyph `ghost` varies only in its phantom points), written
+by fontTools, with numbers chosen to be worked out by hand. Measured: 317,168
+comparisons, 0 disagreements; FreeType differs from this library by one unit in 661 of
+105,444 advances (it rounds each region on its own) and by 2 and 8 units for the two
+`USE_MY_METRICS` glyphs; fontTools agrees exactly once its unrounded delta is rounded
+half away from zero.
+
+**FreeType as a reference for metrics needed care too.** It adds `MVAR` deltas to the
+values it keeps and never undoes them, so a face moved to a location and back reports
+the first location's values, and two settings of coordinates on one face add; and its
+`OS/2` `sTypo*` fields come out carrying the `hasc`, `hdsc` and `hlgp` deltas rather than
+the `tasc`, `tdsc` and `tlgp` ones. The driver therefore asks each location of a face
+that has been nowhere else, sets the coordinates on it once, and compares only the
+`hhea` and window metrics; fontTools reads all three sets and agrees on every one.
 
 **The reference needed care, and three of the first run's disagreements were its.**
 `getGlyphSet(location=)` takes **user** coordinates unless told `normalized=True`, so
@@ -1318,6 +1371,7 @@ memory.** Fonts have three excellent oracles and one of them can also
 | `cmap` maps every codepoint identically | fontTools `getBestCmap()` and every subtable, over all 1,114,112 codepoints per font | `tools/oracle/cmap_diff.py` | `fonttools` |
 | outlines are identical | **FreeType** `FT_Load_Glyph` with `FT_LOAD_NO_HINTING \| FT_LOAD_NO_SCALE`, every glyph of every corpus font, point by point | `tools/oracle/ft_outline.c` | `freetype`, built here: the driver links only FreeType and is compiled inside its image; apt version pinned in full |
 | **variable** outlines are identical at a location, and normalisation is bit-exact | **fontTools** (`getGlyphSet` instances, held to 2/64) **and FreeType** (`FT_Set_Var_Design_Coordinates`, whose normalisation this library's must equal exactly), every glyph of every variable font at planned locations | `tools/oracle/var_diff.py`, `make check-oracle-var` | `fonttools` and `freetype` |
+| **variable** advances, side bearings and line metrics are identical at a location | **fontTools** (`getGlyphSet` widths, `VarStoreInstancer` for `MVAR` and the bearing mapping, held to the unit) **and FreeType** (unscaled advances, `hhea` and window metrics, a fresh face per location, held to a unit for its per-region rounding) | `tools/oracle/metrics_var_diff.py`, `make check-oracle-metrics` | `fonttools` and `freetype` |
 | coverage is close | FreeType `FT_Render_Glyph` at several ppem, compared with a per-pixel tolerance (the two rasterisers are the same algorithm family and differ by rounding) | `tools/oracle/ft_raster.c` | `freetype` |
 | coverage is **byte-identical across platforms** | this library on x86-64 versus this library in the cross container (big-endian, 32-bit) | golden hashes in `tests/data/golden/`, `make check-golden` | the `ghoti-xarch` cross image |
 | shaping is identical | **HarfBuzz** `hb-shape --output-format=json`: glyph ids, advances, offsets and clusters for every string in a per-script corpus, per font | `tools/oracle/hb_diff.py`, `make check-oracle-hb` | `harfbuzz`, built here: `hb-shape` from the pinned apt package, driven by `--text-file` and `--output-format=json` (a batch protocol already) |
@@ -2816,7 +2870,7 @@ What that cost in findings:
 
 **Not built:** `CFF2` (§16); `CBDT` and `sbix` (§7.5); colour
 (§7.6);
-`HVAR`/`VVAR`/`MVAR`/`cvar`/`STAT` and `avar` version 2 (§7.7); shaping, layout, discovery and the writer; the multi-byte
+`VVAR`/`cvar`/`STAT`/`FeatureVariations` and `avar` version 2 (§7.7); shaping, layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`
 and WOFF 1. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is

@@ -1081,9 +1081,9 @@ def variable_variations():
     }
 
 
-def build_variable_gvar(out):
-    """`fvar`, `avar` and `gvar`, written by fontTools around the glyphs above."""
-    fb = truetype("Variable Gvar", outline_cmap(VARIABLE_ORDER),
+def _variable_font(label):
+    """`fvar`, `avar` and `gvar` around the glyphs above, before it is saved."""
+    fb = truetype(label, outline_cmap(VARIABLE_ORDER),
                   order=VARIABLE_ORDER, glyphs=VARIABLE_GLYPHS,
                   advances=VARIABLE_ADVANCES, glyph_names=True)
     # Every glyph's left side bearing is its own xMin, as in a font anyone ships.
@@ -1122,6 +1122,89 @@ def build_variable_gvar(out):
         "wdth": {-1.0: -1.0, 0.0: 0.0, 1.0: 1.0},
     }
     fb.setupGvar(variable_variations())
+    return fb
+
+
+def build_variable_gvar(out):
+    """`fvar`, `avar` and `gvar`, written by fontTools around the glyphs above."""
+    fb = _variable_font("Variable Gvar")
+    pin(fb)
+    fb.save(out)
+
+
+# What `HVAR` and `MVAR` say in `variable-hvar.ttf`. Every number is small and
+# distinct so that a wrong row, a wrong region or a wrong sign is visibly a
+# different advance, and each is meant to be worked out by hand: the unit tests
+# hold this library to the same numbers on a hand-built table and the oracle holds
+# it to fontTools and FreeType on this one.
+#
+# Two regions, a ramp up to the end of each axis: wght 0..1 and wdth 0..1.
+HVAR_REGIONS = [{"wght": (0.0, 1.0, 1.0)}, {"wdth": (0.0, 1.0, 1.0)}]
+# Advance rows, one per glyph in VARIABLE_ORDER: (wght delta, wdth delta). `ghost`
+# is (0, 0) on purpose: its `gvar` moves its phantom points by 30, so a reader
+# that preferred the phantom points to `HVAR` would answer 280 and not 250.
+HVAR_ADVANCE_ROWS = [(10, 0), (0, 5), (20, -10), (-7, 3), (33, 0), (5, 5),
+                     (-40, 10), (15, -15), (0, 0)]
+# Left-bearing rows: three, shared by the nine glyphs through the mapping (glyph
+# `i` takes row `i % 3`), which is what makes it a *mapping* and not a list.
+HVAR_BEARING_ROWS = [(5, 0), (-5, 2), (12, -3)]
+# MVAR, by tag: (wght delta, wdth delta). The hhea, window and typographic
+# metrics each have their own, and the descenders of the three differ in sign
+# convention - the window descent is stored positive - which is the point.
+MVAR_ROWS = {
+    "hasc": (30, 5), "hdsc": (-12, 0), "hlgp": (3, 3),
+    "hcla": (20, -4), "hcld": (6, 1),
+    "tasc": (25, 0), "tdsc": (-9, 2), "tlgp": (4, 0),
+}
+
+
+def _var_store(rows_by_data):
+    """A VarStore from [(region indices, [row...])]: one VarData each."""
+    from fontTools.varLib import builder
+
+    regions = builder.buildVarRegionList(HVAR_REGIONS, ["wght", "wdth"])
+    datas = [builder.buildVarData(indices, rows, optimize=False)
+             for indices, rows in rows_by_data]
+    return builder.buildVarStore(regions, datas)
+
+
+def build_variable_hvar(out):
+    """`variable-gvar.ttf` with `HVAR` (advance and bearing mappings) and `MVAR`."""
+    from fontTools.ttLib.tables import otTables as ot
+    from fontTools.varLib import builder
+
+    fb = _variable_font("Variable Hvar")
+    font = fb.font
+    tags = list(MVAR_ROWS)
+    store = _var_store([
+        ([0, 1], [list(row) for row in HVAR_ADVANCE_ROWS]),
+        ([0, 1], [list(row) for row in HVAR_BEARING_ROWS]),
+        ([0, 1], [list(MVAR_ROWS[tag]) for tag in tags]),
+    ])
+    hvar = font["HVAR"] = newTable("HVAR")
+    table = hvar.table = ot.HVAR()
+    table.Version = 0x00010000
+    table.VarStore = store
+    table.AdvWidthMap = builder.buildVarIdxMap(
+        [(0 << 16) | i for i in range(len(VARIABLE_ORDER))], VARIABLE_ORDER)
+    table.LsbMap = builder.buildVarIdxMap(
+        [(1 << 16) | (i % 3) for i in range(len(VARIABLE_ORDER))],
+        VARIABLE_ORDER)
+    table.RsbMap = None
+    mvar = font["MVAR"] = newTable("MVAR")
+    table = mvar.table = ot.MVAR()
+    table.Version = 0x00010000
+    table.Reserved = 0
+    table.VarStore = store
+    table.ValueRecordSize = 8
+    records = []
+    for row, tag in enumerate(tags):
+        record = ot.MetricsValueRecord()
+        record.ValueTag = tag
+        record.VarIdx = (2 << 16) | row
+        records.append(record)
+    table.ValueRecord = sorted(records, key=lambda r: r.ValueTag)
+    table.ValueRecordCount = len(records)
     pin(fb)
     fb.save(out)
 
@@ -3790,6 +3873,11 @@ FIXTURES = {
     "outline-cubic-flag.ttf": (build_outline_cubic_flag,
         "glyf: flag bit 0x80 in a font declaring glyphDataFormat 0, so the "
         "per-glyph refusal is the only one that can fire"),
+    "variable-hvar.ttf": (build_variable_hvar,
+        "variable-gvar.ttf's glyphs with HVAR - an advance mapping and a left "
+        "bearing mapping that shares three rows among nine glyphs, over two "
+        "regions - and MVAR carrying the hhea, window and typographic ascent, "
+        "descent and gap, all written by fontTools"),
     "variable-gvar.ttf": (build_variable_gvar,
         "fvar, avar and gvar written by fontTools: two axes (one hidden), three "
         "named instances (one with a PostScript name), a bent avar on one axis "

@@ -100,15 +100,18 @@ RUN cd /tmp \
 # in a RUN: the first draft of the `fonttools` image wrote its probe with printf
 # and the \x27 escapes reached the file literally, which is a quoting layer
 # between a check and the fact it checks.
-COPY freetype-version.c freetype-strikes.c freetype-variation.c /tmp/
+COPY freetype-version.c freetype-strikes.c freetype-variation.c \
+     freetype-metrics.c /tmp/
 RUN gcc -O1 -Wall -Wextra -Werror -o /usr/local/bin/freetype-version \
       /tmp/freetype-version.c $(pkg-config --cflags --libs freetype2) \
  && gcc -O2 -Wall -Wextra -Werror -o /usr/local/bin/freetype-strikes \
       /tmp/freetype-strikes.c $(pkg-config --cflags --libs freetype2) \
  && gcc -O2 -Wall -Wextra -Werror -o /usr/local/bin/freetype-variation \
       /tmp/freetype-variation.c $(pkg-config --cflags --libs freetype2) \
+ && gcc -O2 -Wall -Wextra -Werror -o /usr/local/bin/freetype-metrics \
+      /tmp/freetype-metrics.c $(pkg-config --cflags --libs freetype2) \
  && rm /tmp/freetype-version.c /tmp/freetype-strikes.c \
-      /tmp/freetype-variation.c \
+      /tmp/freetype-variation.c /tmp/freetype-metrics.c \
  && /usr/local/bin/freetype-version
 
 ENV LD_LIBRARY_PATH=/usr/local/lib

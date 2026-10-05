@@ -661,6 +661,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Fuzz commands
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
+.PHONY: fuzz-metvar fuzz-run-metvar
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
@@ -668,7 +669,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive
-.PHONY: check-oracle-var check-oracle-var-exhaustive
+.PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
 .PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
 # Fixture commands
@@ -943,7 +944,7 @@ check-oracle-ttx: $(EXAMPLES)
 check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
-check-oracle: check-oracle-var
+check-oracle: check-oracle-var check-oracle-metrics
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -968,6 +969,15 @@ check-oracle-var-exhaustive: ## The same, over every glyph of every font
 check-oracle-var-exhaustive: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
 		python3 $(ORACLE)/var_diff.py --stride 1 --quiet
+
+# The same locations, asked how wide each glyph is and how tall a line, which `HVAR`
+# and `MVAR` answer - or, with no `HVAR`, the phantom points `gvar` carries. See
+# tools/oracle/metrics_var_diff.py for which cases the real fonts reach and which
+# only the synthetic `variable-hvar.ttf` does.
+check-oracle-metrics: ## Diff every variable font's advances and line metrics at planned locations against fontTools and FreeType
+check-oracle-metrics: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
+		python3 $(ORACLE)/metrics_var_diff.py --quiet
 
 check-oracle-cff: ## Diff every CFF glyph's program, path and advance against fontTools
 check-oracle-cff: $(EXAMPLES)
@@ -1645,6 +1655,12 @@ $(eval $(call fuzz-rule,fuzz_raster,raster))
 # inputs that matter are in the relationship between the two tables.
 $(eval $(call fuzz-rule,fuzz_gvar,gvar))
 $(eval $(call fuzz-rule,fuzz_variation,variation))
+# fuzz_metvar takes `HVAR` and `MVAR` together, for the same reason: both read one
+# item variation store, and what it has to survive is its own offsets. It checks
+# that a variation that moves nothing is the default instance and that asking twice
+# gives one answer, which is what a metric - a number nobody can see is wrong -
+# needs and what no sanitizer sees.
+$(eval $(call fuzz-rule,fuzz_metvar,metvar))
 # fuzz_cff takes the whole `CFF ` table, because a CFF is a nest of offsets that
 # point at each other - the Top DICT at the charset and the CharStrings INDEX, the
 # Private DICT at its local subroutines *relative to itself* - and a fuzzer given
@@ -1674,7 +1690,7 @@ $(eval $(call fuzz-rule,fuzz_type1,type1))
 # input either.
 $(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
 
-FUZZERS := sfnt cmap glyf raster cff charstring type1 bitmap gvar variation
+FUZZERS := sfnt cmap glyf raster cff charstring type1 bitmap gvar variation metvar
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

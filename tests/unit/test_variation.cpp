@@ -40,6 +40,7 @@
 #include "test_helpers.h"
 #include "sfnt_builder.h"
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -638,7 +639,8 @@ struct Moving {
   GFNT_Error error{};
 
   Moving(const std::vector<std::vector<uint8_t>> & glyphs,
-      const std::vector<uint8_t> & gvar, int axes = 1) {
+      const std::vector<uint8_t> & gvar, int axes = 1,
+      const std::vector<gfnttest::Table> & extra = {}) {
     std::vector<uint8_t> glyf;
     std::vector<uint8_t> loca;
     bool long_form = false;
@@ -664,6 +666,7 @@ struct Moving {
     if (!gvar.empty()) {
       tables.push_back({GFNT_TAG('g', 'v', 'a', 'r'), gvar});
     }
+    tables.insert(tables.end(), extra.begin(), extra.end());
     bytes = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
     EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
         GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, nullptr), GFNT_OK);
@@ -1871,46 +1874,634 @@ TEST(Gvar, AGlyphAppendedToAnOutlineThatAlreadyHasPointsIsInferredFromItsOwn) {
   gfnt_outline_destroy(outline);
 }
 
-TEST(Gvar, AMetricAtALocationIsRefusedRatherThanAnsweredWithTheDefaults) {
-  // A font that has the whole design space and nothing that moves a metric: the
-  // outline at weight 900 changes shape (gvar), and an advance at weight 900 would
-  // be the weight 400 advance, quietly. It is refused, and a caller who draws and
-  // measures at one location is told which of the two it cannot have.
+// ---------------------------------------------------------------------------
+// HVAR, MVAR, and the phantom points a font without HVAR carries instead
+//
+// Hand-worked, like the gvar cases above: every expectation is a number written
+// from the rules, with the arithmetic in a comment where it is not obvious.
+// ---------------------------------------------------------------------------
+
+using gfnttest::put_s16;
+using gfnttest::put_u8;
+
+/** One region of a store: start, peak and end of every axis. */
+using Region = std::vector<std::array<int16_t, 3>>;
+
+struct ItemData {
+  bool wide = false;                       ///< LONG_WORDS.
+  size_t words = 0;                        ///< How many leading deltas are words.
+  std::vector<uint16_t> regions{};         ///< Which region each column is.
+  std::vector<std::vector<int32_t>> rows{};
+};
+
+struct StoreSpec {
+  uint16_t format = 1;
+  size_t axis_count = 1;
+  std::vector<Region> regions{};
+  std::vector<ItemData> data{};
+};
+
+std::vector<uint8_t> build_store(const StoreSpec & spec) {
+  const size_t header = 8 + 4 * spec.data.size();
+  std::vector<uint8_t> list;
+  std::vector<std::vector<uint8_t>> blocks;
+  std::vector<uint8_t> out;
+  size_t offset;
+
+  put_u16(list, static_cast<uint16_t>(spec.axis_count));
+  put_u16(list, static_cast<uint16_t>(spec.regions.size()));
+  for (const Region & region : spec.regions) {
+    for (const auto & axis : region) {
+      for (int16_t value : axis) {
+        put_s16(list, value);
+      }
+    }
+  }
+  for (const ItemData & data : spec.data) {
+    std::vector<uint8_t> block;
+
+    put_u16(block, static_cast<uint16_t>(data.rows.size()));
+    put_u16(block, static_cast<uint16_t>(data.words | (data.wide ? 0x8000u : 0u)));
+    put_u16(block, static_cast<uint16_t>(data.regions.size()));
+    for (uint16_t region : data.regions) {
+      put_u16(block, region);
+    }
+    for (const std::vector<int32_t> & row : data.rows) {
+      for (size_t k = 0; k < row.size(); ++k) {
+        const bool word = k < data.words;
+
+        if (word && data.wide) {
+          put_u32(block, static_cast<uint32_t>(row[k]));
+        }
+        else if (word || data.wide) {
+          put_s16(block, static_cast<int16_t>(row[k]));
+        }
+        else {
+          put_u8(block, static_cast<uint8_t>(static_cast<int8_t>(row[k])));
+        }
+      }
+    }
+    blocks.push_back(block);
+  }
+  put_u16(out, spec.format);
+  put_u32(out, static_cast<uint32_t>(header));
+  put_u16(out, static_cast<uint16_t>(spec.data.size()));
+  offset = header + list.size();
+  for (const auto & block : blocks) {
+    put_u32(out, static_cast<uint32_t>(offset));
+    offset += block.size();
+  }
+  out.insert(out.end(), list.begin(), list.end());
+  for (const auto & block : blocks) {
+    out.insert(out.end(), block.begin(), block.end());
+  }
+  return out;
+}
+
+/** A delta-set index map; each entry is `entry_bytes` big-endian bytes. */
+std::vector<uint8_t> build_map(uint8_t format, uint8_t entry_format,
+    const std::vector<uint32_t> & entries) {
+  const size_t bytes = ((entry_format >> 4) & 3u) + 1u;
+  std::vector<uint8_t> out;
+
+  put_u8(out, format);
+  put_u8(out, entry_format);
+  if (format == 0) {
+    put_u16(out, static_cast<uint16_t>(entries.size()));
+  }
+  else {
+    put_u32(out, static_cast<uint32_t>(entries.size()));
+  }
+  for (uint32_t entry : entries) {
+    for (size_t i = 0; i < bytes; ++i) {
+      put_u8(out, static_cast<uint8_t>(entry >> (8 * (bytes - 1 - i))));
+    }
+  }
+  return out;
+}
+
+std::vector<uint8_t> build_hvar(const std::vector<uint8_t> & store,
+    const std::vector<uint8_t> & advance_map = {},
+    const std::vector<uint8_t> & bearing_map = {}, uint16_t major = 1) {
+  std::vector<uint8_t> out;
+  size_t at = 20;
+
+  put_u16(out, major);
+  put_u16(out, 0);
+  put_u32(out, store.empty() ? 0u : static_cast<uint32_t>(at));
+  at += store.size();
+  put_u32(out, advance_map.empty() ? 0u : static_cast<uint32_t>(at));
+  at += advance_map.size();
+  put_u32(out, bearing_map.empty() ? 0u : static_cast<uint32_t>(at));
+  put_u32(out, 0);
+  out.insert(out.end(), store.begin(), store.end());
+  out.insert(out.end(), advance_map.begin(), advance_map.end());
+  out.insert(out.end(), bearing_map.begin(), bearing_map.end());
+  return out;
+}
+
+struct MvarRecord {
+  const char * tag;
+  uint16_t outer;
+  uint16_t inner;
+};
+
+std::vector<uint8_t> build_mvar(const std::vector<uint8_t> & store,
+    const std::vector<MvarRecord> & records, uint16_t record_size = 8) {
+  std::vector<uint8_t> out;
+
+  put_u16(out, 1);
+  put_u16(out, 0);
+  put_u16(out, 0);
+  put_u16(out, record_size);
+  put_u16(out, static_cast<uint16_t>(records.size()));
+  put_u16(out, static_cast<uint16_t>(12 + records.size() * record_size));
+  for (const MvarRecord & record : records) {
+    put_tag(out, record.tag);
+    put_u16(out, record.outer);
+    put_u16(out, record.inner);
+    for (size_t i = 8; i < record_size; ++i) {
+      put_u8(out, 0);
+    }
+  }
+  out.insert(out.end(), store.begin(), store.end());
+  return out;
+}
+
+/** The region every case uses: weight, from 0 up to a peak at 1 and no further. */
+const Region kRampToOne = {{0, 16384, 16384}};
+const Region kRampToHalf = {{0, 8192, 16384}};
+
+StoreSpec one_region_store(std::vector<ItemData> data) {
+  StoreSpec spec;
+
+  spec.regions = {kRampToOne};
+  spec.data = std::move(data);
+  return spec;
+}
+
+/** A face of `count` squares with the given extra tables and no gvar. */
+struct Metric : Moving {
+  explicit Metric(size_t count, const std::vector<gfnttest::Table> & extra,
+      const std::vector<uint8_t> & gvar = {})
+      : Moving(std::vector<std::vector<uint8_t>>(count, square()), gvar, 1,
+            extra) {
+  }
+
+  /** The advance at one weight, or the failing result through @p result. */
+  int32_t advance(uint32_t glyph, GFNT_F2Dot14 coordinate,
+      GFNT_Result * result = nullptr) {
+    const GFNT_Variation variation{&coordinate, 1};
+    int32_t value = -1;
+    GFNT_Result got = gfnt_face_glyph_advance(face, glyph, &variation, &value,
+        &error);
+
+    if (result) {
+      *result = got;
+    }
+    return value;
+  }
+};
+
+gfnttest::Table hvar_table(const std::vector<uint8_t> & bytes) {
+  return {GFNT_TAG('H', 'V', 'A', 'R'), bytes};
+}
+
+TEST(Hvar, AnAdvanceIsTheDefaultsPlusTheScaledDeltaOfItsRow) {
+  // Three glyphs of default advance 500; no map, so the glyph number is the row.
+  // One region ramping 0 to 1: the scalar at coordinate c is c itself.
+  Metric font(3, {hvar_table(build_hvar(build_store(one_region_store({
+      {false, 1, {0}, {{100}, {-50}, {7}}}}))))});
+
+  EXPECT_EQ(font.advance(0, 16384), 600);
+  EXPECT_EQ(font.advance(1, 16384), 450);
+  EXPECT_EQ(font.advance(2, 16384), 507);
+  EXPECT_EQ(font.advance(0, 8192), 550);
+  EXPECT_EQ(font.advance(1, 8192), 475);
+  // 7 * 0.5 = 3.5, which rounds half away from zero.
+  EXPECT_EQ(font.advance(2, 8192), 504);
+  // A coordinate outside the region is the default's, and a negative one is
+  // outside a region that starts at zero.
+  EXPECT_EQ(font.advance(0, -16384), 500);
+}
+
+TEST(Hvar, ARoundedNegativeDeltaRoundsAwayFromZeroToo) {
+  // -7 * 0.5 = -3.5 -> -4, so 500 - 4. Truncation or floor would give 497 or 496
+  // in the wrong places; the rule is the same one every other delta follows.
+  Metric font(1, {hvar_table(build_hvar(build_store(one_region_store({
+      {false, 1, {0}, {{-7}}}}))))});
+
+  EXPECT_EQ(font.advance(0, 8192), 496);
+}
+
+TEST(Hvar, AnAdvanceMapPicksTheRowAndTheLastEntryRepeats) {
+  // Entry format 0x11: two-byte entries, two bits of inner index. Entry 0x0001 is
+  // outer 0 inner 1; 0x0004 is outer 1 inner 0. The map has three entries and the
+  // face four glyphs, so glyph 3 takes the last.
+  StoreSpec spec = one_region_store({
+      {false, 1, {0}, {{100}, {-50}}},
+      {false, 0, {0}, {{30}}},     // byte-sized deltas: no words at all
+  });
+  Metric font(4, {hvar_table(build_hvar(build_store(spec),
+      build_map(0, 0x11, {0x0001, 0x0000, 0x0004})))});
+
+  EXPECT_EQ(font.advance(0, 16384), 450);
+  EXPECT_EQ(font.advance(1, 16384), 600);
+  EXPECT_EQ(font.advance(2, 16384), 530);
+  EXPECT_EQ(font.advance(3, 16384), 530);
+}
+
+TEST(Hvar, AFormatOneMapReadsTheSameEntries) {
+  StoreSpec spec = one_region_store({{false, 1, {0}, {{100}, {-50}}}});
+  Metric font(2, {hvar_table(build_hvar(build_store(spec),
+      build_map(1, 0x00, {1, 0})))});
+
+  EXPECT_EQ(font.advance(0, 16384), 450);
+  EXPECT_EQ(font.advance(1, 16384), 600);
+}
+
+TEST(Hvar, WideDeltasAreFourBytesAndMixedRowsAreWordsThenBytes) {
+  // LONG_WORDS makes a word four bytes and a "byte" two. 70,000 does not fit in
+  // sixteen bits, so a reader that took two would read 4,464.
+  StoreSpec spec = one_region_store({
+      {true, 1, {0}, {{70000}}},
+  });
+  Metric wide(1, {hvar_table(build_hvar(build_store(spec)))});
+
+  EXPECT_EQ(wide.advance(0, 16384), 70500);
+
+  // Two columns, the first a word and the second a byte, over two regions: peaks
+  // at 1 (0..1..1) and at 1/2 (0..1/2..1). Row {100, 10}.
+  //   c = 1/2: 100 * 1/2 + 10 * 1     = 60
+  //   c = 3/4: 100 * 3/4 + 10 * 1/2   = 80
+  //   c = 1  : 100 * 1   + 10 * 0     = 100, the second region ends there.
+  StoreSpec two;
+  two.regions = {kRampToOne, kRampToHalf};
+  two.data = {{false, 1, {0, 1}, {{100, 10}}}};
+  Metric mixed(1, {hvar_table(build_hvar(build_store(two)))});
+
+  EXPECT_EQ(mixed.advance(0, 8192), 560);
+  EXPECT_EQ(mixed.advance(0, 12288), 580);
+  EXPECT_EQ(mixed.advance(0, 16384), 600);
+
+  // Wide, with a column that is not a word: it is two bytes then, and -300 read as
+  // one byte would be 0xD4. Regions as above; row {70000, -300} at c = 1/2 is
+  // 70000 * 1/2 + -300 * 1 = 34700.
+  StoreSpec both;
+  both.regions = {kRampToOne, kRampToHalf};
+  both.data = {{true, 1, {0, 1}, {{70000, -300}}}};
+  Metric narrow(1, {hvar_table(build_hvar(build_store(both)))});
+
+  EXPECT_EQ(narrow.advance(0, 8192), 35200);
+}
+
+TEST(Hvar, ABearingNeedsItsOwnMappingAndTheTableSaysNothingWithoutOne) {
+  StoreSpec spec = one_region_store({{false, 1, {0}, {{100}, {-50}}}});
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_Variation at{&one, 1};
+  int32_t value = 99;
+  Metric without(2, {hvar_table(build_hvar(build_store(spec)))});
+  Metric with(2, {hvar_table(build_hvar(build_store(spec), {},
+      build_map(0, 0x00, {1, 0})))});
+
+  EXPECT_EQ(gfnt_face_glyph_side_bearing(without.face, 0, &at, &value,
+      &without.error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(value, 99);
+  // The default's bearing is 0 here, and glyph 0 maps to row 1 (-50).
+  EXPECT_EQ(gfnt_face_glyph_side_bearing(with.face, 0, &at, &value, &with.error),
+      GFNT_OK);
+  EXPECT_EQ(value, -50);
+  EXPECT_EQ(gfnt_face_glyph_side_bearing(with.face, 1, &at, &value, &with.error),
+      GFNT_OK);
+  EXPECT_EQ(value, 100);
+}
+
+TEST(Hvar, AFontWithNeitherHvarNorGvarSaysSoRatherThanAnswerTheDefault) {
+  Metric font(1, {});
+  GFNT_Result result = GFNT_OK;
+
+  EXPECT_EQ(font.advance(0, 16384, &result), -1);
+  EXPECT_EQ(result, GFNT_ERR_UNSUPPORTED);
+  ASSERT_NE(font.error.message, nullptr);
+}
+
+TEST(Hvar, AMetricAtTheDefaultNeverReadsTheTable) {
+  // A table that is wrong in every way, at a location that does not move: the
+  // default instance is answered from hmtx and nothing else is looked at.
+  Metric font(1, {hvar_table(std::vector<uint8_t>(3, 0xFF))});
+  const GFNT_F2Dot14 zero = 0;
+  const GFNT_Variation at{&zero, 1};
+  int32_t value = -1;
+
+  EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, &at, &value, &font.error),
+      GFNT_OK);
+  EXPECT_EQ(value, 500);
+  EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, nullptr, &value, &font.error),
+      GFNT_OK);
+}
+
+TEST(Hvar, ATableThatContradictsItselfIsCorruptAndNamesHvar) {
+  const StoreSpec good = one_region_store({{false, 1, {0}, {{100}}}});
+  StoreSpec format_two = good;
+  StoreSpec two_axes = good;
+  StoreSpec bad_region = good;
+  StoreSpec too_many_words = good;
+  std::vector<uint8_t> past_the_row = build_store(good);
+
+  format_two.format = 2;
+  two_axes.axis_count = 2;
+  two_axes.regions = {{{0, 16384, 16384}, {0, 0, 0}}};
+  // Index 1 of a list of one: past it, but inside the table, because the data
+  // follows the list - so only the count can say it is not a region.
+  bad_region.data[0].regions = {1};
+  too_many_words.data[0].words = 2;
+  past_the_row.resize(past_the_row.size() - 1);
+
+  struct Case {
+    const char * name;
+    std::vector<uint8_t> hvar;
+    GFNT_Result expected;
+  };
+  const Case cases[] = {
+    {"a store format other than 1", build_hvar(build_store(format_two)),
+        GFNT_ERR_UNSUPPORTED},
+    {"a region list of another axis count", build_hvar(build_store(two_axes)),
+        GFNT_ERR_CORRUPT},
+    {"a column naming a region the list lacks",
+        build_hvar(build_store(bad_region)), GFNT_ERR_CORRUPT},
+    {"more word deltas than columns", build_hvar(build_store(too_many_words)),
+        GFNT_ERR_CORRUPT},
+    {"a row cut short by the end of the table", build_hvar(past_the_row),
+        GFNT_ERR_CORRUPT},
+    {"a version other than 1", build_hvar(build_store(good), {}, {}, 2),
+        GFNT_ERR_UNSUPPORTED},
+    {"no store", build_hvar({}), GFNT_ERR_CORRUPT},
+    {"a header cut short", std::vector<uint8_t>(10, 0), GFNT_ERR_CORRUPT},
+    {"a map with no entries", build_hvar(build_store(good),
+        build_map(0, 0x00, {})), GFNT_ERR_CORRUPT},
+    {"a map naming an outer group the store lacks",
+        build_hvar(build_store(good), build_map(0, 0x00, {2})),
+        GFNT_ERR_CORRUPT},
+    {"a map entry format with reserved bits", build_hvar(build_store(good),
+        build_map(0, 0x80, {0})), GFNT_ERR_CORRUPT},
+    {"a map of an unknown format", build_hvar(build_store(good),
+        build_map(2, 0x00, {0})), GFNT_ERR_UNSUPPORTED},
+  };
+
+  for (const Case & test : cases) {
+    Metric font(1, {hvar_table(test.hvar)});
+    GFNT_Result result = GFNT_OK;
+
+    EXPECT_EQ(font.advance(0, 16384, &result), -1) << test.name;
+    EXPECT_EQ(result, test.expected) << test.name;
+    if (test.expected == GFNT_ERR_CORRUPT) {
+      EXPECT_EQ(font.error.table, GFNT_TAG('H', 'V', 'A', 'R')) << test.name;
+    }
+  }
+}
+
+TEST(Hvar, AGlyphThePerGlyphRowsDoNotCoverIsCorrupt) {
+  // No advance map, so the glyph number is the row, and row 1 does not exist. A
+  // second group follows the first, so a reader that did not check would read
+  // that group's header as the missing row and answer.
+  Metric font(2, {hvar_table(build_hvar(build_store(one_region_store({
+      {false, 1, {0}, {{100}}}, {false, 1, {0}, {{5}}}}))))});
+  GFNT_Result result = GFNT_OK;
+
+  EXPECT_EQ(font.advance(0, 16384), 600);
+  EXPECT_EQ(font.advance(1, 16384, &result), -1);
+  EXPECT_EQ(result, GFNT_ERR_CORRUPT);
+}
+
+TEST(Hvar, ARegionTheFormatCallsInvalidIsIgnoredAsGvarsAre) {
+  // Start 8192, peak 0: a zero peak constrains nothing, so the scalar is one
+  // wherever the coordinate is - the rule `gvar` follows, from the same function.
+  StoreSpec spec;
+  spec.regions = {{{8192, 0, 16384}}};
+  spec.data = {{false, 1, {0}, {{40}}}};
+  Metric font(1, {hvar_table(build_hvar(build_store(spec)))});
+
+  EXPECT_EQ(font.advance(0, 16384), 540);
+  EXPECT_EQ(font.advance(0, -16384), 540);
+}
+
+TEST(Hvar, WithoutHvarTheAdvanceFollowsTheDifferenceOfTheFirstTwoPhantomPoints) {
+  // Eight x deltas at weight 1: the four points of the square, then the phantoms
+  // (left, right, top, bottom). Left -20, right +30: the advance grows by
+  // 30 - (-20) = 50. At 1/2 the scalar halves both: 25. y deltas are all zero.
   Tuple tuple;
 
   tuple.peak = {16384};
-  tuple.data = {0x03, 0x0A, 0x0A, 0xF6, 0xF6, 0x83, 0x87};
+  tuple.data = {0x07, 0, 0, 0, 0, 0xEC, 0x1E, 0, 0, 0x87};
   GvarSpec spec;
   spec.glyphs = {glyph_variation_data({tuple})};
-  Moving font({square()}, build_gvar(spec));
-  const GFNT_F2Dot14 moved = 16384;
-  const GFNT_F2Dot14 still = 0;
-  const GFNT_Variation at_location{&moved, 1};
-  const GFNT_Variation at_default{&still, 1};
+  Metric font(1, {}, build_gvar(spec));
+
+  EXPECT_EQ(font.advance(0, 16384), 550);
+  EXPECT_EQ(font.advance(0, 8192), 525);
+  EXPECT_EQ(font.advance(0, 0), 500);
+}
+
+TEST(Hvar, ThePhantomDeltaIsRoundedOnceAfterTheTwoAreCombined) {
+  // Left -21, right +30 at half weight: (30 + 21) / 2 = 25.5, which is 26. Rounding
+  // each (-10.5 -> -11, 15) and then subtracting would give 26 as well, so the
+  // distinguishing case is the other sign: left +21, right -30 is -25.5 -> -26,
+  // while rounding each (10.5 -> 11, -15) gives -26 too. They agree; what this
+  // pins is the half-away direction on a negative sum.
+  Tuple tuple;
+
+  tuple.peak = {16384};
+  tuple.data = {0x07, 0, 0, 0, 0, 0x15, 0xE2, 0, 0, 0x87};
+  GvarSpec spec;
+  spec.glyphs = {glyph_variation_data({tuple})};
+  Metric font(1, {}, build_gvar(spec));
+
+  EXPECT_EQ(font.advance(0, 8192), 474);
+}
+
+TEST(Hvar, HvarWinsWhenTheFontHasBothAndGvarMovesThePhantomsToo) {
+  Tuple tuple;
+
+  tuple.peak = {16384};
+  tuple.data = {0x07, 0, 0, 0, 0, 0xEC, 0x1E, 0, 0, 0x87};
+  GvarSpec spec;
+  spec.glyphs = {glyph_variation_data({tuple})};
+  Metric font(1, {hvar_table(build_hvar(build_store(one_region_store({
+      {false, 1, {0}, {{100}}}}))))}, build_gvar(spec));
+
+  EXPECT_EQ(font.advance(0, 16384), 600) << "not 550, and not 650";
+}
+
+TEST(Hvar, AnEmptyGlyphHasPhantomPointsToo) {
+  // A space: no outline, four phantom points, numbered 0 to 3. A tuple naming
+  // points 0 and 1 by number moves the left and right ones.
+  Tuple tuple;
+
+  tuple.peak = {16384};
+  tuple.private_points = true;
+  // Point numbers: count 2, then one run of two bytes (control 0x01): 0, 1. Then x
+  // deltas for those two (a run of two bytes: 0x01, -4, +10), then y: a run of two
+  // zeros (0x81). The advance grows by 10 - (-4) = 14.
+  tuple.data = {0x02, 0x01, 0x00, 0x01, 0x01, 0xFC, 0x0A, 0x81};
+  GvarSpec spec;
+  spec.glyphs = {glyph_variation_data({tuple})};
+  Moving font({std::vector<uint8_t>{}}, build_gvar(spec));
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_Variation at{&one, 1};
+  int32_t value = -1;
+
+  ASSERT_EQ(gfnt_face_glyph_advance(font.face, 0, &at, &value, &font.error),
+      GFNT_OK);
+  EXPECT_EQ(value, 514);
+}
+
+TEST(Hvar, ACompositeCountsItsComponentsAsItsPoints) {
+  // A composite of two components: its points are the two components, so the
+  // phantoms are numbered 2 to 5, and "all points" covers six. Eight x deltas
+  // would over-read; six are given: two components, then left -6 and right +4,
+  // then top and bottom.
+  const std::vector<uint8_t> composite = gfnttest::build_glyf_composite({
+      {0, kArgsAreXy, 0, 0}, {0, kArgsAreXy, 10, 0}});
+  Tuple tuple;
+
+  tuple.peak = {16384};
+  tuple.data = {0x05, 0, 0, 0xFA, 0x04, 0, 0, 0x85};
+  GvarSpec spec;
+  spec.glyphs = {glyph_variation_data({}), glyph_variation_data({tuple})};
+  Moving font({square(), composite}, build_gvar(spec));
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_Variation at{&one, 1};
+  int32_t value = -1;
+
+  ASSERT_EQ(gfnt_face_glyph_advance(font.face, 1, &at, &value, &font.error),
+      GFNT_OK);
+  EXPECT_EQ(value, 510) << "4 - (-6) = 10";
+}
+
+gfnttest::Table mvar_table(const std::vector<uint8_t> & bytes) {
+  return {GFNT_TAG('M', 'V', 'A', 'R'), bytes};
+}
+
+TEST(Mvar, ALineMetricMovesByItsOwnTagAndOthersStayPut) {
+  // hhea: ascender 800, descender -200, gap 0. hasc +40 (row 0), hdsc -25 (row
+  // 1); no hlgp, so the gap does not move.
+  StoreSpec spec = one_region_store({{false, 1, {0}, {{40}, {-25}}}});
+  Metric font(1, {mvar_table(build_mvar(build_store(spec),
+      {{"hasc", 0, 0}, {"hdsc", 0, 1}}))});
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_F2Dot14 half = 8192;
+  const GFNT_Variation at_one{&one, 1};
+  const GFNT_Variation at_half{&half, 1};
+  GFNT_LineMetrics line{};
+
+  ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA, &at_one,
+      &line, &font.error), GFNT_OK);
+  EXPECT_EQ(line.ascent, 840);
+  EXPECT_EQ(line.descent, -225);
+  EXPECT_EQ(line.line_gap, 0);
+  EXPECT_EQ(line.source, GFNT_LINE_METRICS_HHEA);
+  // 40 * 1/2 = 20; -25 * 1/2 = -12.5 -> -13.
+  ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA, &at_half,
+      &line, &font.error), GFNT_OK);
+  EXPECT_EQ(line.ascent, 820);
+  EXPECT_EQ(line.descent, -213);
+}
+
+TEST(Mvar, TheWindowDescentIsStoredPositiveSoItsDeltaIsSubtracted) {
+  // usWinAscent 900 and usWinDescent 250 (the builder's defaults); hcla +10 and
+  // hcld +20 make 910 and 270, and the API reports the descent negative.
+  StoreSpec spec = one_region_store({{false, 1, {0}, {{10}, {20}}}});
+  Metric font(1, {mvar_table(build_mvar(build_store(spec),
+      {{"hcla", 0, 0}, {"hcld", 0, 1}})),
+      {GFNT_TAG('O', 'S', '/', '2'), gfnttest::build_os2()}});
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_Variation at{&one, 1};
+  GFNT_LineMetrics line{};
+
+  ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_WIN, &at, &line,
+      &font.error), GFNT_OK);
+  EXPECT_EQ(line.ascent, 910);
+  EXPECT_EQ(line.descent, -270);
+}
+
+TEST(Mvar, TheTypographicMetricsHaveTheirOwnThreeTags) {
+  // typo 800 / -200 / 100 (the builder's defaults).
+  StoreSpec spec = one_region_store({{false, 1, {0}, {{1}, {2}, {3}}}});
+  Metric font(1, {mvar_table(build_mvar(build_store(spec),
+      {{"tasc", 0, 0}, {"tdsc", 0, 1}, {"tlgp", 0, 2}})),
+      {GFNT_TAG('O', 'S', '/', '2'), gfnttest::build_os2()}});
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_Variation at{&one, 1};
+  GFNT_LineMetrics line{};
+
+  ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_TYPO, &at, &line,
+      &font.error), GFNT_OK);
+  EXPECT_EQ(line.ascent, 801);
+  EXPECT_EQ(line.descent, -198);
+  EXPECT_EQ(line.line_gap, 103);
+}
+
+TEST(Mvar, AFontWithNoMvarHasLineMetricsThatDoNotMove) {
+  // The specification's statement, and not a refusal: no table is no change.
+  Metric font(1, {});
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_Variation at{&one, 1};
+  GFNT_LineMetrics line{};
+
+  ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA, &at, &line,
+      &font.error), GFNT_OK);
+  EXPECT_EQ(line.ascent, 800);
+  EXPECT_EQ(line.descent, -200);
+}
+
+TEST(Mvar, ALongerRecordIsSkippedByItsStatedSizeAndAShorterOneIsCorrupt) {
+  StoreSpec spec = one_region_store({{false, 1, {0}, {{40}, {-25}}}});
+  Metric longer(1, {mvar_table(build_mvar(build_store(spec),
+      {{"hasc", 0, 0}, {"hdsc", 0, 1}}, 12))});
+  Metric shorter(1, {mvar_table(build_mvar(build_store(spec),
+      {{"hasc", 0, 0}}, 4))});
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_Variation at{&one, 1};
+  GFNT_LineMetrics line{};
+
+  ASSERT_EQ(gfnt_face_line_metrics(longer.face, GFNT_LINE_METRICS_HHEA, &at,
+      &line, &longer.error), GFNT_OK);
+  EXPECT_EQ(line.descent, -225) << "the second record is 12 bytes on";
+  EXPECT_EQ(gfnt_face_line_metrics(shorter.face, GFNT_LINE_METRICS_HHEA, &at,
+      &line, &shorter.error), GFNT_ERR_CORRUPT);
+  EXPECT_EQ(shorter.error.table, GFNT_TAG('M', 'V', 'A', 'R'));
+}
+
+TEST(Mvar, ATableThatContradictsItselfIsCorruptOnlyWhereTheTagIsAsked) {
+  // A record for `hasc` with an index the store lacks, and a header cut short.
+  StoreSpec spec = one_region_store({{false, 1, {0}, {{40}}}});
+  Metric bad_index(1, {mvar_table(build_mvar(build_store(spec),
+      {{"hasc", 3, 0}, {"hdsc", 0, 0}}))});
+  Metric no_store(1, {mvar_table(build_mvar({}, {{"hasc", 0, 0}}))});
+  Metric truncated(1, {mvar_table(std::vector<uint8_t>(6, 0))});
+  const GFNT_F2Dot14 one = 16384;
+  const GFNT_Variation at{&one, 1};
+  GFNT_LineMetrics line{};
+
+  EXPECT_EQ(gfnt_face_line_metrics(bad_index.face, GFNT_LINE_METRICS_HHEA, &at,
+      &line, &bad_index.error), GFNT_ERR_CORRUPT);
+  EXPECT_EQ(gfnt_face_line_metrics(no_store.face, GFNT_LINE_METRICS_HHEA, &at,
+      &line, &no_store.error), GFNT_ERR_CORRUPT);
+  EXPECT_EQ(gfnt_face_line_metrics(truncated.face, GFNT_LINE_METRICS_HHEA, &at,
+      &line, &truncated.error), GFNT_ERR_CORRUPT);
+  // At the default none of it is read.
+  EXPECT_EQ(gfnt_face_line_metrics(bad_index.face, GFNT_LINE_METRICS_HHEA,
+      nullptr, &line, &bad_index.error), GFNT_OK);
+}
+
+TEST(Gvar, AVariationWithTooManyCoordinatesIsInvalidForAMetricToo) {
+  Metric font(1, {});
   const GFNT_F2Dot14 many[2] = {16384, 16384};
   const GFNT_Variation too_many{many, 2};
   int32_t value = -1;
-  GFNT_LineMetrics line{};
 
-  EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, nullptr, &value, nullptr),
-      GFNT_OK);
-  EXPECT_EQ(value, 500);
-  value = -1;
-  EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, &at_default, &value, nullptr),
-      GFNT_OK) << "a variation that moves nothing is the default instance";
-  EXPECT_EQ(value, 500);
-  EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, &at_location, &value,
-      &font.error), GFNT_ERR_UNSUPPORTED);
-  EXPECT_EQ(value, 500) << "and the output is untouched by a refusal";
-  EXPECT_EQ(gfnt_face_glyph_side_bearing(font.face, 0, &at_location, &value,
-      &font.error), GFNT_ERR_UNSUPPORTED);
-  EXPECT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA,
-      &at_location, &line, &font.error), GFNT_ERR_UNSUPPORTED);
-  EXPECT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_HHEA,
-      &at_default, &line, &font.error), GFNT_OK);
-  EXPECT_EQ(line.ascent, 800);
-  EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, &too_many, &value,
-      &font.error), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_glyph_advance(font.face, 0, &too_many, &value, &font.error),
+      GFNT_ERR_INVALID);
   ASSERT_NE(font.error.message, nullptr);
 }
 

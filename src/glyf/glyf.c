@@ -1011,3 +1011,74 @@ GFNT_Result gfnt_glyf_stated_box(const GFNT_Face * face, uint32_t glyph,
   out_box->y_max = (GFNT_F26Dot6)values[4] * GFNT_F26DOT6_ONE;
   return GFNT_OK;
 }
+
+GFNT_Result gfnt_glyf_phantom_deltas(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, int64_t * out_left, int64_t * out_right,
+    GFNT_Error * error) {
+  const GFNT_Allocator * allocator = face->allocator;
+  GFNT_Reader reader;
+  GFNT_GvarPoints points;
+  GFNT_Component component;
+  bool empty = false;
+  int16_t contours = 0;
+  size_t count = 0;
+  size_t total;
+  int64_t * deltas = NULL;
+  GFNT_Result result;
+
+  gfnt_error_clear(error);
+  if (!face || !variation || !out_left || !out_right) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_glyf_reader(face, glyph, &reader, &empty, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (!empty) {
+    result = gfnt_read_s16(&reader, &contours);
+    if (result == GFNT_OK) {
+      result = gfnt_reader_skip(&reader, 8);
+    }
+    if (result != GFNT_OK) {
+      return result;
+    }
+    if (contours > 0) {
+      uint16_t last = 0;
+
+      result = gfnt_reader_u16_at(&reader, (size_t)(contours - 1) * 2u + reader.cursor,
+          &last);
+      if (result != GFNT_OK) {
+        return result;
+      }
+      count = (size_t)last + 1u;
+    }
+    else if (contours < 0) {
+      do {
+        result = gfnt_glyf_component(&reader, glyph, &component, error);
+        if (result != GFNT_OK) {
+          return result;
+        }
+        count += 1;
+      } while (component.flags & GFNT_GLYF_MORE_COMPONENTS);
+    }
+  }
+  total = count + GFNT_GVAR_PHANTOM_POINTS;
+  deltas = allocator->calloc_fn(allocator->ctx, total * 2u, sizeof *deltas);
+  if (!deltas) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_GVAR, 0, glyph,
+        "no memory for a glyph's phantom point deltas");
+  }
+  // No positions: which of a glyph's own points a tuple moves does not matter
+  // here, so there is nothing to interpolate and the phantoms, which `gvar`
+  // never infers, come out exactly as they would with them.
+  memset(&points, 0, sizeof points);
+  points.count = count;
+  result = gfnt_gvar_glyph_deltas(face, glyph, variation->coords,
+      variation->count, &points, deltas, deltas + total, error);
+  if (result == GFNT_OK) {
+    *out_left = deltas[count];
+    *out_right = deltas[count + 1u];
+  }
+  allocator->free_fn(allocator->ctx, deltas);
+  return result;
+}

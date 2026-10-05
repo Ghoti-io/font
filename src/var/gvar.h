@@ -148,6 +148,27 @@ GFNT_Result gfnt_gvar_glyph_deltas(const GFNT_Face * face, uint32_t glyph,
     const GFNT_GvarPoints * points, int64_t * out_x, int64_t * out_y,
     GFNT_Error * error);
 
+/**
+ * How much of a region applies at a location, as a scalar with
+ * ::GFNT_GVAR_FRACTION_BITS fractional bits: the product over the axes of how far
+ * inside the region the coordinate is.
+ *
+ * Shared with the item variation stores of `HVAR` and `MVAR`, whose regions are
+ * the same shape and follow the same rules (an axis with a zero peak, or an
+ * invalid span, is ignored for that axis). Two copies of those rules would be two
+ * answers the first time one was corrected.
+ *
+ * @param axis_count How many axes the arrays have.
+ * @param coords The location, 2.14, one per axis.
+ * @param coord_count How many were given; axes past it are zero.
+ * @param peak One per axis.
+ * @param start One per axis, or NULL to mean the span runs from the peak to zero.
+ * @param end Likewise.
+ */
+int64_t gfnt_gvar_scalar(size_t axis_count, const GFNT_F2Dot14 * coords,
+    size_t coord_count, const int16_t * peak, const int16_t * start,
+    const int16_t * end);
+
 #ifdef __cplusplus
 }
 #endif

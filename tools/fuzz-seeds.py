@@ -404,6 +404,62 @@ def raster_points(contours):
     return bytes(out)
 
 
+def ivs_store(regions, groups, fmt=1, axis_count=1):
+    """An item variation store: `regions` as [[(start, peak, end) per axis]] and
+    `groups` as [(wide, words, region indices, rows)]."""
+    header = 8 + 4 * len(groups)
+    rlist = struct.pack(">HH", axis_count, len(regions))
+    for region in regions:
+        for triple in region:
+            rlist += struct.pack(">hhh", *triple)
+    blocks = []
+    for wide, words, indices, rows in groups:
+        block = struct.pack(">HHH", len(rows), words | (0x8000 if wide else 0),
+                            len(indices))
+        block += b"".join(struct.pack(">H", i) for i in indices)
+        for row in rows:
+            for k, value in enumerate(row):
+                if k < words:
+                    block += struct.pack(">i" if wide else ">h", value)
+                else:
+                    block += struct.pack(">h" if wide else ">b", value)
+        blocks.append(block)
+    out = struct.pack(">HIH", fmt, header, len(groups))
+    offset = header + len(rlist)
+    for block in blocks:
+        out += struct.pack(">I", offset)
+        offset += len(block)
+    return out + rlist + b"".join(blocks)
+
+
+def delta_map(fmt, entry_format, entries):
+    """A delta-set index map."""
+    width = ((entry_format >> 4) & 3) + 1
+    out = bytes([fmt, entry_format])
+    out += struct.pack(">H" if fmt == 0 else ">I", len(entries))
+    for entry in entries:
+        out += entry.to_bytes(width, "big")
+    return out
+
+
+def hvar_table(store, advance_map=b"", bearing_map=b""):
+    at = 20
+    out = struct.pack(">HH", 1, 0) + struct.pack(">I", at)
+    at += len(store)
+    out += struct.pack(">I", at if advance_map else 0)
+    at += len(advance_map)
+    out += struct.pack(">I", at if bearing_map else 0) + struct.pack(">I", 0)
+    return out + store + advance_map + bearing_map
+
+
+def mvar_table(store, records, record_size=8):
+    out = struct.pack(">HHHHHH", 1, 0, 0, record_size, len(records),
+                      12 + len(records) * record_size)
+    for tag, outer, inner in records:
+        out += tag + struct.pack(">HH", outer, inner) + bytes(record_size - 8)
+    return out + store
+
+
 def main():
     latin = {
         "head": head(),
@@ -532,6 +588,40 @@ def main():
         path.write_bytes(bytes([0x04]) + struct.pack(">hhhh", 16384, 0, 0, 0)
                          + table)
         print("%s: %d bytes" % (path.relative_to(root), 9 + len(table)))
+
+    # HVAR and MVAR for fuzz_metvar: the options byte, a split, then the two tables.
+    ramp = [[(0, 16384, 16384)]]
+    one = ivs_store(ramp, [(False, 1, [0], [[100], [-50], [7], [20]])])
+    wide = ivs_store(ramp, [(True, 1, [0], [[70000]])])
+    mixed = ivs_store([[(0, 16384, 16384)], [(0, 8192, 16384)]],
+                      [(False, 1, [0, 1], [[100, 10], [-8, 3]])])
+    groups = ivs_store(ramp, [(False, 1, [0], [[100], [-50]]),
+                              (False, 0, [0], [[30]])])
+    mv_store = ivs_store(ramp, [(False, 1, [0], [[40], [-25], [3], [20], [6],
+                                                  [25], [-9], [4]])])
+    for label, hvar, mvar in (
+            ("per-glyph-rows", hvar_table(one), b""),
+            ("wide-deltas", hvar_table(wide), b""),
+            ("two-regions", hvar_table(mixed), b""),
+            ("advance-map", hvar_table(groups, delta_map(0, 0x11,
+                                                         [1, 0, 4])), b""),
+            ("bearing-map", hvar_table(one, b"", delta_map(0, 0x00,
+                                                           [1, 0, 1, 0])), b""),
+            ("map-format-one", hvar_table(one, delta_map(1, 0x00, [3, 2, 1, 0])),
+             b""),
+            ("line-metrics", b"", mvar_table(mv_store, [
+                (b"hasc", 0, 0), (b"hcla", 0, 3), (b"hcld", 0, 4),
+                (b"hdsc", 0, 1), (b"hlgp", 0, 2), (b"tasc", 0, 5),
+                (b"tdsc", 0, 6), (b"tlgp", 0, 7)])),
+            ("both", hvar_table(one), mvar_table(mv_store, [(b"hasc", 0, 0)])),
+            ("longer-records", b"", mvar_table(mv_store, [(b"hasc", 0, 0)], 12)),
+            ("store-format-two", hvar_table(ivs_store(ramp, [(False, 1, [0],
+                                                              [[1]])], fmt=2)),
+             b"")):
+        total = len(hvar) + len(mvar)
+        write_pair(corpus / ("metvar/%s.seed" % label), 0x00,
+                   max(0, min(255, (256 * len(hvar)) // max(1, total))),
+                   hvar + mvar)
 
     # Paths for the rasteriser, which reads no font at all.
     write_pair(corpus / "raster/square.seed", 0x00, 0x00, raster_points([

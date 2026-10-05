@@ -118,6 +118,25 @@ GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,
 GFNT_Result gfnt_glyf_stated_box(const GFNT_Face * face, uint32_t glyph,
     GFNT_Box * out_box, GFNT_Error * error);
 
+/**
+ * How far `gvar` moves a glyph's left and right phantom points in x at a
+ * location: the two a font without `HVAR` states a glyph's advance and left side
+ * bearing change by.
+ *
+ * @param face The face.
+ * @param glyph The glyph.
+ * @param variation The location, which must have coordinates.
+ * @param out_left Receives the first phantom point's delta, in font units with
+ *   ::GFNT_GVAR_FRACTION_BITS fractional bits.
+ * @param out_right Receives the second's.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_CORRUPT, ::GFNT_ERR_UNSUPPORTED
+ *   for a face with no `gvar`, or ::GFNT_ERR_OOM.
+ */
+GFNT_Result gfnt_glyf_phantom_deltas(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, int64_t * out_left, int64_t * out_right,
+    GFNT_Error * error);
+
 #ifdef __cplusplus
 }
 #endif

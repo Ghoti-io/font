@@ -210,6 +210,31 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         }
       }
     }
+    {
+      // The same glyph's advance at the location, which in a font with no `HVAR`
+      // is read from the phantom points of this very table. The property: a
+      // variation that moves nothing is the default's advance, and asking twice
+      // gives one answer.
+      int32_t at_plain = 0;
+      int32_t at_still = 0;
+      int32_t first = 0;
+      int32_t second = 0;
+      const GFNT_Result a = gfnt_face_glyph_advance(face, glyph, nullptr,
+          &at_plain, &error);
+      const GFNT_Result b = gfnt_face_glyph_advance(face, glyph, &at_default,
+          &at_still, &error);
+      const GFNT_Result c = gfnt_face_glyph_advance(face, glyph, &at_location,
+          &first, &error);
+      const GFNT_Result d = gfnt_face_glyph_advance(face, glyph, &at_location,
+          &second, &error);
+
+      if (a == GFNT_OK && b == GFNT_OK && at_plain != at_still) {
+        abort();
+      }
+      if (c != d || (c == GFNT_OK && first != second)) {
+        abort();
+      }
+    }
     if (base == GFNT_OK && varied == GFNT_OK) {
       // gvar moves points; it never adds or removes one.
       if (gfnt_outline_point_count(plain) != gfnt_outline_point_count(moved)

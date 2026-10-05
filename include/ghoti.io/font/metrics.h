@@ -38,14 +38,15 @@
  *
  * Every accessor takes a `const GFNT_Variation *`; NULL means the default
  * instance. A variation that moves nothing - every coordinate zero - is the
- * default instance too and is answered as one. **Anything else is refused as
- * ::GFNT_ERR_UNSUPPORTED**, because what moves a metric at a location is `HVAR`,
- * `MVAR` or `gvar`'s phantom points and none of them is read yet: answering the
- * default's number for a location a face is not at would lay text out at weight
- * 900 with the advances of weight 400 and report success. The outline at the same
- * location *is* honoured (outline.h), so a caller drawing and measuring at one
- * location is told which of the two it cannot have. More coordinates than the face
- * has axes is ::GFNT_ERR_INVALID (section 7.7).
+ * default instance too and is answered as one. At any other location what moves a
+ * metric is `HVAR` (an advance, a left bearing), `MVAR` (a line's extent) or, in a
+ * font with no `HVAR`, `gvar`'s phantom points (an advance); **where none of them
+ * says, the call is refused as ::GFNT_ERR_UNSUPPORTED** and not answered with the
+ * default's number, which would lay text out at weight 900 with the advances of
+ * weight 400 and report success. A font with an `MVAR` that does not list a line
+ * metric has no change in it, which is the specification's statement and not a
+ * refusal. More coordinates than the face has axes is ::GFNT_ERR_INVALID (section
+ * 7.7).
  */
 
 #ifndef GHOTI_IO_GFNT_METRICS_H
@@ -326,12 +327,19 @@ GFNT_API bool gfnt_face_num_glyphs_disagreement(const GFNT_Face * face,
  *
  * @param face The face.
  * @param glyph The glyph index.
- * @param variation The instance, or NULL for the default.
+ * @param variation The instance, or NULL for the default. At a location other
+ *   than the default the advance is `HVAR`'s delta for the glyph added to
+ *   `hmtx`'s - or, in a font with no `HVAR`, the difference of the first two
+ *   phantom points `gvar` carries - rounded once, half away from zero. A
+ *   composite glyph's own row is used, whatever its `USE_MY_METRICS` component
+ *   says.
  * @param out_advance Receives the advance in font units. Written only on
  *   success.
  * @param error Receives a diagnostic on failure, or NULL.
- * @return ::GFNT_OK, ::GFNT_ERR_INVALID for a glyph the face does not have,
- *   ::GFNT_ERR_UNSUPPORTED if the font has no `hmtx` or `hhea`, or
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID for a glyph the face does not have or
+ *   a variation with more coordinates than the face has axes,
+ *   ::GFNT_ERR_UNSUPPORTED if the font has no `hmtx` or `hhea` - or, at a
+ *   location, has neither `HVAR` nor `gvar` to say how the advance moves - or
  *   ::GFNT_ERR_CORRUPT.
  */
 GFNT_API GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face,
@@ -343,12 +351,15 @@ GFNT_API GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face,
  *
  * @param face The face.
  * @param glyph The glyph index.
- * @param variation The instance, or NULL for the default.
+ * @param variation The instance, or NULL for the default. At a location other
+ *   than the default the bearing is `hmtx`'s plus `HVAR`'s **left-bearing
+ *   mapping**; a font whose `HVAR` has none (which is most of them) is refused,
+ *   because its bearing then follows the varied outline and not any table.
  * @param out_bearing Receives the bearing in font units. Written only on
  *   success.
  * @param error Receives a diagnostic on failure, or NULL.
- * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED or
- *   ::GFNT_ERR_CORRUPT.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED (at a location,
+ *   for a font with no bearing mapping) or ::GFNT_ERR_CORRUPT.
  */
 GFNT_API GFNT_Result gfnt_face_glyph_side_bearing(const GFNT_Face * face,
     uint32_t glyph, const GFNT_Variation * variation, int32_t * out_bearing,
@@ -360,7 +371,10 @@ GFNT_API GFNT_Result gfnt_face_glyph_side_bearing(const GFNT_Face * face,
  * @param face The face.
  * @param policy Which table to believe; ::GFNT_LINE_METRICS_FONT for the
  *   font's own request.
- * @param variation The instance, or NULL for the default.
+ * @param variation The instance, or NULL for the default. At a location the
+ *   `MVAR` delta of each metric the policy chose is added; a font with no `MVAR`,
+ *   or one that does not list a metric, has no change in it, which is a fact
+ *   about the font and not a refusal.
  * @param out_metrics Receives the metrics, with @p source naming the table
  *   that answered. Written only on success.
  * @param error Receives a diagnostic on failure, or NULL.

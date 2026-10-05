@@ -14,14 +14,14 @@ This is what the library implements.
 - Which glyph a code point maps to, and how wide that glyph is.
 - A glyph's outline, from `glyf` and `loca`, with composites resolved: every flag, point matching, and all three transform encodings.
 - A glyph's outline from a **charstring**: `CFF ` inside an sfnt, CID-keyed fonts included, with the Type 2 and Type 1 interpreters behind it.
-- A **variable font's design space** — the axes and named instances from `fvar`, `avar` version 1, and the conversion from the coordinates a person types to the normalised ones — and a `glyf` glyph's outline **at a location in it**, moved by `gvar`: every tuple form, inferred points, composite offsets. A metric at a location is refused rather than answered with the default's.
+- A **variable font's design space** — the axes and named instances from `fvar`, `avar` version 1, and the conversion from the coordinates a person types to the normalised ones — and a `glyf` glyph's outline **at a location in it**, moved by `gvar`: every tuple form, inferred points, composite offsets. A **metric at a location** is answered too - an advance from `HVAR` (or, in a font without one, from the phantom points `gvar` carries), a line's extent from `MVAR`, and a side bearing where `HVAR` maps one - and is refused rather than answered with the default's where the font states nothing that says.
 - That outline rasterised to 8-bit coverage, at any pixel size and any sub-pixel offset.
 - A **bare `CFF `** font program and a **Type 1** one — `.pfb`, `.pfa` or raw — each a face with no sfnt directory at all, stating its em, its glyph count, its names and its advances out of the program itself.
 - The four **standalone bitmap** containers: PCF, BDF, PSF 1 and 2, and GNU Unifont's `.hex`. Each is a face with one strike and no outlines, and a glyph comes back as pixels with its own box and advance.
 - A font that arrives **gzipped**, which is how a PCF almost always does: the wrapper is undone before the format is looked at, under the same size ceiling a file read from disk is held to.
 
 `CFF2`, the bitmap strikes *inside* an sfnt (`EBDT`/`EBLC`, `CBDT`, `sbix`),
-colour, `HVAR`/`MVAR` (so metrics at a location), shaping, layout, discovery and writing are not built.
+colour, shaping, layout, discovery and writing are not built.
 
 ## Before you call it
 
@@ -123,7 +123,7 @@ vector generators.
 
 | Target | What it does |
 | --- | --- |
-| `make examples` | The six programs under `examples/` |
+| `make examples` | The programs under `examples/` |
 | `make check-oracle` | Differentials against fontTools, in a pinned container |
 | `make check-golden` | The same pixels, rebuilt for three big-endian targets |
 | `make fuzz` | The sfnt, cmap, glyf, raster, CFF and charstring fuzzers |
@@ -173,7 +173,7 @@ The tables named above are parsed, glyphs from `glyf` and from `CFF `
 charstrings are turned into outlines, and those outlines are rasterised. Six
 containers are read: an sfnt, a collection, a bare `CFF `, a Type 1 program, and
 the four standalone bitmap formats, any of them gzipped. `CFF2`, the sfnt bitmap
-strikes, colour, `HVAR`/`MVAR`, shaping, layout, font discovery and writing are not
+strikes, colour, shaping, layout, font discovery and writing are not
 implemented.
 
 Every glyph of 312 real fonts is compared against fontTools — 1,999,069 fields

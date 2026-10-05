@@ -386,7 +386,7 @@ static GFNT_Result gfnt_gvar_deltas(GFNT_Reader * reader, size_t count,
  * reader does. The alternative is to condemn a glyph for a header a writer got
  * wrong that nobody else notices.
  */
-static int64_t gfnt_gvar_scalar(size_t axis_count, const GFNT_F2Dot14 * coords,
+int64_t gfnt_gvar_scalar(size_t axis_count, const GFNT_F2Dot14 * coords,
     size_t coord_count, const int16_t * peak, const int16_t * start,
     const int16_t * end) {
   int64_t scalar = (int64_t)1 << GFNT_GVAR_FRACTION_BITS;

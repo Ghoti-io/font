@@ -44,6 +44,9 @@
 #include <ghoti.io/font/macros.h>
 #include "../bitmap/bitmap.h"
 #include "../core/fixed.h"
+#include "../glyf/glyf.h"
+#include "../var/gvar.h"
+#include "../var/metvar.h"
 #include "../var/var.h"
 #include "tables.h"
 
@@ -390,37 +393,67 @@ static GFNT_Result gfnt_hmtx_metrics(const GFNT_Face * face, uint32_t glyph,
 }
 
 /**
- * Refuse a variation that would move a metric, since none of them can.
+ * Whether a variation moves a metric, and so whether a delta has to be added.
  *
- * What moves an advance at a location is `HVAR`, or the phantom points `gvar`
- * carries when a font has none, and what moves a line's extent is `MVAR`. None of
- * the three is read. Answering the default's number for a location it is not at
- * would be the quiet wrong answer this parameter was added to prevent: text laid
- * out at weight 900 with the advances of weight 400, with no error anywhere. The
- * outline at the same location *is* honoured (`gvar`), so a caller who draws and
- * measures at one location gets a shape that moved and a width that would not
- * have - which is why this is a refusal and not a quiet default.
- *
- * A variation that moves nothing is the default instance and is answered as one.
+ * A variation that moves nothing is the default instance and is answered as one,
+ * from the tables the default is stored in. One that does has its deltas from
+ * `HVAR` (an advance, a bearing) or `MVAR` (a line's extent); where a font has no
+ * table that says, the answer is a refusal and not the default's number, because
+ * text laid out at weight 900 with the advances of weight 400 is wrong with no
+ * error anywhere.
  */
-static GFNT_Result gfnt_metrics_refuse_variation(const GFNT_Face * face,
-    uint32_t glyph, const GFNT_Variation * variation, GFNT_Error * error) {
-  bool moved = false;
-  GFNT_Result result = gfnt_variation_moves(face, glyph, variation, &moved,
-      error);
+static GFNT_Result gfnt_metrics_moved(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, bool * out_moved, GFNT_Error * error) {
+  return gfnt_variation_moves(face, glyph, variation, out_moved, error);
+}
 
-  if (result != GFNT_OK || !moved) {
+/**
+ * A delta to a font-unit value, added and rounded once.
+ *
+ * @param delta From ::gfnt_hvar_delta() or ::gfnt_mvar_delta(), with
+ *   ::GFNT_GVAR_FRACTION_BITS fractional bits.
+ */
+static int32_t gfnt_metrics_add(int64_t base, int64_t delta) {
+  return gfnt_saturate32(base
+      + gfnt_round_shift(gfnt_clamp64(delta), GFNT_GVAR_FRACTION_BITS));
+}
+
+/**
+ * How far a glyph's advance moves at a location.
+ *
+ * `HVAR` when the font has one, and the difference of `gvar`'s first two phantom
+ * points when it does not, which is FreeType's order and fontTools'.
+ */
+static GFNT_Result gfnt_metrics_advance_delta(const GFNT_Face * face,
+    uint32_t glyph, const GFNT_Variation * variation, int64_t * out_delta,
+    GFNT_Error * error) {
+  int64_t left = 0;
+  int64_t right = 0;
+  GFNT_Result result;
+
+  if (gfnt_face_has_table(face, GFNT_TAG_HVAR)) {
+    return gfnt_hvar_delta(face, glyph, GFNT_HVAR_ADVANCE, variation->coords,
+        variation->count, out_delta, error);
+  }
+  if (!gfnt_face_has_table(face, GFNT_TAG_GVAR)) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
+        "the font has neither HVAR nor gvar, so nothing says how an advance "
+        "moves at a location other than the default");
+  }
+  result = gfnt_glyf_phantom_deltas(face, glyph, variation, &left, &right,
+      error);
+  if (result != GFNT_OK) {
     return result;
   }
-  return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-      "this library reads no HVAR, MVAR or gvar phantom points, so a metric at "
-      "a location other than the default would be the default's, quietly");
+  *out_delta = right - left;
+  return GFNT_OK;
 }
 
 GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, int32_t * out_advance,
     GFNT_Error * error) {
   uint16_t advance = 0;
+  bool moved = false;
   GFNT_Result result;
 
   if (!face || !out_advance) {
@@ -436,7 +469,7 @@ GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face, uint32_t glyph,
         "a bitmap font, whose metrics are pixels rather than font units - "
         "gfnt_face_glyph_bitmap() carries each glyph's own");
   }
-  result = gfnt_metrics_refuse_variation(face, glyph, variation, error);
+  result = gfnt_metrics_moved(face, glyph, variation, &moved, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -462,6 +495,16 @@ GFNT_Result gfnt_face_glyph_advance(const GFNT_Face * face, uint32_t glyph,
   if (result != GFNT_OK) {
     return result;
   }
+  if (moved) {
+    int64_t delta = 0;
+
+    result = gfnt_metrics_advance_delta(face, glyph, variation, &delta, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_advance = gfnt_metrics_add(advance, delta);
+    return GFNT_OK;
+  }
   *out_advance = (int32_t)advance;
   return GFNT_OK;
 }
@@ -470,6 +513,7 @@ GFNT_Result gfnt_face_glyph_side_bearing(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, int32_t * out_bearing,
     GFNT_Error * error) {
   int16_t bearing = 0;
+  bool moved = false;
   GFNT_Result result;
 
   if (!face || !out_bearing) {
@@ -485,7 +529,7 @@ GFNT_Result gfnt_face_glyph_side_bearing(const GFNT_Face * face, uint32_t glyph,
         "a bitmap font, whose metrics are pixels rather than font units - "
         "gfnt_face_glyph_bitmap() carries each glyph's own");
   }
-  result = gfnt_metrics_refuse_variation(face, glyph, variation, error);
+  result = gfnt_metrics_moved(face, glyph, variation, &moved, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -493,6 +537,24 @@ GFNT_Result gfnt_face_glyph_side_bearing(const GFNT_Face * face, uint32_t glyph,
   result = gfnt_hmtx_metrics(face, glyph, NULL, &bearing, error);
   if (result != GFNT_OK) {
     return result;
+  }
+  if (moved) {
+    int64_t delta = 0;
+
+    // Only `HVAR`'s own mapping says; a font without one has a bearing that
+    // follows its outline, and answering that needs the varied outline's box,
+    // which this accessor does not load.
+    if (!gfnt_face_has_table(face, GFNT_TAG_HVAR)) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
+          "a side bearing at a location needs an HVAR with a bearing mapping");
+    }
+    result = gfnt_hvar_delta(face, glyph, GFNT_HVAR_LEFT_BEARING,
+        variation->coords, variation->count, &delta, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_bearing = gfnt_metrics_add(bearing, delta);
+    return GFNT_OK;
   }
   *out_bearing = bearing;
   return GFNT_OK;
@@ -531,21 +593,15 @@ static void gfnt_line_metrics_win(const GFNT_Os2 * os2,
   };
 }
 
-GFNT_Result gfnt_face_line_metrics(const GFNT_Face * face,
-    GFNT_LineMetricsPolicy policy, const GFNT_Variation * variation,
-    GFNT_LineMetrics * out_metrics, GFNT_Error * error) {
+/**
+ * The line metrics a policy picks at the default instance.
+ */
+static GFNT_Result gfnt_line_metrics_default(const GFNT_Face * face,
+    GFNT_LineMetricsPolicy policy, GFNT_LineMetrics * out_metrics,
+    GFNT_Error * error) {
   const GFNT_Os2 * os2 = NULL;
   const GFNT_Hhea * hhea = NULL;
   GFNT_Result result;
-
-  if (!face || !out_metrics) {
-    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
-        "no face, or nowhere to put the metrics");
-  }
-  result = gfnt_metrics_refuse_variation(face, GFNT_GLYPH_NONE, variation, error);
-  if (result != GFNT_OK) {
-    return result;
-  }
 
   switch (policy) {
     case GFNT_LINE_METRICS_TYPO:
@@ -606,4 +662,89 @@ GFNT_Result gfnt_face_line_metrics(const GFNT_Face * face,
       return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
           "not a line-metrics policy this library defines");
   }
+}
+
+/**
+ * One line metric's `MVAR` delta, added to the default's.
+ */
+static GFNT_Result gfnt_line_metric_vary(const GFNT_Face * face, GFNT_Tag tag,
+    int sign, const GFNT_Variation * variation, int32_t * value,
+    GFNT_Error * error) {
+  int64_t delta = 0;
+  GFNT_Result result = gfnt_mvar_delta(face, tag, variation->coords,
+      variation->count, &delta, error);
+
+  if (result != GFNT_OK) {
+    return result;
+  }
+  *value = gfnt_metrics_add(*value, sign * delta);
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_face_line_metrics(const GFNT_Face * face,
+    GFNT_LineMetricsPolicy policy, const GFNT_Variation * variation,
+    GFNT_LineMetrics * out_metrics, GFNT_Error * error) {
+  GFNT_LineMetrics metrics;
+  bool moved = false;
+  GFNT_Result result;
+
+  if (!face || !out_metrics) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no face, or nowhere to put the metrics");
+  }
+  result = gfnt_metrics_moved(face, GFNT_GLYPH_NONE, variation, &moved, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  result = gfnt_line_metrics_default(face, policy, &metrics, error);
+  if (result != GFNT_OK || !moved) {
+    if (result == GFNT_OK) {
+      *out_metrics = metrics;
+    }
+    return result;
+  }
+
+  // `MVAR` names each metric by a tag of its own, and a font that does not list
+  // one does not move it. The window descent is stored positive and reported
+  // negative, so its delta is subtracted.
+  switch (metrics.source) {
+    case GFNT_LINE_METRICS_TYPO:
+      result = gfnt_line_metric_vary(face, GFNT_TAG('t', 'a', 's', 'c'), 1,
+          variation, &metrics.ascent, error);
+      if (result == GFNT_OK) {
+        result = gfnt_line_metric_vary(face, GFNT_TAG('t', 'd', 's', 'c'), 1,
+            variation, &metrics.descent, error);
+      }
+      if (result == GFNT_OK) {
+        result = gfnt_line_metric_vary(face, GFNT_TAG('t', 'l', 'g', 'p'), 1,
+            variation, &metrics.line_gap, error);
+      }
+      break;
+    case GFNT_LINE_METRICS_WIN:
+      result = gfnt_line_metric_vary(face, GFNT_TAG('h', 'c', 'l', 'a'), 1,
+          variation, &metrics.ascent, error);
+      if (result == GFNT_OK) {
+        result = gfnt_line_metric_vary(face, GFNT_TAG('h', 'c', 'l', 'd'), -1,
+            variation, &metrics.descent, error);
+      }
+      break;
+    case GFNT_LINE_METRICS_HHEA:
+      result = gfnt_line_metric_vary(face, GFNT_TAG('h', 'a', 's', 'c'), 1,
+          variation, &metrics.ascent, error);
+      if (result == GFNT_OK) {
+        result = gfnt_line_metric_vary(face, GFNT_TAG('h', 'd', 's', 'c'), 1,
+            variation, &metrics.descent, error);
+      }
+      if (result == GFNT_OK) {
+        result = gfnt_line_metric_vary(face, GFNT_TAG('h', 'l', 'g', 'p'), 1,
+            variation, &metrics.line_gap, error);
+      }
+      break;
+    default:
+      break;
+  }
+  if (result == GFNT_OK) {
+    *out_metrics = metrics;
+  }
+  return result;
 }

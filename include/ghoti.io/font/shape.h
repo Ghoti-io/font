@@ -106,9 +106,9 @@ typedef struct GFNT_ShapeFeature {
 typedef struct GFNT_ShapeOptions {
   GFNT_Tag script;    ///< The OpenType script tag ('latn'), or 0 for the default.
   GFNT_Tag language;  ///< The OpenType language system tag ('TRK '), or 0.
-  GFNT_Direction direction;
+  GFNT_Direction direction;           ///< The direction the run is set in; zero is left to right.
   const GFNT_ShapeFeature * features; ///< Or NULL.
-  size_t feature_count;
+  size_t feature_count;               ///< How many entries @p features has.
   const GFNT_Variation * variation;   ///< The location in the design space, or NULL.
 } GFNT_ShapeOptions;
 
@@ -119,12 +119,12 @@ typedef struct GFNT_ShapeOptions {
  * offset does not move the pen.
  */
 typedef struct GFNT_ShapedGlyph {
-  uint32_t glyph;
+  uint32_t glyph;     ///< The glyph ID in the face.
   uint32_t cluster;   ///< The index of the first code point this glyph stands for.
-  int32_t x_advance;
-  int32_t y_advance;
-  int32_t x_offset;
-  int32_t y_offset;
+  int32_t x_advance;  ///< How far the pen moves horizontally after this glyph.
+  int32_t y_advance;  ///< How far the pen moves vertically after this glyph.
+  int32_t x_offset;   ///< Horizontal displacement of the drawn glyph from the pen.
+  int32_t y_offset;   ///< Vertical displacement of the drawn glyph from the pen.
 } GFNT_ShapedGlyph;
 
 /**
@@ -135,9 +135,9 @@ typedef struct GFNT_ShapedGlyph {
  * its components.
  */
 typedef struct GFNT_ShapedRun {
-  GFNT_ShapedGlyph * glyphs;
-  size_t count;
-  const GFNT_Allocator * allocator;
+  GFNT_ShapedGlyph * glyphs;  ///< The glyphs, in the order described above.
+  size_t count;               ///< How many entries @p glyphs has.
+  const GFNT_Allocator * allocator; ///< What @p glyphs was allocated with.
   GFNT_Tag script;    ///< The script the font's tables were searched with, or 0.
   GFNT_Tag language;  ///< The language system, or 0 for the script's default.
   size_t gsub_lookups; ///< How many `GSUB` lookups ran.

@@ -137,7 +137,7 @@ typedef struct GFNT_RasterOptions {
    * usually unwanted.
    */
   GFNT_F26Dot6 origin_x;
-  GFNT_F26Dot6 origin_y;
+  GFNT_F26Dot6 origin_y;   ///< The vertical offset, in 26.6 pixels; see origin_x.
   /**
    * How far a flattened curve may stray from the curve, in 26.6 pixels. Zero
    * means the default, a sixteenth of a pixel, which is below what 8-bit

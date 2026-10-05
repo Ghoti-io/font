@@ -89,14 +89,14 @@ typedef enum GFNT_StatFormat {
  *     ::gfnt_face_stat_value_pair().
  */
 typedef struct GFNT_StatValue {
-  GFNT_StatFormat format;
+  GFNT_StatFormat format;  ///< Which of the shapes this value takes.
   uint16_t flags;          ///< ::GFNT_STAT_OLDER_SIBLING and ::GFNT_STAT_ELIDABLE.
   uint16_t name_id;        ///< What the value is called, a `name` ID.
   uint16_t axis_index;     ///< Into the design axes; not for ::GFNT_STAT_MULTI.
-  GFNT_F16Dot16 value;
-  GFNT_F16Dot16 range_min;
-  GFNT_F16Dot16 range_max;
-  GFNT_F16Dot16 linked_value;
+  GFNT_F16Dot16 value;        ///< The value, or the nominal one for a range.
+  GFNT_F16Dot16 range_min;    ///< The low end of the range, for ::GFNT_STAT_RANGE.
+  GFNT_F16Dot16 range_max;    ///< The high end of the range, for ::GFNT_STAT_RANGE.
+  GFNT_F16Dot16 linked_value; ///< What it links to, for ::GFNT_STAT_LINKED.
   size_t pair_count;       ///< ::GFNT_STAT_MULTI only.
 } GFNT_StatValue;
 

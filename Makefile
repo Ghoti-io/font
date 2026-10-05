@@ -415,6 +415,20 @@ endif
 endif
 INCLUDE += $(COMPRESS_CFLAGS)
 
+# ghoti.io-unicode, for what a shaper asks of a codepoint and cannot ask of a
+# font: its combining class, its canonical decomposition and composition, its
+# joining type and group, its Indic categories. Resolved exactly as cutil and
+# compress are, and unconditional for the reason compress's comment gives.
+UNICODE_PC ?= ghoti.io-unicode$(BRANCH)
+UNICODE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(UNICODE_PC) 2>/dev/null)
+UNICODE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(UNICODE_PC) 2>/dev/null)
+ifeq ($(strip $(UNICODE_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-unicode was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+endif
+endif
+INCLUDE += $(UNICODE_CFLAGS)
+
 # Every dependency's link flags, in one variable, so that a link line names one
 # thing and a third dependency is one edit rather than nine. The flag stamps
 # record `$(DEP_LIBS)` for the same reason: `make check-stamps` requires every
@@ -422,7 +436,7 @@ INCLUDE += $(COMPRESS_CFLAGS)
 # reached the recipes and not the stamps would leave objects scoring the previous
 # build's flags.
 
-DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS)
+DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS)
 
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
@@ -1745,7 +1759,7 @@ LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 # What goes in the .pc Requires: field. Built from the same variables the
 # compile uses, so a dependency on another branch cannot be named one way for
 # the build and another way for consumers.
-PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC)
+PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC)
 
 # Where this project's own .pc file is installed.
 PKGCONFIG_INSTALL_PATH ?= $(PC_INSTALL_PATH)

@@ -37,13 +37,8 @@
  *     Universal Shaping Engine's clusters are not here. A run in one of those
  *     scripts is shaped as if it were Latin: the font's lookups run, and the
  *     joining forms that a shaper would have selected are not selected.
- *   * **No normalisation.** The code points are mapped as given. A base and a
- *     combining mark that the font has a precomposed glyph for are two glyphs, not
- *     one, where HarfBuzz would compose them; a precomposed character the font
- *     lacks is `.notdef`, not its parts. `unicode` owns the data this needs.
  *   * **No bidirectional reordering and no vertical text.** A run is one
  *     direction, left to right or right to left, and horizontal.
- *   * **No fallback mark positioning,** for a font that has marks and no `GPOS`.
  *   * **No device table for a pixel size.** Positions are in font units; a
  *     `VariationIndex` device table is read when a location is given.
  *

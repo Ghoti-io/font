@@ -172,7 +172,7 @@ to keep open.
 | `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Both producers are implemented |
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
 | `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Implemented; of the four containers that feed them, `CFF ` inside an sfnt is read |
-| `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()`. The default shaper only: no language registry, no script shapers, no normalisation (§9.2) |
+| `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()`. The default shaper only: no language registry, no script shapers (§9.2) |
 | `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
 | `discover.h` | `GFNT_FontSet`, directory scanning, matching, the default fallback provider. Not implemented |
 | `write.h` | the sfnt serialiser, the subsetter, WOFF 1, the PDF helpers. Not implemented |
@@ -1242,11 +1242,20 @@ bit per boolean feature and enough bits for an alternate's number. A nested
 lookup's positions follow the run as it grows or shrinks, the rule 9.1 names, and
 a run may not outgrow sixty-four times its text (never under 16,384 glyphs).
 
-Departures from 9.2, each stated rather than approximated: **no script shaper, no
-normalisation** (so no canonical reordering of marks), **no fallback mark
-positioning**, **no vertical text**, no `GFNT_Scale` (positions are in font
-units), anchors by contour point read their stated coordinates, and a device
-table for a pixel size is ignored. The oracle (§14) is `hb-shape`, and
+**Normalisation** is HarfBuzz's, not UAX #15's: a precomposed character the font
+maps is kept, one it lacks is taken apart, a base and a mark the font has a
+composite for are joined, marks sort by a *modified* combining class that puts
+Hebrew, Arabic, Thai and Tibetan marks where their scripts want them, a space the
+font lacks becomes its space glyph sized as a fraction of the em, and a run read
+against its script's direction is turned round a grapheme at a time so each mark
+stays behind its base. The data is `unicode`'s (the font's third dependency). A
+font with no `GPOS` has its marks **positioned by the shaper**, from the base's
+box and the mark's combining class (`fallback.c`).
+
+Departures from 9.2, each stated rather than approximated: **no script shaper**,
+**no vertical text**, no `GFNT_Scale` (positions are in font units), anchors by
+contour point read their stated coordinates, and a device table for a pixel size
+is ignored. The oracle (§14) is `hb-shape`, and
 `tools/oracle/hb_diff.py` names each of those as a gap and holds the rest to the
 glyph, the cluster, the advance and the offset.
 

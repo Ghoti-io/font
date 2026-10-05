@@ -35,6 +35,10 @@
 #include "../var/var.h"
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/metrics.h>
+#include <ghoti.io/unicode/char.h>
+#include "fallback.h"
+#include "normalize.h"
+#include "uprops.h"
 
 #define GFNT_PF_GLOBAL 0x01u
 #define GFNT_PF_MANUAL_ZWNJ 0x04u
@@ -99,44 +103,6 @@ static void * gfnt_vec_grow(const GFNT_Allocator * a, void * data,
     *capacity = wanted;
   }
   return grown;
-}
-
-/* --- Unicode properties the default shaper needs ------------------------ */
-
-/**
- * Whether a code point is default-ignorable, as HarfBuzz's table has it.
- *
- * Such a character has no visible form of its own and must not break a context:
- * the lookups skip it, and the shaper hides it and gives it no advance.
- */
-static bool gfnt_default_ignorable(uint32_t u) {
-  if (u < 0xAD) {
-    return false;
-  }
-  return u == 0x00AD || u == 0x034F || u == 0x061C
-      || (u >= 0x115F && u <= 0x1160) || (u >= 0x17B4 && u <= 0x17B5)
-      || (u >= 0x180B && u <= 0x180F) || (u >= 0x200B && u <= 0x200F)
-      || (u >= 0x202A && u <= 0x202E) || (u >= 0x2060 && u <= 0x206F)
-      || u == 0x3164 || (u >= 0xFE00 && u <= 0xFE0F) || u == 0xFEFF
-      || u == 0xFFA0 || (u >= 0xFFF0 && u <= 0xFFF8)
-      || (u >= 0x1BCA0 && u <= 0x1BCA3) || (u >= 0x1D173 && u <= 0x1D17A)
-      || (u >= 0xE0000 && u <= 0xE0FFF);
-}
-
-/**
- * Whether a code point is a combining mark, for a font whose `GDEF` has no glyph
- * classes. A coarse table of the blocks that are marks throughout: it stands in
- * for the general category, which this library does not carry.
- */
-static bool gfnt_unicode_mark(uint32_t u) {
-  return (u >= 0x0300 && u <= 0x036F) || (u >= 0x0483 && u <= 0x0489)
-      || (u >= 0x0591 && u <= 0x05BD) || u == 0x05BF
-      || (u >= 0x05C1 && u <= 0x05C2) || (u >= 0x05C4 && u <= 0x05C5)
-      || u == 0x05C7 || (u >= 0x0610 && u <= 0x061A)
-      || (u >= 0x064B && u <= 0x065F) || u == 0x0670
-      || (u >= 0x06D6 && u <= 0x06DC) || (u >= 0x06DF && u <= 0x06E4)
-      || (u >= 0x1AB0 && u <= 0x1AFF) || (u >= 0x1DC0 && u <= 0x1DFF)
-      || (u >= 0x20D0 && u <= 0x20FF) || (u >= 0xFE20 && u <= 0xFE2F);
 }
 
 /** Scripts written right to left, by their OpenType tag. */
@@ -704,6 +670,127 @@ static GFNT_Result gfnt_shape_apply(GFNT_LApply * c, const GFNT_PlanTable * pt,
   return GFNT_OK;
 }
 
+/**
+ * Mark the characters that continue the grapheme before them but are not marks:
+ * a ZWJ and the emoji it joins, an emoji modifier, a half-width katakana voiced
+ * mark and a tag character.
+ */
+static void gfnt_mark_continuations(GFNT_LInfo * chars, size_t count) {
+  size_t i;
+
+  for (i = 1; i < count; i++) {
+    uint32_t u = chars[i].unicode;
+
+    if (chars[i].flags & GFNT_GF_ZWJ) {
+      chars[i].flags |= GFNT_GF_CONTINUATION;
+      if (i + 1 < count && guni_has_property(chars[i + 1].unicode,
+              GUNI_PROP_EXTENDED_PICTOGRAPHIC)) {
+        i++;
+        chars[i].flags |= GFNT_GF_CONTINUATION;
+      }
+    }
+    else if ((u >= 0x1F3FB && u <= 0x1F3FF) || (u >= 0xFF9E && u <= 0xFF9F)
+        || (u >= 0xE0020 && u <= 0xE007F)) {
+      chars[i].flags |= GFNT_GF_CONTINUATION;
+    }
+  }
+}
+
+/** Reverse the run grapheme by grapheme: each cluster keeps its own order. */
+static void gfnt_reverse_clusters(GFNT_LInfo * chars, size_t count) {
+  size_t i;
+  size_t start = 0;
+
+  for (i = 0; i < count / 2; i++) {
+    GFNT_LInfo t = chars[i];
+
+    chars[i] = chars[count - 1 - i];
+    chars[count - 1 - i] = t;
+  }
+  for (i = 1; i <= count; i++) {
+    if (i == count || chars[i].cluster != chars[i - 1].cluster) {
+      size_t lo = start;
+      size_t hi = i - 1;
+
+      while (lo < hi) {
+        GFNT_LInfo t = chars[lo];
+
+        chars[lo++] = chars[hi];
+        chars[hi--] = t;
+      }
+      start = i;
+    }
+  }
+}
+
+/**
+ * Size the spaces the font has no glyph for, which were mapped to its space.
+ *
+ * HarfBuzz's `_hb_ot_shape_fallback_spaces()`: an em fraction of the font's own
+ * em, a figure space as wide as a digit, a punctuation space as wide as a full
+ * stop, a narrow space half the width the space glyph has. A space that the font
+ * does map, or that a lookup has ligated, is left as the font says.
+ */
+static void gfnt_fallback_spaces(const GFNT_Face * face, GFNT_LBuffer * buf,
+    const GFNT_Variation * variation) {
+  uint16_t upem = 0;
+  size_t i;
+
+  (void)gfnt_face_units_per_em(face, &upem, NULL);
+  for (i = 0; i < buf->len; i++) {
+    GFNT_LInfo * info = &buf->info[i];
+    GFNT_LPos * pos = &buf->pos[i];
+
+    if (!info->space || (info->props & GFNT_PROP_LIGATED)) {
+      continue;
+    }
+    switch (info->space) {
+      case GFNT_SPACE_EM:
+      case GFNT_SPACE_EM_2:
+      case GFNT_SPACE_EM_3:
+      case GFNT_SPACE_EM_4:
+      case GFNT_SPACE_EM_5:
+      case GFNT_SPACE_EM_6:
+      case GFNT_SPACE_EM_16:
+        pos->x_advance = (int32_t)(((int64_t)upem + info->space / 2)
+            / info->space);
+        break;
+      case GFNT_SPACE_4_EM_18:
+        pos->x_advance = (int32_t)((int64_t)upem * 4 / 18);
+        break;
+      case GFNT_SPACE_FIGURE:
+      case GFNT_SPACE_PUNCTUATION: {
+        static const uint32_t figure[] = {'0', '1', '2', '3', '4', '5', '6',
+            '7', '8', '9'};
+        static const uint32_t punctuation[] = {'.', ','};
+        const uint32_t * probe = info->space == GFNT_SPACE_FIGURE
+            ? figure : punctuation;
+        size_t n = info->space == GFNT_SPACE_FIGURE ? 10 : 2;
+        size_t k;
+
+        for (k = 0; k < n; k++) {
+          uint32_t glyph = 0;
+          int32_t advance = 0;
+
+          if (gfnt_face_glyph_for_codepoint(face, probe[k], &glyph, NULL)
+                  == GFNT_OK && glyph
+              && gfnt_face_glyph_advance(face, glyph, variation, &advance,
+                  NULL) == GFNT_OK) {
+            pos->x_advance = advance;
+            break;
+          }
+        }
+        break;
+      }
+      case GFNT_SPACE_NARROW:
+        pos->x_advance /= 2;
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     size_t count, const GFNT_ShapeOptions * options,
     const GFNT_Allocator * allocator, GFNT_ShapedRun * out_run,
@@ -719,6 +806,9 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   GFNT_Result result;
   GFNT_ShapedRun run;
   uint32_t space = 0;
+  GFNT_LInfo * chars = NULL;
+  size_t chars_len = 0;
+  size_t chars_capacity = 0;
   bool native_rtl;
   bool reversed_first;
   size_t i;
@@ -749,49 +839,65 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     gfnt_plan_free(&plan, allocator);
     return result;
   }
-  if (!gfnt_lbuf_init(&buf, allocator, count)) {
-    gfnt_plan_free(&plan, allocator);
-    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-        "no memory for the glyph buffer");
-  }
+  memset(&buf, 0, sizeof buf);
   gfnt_gdef_open(face, &gdef);
   memset(&gsub, 0, sizeof gsub);
   memset(&gpos, 0, sizeof gpos);
 
-  // Map the text. A character the font does not map is the notdef glyph, and
-  // stays in the run, as it does in HarfBuzz.
+  // The characters, with what the shaper needs to know about each. A mark, a ZWJ
+  // and an emoji modifier belong to the grapheme before them, and a grapheme is
+  // never split across clusters, so that a caret or a selection cannot land
+  // between a letter and its accent.
+  chars = allocator->calloc_fn(allocator->ctx, count, sizeof *chars);
+  if (!chars) {
+    result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for the characters of the run");
+    goto done;
+  }
+  chars_len = count;
+  chars_capacity = count;
   for (i = 0; i < count; i++) {
-    uint32_t glyph = 0;
-    GFNT_LInfo * info = &buf.info[i];
+    chars[i].unicode = codepoints[i];
+    chars[i].cluster = (uint32_t)i;
+    gfnt_u_set_props(&chars[i]);
+  }
+  gfnt_mark_continuations(chars, count);
+  for (i = 1; i < count; i++) {
+    if (chars[i].flags & GFNT_GF_CONTINUATION) {
+      chars[i].cluster = chars[i - 1].cluster;
+    }
+  }
 
-    result = gfnt_face_glyph_for_codepoint(face, codepoints[i], &glyph, error);
-    if (result != GFNT_OK) {
-      goto done;
-    }
-    info->glyph = glyph;
-    info->cluster = (uint32_t)i;
-    info->mask = plan.global_mask;
-    info->unicode = codepoints[i];
-    if (gfnt_default_ignorable(codepoints[i])) {
-      info->flags |= GFNT_GF_DEFAULT_IGNORABLE;
-    }
-    if (codepoints[i] == 0x200D) {
-      info->flags |= GFNT_GF_ZWJ;
-    }
-    if (codepoints[i] == 0x200C) {
-      info->flags |= GFNT_GF_ZWNJ;
-    }
+  // The shaper works in the script's own direction. Text the other way is turned
+  // round first, a grapheme at a time so that each keeps its base before its
+  // marks; a run in the script's own direction is turned round at the end.
+  native_rtl = gfnt_script_native_rtl(options->script);
+  reversed_first = (options->direction == GFNT_DIRECTION_RTL) != native_rtl;
+  if (reversed_first) {
+    gfnt_reverse_clusters(chars, count);
+  }
+
+  // Normalise: the glyphs come from here, with the composites the font has made
+  // and the characters it lacks taken apart.
+  if (!gfnt_normalize(face, &chars, &chars_len, &chars_capacity, allocator,
+          GFNT_NORM_COMPOSED_DIACRITICS, NULL)) {
+    result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory while normalising the run");
+    goto done;
+  }
+  if (!gfnt_lbuf_init(&buf, allocator, chars_len)) {
+    result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for the glyph buffer");
+    goto done;
+  }
+  for (i = 0; i < chars_len; i++) {
+    buf.info[i] = chars[i];
+    buf.info[i].mask = plan.global_mask;
+    buf.info[i].props = 0;
+    buf.info[i].lig_props = 0;
   }
   (void)gfnt_face_glyph_for_codepoint(face, 0x20, &space, NULL);
-
-  // A mark belongs to the cluster of the character it follows, and so does a ZWJ:
-  // a grapheme is never split across clusters, so that a caret or a selection
-  // cannot land between a letter and its accent.
-  for (i = 1; i < count; i++) {
-    if (gfnt_unicode_mark(codepoints[i]) || codepoints[i] == 0x200D) {
-      buf.info[i].cluster = buf.info[i - 1].cluster;
-    }
-  }
+  count = chars_len;
 
   // Features with a range of their own: set their value on the code points in it.
   for (i = 0; i < options->feature_count; i++) {
@@ -809,15 +915,6 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
             | ((f->value << pf->shift) & pf->mask);
       }
     }
-  }
-
-  // The shaper works in the script's own direction. Text the other way is turned
-  // round first, so that the lookups see it in reading order, and the run is
-  // turned back at the end if it reads right to left.
-  native_rtl = gfnt_script_native_rtl(options->script);
-  reversed_first = (options->direction == GFNT_DIRECTION_RTL) != native_rtl;
-  if (reversed_first) {
-    gfnt_lbuf_reverse(&buf);
   }
 
   // GSUB.
@@ -848,7 +945,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
         info->props = gfnt_gdef_props(&props, info->glyph);
       }
       else {
-        info->props = gfnt_unicode_mark(info->unicode)
+        info->props = info->gc == GUNI_GC_NONSPACING_MARK
                 && !(info->flags & GFNT_GF_DEFAULT_IGNORABLE)
             ? GFNT_PROP_MARK : GFNT_PROP_BASE;
       }
@@ -925,6 +1022,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     memset(&buf.pos[i], 0, sizeof buf.pos[i]);
     buf.pos[i].x_advance = advance;
   }
+  gfnt_fallback_spaces(face, &buf, options->variation);
 
   // GPOS.
   if (plan.tables[1].present) {
@@ -959,7 +1057,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // back over the base it follows.
   for (i = 0; i < buf.len; i++) {
     if (gfnt_l_is_mark(&buf.info[i])) {
-      if (!plan.tables[1].present) {
+      if (!plan.tables[1].present && !native_rtl) {
         buf.pos[i].x_offset -= buf.pos[i].x_advance;
         buf.pos[i].y_offset -= buf.pos[i].y_advance;
       }
@@ -978,6 +1076,11 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   }
   if (plan.tables[1].present) {
     gfnt_gpos_position_finish_offsets(&buf, native_rtl);
+  }
+  // A font with no `GPOS` does not say where a mark goes, so the shaper does.
+  if (!plan.tables[1].present) {
+    gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
+        !native_rtl, !native_rtl);
   }
   if (native_rtl) {
     gfnt_lbuf_reverse(&buf);
@@ -1004,6 +1107,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   result = GFNT_OK;
 
 done:
+  allocator->free_fn(allocator->ctx, chars);
   gfnt_lbuf_free(&buf);
   gfnt_plan_free(&plan, allocator);
   return result;

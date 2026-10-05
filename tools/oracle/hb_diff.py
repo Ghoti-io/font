@@ -63,16 +63,18 @@ FIXTURES = os.path.join(ROOT, "tests", "data", "fonts")
 # of these areas is read as the gap and not as a defect - and so that the corpus
 # below visibly avoids them rather than quietly omitting them.
 GAPS = {
-    "normalisation": "HarfBuzz composes a base and a mark when the font has the "
-                     "composite, and decomposes a character the font lacks",
-    "script shapers": "Arabic joining, Indic reordering, Hangul jamo, the "
-                      "Universal Shaping Engine",
-    "fallback mark positioning": "a combining mark in a font whose GPOS has no mark feature, "
-                                 "which HarfBuzz places from the glyph's extents",
     "bidi and vertical text": "one direction, horizontal, per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
+    "outline HarfBuzz does not read": "a Type 1 charstring in a CFF table, or a cubic glyf "
+                                      "outline: HarfBuzz measures them wrongly or not at all, "
+                                      "so a mark placed from their box differs",
 }
+
+# Fixtures whose outlines are of a kind HarfBuzz does not read. A mark is placed
+# against its base's box when the font has no GPOS, and the box is the one thing
+# these two cannot agree on.
+UNREAD_OUTLINES = {"cff-type1.otf", "outline-cubic.ttf", "outline-cubic-flag.ttf"}
 
 LATIN = [
     "The quick brown fox jumps over the lazy dog",
@@ -88,6 +90,25 @@ LATIN = [
     "ÅÄÖ åäö Ææ Øø Þþ Ðð Łł Šš Žž",
     "ı İ ii II",
     "a‍b a‌b f‌f f‍f",
+]
+# Text whose shape depends on normalisation: a precomposed character the font may
+# lack, a base and mark the font may have a composite for, marks that arrive out of
+# canonical order, singletons that decompose to another character, and the spaces
+# and joiners a shaper must size or skip. Written as escapes so that the file says
+# what it means.
+FORMS = [
+    "\u00e9 e\u0301 \u00c5 A\u030a \u212b \u2126 \u0391\u0342",
+    "a\u0323\u0302 a\u0302\u0323 \u1ea1\u0302 \u1ec7 e\u0323\u0302 e\u0302\u0323",
+    "\u1ebf \u1ec1 \u1ec3 \u1ec5 o\u031b\u0301 \u01a1\u0301 u\u031b\u0323",
+    "a\u0301\u0300\u0302 a\u0300\u0301 o\u0308\u0304 o\u0304\u0308 \u01d8 \u01d7",
+    "a\u0345\u0301 \u03b1\u0345 \u1f80 \u1f71 \u03ac \u0385 \u03b9\u0308\u0301",
+    "a\u2002b a\u2003b a\u2004b a\u2005b a\u2006b a\u2007b a\u2008b a\u2009b a\u200ab",
+    "a\u00a0b a\u202fb a\u205fb a\u3000b a\u2011b a\u00adb a\u2010b",
+    "e\u034f\u0301 e\u0301\u034f\u0300 a\u034fb x\u034f\u0323\u0301",
+    "a\u200db a\u200cb \u0e01\u0e33 \u1100\u1161 \uac00 \uac01",
+    "\u0627\u0301 \u05d0\u05b7 e\u20dd \u0301a \u0301\u0301",
+    "\u00c0\u00c1\u00c2\u00c3\u00c4\u00c5\u00c6\u00c7\u00c8\u00c9\u00ca\u00cb",
+    "\u0100\u0101\u0102\u0103\u0104\u0105\u0106\u0107\u010c\u010d\u0158\u0159",
 ]
 GREEK = [
     "Αλφάβητο Τάξη Υ ωΩ",
@@ -116,6 +137,8 @@ GROUPS = [
     ("turkish", "Latn", "latn", "tr", "TRK ", "", LATIN),
     ("romanian", "Latn", "latn", "ro", "ROM ", "", LATIN),
     ("dutch", "Latn", "latn", "nl", "NLD ", "", LATIN),
+    ("forms", "Latn", "latn", None, "", "", FORMS),
+    ("forms -ccmp", "Latn", "latn", None, "", "-ccmp", FORMS),
     ("greek", "Grek", "grek", None, "", "", GREEK),
     ("cyrillic", "Cyrl", "cyrl", None, "", "", CYRILLIC),
 ]
@@ -339,25 +362,6 @@ def ours_parse(line):
             for g in value]
 
 
-MARKS = range(0x0300, 0x0370)
-
-
-def has_gpos_mark(font):
-    """Whether the font's GPOS has a `mark` feature at all.
-
-    HarfBuzz positions a combining mark itself, from the glyph's extents and the
-    character's combining class, whenever the font does not say where marks go: a
-    font with no GPOS, and also one whose GPOS has kerning and nothing else. The
-    question this answers is the second half of that, which is the one that is
-    easy to miss. Asked of this library's own layout dump, so the answer is about
-    the same bytes both shapers read.
-    """
-    finished = subprocess.run([DRIVER, "--layout", font], capture_output=True,
-                              text=True)
-    gpos = finished.stdout.split("\nGPOS:", 1)
-    return len(gpos) == 2 and " mark:" in gpos[1]
-
-
 DUMP = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
                     "font-dump")
 
@@ -373,35 +377,18 @@ def has_aat(font):
     return "table 'morx'" in finished.stdout or "table 'kerx'" in finished.stdout
 
 
-def classify(text, want, got, mark_feature, aat=False):
+def classify(text, font, want, got, aat=False):
     """Which known gap, if any, explains a disagreement - or None.
 
     These are the things HarfBuzz does that this library does not (see GAPS and
     shape.h), recognised by their cause and not by the font or the string, so that
-    a *new* kind of disagreement in the same fonts still fails the run:
-
-      * normalisation: a character the font has no glyph for, that HarfBuzz then
-        takes apart into base and mark (and this library leaves as .notdef);
-      * fallback mark positioning: a combining mark in a font whose GPOS does not
-        say where marks go, where HarfBuzz places the mark from the glyph's extents
-        and its combining class.
+    a *new* kind of disagreement in the same fonts still fails the run.
     """
     if aat:
         return "AAT layout"
-    codepoints = [ord(c) for c in text]
-    for glyph in got:
-        cluster = glyph[1]
-        if glyph[0] == 0 and cluster < len(codepoints) and \
-                codepoints[cluster] >= 0xC0:
-            return "normalisation"
-    if not mark_feature and any(c in MARKS for c in codepoints):
-        # Only what happens to a mark is the gap: HarfBuzz re-derives the glyph
-        # classes of the marks from Unicode, takes their advance away, and places
-        # them. The glyphs and the clusters are still held to the reference, so
-        # that a line with a mark in it is not excused for everything else.
-        if len(want) == len(got) \
-                and all(a[0] == b[0] and a[1] == b[1] for a, b in zip(want, got)):
-            return "fallback mark positioning"
+    if os.path.basename(font) in UNREAD_OUTLINES and \
+            any(0x0300 <= ord(c) < 0x0370 for c in text):
+        return "outline HarfBuzz does not read"
     return None
 
 
@@ -457,6 +444,7 @@ def main(argv):
     # says now.
     golden_out = None
     golden_check = None
+    strict = set()
     rows = []
     limit = None
     only = None
@@ -470,6 +458,11 @@ def main(argv):
             skip = True
         elif a == "--groups":
             only = set(argv[index + 1].split(","))
+            skip = True
+        elif a == "--strict":
+            # Count the named gaps as disagreements, to see them in detail while
+            # one is being closed.
+            strict = set(argv[index + 1].split(","))
             skip = True
         elif a == "--write-golden":
             golden_out = argv[index + 1]
@@ -526,7 +519,6 @@ def main(argv):
     per_font = {}
     by_kind = {}
     known = {}
-    gpos_of = {}
     aat_of = {}
     by_group = {}
     by_text = {}
@@ -554,14 +546,11 @@ def main(argv):
             want = parse(want_line)
             got = ours_parse(got_line)
             if cases_for(font) is not None:
-                if font not in gpos_of:
-                    gpos_of[font] = has_gpos_mark(font)
-                marks = (not gpos_of[font]) and any(ord(c) in MARKS for c in text)
                 rows.append("\t".join([
                     os.path.basename(font), group[2] or "-", group[4] or "-",
                     group[5] or "-", (group[7] if len(group) > 7 else "") or "-",
                     " ".join("%04X" % ord(c) for c in text),
-                    "marks" if marks else "-",
+                    "-",
                     " ".join("/".join(str(v) for v in g) for g in want) or "-"]))
             if isinstance(got, dict):
                 refused[got.get("error")] = refused.get(got.get("error"), 0) + 1
@@ -570,11 +559,11 @@ def main(argv):
             glyphs += len(want)
             if got == want:
                 continue
-            if font not in gpos_of:
-                gpos_of[font] = has_gpos_mark(font)
             if font not in aat_of:
                 aat_of[font] = has_aat(font)
-            gap = classify(text, want, got, gpos_of[font], aat_of[font])
+            gap = classify(text, font, want, got, aat_of[font])
+            if gap in strict:
+                gap = None
             if gap:
                 known[gap] = known.get(gap, 0) + 1
                 continue
@@ -603,7 +592,7 @@ def main(argv):
             print("  skipped %s: %s" % (os.path.basename(font), why))
     for gap, n in sorted(known.items(), key=lambda kv: -kv[1]):
         print("  known gap, %d lines: %s - %s" % (n, gap,
-              GAPS.get(gap, GAPS.get("normalisation"))))
+              GAPS[gap]))
     if disagreements:
         print("  by what differs first: %s" % ", ".join(
             "%s %d" % kv for kv in sorted(by_kind.items(), key=lambda kv: -kv[1])))
@@ -637,9 +626,8 @@ GOLDEN_HEADER = """\
 # `make test` and not only the differential. Tab separated:
 #   font  script  language  features  location  code points  flag  glyphs
 # where each glyph is glyph/cluster/x_advance/y_advance/x_offset/y_offset in font
-# units, and the flag `marks` says the case has a combining mark in a font whose
-# GPOS has no mark feature, where HarfBuzz places the mark itself (the engine is
-# held to the glyphs and clusters there, not to the mark's position).
+# units. The flag column is `-`: it once marked a case this engine was held to
+# less than the whole answer on, and none is left.
 """
 
 

@@ -6,9 +6,8 @@
 # `make test` and not only the differential. Tab separated:
 #   font  script  language  features  location  code points  flag  glyphs
 # where each glyph is glyph/cluster/x_advance/y_advance/x_offset/y_offset in font
-# units, and the flag `marks` says the case has a combining mark in a font whose
-# GPOS has no mark feature, where HarfBuzz places the mark itself (the engine is
-# held to the glyphs and clusters there, not to the mark's position).
+# units. The flag column is `-`: it once marked a case this engine was held to
+# less than the whole answer on, and none is left.
 layout-gpos.ttf	latn	-	-	-	0041 0056	-	2/0/620/0/0/0 3/1/700/0/0/0
 layout-gpos.ttf	latn	-	-	-	0054 006F	-	4/0/540/0/-30/0 6/1/520/0/0/0
 layout-gpos.ttf	latn	-	-	-	0041 0054	-	2/0/650/0/10/0 4/1/605/0/0/5
@@ -90,14 +89,14 @@ layout-gsub.ttf	latn	-	salt=3	-	0061	-	30/0/780/0/0/0
 layout-gsub.ttf	latn	-	salt=4	-	0061	-	2/0/500/0/0/0
 layout-gsub.ttf	latn	-	+salt	-	0061	-	28/0/760/0/0/0
 layout-gsub.ttf	latn	-	+dlig	-	006F 006F	-	35/0/1100/0/0/0
-layout-gsub.ttf	latn	-	+dlig	-	006F 0301 006F	marks	35/0/1100/0/0/0 36/0/0/0/-825/662
-layout-gsub.ttf	latn	-	+dlig	-	006F 0300 0301 006F	marks	35/0/1100/0/0/0 37/0/0/0/-825/662 36/0/0/0/-825/1324
-layout-gsub.ttf	latn	-	+hlig	-	006F 0301 006F	marks	16/0/640/0/0/0 36/0/0/0/-320/662 16/2/640/0/0/0
-layout-gsub.ttf	latn	-	+hlig	-	006F 006F 0301	marks	35/0/1100/0/0/0 36/0/0/0/-275/662
-layout-gsub.ttf	latn	-	+cswh	-	006F 0300 006F	marks	35/0/1100/0/0/0 37/0/0/0/-825/662
-layout-gsub.ttf	latn	-	+cswh	-	006F 0301 006F	marks	16/0/640/0/0/0 36/0/0/0/-320/662 16/2/640/0/0/0
-layout-gsub.ttf	latn	-	+cv01	-	006F 0301 006F	marks	35/0/1100/0/0/0 36/0/0/0/-825/662
-layout-gsub.ttf	latn	-	+cv01	-	006F 0300 006F	marks	16/0/640/0/0/0 37/0/0/0/-320/662 16/2/640/0/0/0
+layout-gsub.ttf	latn	-	+dlig	-	006F 0301 006F	-	35/0/1100/0/0/0 36/0/0/0/-825/662
+layout-gsub.ttf	latn	-	+dlig	-	006F 0300 0301 006F	-	35/0/1100/0/0/0 37/0/0/0/-825/662 36/0/0/0/-825/1324
+layout-gsub.ttf	latn	-	+hlig	-	006F 0301 006F	-	16/0/640/0/0/0 36/0/0/0/-320/662 16/2/640/0/0/0
+layout-gsub.ttf	latn	-	+hlig	-	006F 006F 0301	-	35/0/1100/0/0/0 36/0/0/0/-275/662
+layout-gsub.ttf	latn	-	+cswh	-	006F 0300 006F	-	35/0/1100/0/0/0 37/0/0/0/-825/662
+layout-gsub.ttf	latn	-	+cswh	-	006F 0301 006F	-	16/0/640/0/0/0 36/0/0/0/-320/662 16/2/640/0/0/0
+layout-gsub.ttf	latn	-	+cv01	-	006F 0301 006F	-	35/0/1100/0/0/0 36/0/0/0/-825/662
+layout-gsub.ttf	latn	-	+cv01	-	006F 0300 006F	-	16/0/640/0/0/0 37/0/0/0/-320/662 16/2/640/0/0/0
 layout-gsub.ttf	latn	-	+ss03	-	0061 0062 0063	-	2/0/500/0/0/0 2/0/500/0/0/0 3/1/510/0/0/0 4/2/520/0/0/0
 layout-gsub.ttf	latn	-	+ss03	-	0061 0062 0063 0061 0062 0063	-	2/0/500/0/0/0 2/0/500/0/0/0 3/1/510/0/0/0 4/2/520/0/0/0 2/3/500/0/0/0 2/3/500/0/0/0 3/4/510/0/0/0 4/5/520/0/0/0
 layout-gsub.ttf	latn	-	+ss03	-	0061 0062	-	2/0/500/0/0/0 3/1/510/0/0/0
@@ -113,12 +112,12 @@ layout-gsub.ttf	latn	-	+ss06	-	0070 0071	-	27/0/750/0/0/0 18/1/660/0/0/0
 layout-gsub.ttf	latn	-	+ss07	-	0070 0070 0071 0072	-	17/0/650/0/0/0 17/1/650/0/0/0 26/2/740/0/0/0 19/3/670/0/0/0
 layout-gsub.ttf	latn	-	+ss07	-	0070 0071 0072	-	17/0/650/0/0/0 26/1/740/0/0/0 19/2/670/0/0/0
 layout-gsub.ttf	latn	-	+ss08	-	0073 0074 0073 0074	-	22/0/700/0/0/0 23/1/710/0/0/0 22/2/700/0/0/0 23/3/710/0/0/0
-layout-gsub.ttf	latn	-	+ss15	-	0301 0300	marks	38/0/0/0/0/0
-layout-gsub.ttf	latn	-	+dlig,+ss15	-	006F 0301 006F 0300	marks	35/0/1100/0/0/0 36/0/0/0/-825/662 37/0/0/0/-275/662
-layout-gsub.ttf	latn	-	+dlig,+ss16	-	006F 0301 006F 0300	marks	35/0/1100/0/0/0 38/0/0/0/-825/662
-layout-gsub.ttf	latn	-	+ss17	-	0301 0300	marks	36/0/0/0/0/0 37/0/0/0/0/0
-layout-gsub.ttf	latn	-	+ss25	-	006F 0301	marks	16/0/640/0/0/0 36/0/0/0/-320/662
-layout-gsub.ttf	latn	-	+ss18	-	006F 0301	marks	16/0/640/0/0/0 2/0/0/0/-510/662
+layout-gsub.ttf	latn	-	+ss15	-	0301 0300	-	38/0/0/0/0/0
+layout-gsub.ttf	latn	-	+dlig,+ss15	-	006F 0301 006F 0300	-	35/0/1100/0/0/0 36/0/0/0/-825/662 37/0/0/0/-275/662
+layout-gsub.ttf	latn	-	+dlig,+ss16	-	006F 0301 006F 0300	-	35/0/1100/0/0/0 38/0/0/0/-825/662
+layout-gsub.ttf	latn	-	+ss17	-	0301 0300	-	36/0/0/0/0/0 37/0/0/0/0/0
+layout-gsub.ttf	latn	-	+ss25	-	006F 0301	-	16/0/640/0/0/0 36/0/0/0/-320/662
+layout-gsub.ttf	latn	-	+ss18	-	006F 0301	-	16/0/640/0/0/0 2/0/0/0/-510/662
 layout-gsub.ttf	latn	-	+ss19	-	0061 0078 0064	-	2/0/500/0/0/0 25/1/730/0/0/0 5/2/530/0/0/0
 layout-gsub.ttf	latn	-	+ss19	-	0061 0063 0064	-	2/0/500/0/0/0 4/1/520/0/0/0 5/2/530/0/0/0
 layout-gsub.ttf	latn	TRK 	-	-	0066 0069	-	31/0/900/0/0/0

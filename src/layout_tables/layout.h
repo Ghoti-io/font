@@ -101,6 +101,8 @@ extern "C" {
 #define GFNT_GF_ZWJ 0x02u
 #define GFNT_GF_ZWNJ 0x04u
 #define GFNT_GF_HIDDEN 0x08u
+#define GFNT_GF_MARK 0x10u          ///< General category Mn, Mc or Me.
+#define GFNT_GF_CONTINUATION 0x20u  ///< Belongs to the grapheme before it.
 
 /** One glyph of the run, in the order HarfBuzz keeps: parallel to ::GFNT_LPos. */
 typedef struct GFNT_LInfo {
@@ -111,6 +113,9 @@ typedef struct GFNT_LInfo {
   uint16_t props;     ///< GFNT_PROP_*, and the mark attachment class in the high byte.
   uint8_t lig_props;  ///< Ligature id in the top three bits; see ::gfnt_l_lig_id().
   uint8_t flags;      ///< GFNT_GF_*.
+  uint8_t gc;         ///< The Unicode general category, as GUNI_GC_*.
+  uint8_t mcc;        ///< The modified combining class of a mark; 0 for any other.
+  uint8_t space;      ///< A GFNT_SPACE_* the character falls back to, or 0.
 } GFNT_LInfo;
 
 #define GFNT_ATTACH_MARK 1u

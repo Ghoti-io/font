@@ -911,11 +911,15 @@ TEST(Shape, ARuleOverMarksMayNotReachAcrossALigatureTheyBelongTo) {
 TEST(Shape, AMarkReplacedByABaseIsABaseAndTakesRoom) {
   Font font("layout-gsub.ttf");
   // ss18: acute -> a. The substituted glyph has the class its new glyph has, so
-  // it is no longer a mark, and a mark's advance is taken away and a base's is not.
+  // it is no longer a mark to the lookups. The font has no GPOS, though, so the
+  // shaper places marks itself, and it goes by the character: U+0301 is still a
+  // combining mark, its advance is taken away and it is set over the o.
   Glyphs g = run_of(font, V{'o', 0x301}, "+ss18");
   ASSERT_EQ(g.size(), 2u);
   EXPECT_EQ(g[1].glyph, kA);
-  EXPECT_EQ(g[1].x_advance, 500);
+  EXPECT_EQ(g[1].x_advance, 0);
+  EXPECT_EQ(g[1].x_offset, -510);
+  EXPECT_EQ(g[1].y_offset, 662);
 }
 
 TEST(Shape, AChainOnlyAppliesToGlyphsItsFirstInputCoverageHolds) {
@@ -1332,16 +1336,6 @@ TEST(ShapeGolden, EveryCaseShapesToWhatHarfBuzzSays) {
     ASSERT_EQ(shape(*fonts[row.font], row.text, request, &got, &error), GFNT_OK)
         << row.line;
     ++compared;
-    if (row.flag == "marks") {
-      // HarfBuzz places a mark itself in this font, from the glyph's extents; this
-      // library is held to the glyphs and the clusters here, not to the position.
-      ASSERT_EQ(got.size(), row.want.size()) << row.line;
-      for (size_t i = 0; i < got.size(); ++i) {
-        EXPECT_EQ(got[i].glyph, row.want[i].glyph) << row.line;
-        EXPECT_EQ(got[i].cluster, row.want[i].cluster) << row.line;
-      }
-      continue;
-    }
     EXPECT_EQ(got, row.want) << row.line;
   }
   EXPECT_EQ(compared, rows.size());
@@ -1481,4 +1475,106 @@ TEST(ShapeAllocation, EveryAllocationRefusedInTurnIsRefusedCleanly) {
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+
+// --- normalisation, space fallback and the order of a reversed run -----------------
+
+namespace {
+
+/**
+ * A font with 'A' (glyph 1), 'B' (2), a combining acute U+0301 (6), a combining
+ * dot below U+0323 (5), and optionally the precomposed U+00C1 (7) and a space (3).
+ */
+std::vector<uint8_t> accent_font(bool with_composite, bool with_space = true) {
+  std::vector<std::pair<uint32_t, uint16_t>> more = {{0x301, 6}, {0x323, 5}};
+  if (with_composite) {
+    more.push_back({0xC1, 7});
+  }
+  if (with_space) {
+    more.push_back({0x20, 3});
+  }
+  return small_font({}, 8, more);
+}
+
+}  // namespace
+
+TEST(ShapeNormalise, ABaseAndAMarkBecomeTheCompositeTheFontHas) {
+  Font font(accent_font(true));
+  Glyphs g = run_of(font, V{'A', 0x301});
+  ASSERT_EQ(g.size(), 1u);
+  EXPECT_EQ(g[0].glyph, 7u);
+  EXPECT_EQ(g[0].cluster, 0u);
+}
+
+TEST(ShapeNormalise, ACompositeTheFontLacksIsTakenApart) {
+  Font font(accent_font(false));
+  Glyphs g = run_of(font, V{0xC1});
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].glyph, 1u);
+  EXPECT_EQ(g[1].glyph, 6u);
+  EXPECT_EQ(g[0].cluster, 0u);
+  EXPECT_EQ(g[1].cluster, 0u);
+}
+
+TEST(ShapeNormalise, ACompositeTheFontHasIsKept) {
+  Font font(accent_font(true));
+  Glyphs g = run_of(font, V{0xC1});
+  ASSERT_EQ(g.size(), 1u);
+  EXPECT_EQ(g[0].glyph, 7u);
+}
+
+TEST(ShapeNormalise, MarksAreSortedByCombiningClassWhateverOrderTheyCameIn) {
+  Font font(accent_font(false));
+  // The dot below (class 220) goes before the acute (230) either way round.
+  EXPECT_EQ(ids(run_of(font, V{'A', 0x301, 0x323})), (V{1, 5, 6}));
+  EXPECT_EQ(ids(run_of(font, V{'A', 0x323, 0x301})), (V{1, 5, 6}));
+}
+
+TEST(ShapeNormalise, AMarkThatWillNotComposeKeepsItsPlace) {
+  Font font(accent_font(true));
+  // The dot below blocks nothing that matters here: A + acute composes past it.
+  Glyphs g = run_of(font, V{'A', 0x323, 0x301});
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].glyph, 7u);
+  EXPECT_EQ(g[1].glyph, 5u);
+}
+
+TEST(ShapeSpaces, ASpaceTheFontLacksIsSizedAsAFractionOfTheEm) {
+  Font font(accent_font(false));
+  // U+2003 EM SPACE is the whole em (1000 units), U+2002 EN SPACE half of it, U+2009
+  // THIN SPACE a fifth, U+200A HAIR SPACE a sixteenth. All are the font's space glyph.
+  Glyphs g = run_of(font, V{0x2003, 0x2002, 0x2009, 0x200A});
+  ASSERT_EQ(g.size(), 4u);
+  for (const Glyph & x : g) {
+    EXPECT_EQ(x.glyph, 3u);
+  }
+  EXPECT_EQ(g[0].x_advance, 1000);
+  EXPECT_EQ(g[1].x_advance, 500);
+  EXPECT_EQ(g[2].x_advance, 200);
+  EXPECT_EQ(g[3].x_advance, 63);
+}
+
+TEST(ShapeSpaces, ANoBreakSpaceTheFontLacksIsTheSpacesOwnWidth) {
+  Font font(accent_font(false));
+  Glyphs g = run_of(font, V{0xA0});
+  ASSERT_EQ(g.size(), 1u);
+  EXPECT_EQ(g[0].glyph, 3u);
+  EXPECT_EQ(g[0].x_advance, 500);
+}
+
+TEST(ShapeDirection, AReversedRunKeepsEachMarkAfterItsBase) {
+  Font font(accent_font(false));
+  Glyphs g;
+  Request request;
+  request.rtl = true;
+  // Text A, acute, B shaped right to left in a left to right script: the run is
+  // turned round a grapheme at a time, so B comes first and the mark still follows
+  // the A it belongs to.
+  ASSERT_EQ(shape(font, V{'A', 0x301, 'B'}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(ids(g), (V{2, 1, 6}));
+  EXPECT_EQ(g[0].cluster, 2u);
+  EXPECT_EQ(g[1].cluster, 0u);
+  EXPECT_EQ(g[2].cluster, 0u);
 }

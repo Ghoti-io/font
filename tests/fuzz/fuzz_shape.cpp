@@ -9,6 +9,9 @@
  * nested lookup index past the end of the lookup list. A fuzzer given `GSUB`
  * alone cannot write the `GDEF` that changes which of its glyphs are skipped.
  *
+ * With bit 0x80 of the options the first two thirds are Apple's `morx` and `feat`
+ * instead of `GSUB` and `GPOS`.
+ *
  * The input is an options byte, a byte that splits the rest between the tables
  * (the first and second thirds, in the order `GSUB`, `GPOS`, `GDEF`: the byte
  * places the first cut, the second falls halfway after it), and the tables. The
@@ -199,14 +202,25 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
           gfnttest::build_maxp(static_cast<uint16_t>(kGlyphs))},
       {GFNT_TAG('c', 'm', 'a', 'p'), cmap_table(alphabet)},
   };
-  if (!gsub.empty()) {
-    tables.push_back({GFNT_TAG('G', 'S', 'U', 'B'), gsub});
+  if (options & 0x80u) {
+    // Apple's tables instead: the first third is `morx`, the second `feat`.
+    if (!gsub.empty()) {
+      tables.push_back({GFNT_TAG('m', 'o', 'r', 'x'), gsub});
+    }
+    if (!gpos.empty()) {
+      tables.push_back({GFNT_TAG('f', 'e', 'a', 't'), gpos});
+    }
   }
-  if (!gpos.empty()) {
-    tables.push_back({GFNT_TAG('G', 'P', 'O', 'S'), gpos});
-  }
-  if (!gdef.empty()) {
-    tables.push_back({GFNT_TAG('G', 'D', 'E', 'F'), gdef});
+  else {
+    if (!gsub.empty()) {
+      tables.push_back({GFNT_TAG('G', 'S', 'U', 'B'), gsub});
+    }
+    if (!gpos.empty()) {
+      tables.push_back({GFNT_TAG('G', 'P', 'O', 'S'), gpos});
+    }
+    if (!gdef.empty()) {
+      tables.push_back({GFNT_TAG('G', 'D', 'E', 'F'), gdef});
+    }
   }
   const std::vector<uint8_t> font = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE,
       tables);

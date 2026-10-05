@@ -64,8 +64,8 @@ FIXTURES = os.path.join(ROOT, "tests", "data", "fonts")
 # below visibly avoids them rather than quietly omitting them.
 GAPS = {
     "bidi text": "one direction per run",
-    "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
-                  "not by GSUB and GPOS",
+    "AAT layout": "a font with kerx or trak is kerned and tracked by Apple's tables, "
+                  "not by GPOS (morx is read)",
     "Indic character details": "a handful of characters in Gujarati, Oriya and Telugu "
                                "that HarfBuzz sorts or syllabifies differently from "
                                "the Unicode data: found by the generated texts, not "
@@ -577,12 +577,12 @@ def has_vertical(font):
 def has_aat(font):
     """Whether the font carries Apple's layout tables, which HarfBuzz prefers.
 
-    A font with `morx` is shaped by its state machines and not by `GSUB`, and one
-    with `kerx` is kerned by that and not by `GPOS`: a different engine, which
-    this library does not have, answering for the font.
+    A font with `kerx` is kerned by it and not by `GPOS`, and one with `trak` is
+    tracked: a different engine, which this library does not have, answering for
+    the font. (`morx` is read, and is held to HarfBuzz like `GSUB`.)
     """
     finished = subprocess.run([DUMP, font], capture_output=True, text=True)
-    return "table 'morx'" in finished.stdout or "table 'kerx'" in finished.stdout
+    return "table 'kerx'" in finished.stdout or "table 'trak'" in finished.stdout
 
 
 def classify(text, font, want, got, aat=False, script=None):

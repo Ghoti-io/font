@@ -679,6 +679,14 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
   plan->native_rtl = !plan->vertical && gfnt_script_native_rtl(plan->script);
   plan->shaper = gfnt_shaper_select(plan->script, plan->tables[0].script,
       !plan->vertical);
+  // Where a font carries Apple's substitution table it is used, and `GSUB` is
+  // not: the font's own state machines make the forms, so no script's shaper (HarfBuzz issue 1528) is wanted.
+  if (gfnt_morx_present(face)) {
+    // And the glyph classes the shaper would have made up from the characters
+    // are not made either, for the scripts that had a shaper of their own.
+    plan->no_synthetic_classes = plan->shaper != &gfnt_shaper_default;
+    plan->shaper = &gfnt_shaper_default;
+  }
 
   gfnt_plan_collect_default(plan);
   for (i = 0; i < options->feature_count; i++) {

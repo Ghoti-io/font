@@ -2027,3 +2027,303 @@ TEST(ShapeMirror, ABracketTurnsRoundInABackwardsRunIfTheFontHasItsMirror) {
   ASSERT_EQ(shape(f, cps("(A"), Request{}, &g), GFNT_OK);
   EXPECT_EQ(g[0].glyph, 6u);
 }
+
+// --- Apple's morx ------------------------------------------------------------------
+//
+// Every expected value below is what HarfBuzz 10.2.0 gives for the same bytes,
+// from a font built with the same tables: A is glyph 1, B glyph 2, and so on, and
+// the glyphs the tables make are 30 and up.
+
+namespace {
+
+using Bytes = std::vector<uint8_t>;
+
+Bytes cat(std::initializer_list<Bytes> parts) {
+  Bytes out;
+  for (const Bytes & p : parts) {
+    out.insert(out.end(), p.begin(), p.end());
+  }
+  return out;
+}
+
+Bytes words(std::initializer_list<uint32_t> values) {
+  Bytes out;
+  for (uint32_t v : values) {
+    gfnttest::put_u16(out, static_cast<uint16_t>(v));
+  }
+  return out;
+}
+
+Bytes longs(std::initializer_list<uint32_t> values) {
+  Bytes out;
+  for (uint32_t v : values) {
+    gfnttest::put_u32(out, v);
+  }
+  return out;
+}
+
+/** An AAT lookup table, format 6: glyph and value pairs. */
+Bytes lookup6(std::vector<std::pair<uint16_t, uint16_t>> pairs) {
+  std::sort(pairs.begin(), pairs.end());
+  Bytes out = words({6, 4, static_cast<uint32_t>(pairs.size()), 0, 0, 0});
+  for (const auto & p : pairs) {
+    gfnttest::put_u16(out, p.first);
+    gfnttest::put_u16(out, p.second);
+  }
+  gfnttest::put_u16(out, 0xFFFF);
+  gfnttest::put_u16(out, 0);
+  return out;
+}
+
+Bytes pad4(Bytes b) {
+  while (b.size() % 4) {
+    b.push_back(0);
+  }
+  return b;
+}
+
+/**
+ * A state table: the header, the class lookup (class of glyph g = classes[g-1]
+ * for the first glyphs), the states and the entries. @p extra is the subtable's
+ * own offsets (4 bytes each), which the caller patches afterwards.
+ */
+Bytes state_table(uint32_t classes, const std::vector<uint16_t> & class_of,
+    const std::vector<std::vector<uint16_t>> & states,
+    const std::vector<Bytes> & entries, size_t extra_longs) {
+  Bytes lookup = words({8, 1, static_cast<uint32_t>(class_of.size())});
+  for (uint16_t c : class_of) {
+    gfnttest::put_u16(lookup, c);
+  }
+  lookup = pad4(lookup);
+  Bytes array;
+  for (const auto & row : states) {
+    for (uint16_t e : row) {
+      gfnttest::put_u16(array, e);
+    }
+  }
+  array = pad4(array);
+  Bytes table;
+  for (const Bytes & e : entries) {
+    table.insert(table.end(), e.begin(), e.end());
+  }
+  size_t header = 16 + 4 * extra_longs;
+  size_t at_classes = header;
+  size_t at_states = at_classes + lookup.size();
+  size_t at_entries = at_states + array.size();
+  Bytes out = longs({classes, static_cast<uint32_t>(at_classes),
+      static_cast<uint32_t>(at_states), static_cast<uint32_t>(at_entries)});
+  for (size_t i = 0; i < extra_longs; ++i) {
+    gfnttest::put_u32(out, 0);
+  }
+  return cat({out, lookup, array, table});
+}
+
+void patch32(Bytes & b, size_t at, uint32_t v) {
+  b[at] = static_cast<uint8_t>(v >> 24);
+  b[at + 1] = static_cast<uint8_t>(v >> 16);
+  b[at + 2] = static_cast<uint8_t>(v >> 8);
+  b[at + 3] = static_cast<uint8_t>(v);
+}
+
+Bytes morx_subtable(uint8_t type, uint8_t coverage, uint32_t flags, Bytes body) {
+  Bytes out;
+  uint32_t length = static_cast<uint32_t>(12 + body.size());
+  length += (4 - length % 4) % 4;
+  gfnttest::put_u32(out, length);
+  gfnttest::put_u32(out, (static_cast<uint32_t>(coverage) << 24) | type);
+  gfnttest::put_u32(out, flags);
+  out.insert(out.end(), body.begin(), body.end());
+  out.resize(length);
+  return out;
+}
+
+struct MorxFeature {
+  uint16_t type, setting;
+  uint32_t enable, disable;
+};
+
+Bytes morx_table(uint32_t defaults, const std::vector<MorxFeature> & features,
+    const std::vector<Bytes> & subtables) {
+  Bytes chain;
+  for (const MorxFeature & f : features) {
+    gfnttest::put_u16(chain, f.type);
+    gfnttest::put_u16(chain, f.setting);
+    gfnttest::put_u32(chain, f.enable);
+    gfnttest::put_u32(chain, f.disable);
+  }
+  for (const Bytes & s : subtables) {
+    chain.insert(chain.end(), s.begin(), s.end());
+  }
+  Bytes out = words({2, 0});
+  gfnttest::put_u32(out, 1);
+  gfnttest::put_u32(out, defaults);
+  gfnttest::put_u32(out, static_cast<uint32_t>(16 + chain.size()));
+  gfnttest::put_u32(out, static_cast<uint32_t>(features.size()));
+  gfnttest::put_u32(out, static_cast<uint32_t>(subtables.size()));
+  out.insert(out.end(), chain.begin(), chain.end());
+  return out;
+}
+
+/** The `feat` table naming the feature types a test uses, sorted, non-exclusive. */
+Bytes feat_table(const std::vector<std::pair<uint16_t, std::vector<uint16_t>>> & types) {
+  Bytes out;
+  gfnttest::put_u32(out, 0x00010000);
+  gfnttest::put_u16(out, static_cast<uint16_t>(types.size()));
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u32(out, 0);
+  Bytes settings;
+  size_t base = 12 + 12 * types.size();
+  for (const auto & t : types) {
+    gfnttest::put_u16(out, t.first);
+    gfnttest::put_u16(out, static_cast<uint16_t>(t.second.size()));
+    gfnttest::put_u32(out, static_cast<uint32_t>(base + settings.size()));
+    gfnttest::put_u16(out, 0);
+    gfnttest::put_u16(out, 0);
+    for (uint16_t s : t.second) {
+      gfnttest::put_u16(settings, s);
+      gfnttest::put_u16(settings, 0);
+    }
+  }
+  out.insert(out.end(), settings.begin(), settings.end());
+  return out;
+}
+
+Bytes morx_font(const Bytes & morx, const Bytes & feat = {}) {
+  std::vector<gfnttest::Table> tables = {{GFNT_TAG('m', 'o', 'r', 'x'), morx}};
+  if (!feat.empty()) {
+    tables.push_back({GFNT_TAG('f', 'e', 'a', 't'), feat});
+  }
+  return small_font(tables, 40);
+}
+
+struct Placed {
+  uint32_t glyph, cluster;
+  bool operator==(const Placed & o) const {
+    return glyph == o.glyph && cluster == o.cluster;
+  }
+};
+
+std::ostream & operator<<(std::ostream & out, const Placed & p) {
+  return out << p.glyph << "/" << p.cluster;
+}
+
+std::vector<Placed> morx_run(const Bytes & font_bytes, const std::string & text,
+    const std::string & features = "", bool rtl = false,
+    const std::string & script = "latn") {
+  Font font(font_bytes);
+  EXPECT_EQ(font.result, GFNT_OK);
+  Request request;
+  request.script = script;
+  request.features = features;
+  request.rtl = rtl;
+  Glyphs g;
+  EXPECT_EQ(shape(font, cps(text), request, &g), GFNT_OK);
+  std::vector<Placed> out;
+  for (const Glyph & x : g) {
+    out.push_back({x.glyph, x.cluster});
+  }
+  return out;
+}
+
+using P = std::vector<Placed>;
+
+}  // namespace
+
+TEST(ShapeMorx, ANoncontextualSubtableMapsGlyphToGlyph) {
+  Bytes sub = morx_subtable(4, 0, 1, lookup6({{1, 30}, {5, 32}}));
+  Bytes font = morx_font(morx_table(1, {}, {sub}));
+  EXPECT_EQ(morx_run(font, "ABE"), (P{{30, 0}, {2, 1}, {32, 2}}));
+}
+
+TEST(ShapeMorx, ALigatureFormsAndItsComponentsAreRemovedWithTheirClusters) {
+  // A then B: push A, push B and perform; actions pop B then A, A storing.
+  Bytes body = state_table(8, {4, 5}, {{0, 0, 0, 0, 1, 0, 0, 0},
+                                       {0, 0, 0, 0, 0, 2, 0, 0}},
+      {words({0, 0, 0}), words({1, 0x8000, 0}), words({0, 0xA000, 0})}, 3);
+  Bytes actions = longs({0, 0xC0000000u});
+  Bytes components = words({0, 0, 1, 2});
+  Bytes ligatures = words({0, 30, 0, 31, 0, 0});
+  size_t at_actions = body.size();
+  size_t at_components = at_actions + actions.size();
+  size_t at_ligatures = at_components + components.size();
+  patch32(body, 16, static_cast<uint32_t>(at_actions));
+  patch32(body, 20, static_cast<uint32_t>(at_components));
+  patch32(body, 24, static_cast<uint32_t>(at_ligatures));
+  body = cat({body, actions, components, ligatures});
+  Bytes font = morx_font(morx_table(1, {}, {morx_subtable(2, 0, 1, body)}));
+  EXPECT_EQ(morx_run(font, "XABY"), (P{{24, 0}, {30, 1}, {25, 3}}));
+  EXPECT_EQ(morx_run(font, "ABABC"), (P{{30, 0}, {30, 2}, {3, 4}}));
+  // A subtable that wants to run against the text runs on the reversed run: for
+  // a right-to-left run that is the way the text is read.
+  Bytes backwards = morx_subtable(2, 0x40, 1, body);
+  Bytes font2 = morx_font(morx_table(1, {}, {backwards}));
+  EXPECT_EQ(morx_run(font2, "AB", "", true, "arab"), (P{{30, 0}}));
+  EXPECT_EQ(morx_run(font2, "BA", "", true, "arab"), (P{{1, 1}, {2, 0}}));
+}
+
+TEST(ShapeMorx, ARearrangementMovesGlyphsAndMergesTheirClusters) {
+  // From an A, mark first; at a D, mark last and rearrange: ABxCD -> DCxBA.
+  Bytes body = state_table(8, {4, 5, 6, 7}, {{0, 0, 0, 0, 1, 0, 0, 0},
+                                             {2, 2, 2, 2, 2, 2, 2, 3}},
+      {words({0, 0}), words({1, 0x8000}), words({1, 0}),
+          words({0, 0x2000 | 15})}, 0);
+  Bytes font = morx_font(morx_table(1, {}, {morx_subtable(0, 0, 1, body)}));
+  EXPECT_EQ(morx_run(font, "ABEFCD"),
+      (P{{4, 0}, {3, 0}, {5, 0}, {6, 0}, {2, 0}, {1, 0}}));
+  EXPECT_EQ(morx_run(font, "AEFD"), (P{{4, 0}, {6, 0}, {5, 0}, {1, 0}}));
+}
+
+TEST(ShapeMorx, AnInsertionPutsGlyphsAfterTheCurrentGlyphInItsCluster) {
+  // An A inserts two glyphs, 30 and 31, behind itself.
+  Bytes body = state_table(6, {4, 5}, {{0, 0, 0, 0, 1, 0}},
+      {words({0, 0, 0xFFFF, 0xFFFF}), words({0, 0x0040, 0, 0xFFFF})}, 1);
+  patch32(body, 16, static_cast<uint32_t>(body.size()));
+  body = cat({body, words({30, 31, 32, 33})});
+  Bytes font = morx_font(morx_table(1, {}, {morx_subtable(5, 0, 1, body)}));
+  EXPECT_EQ(morx_run(font, "XAY"),
+      (P{{24, 0}, {1, 1}, {30, 1}, {31, 1}, {25, 2}}));
+}
+
+TEST(ShapeMorx, AContextualSubtableSubstitutesTheMarkedAndTheCurrentGlyph) {
+  // An A sets the mark; a B or C after it substitutes the A through lookup 0 and
+  // itself through lookup 1.
+  Bytes body = state_table(8, {4, 5, 6}, {{0, 0, 0, 0, 1, 0, 0, 0},
+                                          {0, 0, 0, 0, 1, 2, 3, 0}},
+      {words({0, 0, 0xFFFF, 0xFFFF}), words({1, 0x8000, 0xFFFF, 0xFFFF}),
+          words({0, 0, 0, 1}), words({0, 0, 0xFFFF, 1})}, 1);
+  Bytes lookup0 = lookup6({{1, 30}, {2, 34}});
+  Bytes lookup1 = lookup6({{2, 31}, {3, 32}});
+  patch32(body, 16, static_cast<uint32_t>(body.size()));
+  body = cat({body, longs({8, static_cast<uint32_t>(8 + lookup0.size())}),
+      lookup0, lookup1});
+  Bytes font = morx_font(morx_table(1, {}, {morx_subtable(1, 0, 1, body)}));
+  EXPECT_EQ(morx_run(font, "AB"), (P{{30, 0}, {31, 1}}));
+  EXPECT_EQ(morx_run(font, "XAC"), (P{{24, 0}, {1, 1}, {32, 2}}));
+}
+
+TEST(ShapeMorx, FeaturesSelectSubtablesFirstRequestWinsAndRangesAreHonoured) {
+  // Subtable 1 (flag 1, on by default) maps A; subtable 2 (flag 2) maps B and is
+  // turned on by the common-ligatures selector of the ligature feature.
+  std::vector<MorxFeature> features = {{1, 2, 0x2, 0xFFFFFFFF},
+      {1, 3, 0, 0xFFFFFFFD}};
+  Bytes first = morx_subtable(4, 0, 1, lookup6({{1, 30}}));
+  Bytes second = morx_subtable(4, 0, 2, lookup6({{2, 31}}));
+  Bytes font = morx_font(morx_table(1, features, {first, second}),
+      feat_table({{1, {2, 3}}}));
+  EXPECT_EQ(morx_run(font, "AB"), (P{{30, 0}, {2, 1}}));
+  EXPECT_EQ(morx_run(font, "AB", "liga"), (P{{30, 0}, {31, 1}}));
+  EXPECT_EQ(morx_run(font, "AB", "-liga"), (P{{30, 0}, {2, 1}}));
+  // Whichever of two requests for one setting came first is the one that holds.
+  EXPECT_EQ(morx_run(font, "AB", "liga,-liga"), (P{{30, 0}, {31, 1}}));
+  EXPECT_EQ(morx_run(font, "AB", "-liga,liga"), (P{{30, 0}, {2, 1}}));
+  // A range reaches the glyphs whose clusters it holds.
+  EXPECT_EQ(morx_run(font, "BB", "liga[1:2]"), (P{{2, 0}, {31, 1}}));
+}
+
+TEST(ShapeMorx, ItReplacesTheScriptsOwnShaperAndNoClassIsMadeUpForAMark) {
+  // A mark of an Arabic run keeps its advance: no class is made up for it and no
+  // script shaper reorders or joins; the font's tables do it all.
+  Bytes sub = morx_subtable(4, 0, 1, lookup6({{1, 30}}));
+  Bytes font = morx_font(morx_table(1, {}, {sub}));
+  EXPECT_EQ(morx_run(font, "A", "", true, "arab"), (P{{30, 0}}));
+}

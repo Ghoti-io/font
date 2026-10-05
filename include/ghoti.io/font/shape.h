@@ -47,6 +47,9 @@
  *     right to left, top to bottom or bottom to top. Vertical text is shaped as
  *     HarfBuzz shapes it for a font that is not variable; at a location in the
  *     design space a vertical run is refused.
+ *   * **Apple's tables in part.** A font with `morx` is substituted by it and not
+ *     by `GSUB`, as HarfBuzz does; `mort`, `kerx`, `trak` and the rest of AAT are
+ *     not read.
  *   * **No device table for a pixel size.** Positions are in font units; a
  *     `VariationIndex` device table is read when a location is given.
  *

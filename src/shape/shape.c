@@ -588,6 +588,9 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
       if (gdef.has_glyph_classes) {
         info->props = gfnt_gdef_props(&props, info->glyph);
       }
+      else if (plan.no_synthetic_classes) {
+        info->props = GFNT_PROP_BASE;
+      }
       else {
         info->props = info->gc == GUNI_GC_NONSPACING_MARK
                 && !(info->flags & GFNT_GF_DEFAULT_IGNORABLE)
@@ -596,7 +599,26 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
       info->lig_props = 0;
     }
   }
-  if (plan.tables[0].present) {
+  if (gfnt_morx_present(face)) {
+    // Apple's state machines stand in for `GSUB`.
+    result = gfnt_morx_apply(face, &buf, native_rtl, vertical, options->features,
+        options->feature_count, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+    gfnt_morx_remove_deleted(&buf);
+    ctx.oom = false;
+    {
+      size_t stage;
+
+      for (stage = 0; stage < plan.gsub_stages; stage++) {
+        if (plan.pause[stage]) {
+          plan.pause[stage](&ctx);
+        }
+      }
+    }
+  }
+  else if (plan.tables[0].present) {
     result = gfnt_shape_apply(&gsub, &plan.tables[0], plan.gsub_stages, &ctx,
         error, &run.gsub_lookups);
     if (result != GFNT_OK) {

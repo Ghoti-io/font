@@ -168,6 +168,7 @@ struct GFNT_Plan {
   bool has_frac;
   bool has_mark_feature;      ///< `mark` is in a language system of either table.
   bool native_rtl;
+  bool no_synthetic_classes; ///< `morx` stood in for a script's own shaper.
   bool vertical;              ///< The run is top to bottom or bottom to top.
 };
 

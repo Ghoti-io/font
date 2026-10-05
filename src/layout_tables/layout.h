@@ -286,6 +286,21 @@ bool gfnt_l_lookup(GFNT_LApply * c, uint32_t index, size_t * out_offset,
 bool gfnt_l_would_apply(GFNT_LApply * c, uint32_t lookup_index,
     const uint32_t * glyphs, size_t n, bool zero_context);
 
+/* --- morx.c ----------------------------------------------------------- */
+
+struct GFNT_ShapeFeature;
+
+/** Whether the face has Apple's glyph substitution table. */
+bool gfnt_morx_present(const GFNT_Face * face);
+/**
+ * Run every `morx` chain over the run, as the features select. Glyphs a ligature
+ * absorbed are left as 0xFFFF until ::gfnt_morx_remove_deleted().
+ */
+GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
+    bool backward, bool vertical, const struct GFNT_ShapeFeature * features,
+    size_t feature_count, GFNT_Error * error);
+void gfnt_morx_remove_deleted(GFNT_LBuffer * buf);
+
 /* --- buffer.c --------------------------------------------------------- */
 
 bool gfnt_lbuf_init(GFNT_LBuffer * b, const GFNT_Allocator * allocator,

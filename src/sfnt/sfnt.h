@@ -47,6 +47,7 @@
 #include "../cff/cff.h"
 #include "../type1/type1.h"
 #include "../reader/reader.h"
+#include "../var/var.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -161,6 +162,10 @@ struct GFNT_Face {
   GFNT_Eblc eblc;
   GFNT_Cached ebsc_state;           ///< `EBSC`'s scale records, likewise.
   GFNT_Ebsc ebsc;
+  GFNT_Cached fvar_state;           ///< `fvar`'s axes and named instances.
+  GFNT_Fvar fvar;
+  GFNT_Cached avar_state;           ///< `avar`'s segment maps.
+  GFNT_Avar avar;
 };
 
 /**

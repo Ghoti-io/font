@@ -303,6 +303,38 @@ def main(argv):
                       % (index, subtable.platformID, subtable.platEncID,
                          subtable.format))
 
+    # The design space, in the same integers the library's dump prints: 16.16 for
+    # an axis and 2.14 for a segment map. fontTools holds both as floats, and
+    # rounding them here rather than in the comparison keeps the conversion in one
+    # place - and a float of a 16.16 value is exact, so nothing is lost by it.
+    if "fvar" in font:
+        fvar = readable(font, "fvar", out)
+        if fvar is not None:
+            out.write("fvar.axes\t%d\n" % len(fvar.axes))
+            out.write("fvar.instances\t%d\n" % len(fvar.instances))
+            for index, axis in enumerate(fvar.axes):
+                out.write("fvar.axis.%d\t%s %d %d %d %d %d\n"
+                          % (index, axis.axisTag, round(axis.minValue * 65536),
+                             round(axis.defaultValue * 65536),
+                             round(axis.maxValue * 65536), axis.flags,
+                             axis.axisNameID))
+            for index, instance in enumerate(fvar.instances):
+                coordinates = " ".join(
+                    str(round(instance.coordinates[axis.axisTag] * 65536))
+                    for axis in fvar.axes)
+                out.write("fvar.instance.%d\t%d %d %d %s\n"
+                          % (index, instance.subfamilyNameID, instance.flags,
+                             instance.postscriptNameID, coordinates))
+            if "avar" in font:
+                avar = readable(font, "avar", out)
+                for index, axis in enumerate(fvar.axes if avar else ()):
+                    segments = avar.segments.get(axis.axisTag, {})
+                    out.write("avar.axis.%d\t%s\n"
+                              % (index, " ".join(
+                                  "%d:%d" % (round(low * 16384),
+                                             round(high * 16384))
+                                  for low, high in sorted(segments.items()))))
+
     # Glyph names, from whichever table actually holds them - and where neither
     # does, said rather than invented: fontTools makes up "glyph00012" for a
     # TrueType font with `post` format 3.0, and emitting that would score this

@@ -125,6 +125,27 @@ int main(int argc, char ** argv) {
   if (gfnt_face_name_dump(face, stdout) != GFNT_OK) {
     printf("name: absent\n");
   }
+  // The design space, for a font that has one. A font with none prints nothing
+  // here and the reference prints nothing for it either, so a table that this
+  // library failed to read is said in a line of its own rather than left as
+  // silence a differential would read as agreement.
+  if (gfnt_face_is_variable(face)) {
+    size_t axes = 0;
+
+    // fvar first and on its own, so a refusal is attributed to the table that
+    // made it: the dump below fails for an avar too, and "absent (Corrupt data)"
+    // under the wrong name would make the differential compare the wrong table's
+    // verdict.
+    if (gfnt_face_axis_count(face, &axes, &error) != GFNT_OK) {
+      printf("fvar: absent (%s)\n", gfnt_result_string(error.result));
+    }
+    else {
+      result = gfnt_face_variation_dump(face, stdout);
+      if (result != GFNT_OK) {
+        printf("avar: absent (%s)\n", gfnt_result_string(result));
+      }
+    }
+  }
   // The `post` glyph names, last because they are the longest section. A font
   // with none says so on a line of its own (see the dump), because a
   // differential reads silence as agreement.

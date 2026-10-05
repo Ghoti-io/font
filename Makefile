@@ -1102,7 +1102,7 @@ TIER0_FILES := include/ghoti.io/font/core.h include/ghoti.io/font/blob.h \
 	include/ghoti.io/font/face.h include/ghoti.io/font/metrics.h \
 	include/ghoti.io/font/cmap.h include/ghoti.io/font/name.h \
 	include/ghoti.io/font/glyph.h include/ghoti.io/font/bitmap.h \
-	include/ghoti.io/font/color.h \
+	include/ghoti.io/font/color.h include/ghoti.io/font/variation.h \
 	include/ghoti.io/font/font.h include/ghoti.io/font/allocator.h \
 	src/core/*.c src/core/*.h src/reader/*.c src/reader/*.h src/blob/*.c src/blob/*.h \
 	src/sfnt/*.c src/sfnt/*.h src/woff/*.c src/woff/*.h src/tables/*.c src/tables/*.h \

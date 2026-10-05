@@ -79,6 +79,8 @@
 #define GFNT_StrikePolicy GHOTIIO_FONT(GFNT_StrikePolicy)
 #define GFNT_Tag GHOTIIO_FONT(GFNT_Tag)
 #define GFNT_Variation GHOTIIO_FONT(GFNT_Variation)
+#define GFNT_Axis GHOTIIO_FONT(GFNT_Axis)
+#define GFNT_NamedInstance GHOTIIO_FONT(GFNT_NamedInstance)
 
 // Public functions.
 #define gfnt_allocator_default GHOTIIO_FONT(gfnt_allocator_default)
@@ -199,6 +201,13 @@
 #define gfnt_units_to_pixels GHOTIIO_FONT(gfnt_units_to_pixels)
 #define gfnt_version_number GHOTIIO_FONT(gfnt_version_number)
 #define gfnt_version_string GHOTIIO_FONT(gfnt_version_string)
+#define gfnt_face_is_variable GHOTIIO_FONT(gfnt_face_is_variable)
+#define gfnt_face_axis_count GHOTIIO_FONT(gfnt_face_axis_count)
+#define gfnt_face_axis_at GHOTIIO_FONT(gfnt_face_axis_at)
+#define gfnt_face_instance_count GHOTIIO_FONT(gfnt_face_instance_count)
+#define gfnt_face_instance_at GHOTIIO_FONT(gfnt_face_instance_at)
+#define gfnt_face_normalize GHOTIIO_FONT(gfnt_face_normalize)
+#define gfnt_face_variation_dump GHOTIIO_FONT(gfnt_face_variation_dump)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

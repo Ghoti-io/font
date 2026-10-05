@@ -789,8 +789,38 @@ and top-side-bearing deltas through the item variation store and delta-set
 index maps), `MVAR` (the metric tags), `STAT` (axis values formats 1-4, for
 naming an instance), and `GSUB`/`GPOS` `FeatureVariations`.
 Normalisation: user coordinate to `-1..1` by the axis's min/default/max, then
-`avar`. Every accessor takes a `GFNT_Variation *`. Nothing reads a variation
-table yet, so the parameter selects the default instance.
+`avar`. Every accessor takes a `GFNT_Variation *`.
+
+**`fvar` and `avar` version 1 are read (`variation.h`, `src/var/`).** The axes, the
+named instances and the segment maps come out as the tables' own integers - 16.16
+for user coordinates, 2.14 for a map - and `gfnt_face_normalize()` is the one way
+from the first coordinate system to the second. It is public on purpose: a
+caller who hands a `GFNT_Variation` *user* coordinates where normalised ones are
+expected asks for weight 700 and is clamped to the heaviest the font has, with no
+error anywhere.
+
+- **The arithmetic is FreeType's**, in 16.16 with half-away rounding at each
+  division and `(x + 2) >> 2` to 2.14. The specification leaves the rounding open
+  and every other reader agrees, so the one to share is the one that makes two
+  readers' last bits equal rather than merely close; that last bit moves every
+  point it reaches.
+- **An axis not given takes its default**, so a caller who sets only weight on a
+  two-axis face leaves the other where the designer put it.
+- **A map is clamped before it is applied, not after.** The final clamp to
+  `-1..1` would hide an axis that forgot to clamp its input, because a value past
+  the end of the range and the end itself both end at one; a map in between is
+  where they differ, and a test with one is how that was found.
+- **An `avar` that is not a function is refused** (source coordinates that do not
+  strictly increase), as is one whose axis count is not `fvar`'s. Version 2 is
+  `GFNT_ERR_UNSUPPORTED` rather than read as version 1, which would apply the
+  segment maps and silently drop the variation store that re-maps one axis as a
+  function of the others.
+- **A face that cannot read its `avar` still has its axes.** The refusal is the
+  mapping's, and normalising is what fails.
+
+`ttx_diff` compares every axis, instance and segment map of every variable font
+in the image against fontTools in the tables' own integers, and each field was
+planted and seen to fire.
 
 ### 7.8 Required tables are per operation
 

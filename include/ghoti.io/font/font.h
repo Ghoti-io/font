@@ -45,6 +45,7 @@
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/name.h>
+#include <ghoti.io/font/variation.h>
 #include <ghoti.io/font/macros.h>
 
 #endif // GHOTI_IO_GFNT_FONT_H

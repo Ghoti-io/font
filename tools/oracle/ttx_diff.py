@@ -74,7 +74,7 @@ PATTERNS = [
     # of that table's fields. The result's name distinguishes "the font has no
     # such table" from "it has one and this library would not read it", and the
     # second is the half that has to line up with the reference's `unreadable.`.
-    (r"^(head|hhea|OS/2|post): absent \((.*)\)$", "declined"),
+    (r"^(head|hhea|OS/2|post|fvar|avar): absent \((.*)\)$", "declined"),
     (r"^head: version \d+\.\d+, revision 0x([0-9A-F]+), unitsPerEm (\d+), "
      r"flags 0x([0-9A-F]+)$",
      ["head.fontRevision", "head.unitsPerEm", "head.flags"]),
@@ -138,6 +138,16 @@ PATTERNS = [
     (r"^numGlyphs: (\d+) maxp (\d+)$", ["numGlyphs.minimum", "maxp.numGlyphs"]),
     (r"^cmap subtable (\d+): platform (\d+), encoding (\d+), format (\d+), "
      r"offset \d+$", "cmap"),
+    # The design space. Printed in the tables' own integers - 16.16 for an axis
+    # and 2.14 for a segment map - because the reference is converted to them too,
+    # and a comparison in floats would be agreement to within a tolerance that
+    # nobody chose.
+    (r"^fvar: (\d+) axes, (\d+) instances$", "fvar-count"),
+    (r"^fvar axis (\d+): '(.{4})' min (-?\d+) default (-?\d+) max (-?\d+) "
+     r"flags 0x([0-9A-F]+) name (\d+)$", "fvar-axis"),
+    (r"^fvar instance (\d+): name (\d+) flags 0x([0-9A-F]+) postscript (\d+) "
+     r"coordinates ?(.*)$", "fvar-instance"),
+    (r"^avar axis (\d+): \d+ pairs ?(.*)$", "avar-axis"),
     (r"^glyph name (\d+): '(.*)'$", "glyphname"),
     (r"^glyph names: none in this font$", "glyphnames-absent"),
     (r"^name record \d+: platform (\d+), encoding (\d+), language (\d+), "
@@ -182,6 +192,21 @@ def parse_ours(text):
                 platform, encoding, language, name_id, value = found.groups()
                 values["name.%d.%d.%d.%d" % (int(platform), int(encoding),
                                              int(language), int(name_id))] = value
+            elif keys == "fvar-count":
+                axes, instances = found.groups()
+                values["fvar.axes"] = axes
+                values["fvar.instances"] = instances
+            elif keys == "fvar-axis":
+                index, tag, low, default, high, flags, name = found.groups()
+                values["fvar.axis.%d" % int(index)] = "%s %s %s %s %d %s" % (
+                    tag, low, default, high, int(flags, 16), name)
+            elif keys == "fvar-instance":
+                index, name, flags, postscript, coordinates = found.groups()
+                values["fvar.instance.%d" % int(index)] = "%s %d %s %s" % (
+                    name, int(flags, 16), postscript, coordinates)
+            elif keys == "avar-axis":
+                index, pairs = found.groups()
+                values["avar.axis.%d" % int(index)] = pairs
             elif keys == "glyphname":
                 index, value = found.groups()
                 values["glyphname.%d" % int(index)] = value
@@ -252,7 +277,7 @@ def agree(key, ours, theirs):
         return int(ours, 16) == int(float(theirs))
     if key.startswith(("name.", "glyphname.")):
         return ours == theirs
-    if key.startswith(("directory.", "cmap.subtable.")):
+    if key.startswith(("directory.", "cmap.subtable.", "fvar.", "avar.")):
         return ours == theirs
     # Everything else is an integer on both sides; the reference prints some of
     # them as floats where fontTools stores them that way.

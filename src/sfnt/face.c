@@ -445,6 +445,10 @@ void gfnt_face_free(GFNT_Face * face) {
   // strike list - nothing here points at it, but the order keeps the
   // dependency readable in one direction.
   gfnt_ebsc_release(allocator, &face->ebsc);
+  // fvar's lists are copied out of a big-endian table, and avar's refer to
+  // nothing else here.
+  gfnt_fvar_release(allocator, &face->fvar);
+  gfnt_avar_release(allocator, &face->avar);
   allocator->free_fn(allocator->ctx, face->tables);
   // The caller's blob is left alone - every other face of a collection is still
   // using it - and a blob this face derived for itself is destroyed, because

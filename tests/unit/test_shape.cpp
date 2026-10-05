@@ -2327,3 +2327,100 @@ TEST(ShapeMorx, ItReplacesTheScriptsOwnShaperAndNoClassIsMadeUpForAMark) {
   Bytes font = morx_font(morx_table(1, {}, {sub}));
   EXPECT_EQ(morx_run(font, "A", "", true, "arab"), (P{{30, 0}}));
 }
+
+// ---- Font fallback ----
+
+namespace {
+
+struct Faces {
+  std::vector<std::unique_ptr<Font>> fonts;
+  std::vector<const GFNT_Face *> faces;
+  void add(std::vector<uint8_t> bytes) {
+    fonts.push_back(std::make_unique<Font>(std::move(bytes)));
+    EXPECT_EQ(fonts.back()->result, GFNT_OK);
+    faces.push_back(fonts.back()->face);
+  }
+};
+
+}  // namespace
+
+TEST(ShapeFallback, EachCharacterGoesToTheFirstFaceThatHasIt) {
+  Faces f;
+  f.add(small_font({}, 4));  // A B C
+  f.add(small_font({}, 8));  // A to G
+  std::vector<uint32_t> text = cps("ABEC");
+  GFNT_FaceRuns out{};
+  ASSERT_EQ(gfnt_faces_shape(f.faces.data(), f.faces.size(), text.data(),
+                text.size(), nullptr, nullptr, &out, nullptr), GFNT_OK);
+  ASSERT_EQ(out.count, 3u);
+  EXPECT_EQ(out.runs[0].face, 0u);
+  EXPECT_EQ(out.runs[0].length, 2u);
+  EXPECT_EQ(out.runs[1].face, 1u);
+  EXPECT_EQ(out.runs[1].start, 2u);
+  EXPECT_EQ(out.runs[1].run.glyphs[0].cluster, 2u);  // a cluster of the whole text
+  EXPECT_EQ(out.runs[2].face, 0u);
+  EXPECT_EQ(out.runs[2].run.glyphs[0].cluster, 3u);
+  gfnt_face_runs_free(&out);
+}
+
+TEST(ShapeFallback, AClusterStaysInOneFaceWhenOneHasAllOfIt) {
+  Faces f;
+  f.add(small_font({}, 3));                 // A B
+  f.add(small_font({}, 2, {{0x301, 1}}));   // A and the acute
+  std::vector<uint32_t> text = {'A', 0x301};
+  GFNT_FaceRuns out{};
+  ASSERT_EQ(gfnt_faces_shape(f.faces.data(), 2, text.data(), 2, nullptr, nullptr,
+                &out, nullptr), GFNT_OK);
+  ASSERT_EQ(out.count, 1u);
+  EXPECT_EQ(out.runs[0].face, 1u);
+  gfnt_face_runs_free(&out);
+}
+
+TEST(ShapeFallback, AMarkTheBaseFaceLacksIsBorrowedAndCentredOverTheBase) {
+  Faces f;
+  f.add(small_font({}, 3));                 // A B
+  f.add(small_font({}, 2, {{0x301, 1}}));   // A and the acute; no B
+  std::vector<uint32_t> text = {'B', 0x301};
+  GFNT_FaceRuns out{};
+  ASSERT_EQ(gfnt_faces_shape(f.faces.data(), 2, text.data(), 2, nullptr, nullptr,
+                &out, nullptr), GFNT_OK);
+  ASSERT_EQ(out.count, 2u);
+  EXPECT_EQ(out.runs[0].face, 0u);
+  EXPECT_EQ(out.runs[1].face, 1u);
+  const GFNT_ShapedGlyph & mark = out.runs[1].run.glyphs[0];
+  EXPECT_EQ(mark.cluster, 1u);
+  EXPECT_EQ(mark.x_advance, 0);
+  // Half the base's advance back; the font has no outlines, so the mark's ink is
+  // taken to be centred on its origin.
+  EXPECT_EQ(mark.x_offset, -250);
+  gfnt_face_runs_free(&out);
+}
+
+TEST(ShapeFallback, ARightToLeftTextComesBackLastStretchFirst) {
+  Faces f;
+  f.add(small_font({}, 4));
+  f.add(small_font({}, 8));
+  std::vector<uint32_t> text = cps("ABE");
+  GFNT_ShapeOptions o{};
+  o.direction = GFNT_DIRECTION_RTL;
+  GFNT_FaceRuns out{};
+  ASSERT_EQ(gfnt_faces_shape(f.faces.data(), 2, text.data(), 3, &o, nullptr,
+                &out, nullptr), GFNT_OK);
+  ASSERT_EQ(out.count, 2u);
+  EXPECT_EQ(out.runs[0].start, 2u);
+  EXPECT_EQ(out.runs[1].start, 0u);
+  gfnt_face_runs_free(&out);
+}
+
+TEST(ShapeFallback, RefusesNoFacesAndEmptyTextIsEmpty) {
+  Faces f;
+  f.add(small_font({}, 4));
+  GFNT_FaceRuns out{};
+  uint32_t a = 'A';
+  EXPECT_EQ(gfnt_faces_shape(f.faces.data(), 0, &a, 1, nullptr, nullptr, &out,
+                nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_faces_shape(f.faces.data(), 1, nullptr, 0, nullptr, nullptr,
+                &out, nullptr), GFNT_OK);
+  EXPECT_EQ(out.count, 0u);
+  gfnt_face_runs_free(&out);
+}

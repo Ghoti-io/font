@@ -27,6 +27,8 @@
  *
  *   --script <tag>, --language <tag>, --rtl, --features <list>, --face <n>
  *                       as for font-shape
+ *   --fallback <font>   a face to draw with where the first lacks a character;
+ *                       repeatable, in order of preference
  *   --location <list>   a location in a variable font's design space, as
  *                       `wght=700,wdth=90`, in user coordinates
  *   --margin <n>        pixels around the text (default 16)
@@ -198,8 +200,18 @@ int main(int argc, char ** argv) {
   GFNT_Blob * blob = NULL;
   GFNT_Face * face = NULL;
   GFNT_Error error;
-  GFNT_ShapedRun run;
+  GFNT_FaceRuns runs;
   GFNT_LineMetrics lines;
+  const char * fallback_path[8];
+  GFNT_Blob * fallback_blob[8];
+  GFNT_Face * fallback_face[8];
+  uint16_t fallback_upem[8];
+  size_t fallbacks = 0;
+  const GFNT_Face * list_faces[9];
+  uint16_t list_upem[9];
+  size_t gcount = 0;
+  GFNT_ShapedGlyph * glyphs;
+  size_t * gface;
   uint32_t codepoints[2048];
   long count;
   size_t index = 0;
@@ -237,6 +249,10 @@ int main(int argc, char ** argv) {
     else if (strcmp(argv[arg], "--location") == 0 && arg + 1 < argc) {
       location = argv[++arg];
     }
+    else if (strcmp(argv[arg], "--fallback") == 0 && arg + 1 < argc
+        && fallbacks < 8) {
+      fallback_path[fallbacks++] = argv[++arg];
+    }
     else if (strcmp(argv[arg], "--margin") == 0 && arg + 1 < argc) {
       margin = atoi(argv[++arg]);
     }
@@ -251,7 +267,7 @@ int main(int argc, char ** argv) {
   if (positionals != 4) {
     fprintf(stderr,
         "usage: %s [--script tag] [--language tag] [--rtl] [--features list]"
-        " [--face n] [--margin n] <font> <ppem> <out.pgm> <text>\n", argv[0]);
+        " [--face n] [--fallback font]... [--margin n] <font> <ppem> <out.pgm> <text>\n", argv[0]);
     return 2;
   }
   ppem = (uint32_t)strtoul(positional[1], NULL, 10);
@@ -332,9 +348,28 @@ int main(int argc, char ** argv) {
     variation.delta_rounding = GFNT_DELTA_ROUND_HALF_UP;
     options.variation = &variation;
   }
-  memset(&run, 0, sizeof run);
-  if (gfnt_face_shape(face, codepoints, (size_t)count, &options, NULL, &run,
-          &error) != GFNT_OK) {
+  if (fallbacks && location) {
+    fprintf(stderr, "--fallback and --location cannot be combined\n");
+    return 2;
+  }
+  list_faces[0] = face;
+  list_upem[0] = upem;
+  for (i = 0; i < fallbacks; i++) {
+    if (gfnt_blob_create_file(fallback_path[i], NULL, NULL, &fallback_blob[i],
+            &error) != GFNT_OK
+        || gfnt_face_load(fallback_blob[i], 0, NULL, NULL, &fallback_face[i],
+               &error) != GFNT_OK
+        || gfnt_face_units_per_em(fallback_face[i], &fallback_upem[i], &error)
+               != GFNT_OK) {
+      gfnt_error_dump(&error, stderr);
+      return 1;
+    }
+    list_faces[i + 1] = fallback_face[i];
+    list_upem[i + 1] = fallback_upem[i];
+  }
+  memset(&runs, 0, sizeof runs);
+  if (gfnt_faces_shape(list_faces, fallbacks + 1, codepoints, (size_t)count,
+          &options, NULL, &runs, &error) != GFNT_OK) {
     gfnt_error_dump(&error, stderr);
     gfnt_face_free(face);
     gfnt_blob_destroy(blob);
@@ -342,13 +377,32 @@ int main(int argc, char ** argv) {
   }
 
   // Everything in 26.6 pixels: font units times ppem over the em, rounded.
-#define SCALE64(units) \
-  (((int64_t)(units) * (int64_t)ppem * 64 + ((units) >= 0 ? (int64_t)upem / 2 \
-      : -(int64_t)upem / 2)) / (int64_t)upem)
+#define SCALE_OF(units, em) \
+  (((int64_t)(units) * (int64_t)ppem * 64 + ((units) >= 0 ? (int64_t)(em) / 2 \
+      : -(int64_t)(em) / 2)) / (int64_t)(em))
+#define SCALE64(units) SCALE_OF(units, upem)
   asc64 = SCALE64(lines.ascent);
   desc64 = SCALE64(-lines.descent);
-  for (i = 0; i < run.count; i++) {
-    total64 += SCALE64(run.glyphs[i].x_advance);
+  // One list of glyphs, each with the face that draws it, in drawing order.
+  for (i = 0; i < runs.count; i++) {
+    gcount += runs.runs[i].run.count;
+  }
+  glyphs = malloc((gcount ? gcount : 1) * sizeof *glyphs);
+  gface = malloc((gcount ? gcount : 1) * sizeof *gface);
+  if (!glyphs || !gface) {
+    return 1;
+  }
+  gcount = 0;
+  for (i = 0; i < runs.count; i++) {
+    size_t k;
+
+    for (k = 0; k < runs.runs[i].run.count; k++) {
+      glyphs[gcount] = runs.runs[i].run.glyphs[k];
+      gface[gcount++] = runs.runs[i].face;
+    }
+  }
+  for (i = 0; i < gcount; i++) {
+    total64 += SCALE_OF(glyphs[i].x_advance, list_upem[gface[i]]);
   }
   width = (int)((total64 + 63) / 64) + 2 * margin;
   baseline = margin + (int)((asc64 + 32) / 64);
@@ -359,10 +413,12 @@ int main(int argc, char ** argv) {
   }
   memset(canvas, 0, (size_t)width * (size_t)height); // coverage, then inverted
 
-  for (i = 0; i < run.count; i++) {
-    const GFNT_ShapedGlyph * g = &run.glyphs[i];
-    int64_t x64 = (int64_t)margin * 64 + pen64 + SCALE64(g->x_offset);
-    int64_t y64 = -SCALE64(g->y_offset); // y down
+  for (i = 0; i < gcount; i++) {
+    const GFNT_ShapedGlyph * g = &glyphs[i];
+    const GFNT_Face * gf = list_faces[gface[i]];
+    uint16_t gem = list_upem[gface[i]];
+    int64_t x64 = (int64_t)margin * 64 + pen64 + SCALE_OF(g->x_offset, gem);
+    int64_t y64 = -SCALE_OF(g->y_offset, gem); // y down
     GFNT_RasterOptions ro;
     GFNT_Coverage cov;
     int64_t ix = x64 >> 6;
@@ -374,8 +430,8 @@ int main(int argc, char ** argv) {
     memset(&cov, 0, sizeof cov);
     ro.origin_x = (GFNT_F26Dot6)(x64 & 63);
     ro.origin_y = (GFNT_F26Dot6)((-y64) & 63);
-    pen64 += SCALE64(g->x_advance);
-    if (render(face, g->glyph, ppem, &ro, location ? &variation : NULL, &cov,
+    pen64 += SCALE_OF(g->x_advance, gem);
+    if (render(gf, g->glyph, ppem, &ro, location ? &variation : NULL, &cov,
             &error) != GFNT_OK) {
       continue;
     }
@@ -410,7 +466,13 @@ int main(int argc, char ** argv) {
     fclose(out);
   }
   free(canvas);
-  gfnt_shaped_run_free(&run);
+  free(glyphs);
+  free(gface);
+  gfnt_face_runs_free(&runs);
+  for (i = 0; i < fallbacks; i++) {
+    gfnt_face_free(fallback_face[i]);
+    gfnt_blob_destroy(fallback_blob[i]);
+  }
   gfnt_face_free(face);
   gfnt_blob_destroy(blob);
   return 0;

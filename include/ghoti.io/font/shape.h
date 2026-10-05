@@ -175,6 +175,69 @@ GFNT_API GFNT_Result gfnt_face_shape(const GFNT_Face * face,
 GFNT_API void gfnt_shaped_run_free(GFNT_ShapedRun * run);
 
 /**
+ * @brief One stretch of a text, shaped with one face of a fallback list.
+ *
+ * The clusters of @p run are indices into the whole text, not into the stretch.
+ */
+typedef struct GFNT_FaceRun {
+  size_t face;     ///< The index into the list of faces that shaped this stretch.
+  size_t start;    ///< The first code point of the stretch.
+  size_t length;   ///< How many code points it has.
+  GFNT_ShapedRun run; ///< The glyphs, positioned as ::gfnt_face_shape() does.
+} GFNT_FaceRun;
+
+/**
+ * @brief A text shaped with a list of faces. Free with ::gfnt_face_runs_free().
+ *
+ * The stretches are in visual order: for a right-to-left or bottom-to-top run the
+ * last stretch of the text comes first, so drawing them one after another, each
+ * where the last one's pen stopped, draws the text.
+ */
+typedef struct GFNT_FaceRuns {
+  GFNT_FaceRun * runs; ///< The stretches.
+  size_t count;        ///< How many.
+  const GFNT_Allocator * allocator; ///< What @p runs was allocated with.
+} GFNT_FaceRuns;
+
+/**
+ * @brief Shape a text with the first face of a list that has each character.
+ *
+ * Font fallback. Each cluster (a character and the marks that follow it) goes to
+ * the first face whose `cmap` maps all of it. When none does, the base character
+ * goes to the first face that has it and each mark the base's face lacks goes to
+ * the first face that has the mark, so a stack of combining marks over a letter
+ * is drawn with whichever fonts hold the marks. A character no face has is shaped
+ * by the first face and comes out as its `.notdef`.
+ *
+ * Consecutive characters of one face are shaped together, so a face's own
+ * substitution and positioning run across them. They do not run across a change
+ * of face: a ligature or an Arabic join cannot span two fonts. A mark set apart
+ * from its base this way is given no advance and is centred over the base's
+ * glyph, from the extents of the two; a mark that was shaped with its base keeps
+ * what the font's own anchors give it. A horizontal run is centred; a vertical
+ * one is left where its own face puts it.
+ *
+ * @param faces The faces, most preferred first.
+ * @param face_count How many. At least one.
+ * @param codepoints The text.
+ * @param count How many code points.
+ * @param options As for ::gfnt_face_shape(). When it names no script, the text's
+ *   own is used for every stretch, so they agree. A feature's range is cut to
+ *   each stretch. A variation location applies to every face.
+ * @param allocator Or NULL for the default. The result keeps the pointer.
+ * @param out Receives the stretches; written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return As ::gfnt_face_shape(); ::GFNT_ERR_INVALID also for no faces or a NULL face.
+ */
+GFNT_API GFNT_Result gfnt_faces_shape(const GFNT_Face * const * faces,
+    size_t face_count, const uint32_t * codepoints, size_t count,
+    const GFNT_ShapeOptions * options, const GFNT_Allocator * allocator,
+    GFNT_FaceRuns * out, GFNT_Error * error);
+
+/** @brief Release the stretches and their glyphs. A zeroed one is harmless. */
+GFNT_API void gfnt_face_runs_free(GFNT_FaceRuns * runs);
+
+/**
  * @brief Print a face's layout tables: scripts, language systems, features and the
  * type of every lookup.
  *

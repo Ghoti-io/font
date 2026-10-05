@@ -67,12 +67,6 @@ GAPS = {
     "AAT layout": "a font with kerx is kerned by its subtables of formats 0, 1, 2 and 6, as HarfBuzz does,"
                   " but not by format 4's anchor points, and one with trak is tracked by Apple's table "
                   "(morx is read)",
-    "Indic character details": "two things left in Oriya and Gurmukhi: after a dotted "
-                               "circle, a halant and a consonant that takes a below form, "
-                               "HarfBuzz merges the consonant's cluster with the pre-base "
-                               "matra's where this library does not; and HarfBuzz lets "
-                               "Gurmukhi II follow a bindu, tippi, addak or visarga with no "
-                               "circle where this library puts one",
     "USE character categories": "Mongolian free variation selector one, which HarfBuzz "
                                 "ligates with the letter before it where this library "
                                 "does not, and a few Mongolian marks after punctuation; "
@@ -83,9 +77,6 @@ GAPS = {
                                       "outline: HarfBuzz measures them wrongly or not at all, "
                                       "so a mark placed from their box differs",
 }
-
-# The Indic scripts in which a few characters still differ.
-INDIC_DETAIL_SCRIPTS = set("gujr orya telu".split())
 
 # The Universal Shaping Engine scripts in which a few characters still differ.
 USE_DETAIL_SCRIPTS = set("gran java sind mong tavt tirh".split())
@@ -602,8 +593,6 @@ def classify(text, font, want, got, aat=False, script=None):
         return "script shaper not written"
     if script in USE_DETAIL_SCRIPTS:
         return "USE character categories"
-    if script in INDIC_DETAIL_SCRIPTS:
-        return "Indic character details"
     if os.path.basename(font) in UNREAD_OUTLINES and \
             any(0x0300 <= ord(c) < 0x0370 for c in text):
         return "outline HarfBuzz does not read"

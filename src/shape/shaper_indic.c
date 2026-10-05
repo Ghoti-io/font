@@ -47,7 +47,7 @@
 enum {
   IC_X, IC_C, IC_V, IC_N, IC_H, IC_ZWNJ, IC_ZWJ, IC_M, IC_SM, IC_A, IC_VD,
   IC_PLACEHOLDER, IC_DOTTEDCIRCLE, IC_RS, IC_COENG, IC_REPHA, IC_RA, IC_CM,
-  IC_SYMBOL, IC_CS, IC_COUNT
+  IC_SYMBOL, IC_CS, IC_GRAMMAR_MA, IC_COUNT
 };
 
 // Where in the syllable a character wants to be, in the order the syllable is
@@ -360,10 +360,11 @@ static GFNT_Nfa * indic_grammar(void) {
   cn = SEQ(SEQ(c, OPT(SYM(IC_ZWJ))), n);
   forced_rakar = SEQ(SEQ(SYM(IC_ZWJ), SYM(IC_H)), SEQ(SYM(IC_ZWJ), SYM(IC_RA)));
   symbol = SEQ(SYM(IC_SYMBOL), OPT(SYM(IC_N)));
-  matra_group = SEQ(SEQ(REP(z, 0, 3), SYM(IC_M)), SEQ(OPT(SYM(IC_N)),
+  matra_group = SEQ(SEQ(REP(z, 0, 3), SET(BIT(IC_M) | BIT(IC_GRAMMAR_MA))), SEQ(OPT(SYM(IC_N)),
       OPT(ALT(SYM(IC_H), forced_rakar))));
-  syllable_tail = SEQ(OPT(SEQ(SEQ(OPT(z), SYM(IC_SM)),
-      SEQ(OPT(SYM(IC_SM)), OPT(SYM(IC_ZWNJ))))), STAR(SET(BIT(IC_A) | BIT(IC_VD))));
+  syllable_tail = SEQ(OPT(SEQ(SEQ(SEQ(OPT(z), SYM(IC_SM)),
+      SEQ(OPT(SYM(IC_SM)), OPT(SYM(IC_ZWNJ)))), OPT(SYM(IC_GRAMMAR_MA)))),
+      STAR(SET(BIT(IC_A) | BIT(IC_VD))));
   place_holder = SET(BIT(IC_PLACEHOLDER) | BIT(IC_DOTTEDCIRCLE));
   halant_group = SEQ(OPT(z), SEQ(SYM(IC_H), OPT(SEQ(SYM(IC_ZWJ), OPT(SYM(IC_N))))));
   final_halant_group = ALT(halant_group, SEQ(SYM(IC_H), SYM(IC_ZWNJ)));
@@ -406,6 +407,17 @@ static void indic_find_syllables(GFNT_ShapeCtx * ctx) {
   }
   for (i = 0; i < buf->len; i++) {
     cats[i] = buf->info[i].category;
+    // HarfBuzz lets the Gurmukhi vowel sign II follow a syllable modifier
+    // without a circle of its own, so for the grammar it is a matra that is
+    // also allowed in the tail.
+    if (cats[i] == IC_M && buf->info[i].unicode == 0x0A40) {
+      if (i && cats[i - 1] == IC_SM) {
+        // In the tail it stays where it is, as a mark that is not reordered.
+        buf->info[i].category = IC_A;
+        buf->info[i].position = IP_END;
+      }
+      cats[i] = IC_GRAMMAR_MA;
+    }
   }
   while (pos < buf->len) {
     int token = IS_NON_INDIC;
@@ -790,19 +802,54 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   }
 
   // Sort the syllable by position: the matras and the rest go where they go. The
-  // sort is stable.
-  for (i = start + 1; i < end; i++) {
-    size_t j = i;
+  // sort is stable. Each character carries its place in the syllable while it
+  // runs, so that the clusters of everything that moved can be merged after.
+  {
+    uint8_t tag = info[start].syllable;
 
-    while (j > start && info[j - 1].position > info[i].position) {
-      j--;
+    for (i = start; i < end; i++) {
+      info[i].syllable = (uint8_t)(i - start);
     }
-    if (j < i) {
-      // A left-hand matra's clusters are merged after it has found its place.
-      if (info[i].position != IP_PRE_M) {
-        gfnt_merge_clusters(info, buf->len, j, i + 1);
+    for (i = start + 1; i < end; i++) {
+      size_t j = i;
+
+      while (j > start && info[j - 1].position > info[i].position) {
+        j--;
       }
-      indic_move(buf, i, j);
+      if (j < i) {
+        indic_move(buf, i, j);
+      }
+    }
+    // The positions after the base may shuffle about: in old-style mode halants
+    // are moved too, so everything after the base is merged. Otherwise each
+    // cycle of the permutation is merged. A left-hand matra, which went to the
+    // front, takes the whole cycle it is in with it.
+    if (data->is_old_spec || end - start > 127) {
+      gfnt_merge_clusters(info, buf->len, base, end);
+    }
+    else {
+      for (i = base + 1; i < end; i++) {
+        if (info[i].syllable != 255) {
+          size_t max = i;
+          size_t j = start + info[i].syllable;
+
+          while (j != i) {
+            size_t next = start + info[j].syllable;
+
+            if (j > max) {
+              max = j;
+            }
+            info[j].syllable = 255;
+            j = next;
+          }
+          if (i != max) {
+            gfnt_merge_clusters(info, buf->len, i, max + 1);
+          }
+        }
+      }
+    }
+    for (i = start; i < end; i++) {
+      info[i].syllable = tag;
     }
   }
 }

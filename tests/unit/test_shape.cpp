@@ -2786,6 +2786,20 @@ TEST(ShapeIndic, TheDevanagariAccentsAreMarksThatWantABase) {
   EXPECT_EQ(ids(g), (V{4, 2}));
 }
 
+TEST(ShapeIndic, GurmukhiIIFollowsABinduWithNoCircleOfItsOwn) {
+  // BINDU 2, VOWEL SIGN II 3, VOWEL SIGN AA 5, the dotted circle 4.
+  Font font(small_font({}, 8, {{0x0A02, 2}, {0x0A40, 3}, {0x0A3E, 5},
+      {0x25CC, 4}}));
+  Glyphs g;
+  Request request;
+  request.script = "gur2";
+  ASSERT_EQ(shape(font, V{0x0A02, 0x0A40}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 2, 3}));
+  // Another vowel sign after the bindu is a syllable of its own.
+  ASSERT_EQ(shape(font, V{0x0A02, 0x0A3E}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 2, 4, 5}));
+}
+
 TEST(ShapeIndic, TheTeluguLengthMarksSortBeforeTheNuktaAndTheFirstBeforeTheSecond) {
   Font font(small_font({}, 8, {{0x0C55, 2}, {0x0C56, 3}, {0x25CC, 4}}));
   Glyphs g;

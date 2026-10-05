@@ -67,10 +67,12 @@ GAPS = {
     "AAT layout": "a font with kerx is kerned by its subtables of formats 0, 1, 2 and 6, as HarfBuzz does,"
                   " but not by format 4's anchor points, and one with trak is tracked by Apple's table "
                   "(morx is read)",
-    "Indic character details": "a handful of characters in Gujarati, Oriya and Telugu "
-                               "that HarfBuzz sorts or syllabifies differently from "
-                               "the Unicode data: found by the generated texts, not "
-                               "yet traced to a rule",
+    "Indic character details": "two things left in Oriya and Gurmukhi: after a dotted "
+                               "circle, a halant and a consonant that takes a below form, "
+                               "HarfBuzz merges the consonant's cluster with the pre-base "
+                               "matra's where this library does not; and HarfBuzz lets "
+                               "Gurmukhi II follow a bindu, tippi, addak or visarga with no "
+                               "circle where this library puts one",
     "USE character categories": "a handful of characters in Grantha, Javanese, Khudawadi, "
                                 "Mongolian, Tai Viet and Tirhuta that HarfBuzz sorts into "
                                 "a different Universal Shaping Engine category than the "

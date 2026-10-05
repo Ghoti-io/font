@@ -41,6 +41,7 @@
 #include "nfa.h"
 #include "plan.h"
 #include "uprops.h"
+#include "vowel_constraints.h"
 
 // The categories of an Indic character.
 enum {
@@ -262,18 +263,32 @@ static void indic_set_properties(GFNT_LInfo * info) {
   int cat = IC_X;
   int pos = IP_END;
 
-  // The Oriya overline is newer than HarfBuzz's table, which knows it as nothing.
-  if (u == 0x0B55) {
-    info->category = IC_X;
-    info->position = IP_END;
-    return;
-  }
   if (indic_in_table(u)) {
     cat = indic_category_of(guni_indic_syllabic_category(u));
     pos = indic_side_of(guni_indic_positional_category(u));
   }
   else if (u == 0x00A0 || u == 0x2010 || u == 0x2011) {
     cat = IC_PLACEHOLDER;
+  }
+  // Characters newer than HarfBuzz's table, or that it sorts differently from the
+  // Unicode data, found by trying each as every category against it.
+  switch (u) {
+    case 0x0B55:   // The Oriya overline: a nukta.
+      cat = IC_N;
+      break;
+    case 0x0953:   // The Devanagari grave and acute accents: syllable modifiers.
+    case 0x0954:
+      cat = IC_SM;
+      break;
+    case 0x09FC:   // The Bengali vedic anusvara and the Kannada and Malayalam
+    case 0x0C80:   // signs like it stand where a base would.
+      cat = IC_PLACEHOLDER;
+      break;
+    case 0x0D04:
+      cat = IC_C;
+      break;
+    default:
+      break;
   }
   if (u == 0x0A51) {
     cat = IC_M;   // The Gurmukhi udaat: a vowel sign in HarfBuzz's table.
@@ -305,6 +320,9 @@ static void indic_set_properties(GFNT_LInfo * info) {
   else if (FLAG(cat) & (FLAG(IC_SM) | FLAG(IC_VD) | FLAG(IC_A)
       | FLAG(IC_SYMBOL))) {
     pos = IP_SMVD;
+  }
+  if (u == 0x0A51) {
+    pos = IP_BELOW_C;   // The udaat is written below, though the Unicode data has no position for it.
   }
   if (u == 0x0B01) {
     pos = IP_BEFORE_SUB;   // The Oriya bindu is before the subjoined, in the spec.
@@ -614,6 +632,7 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   // there is no reph.
   if (has_reph && base == start && limit - base <= 2) {
     has_reph = false;
+    limit = start;   // and the font is not asked to form one
   }
 
   // Everything before the base is before it in the syllable.
@@ -1224,7 +1243,8 @@ static void indic_collect_features(GFNT_Plan * plan) {
   // The basic features, one at a time, each limited to the glyphs the reordering
   // chose.
   for (i = 0; i < IF_BASIC; i++) {
-    uint32_t joiners = GFNT_PF_MANUAL_ZWNJ | GFNT_PF_MANUAL_ZWJ;
+    uint32_t joiners = GFNT_PF_MANUAL_ZWNJ | GFNT_PF_MANUAL_ZWJ
+        | GFNT_PF_PER_SYLLABLE;
 
     if (indic_features[i].global) {
       gfnt_plan_enable(plan, indic_tag(indic_features[i].tag), joiners, 1);
@@ -1237,7 +1257,8 @@ static void indic_collect_features(GFNT_Plan * plan) {
   gfnt_plan_pause(plan, indic_final_reordering);
   // The others, all at once.
   for (; i < IF_COUNT; i++) {
-    uint32_t joiners = GFNT_PF_MANUAL_ZWNJ | GFNT_PF_MANUAL_ZWJ;
+    uint32_t joiners = GFNT_PF_MANUAL_ZWNJ | GFNT_PF_MANUAL_ZWJ
+        | GFNT_PF_PER_SYLLABLE;
 
     if (indic_features[i].global) {
       gfnt_plan_enable(plan, indic_tag(indic_features[i].tag), joiners, 1);
@@ -1346,6 +1367,7 @@ const GFNT_Shaper gfnt_shaper_indic = {
   .collect_features = indic_collect_features,
   .data_create = indic_data_create,
   .data_destroy = indic_data_destroy,
+  .preprocess_text = gfnt_vowel_constraints,
   .normalization = GFNT_NORM_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT,
   .normalization_hooks = &indic_hooks,
   .setup_masks = indic_setup_masks,

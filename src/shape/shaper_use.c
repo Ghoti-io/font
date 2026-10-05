@@ -39,6 +39,7 @@
 #include "nfa.h"
 #include "plan.h"
 #include "uprops.h"
+#include "vowel_constraints.h"
 #include "use_data.h"
 
 // The categories of USE, with the subclasses that depend on position.
@@ -135,6 +136,11 @@ static uint8_t use_category(uint32_t u) {
       GFNT_USE_ISC_OVERRIDE_COUNT, u, (int)guni_indic_syllabic_category(u));
   ipc = (GUNI_IndicPositionalCategory)use_override(gfnt_use_ipc_overrides,
       GFNT_USE_IPC_OVERRIDE_COUNT, u, (int)guni_indic_positional_category(u));
+  // The Sinhala kunddaliya is punctuation in the Unicode data and takes marks like
+  // a letter in HarfBuzz's.
+  if (u == 0x0DF4) {
+    return UC_B;
+  }
   // The Sinhala al-lakuna stands where a vowel modifier does, and before them.
   if (u == 0x0DCA) {
     return UC_VMH;
@@ -910,6 +916,7 @@ const GFNT_Shaper gfnt_shaper_use = {
   .collect_features = use_collect_features,
   .data_create = use_data_create,
   .data_destroy = use_data_destroy,
+  .preprocess_text = gfnt_vowel_constraints,
   .normalization = GFNT_NORM_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT,
   .normalization_hooks = &use_hooks,
   .setup_masks = use_setup_masks,

@@ -71,8 +71,9 @@ uint8_t gfnt_u_modified_ccc(uint32_t u) {
   }
   switch (ccc) {
     case 84:
+      return 4;   // Telugu length marks sort before the nukta and the virama,
     case 91:
-      return 0;   // Telugu length marks do not reorder.
+      return 5;   // and the first before the second.
     case 103:
       return 3;   // Thai.
     case 130:

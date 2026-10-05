@@ -2757,3 +2757,40 @@ TEST(ShapeKerx, AStateMachinesCrossStreamShiftsCarryOnAndAMarkedValueSetsApart) 
   EXPECT_EQ(g[1].y_offset, 0);
   EXPECT_EQ(g[2].y_offset, -10);
 }
+
+// ---- Indic vowel constraints and the characters HarfBuzz sorts differently ----
+
+TEST(ShapeIndic, AVowelAndTheSignThatMakesAnotherVowelAreSetOffByADottedCircle) {
+  // Gujarati A and the sign for AA add up to the letter AA: HarfBuzz puts a dotted
+  // circle between them, and the circle shares the sign's cluster.
+  Font font(small_font({}, 8, {{0x0A85, 2}, {0x0ABE, 3}, {0x0A86, 5},
+      {0x25CC, 4}}));
+  Glyphs g;
+  Request request;
+  request.script = "gjr2";
+  ASSERT_EQ(shape(font, V{0x0A85, 0x0ABE}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4, 3}));
+  EXPECT_EQ(g[1].cluster, 0u);
+  // Two letters that no one letter stands for are left alone.
+  ASSERT_EQ(shape(font, V{0x0A86, 0x0ABE}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5, 3}));
+}
+
+TEST(ShapeIndic, TheDevanagariAccentsAreMarksThatWantABase) {
+  // U+0953 stands where a syllable modifier does, so alone it gets a circle.
+  Font font(small_font({}, 8, {{0x0953, 2}, {0x25CC, 4}}));
+  Glyphs g;
+  Request request;
+  request.script = "dev2";
+  ASSERT_EQ(shape(font, V{0x0953}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 2}));
+}
+
+TEST(ShapeIndic, TheTeluguLengthMarksSortBeforeTheNuktaAndTheFirstBeforeTheSecond) {
+  Font font(small_font({}, 8, {{0x0C55, 2}, {0x0C56, 3}, {0x25CC, 4}}));
+  Glyphs g;
+  Request request;
+  request.script = "tel2";
+  ASSERT_EQ(shape(font, V{0x0C56, 0x0C55}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 2, 3}));
+}

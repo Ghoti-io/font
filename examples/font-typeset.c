@@ -366,7 +366,7 @@ int main(int argc, char ** argv) {
     GFNT_RasterOptions ro;
     GFNT_Coverage cov;
     int64_t ix = x64 >> 6;
-    int64_t iy = y64 >> 6;
+    int64_t iy = (-y64) >> 6; // whole pixels up; the rest goes to the rasteriser
     uint32_t row;
     uint32_t col;
 
@@ -380,8 +380,7 @@ int main(int argc, char ** argv) {
       continue;
     }
     for (row = 0; row < cov.height; row++) {
-      int64_t y = (int64_t)baseline - cov.top + (int64_t)row - iy
-          - ((y64 & 63) ? 1 : 0) * 0;
+      int64_t y = (int64_t)baseline - cov.top + (int64_t)row - iy;
       for (col = 0; col < cov.width; col++) {
         int64_t x = ix + cov.left + (int64_t)col;
         unsigned sum;

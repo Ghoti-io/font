@@ -73,11 +73,12 @@ GAPS = {
                                "matra's where this library does not; and HarfBuzz lets "
                                "Gurmukhi II follow a bindu, tippi, addak or visarga with no "
                                "circle where this library puts one",
-    "USE character categories": "a handful of characters in Grantha, Javanese, Khudawadi, "
-                                "Mongolian, Tai Viet and Tirhuta that HarfBuzz sorts into "
-                                "a different Universal Shaping Engine category than the "
-                                "Unicode data and Microsoft's overrides give: found by the "
-                                "generated texts, not yet traced to a rule",
+    "USE character categories": "Mongolian free variation selector one, which HarfBuzz "
+                                "ligates with the letter before it where this library "
+                                "does not, and a few Mongolian marks after punctuation; "
+                                "found by shaping every pair of a script's characters, "
+                                "which also shows Khmer and Myanmar differing in ways "
+                                "the generated texts do not reach",
     "outline HarfBuzz does not read": "a Type 1 charstring in a CFF table, or a cubic glyf "
                                       "outline: HarfBuzz measures them wrongly or not at all, "
                                       "so a mark placed from their box differs",

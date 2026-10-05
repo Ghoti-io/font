@@ -37,7 +37,7 @@ bool gfnt_u_default_ignorable(uint32_t u) {
   }
   return u == 0x00AD || u == 0x034F || u == 0x061C
       || (u >= 0x17B4 && u <= 0x17B5)
-      || (u >= 0x180B && u <= 0x180F) || (u >= 0x200B && u <= 0x200F)
+      || (u >= 0x180B && u <= 0x180E) || (u >= 0x200B && u <= 0x200F)
       || (u >= 0x202A && u <= 0x202E) || (u >= 0x2060 && u <= 0x206F)
       || (u >= 0xFE00 && u <= 0xFE0F) || u == 0xFEFF
       || (u >= 0xFFF0 && u <= 0xFFF8)

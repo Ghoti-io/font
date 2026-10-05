@@ -27,6 +27,7 @@
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/unicode/char.h>
 #include <ghoti.io/unicode/norm.h>
+#include <ghoti.io/font/cmap.h>
 #include <string.h>
 #include "normalize.h"
 #include "uprops.h"
@@ -288,9 +289,42 @@ static int gfnt_decompose(GFNT_NormCtx * c, bool shortest, uint32_t ab) {
   return 0;
 }
 
+/**
+ * Whether a character is a variation selector the font's cmap is asked about. HarfBuzz
+ * does not ask for Mongolian's free ones.
+ */
+static bool gfnt_is_variation_selector(uint32_t u) {
+  return (u >= 0xFE00 && u <= 0xFE0F) || (u >= 0xE0100 && u <= 0xE01EF);
+}
+
 static void gfnt_decompose_current(GFNT_NormCtx * c, bool shortest) {
   uint32_t u = c->in[c->idx].unicode;
   uint32_t glyph = 0;
+
+  // A character the font has a variation sequence for with the selector after it
+  // takes the glyph of the sequence, and the selector goes.
+  if (c->idx + 1 < c->count && gfnt_is_variation_selector(c->in[c->idx + 1].unicode)) {
+    GFNT_UvsKind kind = GFNT_UVS_NONE;
+    uint32_t variant = 0;
+
+    if (gfnt_face_variation_glyph(c->face, u, c->in[c->idx + 1].unicode, &variant,
+            &kind, NULL) == GFNT_OK
+        && (kind == GFNT_UVS_GLYPH
+            || (kind == GFNT_UVS_DEFAULT && gfnt_nominal(c, u, &variant)))) {
+      uint32_t selector_cluster = c->in[c->idx + 1].cluster;
+
+      gfnt_next_char(c, variant);
+      if (!c->oom) {
+        GFNT_LInfo * slot = &c->out[c->len - 1];
+
+        if (selector_cluster < slot->cluster) {
+          slot->cluster = selector_cluster;
+        }
+      }
+      c->idx++;
+      return;
+    }
+  }
 
   if (shortest && gfnt_nominal(c, u, &glyph)) {
     gfnt_next_char(c, glyph);

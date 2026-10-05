@@ -482,6 +482,156 @@ GFNT_Result gfnt_cmap_lookup(const GFNT_Face * face,
   }
 }
 
+/** A 24-bit value at an offset. */
+static bool gfnt_cmap_u24_at(const GFNT_Reader * r, size_t at, uint32_t * out) {
+  uint8_t b[3];
+
+  if (gfnt_reader_u8_at(r, at, &b[0]) != GFNT_OK
+      || gfnt_reader_u8_at(r, at + 1, &b[1]) != GFNT_OK
+      || gfnt_reader_u8_at(r, at + 2, &b[2]) != GFNT_OK) {
+    return false;
+  }
+  *out = ((uint32_t)b[0] << 16) | ((uint32_t)b[1] << 8) | b[2];
+  return true;
+}
+
+GFNT_Result gfnt_face_variation_glyph(const GFNT_Face * face, uint32_t base,
+    uint32_t selector, uint32_t * out_glyph, GFNT_UvsKind * out_kind,
+    GFNT_Error * error) {
+  GFNT_Reader cmap;
+  GFNT_Reader sub;
+  size_t records = 0;
+  size_t count = 0;
+  size_t i;
+  GFNT_Result result;
+
+  if (!face || !out_glyph || !out_kind) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, GFNT_CMAP_TAG, 0,
+        GFNT_GLYPH_NONE, "no face, or nowhere to put the answer");
+  }
+  *out_kind = GFNT_UVS_NONE;
+  *out_glyph = 0;
+  if (!gfnt_face_has_table(face, GFNT_CMAP_TAG)) {
+    return GFNT_OK;
+  }
+  result = gfnt_cmap_open(face, &cmap, &count, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  for (i = 0; i < count; i++) {
+    uint16_t format = 0;
+    uint32_t offset = 0;
+    size_t at = GFNT_CMAP_HEADER_BYTES + i * GFNT_CMAP_RECORD_BYTES;
+
+    if (gfnt_reader_u32_at(&cmap, at + 4, &offset) != GFNT_OK
+        || gfnt_reader_u16_at(&cmap, offset, &format) != GFNT_OK) {
+      continue;
+    }
+    if (format == 14) {
+      uint32_t n = 0;
+      size_t lo = 0;
+      size_t hi;
+
+      if (gfnt_reader_sub(&cmap, offset, GFNT_READER_REST, &sub) != GFNT_OK
+          || gfnt_reader_u32_at(&sub, 6, &n) != GFNT_OK) {
+        return GFNT_ERR_CORRUPT;
+      }
+      records = n;
+      hi = records;
+      while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        size_t rec = 10 + 11 * mid;
+        uint32_t vs = 0;
+        uint32_t def = 0;
+        uint32_t non = 0;
+
+        if (!gfnt_cmap_u24_at(&sub, rec, &vs)) {
+          return GFNT_ERR_CORRUPT;
+        }
+        if (selector < vs) {
+          hi = mid;
+        }
+        else if (selector > vs) {
+          lo = mid + 1;
+        }
+        else {
+          size_t a;
+          size_t b;
+
+          if (gfnt_reader_u32_at(&sub, rec + 3, &def) != GFNT_OK
+              || gfnt_reader_u32_at(&sub, rec + 7, &non) != GFNT_OK) {
+            return GFNT_ERR_CORRUPT;
+          }
+          if (non) {
+            uint32_t m = 0;
+
+            if (gfnt_reader_u32_at(&sub, non, &m) != GFNT_OK) {
+              return GFNT_ERR_CORRUPT;
+            }
+            a = 0;
+            b = m;
+            while (a < b) {
+              size_t k = a + (b - a) / 2;
+              size_t at2 = non + 4 + 5 * k;
+              uint32_t u = 0;
+              uint16_t g = 0;
+
+              if (!gfnt_cmap_u24_at(&sub, at2, &u)
+                  || gfnt_reader_u16_at(&sub, at2 + 3, &g) != GFNT_OK) {
+                return GFNT_ERR_CORRUPT;
+              }
+              if (base < u) {
+                b = k;
+              }
+              else if (base > u) {
+                a = k + 1;
+              }
+              else {
+                *out_glyph = g;
+                *out_kind = GFNT_UVS_GLYPH;
+                return GFNT_OK;
+              }
+            }
+          }
+          if (def) {
+            uint32_t m = 0;
+
+            if (gfnt_reader_u32_at(&sub, def, &m) != GFNT_OK) {
+              return GFNT_ERR_CORRUPT;
+            }
+            a = 0;
+            b = m;
+            while (a < b) {
+              size_t k = a + (b - a) / 2;
+              size_t at2 = def + 4 + 4 * k;
+              uint32_t u = 0;
+              uint8_t extra = 0;
+
+              if (!gfnt_cmap_u24_at(&sub, at2, &u)
+                  || gfnt_reader_u8_at(&sub, at2 + 3, &extra) != GFNT_OK) {
+                return GFNT_ERR_CORRUPT;
+              }
+              if (base < u) {
+                b = k;
+              }
+              else if (base > (uint64_t)u + extra) {
+                a = k + 1;
+              }
+              else {
+                *out_kind = GFNT_UVS_DEFAULT;
+                return GFNT_OK;
+              }
+            }
+          }
+          return GFNT_OK;
+        }
+      }
+      return GFNT_OK;
+    }
+  }
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_face_glyph_for_codepoint(const GFNT_Face * face,
     uint32_t codepoint, uint32_t * out_glyph, GFNT_Error * error) {
   GFNT_CmapSubtable best;

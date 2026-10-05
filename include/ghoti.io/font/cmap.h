@@ -141,6 +141,31 @@ GFNT_API GFNT_Result gfnt_face_cmap_best(const GFNT_Face * face,
 GFNT_API GFNT_Result gfnt_face_glyph_for_codepoint(const GFNT_Face * face,
     uint32_t codepoint, uint32_t * out_glyph, GFNT_Error * error);
 
+/** @brief What a variation sequence maps to. */
+typedef enum GFNT_UvsKind {
+  GFNT_UVS_NONE = 0, ///< The font has no entry for the pair.
+  GFNT_UVS_DEFAULT,  ///< The base character's own glyph is the one to use.
+  GFNT_UVS_GLYPH     ///< A glyph of its own, returned.
+} GFNT_UvsKind;
+
+/**
+ * @brief What a base character and a variation selector map to, through the
+ *   font's format 14 subtable.
+ *
+ * @param face The face.
+ * @param base The base character.
+ * @param selector The variation selector (U+FE00 to U+FE0F, U+E0100 to
+ *   U+E01EF, or a Mongolian one).
+ * @param out_glyph Receives the glyph when @p out_kind is ::GFNT_UVS_GLYPH.
+ * @param out_kind Receives which of the three answers it is.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK (including when the font has no format 14 subtable, which
+ *   is ::GFNT_UVS_NONE), ::GFNT_ERR_INVALID or ::GFNT_ERR_CORRUPT.
+ */
+GFNT_API GFNT_Result gfnt_face_variation_glyph(const GFNT_Face * face,
+    uint32_t base, uint32_t selector, uint32_t * out_glyph,
+    GFNT_UvsKind * out_kind, GFNT_Error * error);
+
 /**
  * @brief The glyph a codepoint maps to through one named subtable.
  *

@@ -136,6 +136,23 @@ static uint8_t use_category(uint32_t u) {
       GFNT_USE_ISC_OVERRIDE_COUNT, u, (int)guni_indic_syllabic_category(u));
   ipc = (GUNI_IndicPositionalCategory)use_override(gfnt_use_ipc_overrides,
       GFNT_USE_IPC_OVERRIDE_COUNT, u, (int)guni_indic_positional_category(u));
+  // Characters HarfBuzz sorts differently from the Unicode data and Microsoft's
+  // overrides, found by shaping every pair of a script's characters against it.
+  if ((u >= 0x1B5A && u <= 0x1B6A) || (u >= 0x1B74 && u <= 0x1B7E)) {
+    return UC_GB;    // Balinese punctuation and musical symbols.
+  }
+  if ((u >= 0x1BFC && u <= 0x1BFF) || u == 0x1A1E || u == 0x1A1F
+      || (u >= 0x11047 && u <= 0x1104D) || (u >= 0xA9C1 && u <= 0xA9CD)
+      || u == 0xA9DE || u == 0xA9DF || u == 0xAADE || u == 0xAADF
+      || u == 0x114C6) {
+    return UC_O;     // The punctuation of Batak, Buginese, Brahmi, Javanese, Tai Viet, Tirhuta.
+  }
+  if (u == 0x11302 || u == 0x11303 || u == 0xAAB4 || u == 0x114C1) {
+    return UC_VMABV; // Grantha anusvara and visarga, Tai Viet mai thung, Tirhuta sign visarga.
+  }
+  if ((u >= 0x180B && u <= 0x180D) || u == 0x180F) {
+    return UC_N;     // The Mongolian free variation selectors.
+  }
   // The Sinhala kunddaliya is punctuation in the Unicode data and takes marks like
   // a letter in HarfBuzz's.
   if (u == 0x0DF4) {

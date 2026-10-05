@@ -2794,3 +2794,62 @@ TEST(ShapeIndic, TheTeluguLengthMarksSortBeforeTheNuktaAndTheFirstBeforeTheSecon
   ASSERT_EQ(shape(font, V{0x0C56, 0x0C55}, request, &g), GFNT_OK);
   EXPECT_EQ(ids(g), (V{4, 2, 3}));
 }
+
+// ---- Variation sequences ----
+
+namespace {
+
+/** A font whose cmap has a format 4 subtable and a format 14 one. */
+std::vector<uint8_t> uvs_font() {
+  std::vector<gfnttest::Segment4> segments;
+  segments.push_back({'A', 'C', static_cast<int16_t>(1 - 'A'), {}});  // A B C = 1 2 3
+  segments.push_back({0xFFFF, 0xFFFF, 1, {}});
+  // Format 14: selector U+FE00 with a default range 'B', and non-default A -> 5.
+  auto u24 = [](std::vector<uint8_t> & out, uint32_t v) {
+    out.push_back(static_cast<uint8_t>(v >> 16));
+    out.push_back(static_cast<uint8_t>(v >> 8));
+    out.push_back(static_cast<uint8_t>(v));
+  };
+  std::vector<uint8_t> f14;
+  gfnttest::put_u16(f14, 14);
+  gfnttest::put_u32(f14, 10 + 11 + 8 + 9);   // length
+  gfnttest::put_u32(f14, 1);                 // one selector
+  u24(f14, 0xFE00);
+  gfnttest::put_u32(f14, 21);                // default UVS
+  gfnttest::put_u32(f14, 29);                // non-default UVS
+  gfnttest::put_u32(f14, 1);                 // one default range
+  u24(f14, 'B');
+  f14.push_back(0);
+  gfnttest::put_u32(f14, 1);                 // one non-default mapping
+  u24(f14, 'A');
+  gfnttest::put_u16(f14, 5);
+  std::vector<std::pair<uint16_t, int16_t>> metrics(8, {500, 0});
+  return gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, {
+      {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, 0)},
+      {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 0, 8)},
+      {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics)},
+      {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(8)},
+      {GFNT_TAG('c', 'm', 'a', 'p'), gfnttest::build_cmap({
+          {3, 1, gfnttest::build_cmap_format4(segments)}, {0, 5, f14}})},
+  });
+}
+
+}  // namespace
+
+TEST(ShapeVariation, ACharacterAndASelectorTheFontHasASequenceForShapeAsTheGlyphItNames) {
+  Font font(uvs_font());
+  ASSERT_EQ(font.result, GFNT_OK);
+  Glyphs g;
+  Request request;
+  ASSERT_EQ(shape(font, V{'A', 0xFE00}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5}));
+  // A default sequence uses the character's own glyph, and the selector is spent.
+  ASSERT_EQ(shape(font, V{'B', 0xFE00}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2}));
+  // No entry: the character, and the selector after it hidden as before.
+  ASSERT_EQ(shape(font, V{'C', 0xFE00}, request, &g), GFNT_OK);
+  EXPECT_EQ(g[0].glyph, 3u);
+  // The selector has to follow the character directly.
+  ASSERT_EQ(shape(font, V{'A', 0x0301, 0xFE00}, request, &g), GFNT_OK);
+  EXPECT_EQ(g[0].glyph, 1u);
+}

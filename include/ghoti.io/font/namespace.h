@@ -232,6 +232,7 @@
 #define GFNT_ShapedGlyph GHOTIIO_FONT(GFNT_ShapedGlyph)
 #define GFNT_ShapedRun GHOTIIO_FONT(GFNT_ShapedRun)
 #define gfnt_face_shape GHOTIIO_FONT(gfnt_face_shape)
+#define gfnt_face_variation_glyph GHOTIIO_FONT(gfnt_face_variation_glyph)
 #define gfnt_shaped_run_free GHOTIIO_FONT(gfnt_shaped_run_free)
 #define gfnt_faces_shape GHOTIIO_FONT(gfnt_faces_shape)
 #define gfnt_face_runs_free GHOTIIO_FONT(gfnt_face_runs_free)

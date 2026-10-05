@@ -1880,6 +1880,51 @@ TEST(ShapeMyanmar, TheLeftVowelAndTheMedialRaGoBeforeTheConsonant) {
   EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 0);
 }
 
+TEST(ShapeHangul, ATrailingJamoJoinsTheClusterOfASyllableTheFontHasButNotOtherwise) {
+  // HIEUH 3, A 4, NIEUN 5, and the syllable HA 2 in one font and not in the other.
+  Font with(small_font({}, 8, {{0xD558, 2}, {0x1112, 3}, {0x1161, 4},
+      {0x11AB, 5}}));
+  Font without(small_font({}, 8, {{0x1112, 3}, {0x1161, 4}, {0x11AB, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "hang";
+  // HarfBuzz: the font has HA but nothing for HA+NIEUN, so HA is taken apart and
+  // the jamo that followed is part of the syllable.
+  ASSERT_EQ(shape(with, V{0xD558, 0x11AB}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(g[2].cluster, 0u);
+  // A font without HA only takes it apart: the NIEUN after it stands alone.
+  ASSERT_EQ(shape(without, V{0xD558, 0x11AB}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(ids(g), (V{3, 4, 5}));
+  EXPECT_EQ(g[1].cluster, 0u);
+  EXPECT_EQ(g[2].cluster, 1u);
+}
+
+TEST(ShapeHangul, AJoinerAfterASyllableOfJamoIsInItsCluster) {
+  Font font(small_font({}, 8, {{0x1112, 3}, {0x1161, 4}, {0x11AB, 5}, {0x20, 7}}));
+  Glyphs g;
+  Request request;
+  request.script = "hang";
+  ASSERT_EQ(shape(font, V{0x1112, 0x1161, 0x11AB, 0x200D}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 4u);
+  for (const Glyph & x : g) {
+    EXPECT_EQ(x.cluster, 0u);
+  }
+}
+
+TEST(ShapeHangul, TheFillersAreDrawnWithTheFontsOwnGlyphsNotHidden) {
+  // U+115F, U+1160, U+3164 and U+FFA0 are default-ignorable in Unicode and are
+  // not so for HarfBuzz: it keeps the glyph the font has for them.
+  Font font(small_font({}, 8, {{0x115F, 5}, {0x1160, 6}, {0x3164, 4}, {0xFFA0, 3},
+      {0x20, 7}}));
+  Glyphs g;
+  Request request;
+  request.script = "hang";
+  ASSERT_EQ(shape(font, V{0x115F, 0x1160, 0x3164, 0xFFA0}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5, 6, 4, 3}));
+}
+
 TEST(ShapeHangul, JamoBecomeTheSyllableTheFontHasAndStayJamoWhenItHasNone) {
   // HAN 2, the jamo HIEUH 3, A 4, NIEUN 5, the tone mark 6.
   Font composed(small_font({}, 8, {{0xD55C, 2}, {0x1112, 3}, {0x1161, 4},

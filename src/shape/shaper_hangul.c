@@ -119,6 +119,20 @@ static GFNT_LInfo hangul_char(const GFNT_LInfo * from, uint32_t u, uint8_t featu
   return r;
 }
 
+/**
+ * Merge the clusters of out[start, end), and of whatever of the text still to be
+ * read (in[next, count)) was already one with the last of them, such as a ZWJ.
+ */
+static void hangul_merge(GFNT_LInfo * out, size_t w, size_t start, size_t end,
+    GFNT_LInfo * in, size_t count, size_t next) {
+  uint32_t old = out[end - 1].cluster;
+
+  gfnt_merge_clusters(out, w, start, end);
+  for (; next < count && in[next].cluster == old; next++) {
+    in[next].cluster = out[start].cluster;
+  }
+}
+
 static void hangul_preprocess(GFNT_ShapeCtx * ctx, GFNT_LInfo ** chars,
     size_t * len, size_t * capacity) {
   GFNT_LInfo * in = *chars;
@@ -223,8 +237,8 @@ static void hangul_preprocess(GFNT_ShapeCtx * ctx, GFNT_LInfo ** chars,
           out[w++] = hangul_char(&in[i + 2], t, HF_TJMO);
         }
         end = start + n;
-        gfnt_merge_clusters(out, w, start, end);
         i += n;
+        hangul_merge(out, w, start, end, in, count, i);
         continue;
       }
     }
@@ -267,16 +281,18 @@ static void hangul_preprocess(GFNT_ShapeCtx * ctx, GFNT_LInfo ** chars,
           if (tindex) {
             out[w++] = hangul_char(&in[i], d2, HF_TJMO);
           }
-          // If an LV was taken apart because a trailing jamo follows, that
-          // jamo is in the syllable.
-          if (!tindex && i + 1 < count && hangul_is_t(in[i + 1].unicode)) {
+          // An <LV> the font has, taken apart because a jamo follows that it
+          // cannot combine with, takes that jamo into the syllable. One the font
+          // lacks is only taken apart: the jamo after it stands alone.
+          if (has_glyph && !tindex && i + 1 < count
+              && hangul_is_t(in[i + 1].unicode)) {
             out[w++] = hangul_char(&in[i + 1], in[i + 1].unicode, HF_TJMO);
             s_len++;
             used++;
           }
           end = start + s_len;
           i += used;
-          gfnt_merge_clusters(out, w, start, end);
+          hangul_merge(out, w, start, end, in, count, i);
           continue;
         }
       }

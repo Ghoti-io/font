@@ -27,16 +27,20 @@
 #include <ghoti.io/unicode/char.h>
 #include "uprops.h"
 
+/**
+ * Unicode's Default_Ignorable_Code_Point, less the four Hangul fillers (U+115F,
+ * U+1160, U+3164, U+FFA0), which HarfBuzz draws with the font's own glyphs.
+ */
 bool gfnt_u_default_ignorable(uint32_t u) {
   if (u < 0xAD) {
     return false;
   }
   return u == 0x00AD || u == 0x034F || u == 0x061C
-      || (u >= 0x115F && u <= 0x1160) || (u >= 0x17B4 && u <= 0x17B5)
+      || (u >= 0x17B4 && u <= 0x17B5)
       || (u >= 0x180B && u <= 0x180F) || (u >= 0x200B && u <= 0x200F)
       || (u >= 0x202A && u <= 0x202E) || (u >= 0x2060 && u <= 0x206F)
-      || u == 0x3164 || (u >= 0xFE00 && u <= 0xFE0F) || u == 0xFEFF
-      || u == 0xFFA0 || (u >= 0xFFF0 && u <= 0xFFF8)
+      || (u >= 0xFE00 && u <= 0xFE0F) || u == 0xFEFF
+      || (u >= 0xFFF0 && u <= 0xFFF8)
       || (u >= 0x1BCA0 && u <= 0x1BCA3) || (u >= 0x1D173 && u <= 0x1D17A)
       || (u >= 0xE0000 && u <= 0xE0FFF);
 }

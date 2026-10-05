@@ -165,6 +165,139 @@ static int32_t kerx_pair(const GFNT_Reader * r, size_t subtable,
   }
 }
 
+/**
+ * A state-machine (format 1) subtable: contextual kerning. Glyphs a transition
+ * pushes are kept on a stack of eight; a transition that names values applies
+ * them to the stack from the top, one glyph to each value, until a value with its
+ * low bit set ends the list; the glyphs not reached stay on the stack. A ninth push empties it.
+ */
+#define KERX_STACK 8u
+#define KERX_DETACHED INT32_MIN
+
+static void kerx_format1(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
+    bool cross, GFNT_LBuffer * b, uint32_t kern_mask, bool * bad) {
+  size_t base = subtable + 12;
+  uint32_t classes = gfnt_lr_u32(r, base, bad);
+  size_t class_table = base + gfnt_lr_u32(r, base + 4, bad);
+  size_t state_array = base + gfnt_lr_u32(r, base + 8, bad);
+  size_t entry_table = base + gfnt_lr_u32(r, base + 12, bad);
+  size_t values = base + gfnt_lr_u32(r, base + 16, bad);
+  size_t stack[KERX_STACK];
+  size_t depth = 0;
+  uint32_t state = 0;
+  int64_t ops = (int64_t)b->len * 64;
+
+  if (ops < 16384) {
+    ops = 16384;
+  }
+  b->idx = 0;
+  while (!*bad) {
+    uint32_t klass = 0;
+    size_t entry;
+    uint32_t index;
+    uint16_t new_state;
+    uint16_t flags;
+    uint16_t action;
+
+    if (b->idx < b->len) {
+      uint32_t glyph = b->info[b->idx].glyph;
+      uint32_t value = 0;
+
+      if (glyph == 0xFFFFu) {
+        klass = 2;
+      }
+      else if (!gfnt_aat_lookup(r, class_table, num_glyphs, glyph, 2, &value,
+                   bad)) {
+        klass = 1;
+      }
+      else {
+        klass = value;
+      }
+    }
+    if (klass >= classes) {
+      klass = 1;
+    }
+    index = gfnt_lr_u16(r, state_array + 2 * ((size_t)state * classes + klass),
+        bad);
+    entry = entry_table + 6 * (size_t)index;
+    new_state = (uint16_t)gfnt_lr_u16(r, entry, bad);
+    flags = (uint16_t)gfnt_lr_u16(r, entry + 2, bad);
+    action = (uint16_t)gfnt_lr_u16(r, entry + 4, bad);
+    if (*bad) {
+      return;
+    }
+    if (flags & 0x2000u) {
+      depth = 0;
+    }
+    if (flags & 0x8000u) {
+      // At the end of the text the position past the last glyph is pushed too, and
+      // takes the first of the values to nothing.
+      if (depth < KERX_STACK) {
+        stack[depth++] = b->idx;
+      }
+      else {
+        depth = 0;
+      }
+    }
+    if (action != 0xFFFFu && depth) {
+      size_t at = values + (size_t)(action & ~1u);
+      bool last = false;
+
+      while (!last && depth && !*bad) {
+        size_t g = stack[--depth];
+        int32_t v = (int16_t)gfnt_lr_u16(r, at, bad);
+
+        at += 2;
+        if (g >= b->len) {
+          // The position past the end: its value is read and its end mark is not.
+          continue;
+        }
+        last = (v & 1) != 0;
+        v &= ~1;
+        if (cross) {
+          // What each glyph is shifted by is its own; the run is summed after.
+          if (v == -0x8000) {
+            b->pos[g].y_offset = KERX_DETACHED;
+          }
+          else if (b->pos[g].y_offset != KERX_DETACHED) {
+            b->pos[g].y_offset += v;
+          }
+        }
+        else if (b->info[g].mask & kern_mask) {
+          b->pos[g].x_advance += v;
+          b->pos[g].x_offset += v;
+        }
+      }
+    }
+    state = new_state;
+    if (b->idx >= b->len) {
+      break;
+    }
+    if (!(flags & 0x4000u) || ops-- <= 0) {
+      b->idx++;
+    }
+  }
+}
+
+/**
+ * Every glyph rides on the one before it, so a shift of one carries on to all the
+ * glyphs after it, except that a glyph set apart starts again from nothing.
+ */
+static void kerx_sum_shifts(GFNT_LBuffer * b) {
+  int32_t run = 0;
+  size_t i;
+
+  for (i = 0; i < b->len; i++) {
+    if (b->pos[i].y_offset == KERX_DETACHED) {
+      run = 0;
+    }
+    else {
+      run += b->pos[i].y_offset;
+    }
+    b->pos[i].y_offset = run;
+  }
+}
+
 /** Run one pair-kerning subtable over the run. */
 static void kerx_run(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
     uint32_t format, bool cross, GFNT_LApply * c, GFNT_LBuffer * b, uint32_t kern_mask,
@@ -240,9 +373,28 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     if (bad || length < 12) {
       break;
     }
-    if (!(coverage & (KERX_VERTICAL | KERX_VARIATION | KERX_DESCENDING))) {
-      kerx_run(&table, cursor, glyphs, coverage & 0xFFu, (coverage & KERX_CROSS) != 0,
-          &c, b, kern_mask, &bad);
+    if (!(coverage & (KERX_VERTICAL | KERX_VARIATION))) {
+      uint32_t format = coverage & 0xFFu;
+
+      if (format == 1) {
+        bool flip = (coverage & KERX_DESCENDING) != 0;
+
+        if (flip) {
+          gfnt_lbuf_reverse(b);
+        }
+        kerx_format1(&table, cursor, glyphs, (coverage & KERX_CROSS) != 0, b,
+            kern_mask, &bad);
+        if (flip) {
+          gfnt_lbuf_reverse(b);
+        }
+        if (coverage & KERX_CROSS) {
+          kerx_sum_shifts(b);
+        }
+      }
+      else if (!(coverage & KERX_DESCENDING)) {
+        kerx_run(&table, cursor, glyphs, format, (coverage & KERX_CROSS) != 0,
+            &c, b, kern_mask, &bad);
+      }
     }
     cursor += length;
   }

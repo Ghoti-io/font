@@ -750,7 +750,14 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   }
 
   if (plan.apply_kerx && !vertical && plan.kern_mask) {
+    // As for `kern`, in visual order.
+    if (native_rtl) {
+      gfnt_lbuf_reverse(&buf);
+    }
     result = gfnt_kerx_apply(face, &buf, &gdef, plan.kern_mask, error);
+    if (native_rtl) {
+      gfnt_lbuf_reverse(&buf);
+    }
     if (result != GFNT_OK) {
       goto done;
     }

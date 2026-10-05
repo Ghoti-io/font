@@ -2654,3 +2654,106 @@ TEST(ShapeKerx, ClassSubtablesAddTheTwoClassesToAnIndexIntoTheValues) {
   EXPECT_EQ(kerx_shape(kerx, "CB")[1].x_offset, 0);
   EXPECT_EQ(kerx_shape(kerx, "AA")[1].x_offset, 0);
 }
+
+namespace {
+
+/**
+ * A contextual kerning subtable: classes A = 4 and B = 5; A pushes itself and
+ * stays in state 1, B in state 1 applies the values at @p action (a byte offset
+ * into @p values) and returns to state 0.
+ */
+Bytes kerx_contextual(const std::vector<int16_t> & values, uint16_t action,
+    uint32_t flags = 0, uint16_t b_flags = 0) {
+  Bytes classes;
+  for (uint16_t v : std::initializer_list<uint16_t>{8, 1, 2, 4, 5}) {  // format 8, first glyph 1, two glyphs
+    gfnttest::put_u16(classes, v);
+  }
+  Bytes states;
+  for (uint16_t e : std::initializer_list<uint16_t>{0, 0, 0, 0, 1, 0,  // state 0: A pushes
+                      0, 0, 0, 0, 1, 2}) {  // state 1: A pushes, B applies
+    gfnttest::put_u16(states, e);
+  }
+  Bytes entries;
+  for (uint16_t e : std::initializer_list<uint16_t>{0, 0, 0xFFFF,  // nothing
+                      1, 0x8000, 0xFFFF,     // push
+                      0, b_flags, action}) { // apply
+    gfnttest::put_u16(entries, e);
+  }
+  Bytes vals;
+  for (int16_t v : values) {
+    gfnttest::put_u16(vals, static_cast<uint16_t>(v));
+  }
+  while (classes.size() % 4) {
+    classes.push_back(0);
+  }
+  while (states.size() % 4) {
+    states.push_back(0);
+  }
+  while (entries.size() % 4) {
+    entries.push_back(0);
+  }
+  const uint32_t at_classes = 20;
+  const uint32_t at_states = at_classes + static_cast<uint32_t>(classes.size());
+  const uint32_t at_entries = at_states + static_cast<uint32_t>(states.size());
+  const uint32_t at_values = at_entries + static_cast<uint32_t>(entries.size());
+  Bytes body;
+  for (uint32_t v : {6u, at_classes, at_states, at_entries, at_values}) {
+    gfnttest::put_u32(body, v);
+  }
+  for (const Bytes * part : {&classes, &states, &entries, &vals}) {
+    body.insert(body.end(), part->begin(), part->end());
+  }
+  return kerx_subtable(flags, 1, body);
+}
+
+}  // namespace
+
+TEST(ShapeKerx, AStateMachineAppliesItsValuesFromTheTopOfTheStack) {
+  // The first value is for the glyph on top; one with its low bit set is the last.
+  Bytes kerx = kerx_table({kerx_contextual({-10, -21, -30}, 0)});
+  Glyphs g = shape_bytes(small_font({{GFNT_TAG('k', 'e', 'r', 'x'), kerx}}),
+      cps("AAB"));
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(g[0].x_advance, 500 - 22);
+  EXPECT_EQ(g[0].x_offset, -22);
+  EXPECT_EQ(g[1].x_advance, 500 - 10);
+  EXPECT_EQ(g[2].x_advance, 500);
+  // The glyph the values did not reach stays on the stack for the next B.
+  g = shape_bytes(small_font({{GFNT_TAG('k', 'e', 'r', 'x'),
+      kerx_table({kerx_contextual({-10, -21, -30}, 0)})}}), cps("AAAB"));
+  EXPECT_EQ(g[0].x_advance, 500);
+  EXPECT_EQ(g[1].x_advance, 500 - 22);
+  EXPECT_EQ(g[2].x_advance, 500 - 10);
+  // A value offset is in bytes.
+  g = shape_bytes(small_font({{GFNT_TAG('k', 'e', 'r', 'x'),
+      kerx_table({kerx_contextual({-10, -21, -30}, 2)})}}), cps("AB"));
+  EXPECT_EQ(g[0].x_advance, 500 - 22);
+}
+
+TEST(ShapeKerx, AStateMachinesStackHoldsEightAndAnotherPushEmptiesIt) {
+  Bytes kerx = kerx_table({kerx_contextual({-10, -20, -30, -40, -50, -60, -70, -80,
+      -90}, 0)});
+  Bytes font = small_font({{GFNT_TAG('k', 'e', 'r', 'x'), kerx}});
+  EXPECT_EQ(shape_bytes(font, cps("AAAAAAAAB"))[7].x_advance, 500 - 10);
+  // The ninth A empties the stack: nothing is left for B.
+  EXPECT_EQ(shape_bytes(font, cps("AAAAAAAAAB"))[0].x_advance, 500);
+  EXPECT_EQ(shape_bytes(font, cps("AAAAAAAAAB"))[8].x_advance, 500);
+}
+
+TEST(ShapeKerx, AStateMachinesCrossStreamShiftsCarryOnAndAMarkedValueSetsApart) {
+  Bytes font = small_font({{GFNT_TAG('k', 'e', 'r', 'x'), kerx_table({
+      kerx_contextual({-10, -20, -31}, 0, 0x40000000u)})}});
+  Glyphs g = shape_bytes(font, cps("AAAB"));
+  ASSERT_EQ(g.size(), 4u);
+  EXPECT_EQ(g[0].y_offset, -32);
+  EXPECT_EQ(g[1].y_offset, -52);
+  EXPECT_EQ(g[2].y_offset, -62);
+  EXPECT_EQ(g[3].y_offset, -62);
+  // -0x8000 puts a glyph back to nothing, and the glyphs after it start from there.
+  font = small_font({{GFNT_TAG('k', 'e', 'r', 'x'), kerx_table({
+      kerx_contextual({-10, -32768, -30}, 0, 0x40000000u)})}});
+  g = shape_bytes(font, cps("AAAB"));
+  EXPECT_EQ(g[0].y_offset, -30);
+  EXPECT_EQ(g[1].y_offset, 0);
+  EXPECT_EQ(g[2].y_offset, -10);
+}

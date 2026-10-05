@@ -64,8 +64,8 @@ FIXTURES = os.path.join(ROOT, "tests", "data", "fonts")
 # below visibly avoids them rather than quietly omitting them.
 GAPS = {
     "bidi text": "one direction per run",
-    "AAT layout": "a font with kerx is kerned by its pair subtables (formats 0, 2, 6), as HarfBuzz does,"
-                  " but not by the state-machine ones (1, 4), and one with trak is tracked by Apple's table "
+    "AAT layout": "a font with kerx is kerned by its subtables of formats 0, 1, 2 and 6, as HarfBuzz does,"
+                  " but not by format 4's anchor points, and one with trak is tracked by Apple's table "
                   "(morx is read)",
     "Indic character details": "a handful of characters in Gujarati, Oriya and Telugu "
                                "that HarfBuzz sorts or syllabifies differently from "

@@ -231,8 +231,8 @@ static unsigned gfnt_arabic_joining(const GFNT_LInfo * info) {
   }
 }
 
-static void gfnt_arabic_setup_masks(GFNT_ShapeCtx * ctx) {
-  const GFNT_ArabicData * data = ctx->plan->shaper_data;
+static void gfnt_arabic_apply_masks(const GFNT_ArabicData * data,
+    GFNT_ShapeCtx * ctx) {
   GFNT_LBuffer * buf = ctx->buf;
   uint8_t * action;
   size_t prev = (size_t)-1;
@@ -267,6 +267,10 @@ static void gfnt_arabic_setup_masks(GFNT_ShapeCtx * ctx) {
     buf->info[i].mask |= data->mask_array[action[i]];
   }
   ctx->allocator->free_fn(ctx->allocator->ctx, action);
+}
+
+static void gfnt_arabic_setup_masks(GFNT_ShapeCtx * ctx) {
+  gfnt_arabic_apply_masks(ctx->plan->shaper_data, ctx);
 }
 
 /** Whether a code point is one of the combining marks that sit above or below. */
@@ -357,3 +361,18 @@ const GFNT_Shaper gfnt_shaper_arabic = {
   .zero_width_marks = 2,
   .fallback_position = true,
 };
+
+/* --- for the shapers that join the way Arabic does without being it ------ */
+
+void * gfnt_arabic_masks_create(const GFNT_Plan * plan,
+    const GFNT_Allocator * allocator) {
+  return gfnt_arabic_data_create(plan, allocator);
+}
+
+void gfnt_arabic_masks_apply(const void * data, GFNT_ShapeCtx * ctx) {
+  gfnt_arabic_apply_masks(data, ctx);
+}
+
+void gfnt_arabic_masks_destroy(void * data, const GFNT_Allocator * allocator) {
+  gfnt_arabic_data_destroy(data, allocator);
+}

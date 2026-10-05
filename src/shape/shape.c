@@ -72,6 +72,7 @@ static GFNT_Result gfnt_shape_apply(GFNT_LApply * c, const GFNT_PlanTable * pt,
       c->lookup_mask = l->mask;
       c->auto_zwnj = l->auto_zwnj;
       c->auto_zwj = l->auto_zwj;
+      c->per_syllable = l->per_syllable;
       gfnt_l_apply_lookup_to_buffer(c, l->index);
       (*out_ran)++;
       if (c->fault.bad) {
@@ -253,6 +254,25 @@ static void gfnt_setup_fraction_masks(const GFNT_Plan * plan,
         buf->info[j].mask |= plan->dnom_mask | plan->frac_mask;
       }
       i = end;
+    }
+  }
+}
+
+/**
+ * Take a mark's advance away. If no `GPOS` has placed it, it is moved back by the
+ * advance first, so that it hangs over the glyph before it instead of after.
+ */
+static void gfnt_zero_mark_widths(GFNT_LBuffer * buf, bool adjust) {
+  size_t i;
+
+  for (i = 0; i < buf->len; i++) {
+    if (gfnt_l_is_mark(&buf->info[i])) {
+      if (adjust) {
+        buf->pos[i].x_offset -= buf->pos[i].x_advance;
+        buf->pos[i].y_offset -= buf->pos[i].y_advance;
+      }
+      buf->pos[i].x_advance = 0;
+      buf->pos[i].y_advance = 0;
     }
   }
 }
@@ -570,6 +590,11 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   }
   gfnt_fallback_spaces(face, &buf, options->variation);
 
+  // A shaper that wants marks taken out of the width before positioning says so.
+  if (plan.shaper->zero_width_marks == 1) {
+    gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl);
+  }
+
   // GPOS.
   if (plan.tables[1].present) {
     gpos.buf = &buf;
@@ -609,15 +634,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // A mark takes no room of its own: its advance is folded into where it sits.
   // With a GPOS the font has already said where; without one, the mark is pulled
   // back over the base it follows.
-  for (i = 0; i < buf.len; i++) {
-    if (gfnt_l_is_mark(&buf.info[i])) {
-      if (!plan.tables[1].present && !native_rtl) {
-        buf.pos[i].x_offset -= buf.pos[i].x_advance;
-        buf.pos[i].y_offset -= buf.pos[i].y_advance;
-      }
-      buf.pos[i].x_advance = 0;
-      buf.pos[i].y_advance = 0;
-    }
+  if (plan.shaper->zero_width_marks == 2) {
+    gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl);
   }
   for (i = 0; i < buf.len; i++) {
     if ((buf.info[i].flags & GFNT_GF_DEFAULT_IGNORABLE)

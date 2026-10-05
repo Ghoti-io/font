@@ -130,6 +130,23 @@ bool gfnt_lbuf_enlarge(GFNT_LBuffer * b, size_t size) {
   return true;
 }
 
+bool gfnt_lbuf_insert(GFNT_LBuffer * b, size_t at, const GFNT_LInfo * info) {
+  size_t i;
+
+  if (!gfnt_lbuf_enlarge(b, b->len + 1)) {
+    return false;
+  }
+  for (i = b->len; i > at; i--) {
+    b->info[i] = b->info[i - 1];
+    b->pos[i] = b->pos[i - 1];
+  }
+  b->info[at] = *info;
+  memset(&b->pos[at], 0, sizeof b->pos[at]);
+  b->len++;
+  b->out_info = b->info;
+  return true;
+}
+
 /** Make room to write @p num_out entries while consuming @p num_in. */
 static bool gfnt_lbuf_make_room_for(GFNT_LBuffer * b, size_t num_in,
     size_t num_out) {

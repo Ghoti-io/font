@@ -66,10 +66,14 @@ GAPS = {
     "bidi and vertical text": "one direction, horizontal, per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
-    "script shaper not written": "Indic, Khmer, Myanmar and Universal Shaping Engine "
-                                 "scripts, whose clusters this library does not form",
-    "Nastaliq contextual forms": "Noto Nastaliq Urdu's contextual lookups, one mark placed "
-                                 "differently: not yet traced",
+    "script shaper not written": "Indic, Khmer and Myanmar scripts, whose clusters "
+                                 "this library does not form",
+    "USE character categories": "a handful of characters in Grantha, Javanese, Khudawadi, "
+                                "Mongolian, Newa, Tai Viet and Tirhuta that HarfBuzz "
+                                "sorts into a different Universal Shaping Engine "
+                                "category than the Unicode data and Microsoft's "
+                                "overrides give: found by the generated texts, not "
+                                "yet traced to a rule",
     "outline HarfBuzz does not read": "a Type 1 charstring in a CFF table, or a cubic glyf "
                                       "outline: HarfBuzz measures them wrongly or not at all, "
                                       "so a mark placed from their box differs",
@@ -80,10 +84,10 @@ GAPS = {
 # shaper arrives its scripts leave this list, and the differential holds them.
 UNSHAPED_SCRIPTS = set("""
     beng deva guru gujr knda mlym orya sinh taml telu khmr mymr
-    bali khoj gran java sund tibt cham mtei cakm kthi khar lepc marc modi newa
-    sidd soyo tirh bugi sind rjng limb dogr shrd ahom takr batk bhks brah sylo
-    dupl rohg saur tglg gong kali gonm zanb hano phag tagb tavt buhd mong sogd
 """.split())
+
+# The Universal Shaping Engine scripts in which a few characters still differ.
+USE_DETAIL_SCRIPTS = set("gran java sind mong newa tavt tirh".split())
 
 # Fixtures whose outlines are of a kind HarfBuzz does not read. A mark is placed
 # against its base's box when the font has no GPOS, and the box is the one thing
@@ -551,8 +555,8 @@ def classify(text, font, want, got, aat=False, script=None):
         return "AAT layout"
     if script in UNSHAPED_SCRIPTS:
         return "script shaper not written"
-    if os.path.basename(font).startswith("NotoNastaliq"):
-        return "Nastaliq contextual forms"
+    if script in USE_DETAIL_SCRIPTS:
+        return "USE character categories"
     if os.path.basename(font) in UNREAD_OUTLINES and \
             any(0x0300 <= ord(c) < 0x0370 for c in text):
         return "outline HarfBuzz does not read"

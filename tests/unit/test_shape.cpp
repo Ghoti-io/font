@@ -1652,3 +1652,92 @@ TEST(ShapeArabic, ADualJoiningLetterBeforeAJoinerTakesItsInitialForm) {
   std::vector<uint32_t> out = ids(g);
   EXPECT_NE(std::find(out.begin(), out.end(), 7u), out.end());
 }
+
+TEST(ShapeHebrew, ALetterAndItsPointBecomeThePresentationFormTheFontHas) {
+  Font composed(small_font({}, 6, {{0x5D1, 2}, {0x5BC, 3}, {0xFB31, 4}}));
+  Font bare(small_font({}, 6, {{0x5D1, 2}, {0x5BC, 3}}));
+  Glyphs g;
+  Request request;
+  request.script = "hebr";
+  request.rtl = true;
+  ASSERT_EQ(shape(composed, V{0x5D1, 0x5BC}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4}));
+  // A font without the form keeps the two: the point follows its letter in
+  // reading order, so it comes first in the visual order the glyphs are returned in.
+  ASSERT_EQ(shape(bare, V{0x5D1, 0x5BC}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2}));
+}
+
+TEST(ShapeThai, SaraAmIsSplitAndItsNikhahitMovesBeforeAToneMark) {
+  // KO KAI 2, MAI EK 3, NIKHAHIT 4, SARA AA 5.
+  Font font(small_font({}, 8, {{0xE01, 2}, {0xE48, 3}, {0xE4D, 4}, {0xE32, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "thai";
+  ASSERT_EQ(shape(font, V{0xE01, 0xE33}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4, 5}));
+  // The tone mark that came before the vowel stays between the nikhahit and the
+  // SARA AA it was written ahead of; one written after it stays after.
+  ASSERT_EQ(shape(font, V{0xE01, 0xE48, 0xE33}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4, 3, 5}));
+  ASSERT_EQ(shape(font, V{0xE01, 0xE33, 0xE48}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4, 5, 3}));
+}
+
+namespace {
+
+/**
+ * A font that knows a few Javanese characters and nothing of layout: the letter
+ * A98F is glyph 2, the vowel sign TALING (written before its letter) 3, the vowel
+ * sign TARUNG (written after) 4, the dotted circle 5, the space 6.
+ */
+std::vector<uint8_t> javanese_font() {
+  return small_font({}, 8, {{0xA98F, 2}, {0xA9BA, 3}, {0xA9B4, 4}, {0x25CC, 5},
+      {0x20, 6}});
+}
+
+}  // namespace
+
+TEST(ShapeUniversal, AMarkWithNoBaseIsGivenTheDottedCircle) {
+  Font font(javanese_font());
+  Glyphs g;
+  Request request;
+  request.script = "java";
+  ASSERT_EQ(shape(font, V{0xA9B4}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5, 4}));
+  EXPECT_EQ(g[0].cluster, 0u);
+  // On its base it needs none.
+  ASSERT_EQ(shape(font, V{0xA98F, 0xA9B4}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4}));
+}
+
+TEST(ShapeUniversal, AVowelSignWrittenBeforeItsLetterIsMovedAheadOfIt) {
+  Font font(javanese_font());
+  Glyphs g;
+  Request request;
+  request.script = "java";
+  ASSERT_EQ(shape(font, V{0xA98F, 0xA9BA}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2}));
+}
+
+TEST(ShapeUniversal, AJoinerBetweenALetterAndItsMarkDoesNotBreakTheSyllable) {
+  Font font(javanese_font());
+  Glyphs g;
+  Request request;
+  request.script = "java";
+  // The joiner is drawn as the space glyph, and no dotted circle appears.
+  ASSERT_EQ(shape(font, V{0xA98F, 0x200C, 0xA9B4}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 6, 4}));
+  // On its own a non-joiner is a broken syllable, as HarfBuzz has it.
+  ASSERT_EQ(shape(font, V{0x200C}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5, 6}));
+}
+
+TEST(ShapeUniversal, AMarkAfterASpaceIsLeftWithoutACircle) {
+  Font font(javanese_font());
+  Glyphs g;
+  Request request;
+  request.script = "java";
+  ASSERT_EQ(shape(font, V{0x20, 0xA9B4}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{6, 4}));
+}

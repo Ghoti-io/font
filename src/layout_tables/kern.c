@@ -182,6 +182,8 @@ GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
   c.lookup_props = GFNT_LF_IGNORE_MARKS;
   // Positioning, so a joiner never stands between a pair.
   c.is_gpos = true;
+  c.auto_zwnj = true;
+  c.auto_zwj = true;
   while (idx < b->len && !bad) {
     size_t i = idx;
     size_t j;

@@ -195,6 +195,28 @@ extern const GFNT_Shaper gfnt_shaper_default;
 extern const GFNT_Shaper gfnt_shaper_arabic;
 extern const GFNT_Shaper gfnt_shaper_hebrew;
 extern const GFNT_Shaper gfnt_shaper_thai;
+extern const GFNT_Shaper gfnt_shaper_use;
+
+/** The joining masks the Arabic shaper sets, for a shaper that borrows them. */
+void * gfnt_arabic_masks_create(const GFNT_Plan * plan,
+    const GFNT_Allocator * allocator);
+void gfnt_arabic_masks_apply(const void * data, GFNT_ShapeCtx * ctx);
+void gfnt_arabic_masks_destroy(void * data, const GFNT_Allocator * allocator);
+
+/**
+ * Insert a dotted circle at the start of every broken syllable, if the font has one.
+ *
+ * HarfBuzz's hb_syllabic_insert_dotted_circles(): the circle goes after a repha, in
+ * the syllable and with its cluster and masks, with category @p dotted_category.
+ * @return false on no memory.
+ */
+bool gfnt_syllabic_insert_dotted_circles(GFNT_ShapeCtx * ctx,
+    unsigned broken_type, unsigned dotted_category, int repha_category,
+    int dotted_position);
+/** A pause: forget which glyphs have been substituted, to see what the next stage does. */
+void gfnt_syllabic_clear_substitution_flags(GFNT_ShapeCtx * ctx);
+/** A pause: the syllables are done with. */
+void gfnt_syllabic_clear_syllables(GFNT_ShapeCtx * ctx);
 
 /** Build the plan. On failure the plan is freed and zeroed. */
 GFNT_Result gfnt_plan_build(const GFNT_Face * face,

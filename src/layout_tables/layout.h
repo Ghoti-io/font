@@ -116,6 +116,9 @@ typedef struct GFNT_LInfo {
   uint8_t gc;         ///< The Unicode general category, as GUNI_GC_*.
   uint8_t mcc;        ///< The modified combining class of a mark; 0 for any other.
   uint8_t space;      ///< A GFNT_SPACE_* the character falls back to, or 0.
+  uint8_t syllable;   ///< The syllable it belongs to, serial and kind; 0 for none.
+  uint8_t category;   ///< The shaper's category for the character.
+  uint8_t position;   ///< The shaper's position in the syllable.
 } GFNT_LInfo;
 
 #define GFNT_ATTACH_MARK 1u
@@ -191,6 +194,7 @@ typedef struct GFNT_LFault {
 
 /** What a lookup is applied in. */
 typedef struct GFNT_LApply {
+  bool per_syllable;   ///< The lookup being applied matches within a syllable.
   GFNT_LBuffer * buf;
   const GFNT_Face * face;
   const GFNT_Variation * variation;
@@ -235,6 +239,9 @@ typedef struct GFNT_LIter {
   size_t idx;
   size_t end;
   size_t num_items;
+  uint32_t mask;          ///< Which glyphs may match: all of them in a context.
+  bool per_syllable;      ///< Matches do not cross a syllable.
+  uint8_t syllable;       ///< The syllable the match began in, when it is held to one.
 } GFNT_LIter;
 
 /** An offset relative to a subtable, with 0 meaning "none" kept as 0. */
@@ -282,6 +289,8 @@ void gfnt_lbuf_sync(GFNT_LBuffer * b);
 bool gfnt_lbuf_move_to(GFNT_LBuffer * b, size_t i);
 bool gfnt_lbuf_next_glyph(GFNT_LBuffer * b);
 bool gfnt_lbuf_replace_glyph(GFNT_LBuffer * b, uint32_t glyph);
+/** Put @p info at index @p at, between lookups (the run has no output half). */
+bool gfnt_lbuf_insert(GFNT_LBuffer * b, size_t at, const GFNT_LInfo * info);
 bool gfnt_lbuf_output_glyph(GFNT_LBuffer * b, uint32_t glyph);
 bool gfnt_lbuf_skip_glyph(GFNT_LBuffer * b);
 bool gfnt_lbuf_delete_glyph(GFNT_LBuffer * b);

@@ -57,13 +57,18 @@ void gfnt_liter_init(GFNT_LIter * it, GFNT_LApply * c, bool context_match) {
   it->c = c;
   it->lookup_props = c->lookup_props;
   it->ignore_zwnj = c->is_gpos || (context_match && c->auto_zwnj);
-  it->ignore_zwj = c->is_gpos || c->auto_zwj;
+  it->ignore_zwj = context_match || c->auto_zwj;
+  // A glyph in a context is not required to carry the feature's bit: only the glyph
+  // the lookup is applied to is chosen by it.
+  it->mask = context_match ? 0xFFFFFFFFu : c->lookup_mask;
+  it->per_syllable = !c->is_gpos && c->per_syllable;
 }
 
 void gfnt_liter_reset(GFNT_LIter * it, size_t start, size_t num_items) {
   it->idx = start;
   it->num_items = num_items;
   it->end = it->c->buf->len;
+  it->syllable = start == it->c->buf->idx ? it->c->buf->info[start].syllable : 0;
 }
 
 void gfnt_liter_set_match(GFNT_LIter * it, GFNT_MatchKind kind, uint32_t base,
@@ -93,7 +98,8 @@ static GFNT_Match gfnt_liter_may_match(GFNT_LIter * it,
   GFNT_LApply * c = it->c;
   uint32_t value;
 
-  if (!(info->mask & c->lookup_mask)) {
+  if (!(info->mask & it->mask)
+      || (it->per_syllable && it->syllable && it->syllable != info->syllable)) {
     return GFNT_MATCH_NO;
   }
   if (!it->has_match) {

@@ -2424,3 +2424,71 @@ TEST(ShapeFallback, RefusesNoFacesAndEmptyTextIsEmpty) {
   EXPECT_EQ(out.count, 0u);
   gfnt_face_runs_free(&out);
 }
+
+namespace {
+
+/** A font of boxes: glyph n is box n, mapped from the given code points. */
+std::vector<uint8_t> box_font(
+    const std::vector<std::tuple<uint16_t, int16_t, int16_t, int16_t, int16_t,
+        uint16_t>> & boxes) {  // code point, x0, y0, x1, y1, advance
+  std::vector<std::vector<uint8_t>> glyphs = {{}};
+  std::vector<std::pair<uint16_t, int16_t>> metrics = {{500, 0}};
+  std::vector<gfnttest::Segment4> segments;
+  uint16_t n = 1;
+  for (const auto & b : boxes) {
+    auto [cp, x0, y0, x1, y1, adv] = b;
+    glyphs.push_back(gfnttest::build_glyf_glyph(
+        {{{x0, y0, true}, {x1, y0, true}, {x1, y1, true}, {x0, y1, true}}}));
+    metrics.push_back({adv, x0});
+    segments.push_back({cp, cp, static_cast<int16_t>(n - cp), {}});
+    n++;
+  }
+  std::sort(segments.begin(), segments.end(),
+      [](const gfnttest::Segment4 & a, const gfnttest::Segment4 & c) {
+        return a.start < c.start;
+      });
+  segments.push_back({0xFFFF, 0xFFFF, 1, {}});
+  std::vector<uint8_t> glyf, loca;
+  bool long_loca = false;
+  gfnttest::build_glyf_and_loca(glyphs, &glyf, &loca, &long_loca);
+  return gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, {
+      {GFNT_TAG('h', 'e', 'a', 'd'),
+          gfnttest::build_head(1000, long_loca ? 1 : 0)},
+      {GFNT_TAG('h', 'h', 'e', 'a'),
+          gfnttest::build_hhea(800, -200, 0, static_cast<uint16_t>(glyphs.size()))},
+      {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics, {})},
+      {GFNT_TAG('m', 'a', 'x', 'p'),
+          gfnttest::build_maxp(static_cast<uint16_t>(glyphs.size()))},
+      {GFNT_TAG('c', 'm', 'a', 'p'),
+          gfnttest::build_cmap({{3, 1, gfnttest::build_cmap_format4(segments)}})},
+      {GFNT_TAG('g', 'l', 'y', 'f'), glyf},
+      {GFNT_TAG('l', 'o', 'c', 'a'), loca},
+  });
+}
+
+}  // namespace
+
+TEST(ShapeFallback, BorrowedMarksStackAboveAndBelowTheBaseInChains) {
+  Faces f;
+  f.add(box_font({{'B', 0, 0, 500, 600, 600}}));
+  // Two marks above (ink 700 to 800) and one below (-250 to -150), no advance.
+  f.add(box_font({{0x301, -400, 700, -100, 800, 0},
+      {0x316, -400, -250, -100, -150, 0}}));
+  std::vector<uint32_t> text = {'B', 0x301, 0x301, 0x316};
+  GFNT_FaceRuns out{};
+  ASSERT_EQ(gfnt_faces_shape(f.faces.data(), 2, text.data(), 4, nullptr, nullptr,
+                &out, nullptr), GFNT_OK);
+  ASSERT_EQ(out.count, 2u);
+  ASSERT_EQ(out.runs[1].run.count, 3u);
+  const GFNT_ShapedGlyph * m = out.runs[1].run.glyphs;
+  // Canonical order puts the mark below first; it hangs from the base's bottom.
+  EXPECT_EQ(m[0].y_offset, 130);
+  // The first above rests just over the base (top 600), the next over that.
+  EXPECT_EQ(m[1].y_offset, -80);
+  EXPECT_EQ(m[2].y_offset, 40);
+  for (int k = 0; k < 3; k++) {
+    EXPECT_EQ(m[k].x_advance, 0);
+    EXPECT_EQ(m[k].x_offset, -50);  // centred over a 600-wide base
+  }
+  gfnt_face_runs_free(&out);
+}

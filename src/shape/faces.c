@@ -26,6 +26,7 @@
  */
 
 #include <ghoti.io/font/cmap.h>
+#include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/shape.h>
 #include <ghoti.io/unicode/char.h>
 #include <stdlib.h>
@@ -137,37 +138,116 @@ static GFNT_Result cut_features(const GFNT_ShapeOptions * options, size_t start,
   return GFNT_OK;
 }
 
-/**
- * Give the leading marks of a stretch, which were cut from their base by a change
- * of face, no advance and a place over the base's glyph.
- */
-static void centre_over(const GFNT_FaceRun * before, GFNT_FaceRun * run,
-    const GFNT_Face * before_face, const GFNT_Face * face,
-    const uint32_t * cp, const GFNT_ShapeOptions * options, bool rtl) {
-  const GFNT_ShapedGlyph * base;
-  size_t lead = run->start;
+/** What a cluster has drawn so far, in ems: where the next mark stacks. */
+typedef struct Stack {
+  bool valid;
+  double top;      ///< The highest ink, above the baseline.
+  double bottom;   ///< The lowest ink.
+  double advance;  ///< How wide the base is.
+} Stack;
+
+static double em_of(const GFNT_Face * face) {
+  uint16_t upem = 0;
+  return gfnt_face_units_per_em(face, &upem, NULL) == GFNT_OK && upem
+      ? (double)upem : 1000.0;
+}
+
+/** The ink of a glyph in ems, y up; false when it has none. */
+static bool ink(const GFNT_Face * face, const GFNT_ShapedGlyph * g,
+    const GFNT_ShapeOptions * options, double * top, double * bottom,
+    double * centre) {
   GFNT_Extents e;
-  int32_t cx;
-  if (!before->run.count) {
-    return;
+  double em = em_of(face);
+  if (!gfnt_glyph_extents(face, g->glyph, options->variation, &e)
+      || (e.width == 0 && e.height == 0)) {
+    return false;
   }
+  *top = (g->y_offset + e.y_bearing) / em;
+  *bottom = (g->y_offset + e.y_bearing + e.height) / em;
+  *centre = (g->x_offset + e.x_bearing + e.width / 2.0) / em;
+  return true;
+}
+
+/**
+ * Take the state of a stretch's last cluster, as the stretch drew it: the ink of
+ * the base and of the marks the font put with it.
+ */
+static void measure(const GFNT_FaceRun * run, const GFNT_Face * face,
+    const uint32_t * cp, const GFNT_ShapeOptions * options, Stack * st) {
+  size_t base = run->start + run->length;
+  double em = em_of(face);
+  while (base > run->start && is_attached(cp[base - 1])) {
+    base--;
+  }
+  if (base == run->start) {
+    return; // all marks: the state holds from before
+  }
+  base--;
+  st->valid = true;
+  st->top = st->bottom = st->advance = 0;
+  for (size_t g = 0; g < run->run.count; g++) {
+    const GFNT_ShapedGlyph * m = &run->run.glyphs[g];
+    double t, b, c;
+    if (m->cluster < base) {
+      continue;
+    }
+    st->advance += m->x_advance / em;
+    if (ink(face, m, options, &t, &b, &c)) {
+      st->top = t > st->top ? t : st->top;
+      st->bottom = b < st->bottom ? b : st->bottom;
+    }
+  }
+}
+
+/**
+ * Put the leading marks of a stretch, which a change of face cut from their
+ * base, over the base: centred, with no advance, and stacked above or below
+ * whatever the cluster has drawn so far.
+ */
+static void stack_over(GFNT_FaceRun * run, const GFNT_Face * face,
+    const uint32_t * cp, const GFNT_ShapeOptions * options, bool rtl, Stack * st) {
+  size_t lead = run->start;
+  double em = em_of(face);
+  const double gap = 0.02;
   while (lead < run->start + run->length && is_mark(cp[lead])) {
     lead++;
   }
-  // The base is the last glyph, in text order, of the stretch before.
-  base = rtl ? &before->run.glyphs[0] : &before->run.glyphs[before->run.count - 1];
-  (void)before_face;
-  for (size_t g = 0; g < run->run.count; g++) {
-    GFNT_ShapedGlyph * m = &run->run.glyphs[g];
+  if (!st->valid) {
+    return;
+  }
+  // In the order of the text, whichever way the glyphs lie.
+  for (size_t k = 0; k < run->run.count; k++) {
+    GFNT_ShapedGlyph * m = &run->run.glyphs[rtl ? run->run.count - 1 - k : k];
+    double t, b, c;
+    double x;
     if (m->cluster >= lead) {
       continue;
     }
-    cx = gfnt_glyph_extents(face, m->glyph, options->variation, &e)
-        ? e.x_bearing + e.width / 2 : m->x_advance / 2;
-    // Where the ink is now is the offset plus the ink's own centre; put it over
-    // the middle of the base instead.
-    m->x_offset = (rtl ? base->x_advance / 2 : -(base->x_advance / 2)) - cx;
+    if (!ink(face, m, options, &t, &b, &c)) {
+      c = m->x_offset / em; // no ink: centred on its origin
+      t = b = 0;
+    }
+    // The ink as the shaper left it; put its centre over the base's.
+    x = (rtl ? st->advance / 2 : -st->advance / 2) - (c - m->x_offset / em);
+    m->x_offset = (int32_t)(x * em + (x < 0 ? -0.5 : 0.5));
     m->x_advance = 0;
+    if (t != b) {
+      // Its extent, with the vertical offset the shaper gave it taken out.
+      double h_top = t - m->y_offset / em;
+      double h_bottom = b - m->y_offset / em;
+      double y;
+      // Which side it hangs on is where its own ink lies: the shaper has put
+      // marks in canonical order and merged their clusters, so the character
+      // is no longer to hand.
+      if (h_top + h_bottom < 0) {
+        y = st->bottom - h_top - gap;
+        st->bottom = y + h_bottom;
+      } else {
+        y = st->top - h_bottom + gap;
+        st->top = y + h_top;
+      }
+      m->y_offset = (int32_t)(y * em + (y < 0 ? -0.5 : 0.5));
+    }
   }
 }
 
@@ -182,6 +262,7 @@ GFNT_Result gfnt_faces_shape(const GFNT_Face * const * faces, size_t face_count,
   GFNT_Result r = GFNT_OK;
   bool rtl;
   bool vertical;
+  Stack stack = {false, 0, 0, 0};
 
   gfnt_error_clear(error);
   if (!faces || !face_count || !out || (count && !codepoints)) {
@@ -261,11 +342,10 @@ GFNT_Result gfnt_faces_shape(const GFNT_Face * const * faces, size_t face_count,
         run->run.glyphs[g].cluster += (uint32_t)i;
       }
       result.count++;
-      if (!vertical && result.count > 1 && is_mark(codepoints[i])) {
-        centre_over(&result.runs[result.count - 2], run,
-            faces[result.runs[result.count - 2].face], faces[pick[i]],
-            codepoints, &resolved, rtl);
+      if (!vertical && is_mark(codepoints[i])) {
+        stack_over(run, faces[pick[i]], codepoints, &resolved, rtl, &stack);
       }
+      measure(run, faces[pick[i]], codepoints, &resolved, &stack);
     }
     i = end;
   }

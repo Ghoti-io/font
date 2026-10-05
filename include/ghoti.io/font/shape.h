@@ -213,9 +213,11 @@ typedef struct GFNT_FaceRuns {
  * substitution and positioning run across them. They do not run across a change
  * of face: a ligature or an Arabic join cannot span two fonts. A mark set apart
  * from its base this way is given no advance and is centred over the base's
- * glyph, from the extents of the two; a mark that was shaped with its base keeps
- * what the font's own anchors give it. A horizontal run is centred; a vertical
- * one is left where its own face puts it.
+ * glyph, from the extents of the two, and stacked on the ink the cluster has so far:
+ * a mark that hangs below the baseline under it, any other over it, so marks
+ * from fallback faces form chains above and below the base. A mark that was
+ * shaped with its base keeps what the font's own anchors give it. This is done
+ * for a horizontal run; a vertical one is left where its own face puts it.
  *
  * @param faces The faces, most preferred first.
  * @param face_count How many. At least one.

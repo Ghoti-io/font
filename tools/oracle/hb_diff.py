@@ -66,8 +66,12 @@ GAPS = {
     "bidi and vertical text": "one direction, horizontal, per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
-    "script shaper not written": "Indic (but Devanagari), Khmer and Myanmar scripts, "
-                                 "whose clusters this library does not form right yet",
+    "script shaper not written": "Khmer and Myanmar scripts, whose clusters this "
+                                 "library does not form yet",
+    "Indic character details": "a handful of characters in Gujarati, Oriya and Telugu "
+                               "that HarfBuzz sorts or syllabifies differently from "
+                               "the Unicode data: found by the generated texts, not "
+                               "yet traced to a rule",
     "USE character categories": "a handful of characters in Grantha, Javanese, Khudawadi, "
                                 "Mongolian, Tai Viet and Tirhuta that HarfBuzz sorts into "
                                 "a different Universal Shaping Engine category than the "
@@ -78,6 +82,9 @@ GAPS = {
                                       "so a mark placed from their box differs",
 }
 
+# The Indic scripts in which a few characters still differ.
+INDIC_DETAIL_SCRIPTS = set("gujr orya telu".split())
+
 # The Universal Shaping Engine scripts in which a few characters still differ.
 USE_DETAIL_SCRIPTS = set("gran java sind mong tavt tirh".split())
 
@@ -85,7 +92,7 @@ USE_DETAIL_SCRIPTS = set("gran java sind mong tavt tirh".split())
 # generated from the font (`auto` groups) and shaped as if it were Latin. As each
 # shaper arrives its scripts leave this list, and the differential holds them.
 UNSHAPED_SCRIPTS = set("""
-    beng guru gujr knda mlym orya taml telu khmr mymr
+    khmr mymr
 """.split())
 
 
@@ -557,6 +564,8 @@ def classify(text, font, want, got, aat=False, script=None):
         return "script shaper not written"
     if script in USE_DETAIL_SCRIPTS:
         return "USE character categories"
+    if script in INDIC_DETAIL_SCRIPTS:
+        return "Indic character details"
     if os.path.basename(font) in UNREAD_OUTLINES and \
             any(0x0300 <= ord(c) < 0x0370 for c in text):
         return "outline HarfBuzz does not read"

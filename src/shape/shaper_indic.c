@@ -171,7 +171,7 @@ static int indic_category_of(GUNI_IndicSyllabicCategory isc) {
     case GUNI_INSC_CONSONANT_PREFIXED: return IC_X;
     case GUNI_INSC_CONSONANT_SUBJOINED: return IC_CM;
     case GUNI_INSC_CONSONANT_SUCCEEDING_REPHA: return IC_CM;
-    case GUNI_INSC_CONSONANT_WITH_STACKER: return IC_REPHA;
+    case GUNI_INSC_CONSONANT_WITH_STACKER: return IC_CS;
     case GUNI_INSC_GEMINATION_MARK: return IC_SM;
     case GUNI_INSC_INVISIBLE_STACKER: return IC_COENG;
     case GUNI_INSC_JOINER: return IC_ZWJ;
@@ -262,12 +262,24 @@ static void indic_set_properties(GFNT_LInfo * info) {
   int cat = IC_X;
   int pos = IP_END;
 
+  // The Oriya overline is newer than HarfBuzz's table, which knows it as nothing.
+  if (u == 0x0B55) {
+    info->category = IC_X;
+    info->position = IP_END;
+    return;
+  }
   if (indic_in_table(u)) {
     cat = indic_category_of(guni_indic_syllabic_category(u));
     pos = indic_side_of(guni_indic_positional_category(u));
   }
   else if (u == 0x00A0 || u == 0x2010 || u == 0x2011) {
     cat = IC_PLACEHOLDER;
+  }
+  if (u == 0x0A51) {
+    cat = IC_M;   // The Gurmukhi udaat: a vowel sign in HarfBuzz's table.
+  }
+  if (u == 0x0AFB) {
+    cat = IC_N;   // The Gujarati shadda: HarfBuzz's table has it as a nukta.
   }
   if (u == 0x17D2) {
     cat = IC_COENG;
@@ -338,21 +350,20 @@ static GFNT_Nfa * indic_grammar(void) {
   halant_group = SEQ(OPT(z), SEQ(SYM(IC_H), OPT(SEQ(SYM(IC_ZWJ), OPT(SYM(IC_N))))));
   final_halant_group = ALT(halant_group, SEQ(SYM(IC_H), SYM(IC_ZWNJ)));
   medial_group = OPT(SYM(IC_CM));
-  halant_or_matra_group = ALT(final_halant_group,
-      SEQ(OPT(SEQ(SYM(IC_H), SYM(IC_ZWJ))), REP(matra_group, 0, 4)));
+  halant_or_matra_group = ALT(final_halant_group, STAR(matra_group));
   repha_or_cs = SET(BIT(IC_REPHA) | BIT(IC_CS));
   rest = SEQ(SEQ(medial_group, halant_or_matra_group), syllable_tail);
 
   roots[IS_CONSONANT] = SEQ(SEQ(OPT(repha_or_cs),
-      REP(SEQ(cn, halant_group), 0, 4)), SEQ(cn, rest));
+      STAR(SEQ(cn, halant_group))), SEQ(cn, rest));
   roots[IS_VOWEL] = SEQ(SEQ(OPT(reph), SEQ(SYM(IC_V), n)),
-      ALT(SYM(IC_ZWJ), SEQ(REP(SEQ(halant_group, cn), 0, 4), rest)));
+      ALT(SYM(IC_ZWJ), SEQ(STAR(SEQ(halant_group, cn)), rest)));
   roots[IS_STANDALONE] = SEQ(ALT(SEQ(OPT(repha_or_cs), place_holder),
       SEQ(OPT(reph), SYM(IC_DOTTEDCIRCLE))),
-      SEQ(n, SEQ(REP(SEQ(halant_group, cn), 0, 4), rest)));
+      SEQ(n, SEQ(STAR(SEQ(halant_group, cn)), rest)));
   roots[IS_SYMBOL] = SEQ(symbol, syllable_tail);
   roots[IS_BROKEN] = SEQ(SEQ(OPT(reph), n),
-      SEQ(REP(SEQ(halant_group, cn), 0, 4), rest));
+      SEQ(STAR(SEQ(halant_group, cn)), rest));
   roots[IS_NON_INDIC] = SET(~(uint64_t)0);
   nfa = gfnt_nfa_compile(&b, roots, IS_COUNT);
   gfnt_re_free(&b);
@@ -564,6 +575,9 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
           // form. One before a halant asks for a subjoined form, so it goes on.
           if (start < i && info[i].category == IC_ZWJ
               && info[i - 1].category == IC_H) {
+            if (seen_below) {
+              base = end;
+            }
             break;
           }
         }
@@ -682,6 +696,22 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     }
   }
 
+  // A halant after the base goes with the consonant it is to be formed with, and
+  // so does a nukta or joiner that stands between that and the one before.
+  for (i = end - 1; i > base + 1; i--) {
+    if (info[i - 1].category == IC_H && indic_is_consonant(&info[i])
+        && info[i].position > IP_BASE_C) {
+      size_t k = i;
+
+      while (k > base + 1
+          && (FLAG(info[k - 1].category) & (JOINER_FLAGS | FLAG(IC_N)
+              | FLAG(IC_RS) | HALANT_OR_COENG_FLAGS))) {
+        info[k - 1].position = info[i].position;
+        k--;
+      }
+    }
+  }
+
   // The features' masks: the glyphs each applies to.
   {
     uint32_t mask;
@@ -703,7 +733,8 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
       info[base].mask |= mask;
     }
     // Post-base.
-    mask = data->mask[IF_BLWF] | data->mask[IF_ABVF] | data->mask[IF_PSTF];
+    mask = data->mask[IF_BLWF] | data->mask[IF_ABVF] | data->mask[IF_PSTF]
+        | data->mask[IF_CJCT];
     for (i = base + 1; i < end; i++) {
       info[i].mask |= mask;
     }
@@ -748,7 +779,66 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
       j--;
     }
     if (j < i) {
+      // A left-hand matra's clusters are merged after it has found its place.
+      if (info[i].position != IP_PRE_M) {
+        gfnt_merge_clusters(info, buf->len, j, i + 1);
+      }
       indic_move(buf, i, j);
+    }
+  }
+}
+
+/**
+ * Reverse the order of the left-hand matras the sort left side by side: HarfBuzz
+ * does, each matra keeping the nukta or halant that followed it.
+ */
+static void indic_reverse_matra_runs(GFNT_LBuffer * buf, size_t start,
+    size_t end) {
+  size_t i = start;
+
+  while (i < end) {
+    if (buf->info[i].position == IP_PRE_M) {
+      size_t j = i;
+      size_t k;
+      size_t lo;
+      size_t hi;
+
+      while (j < end && buf->info[j].position == IP_PRE_M) {
+        j++;
+      }
+      // Reverse the whole run, then each block (a matra and what follows it)
+      // back into its own order.
+      for (lo = i, hi = j - 1; lo < hi; lo++, hi--) {
+        GFNT_LInfo t = buf->info[lo];
+        GFNT_LPos p = buf->pos[lo];
+
+        buf->info[lo] = buf->info[hi];
+        buf->pos[lo] = buf->pos[hi];
+        buf->info[hi] = t;
+        buf->pos[hi] = p;
+      }
+      for (k = i; k < j;) {
+        size_t e = k + 1;
+
+        // After the reversal a block's matra is its last element.
+        while (e < j && buf->info[e - 1].category != IC_M) {
+          e++;
+        }
+        for (lo = k, hi = e - 1; lo < hi; lo++, hi--) {
+          GFNT_LInfo t = buf->info[lo];
+          GFNT_LPos p = buf->pos[lo];
+
+          buf->info[lo] = buf->info[hi];
+          buf->pos[lo] = buf->pos[hi];
+          buf->info[hi] = t;
+          buf->pos[hi] = p;
+        }
+        k = e;
+      }
+      i = j;
+    }
+    else {
+      i++;
     }
   }
 }
@@ -765,6 +855,7 @@ static void indic_reorder_syllable(GFNT_ShapeCtx * ctx, const IndicData * data,
       // The vowels were made to look like consonants, and so were the dotted
       // circle and the placeholder.
       indic_reorder_consonant_syllable(ctx, data, start, end);
+      indic_reverse_matra_runs(ctx->buf, start, end);
       break;
     default:
       break;
@@ -912,8 +1003,11 @@ static void indic_final_reordering_syllable(GFNT_ShapeCtx * ctx,
     // makes there is a chillu or a ligature.
     if (!data->malayalam && !data->tamil) {
       while (new_pos > start
-          && !indic_is_one_of(&info[new_pos],
-              FLAG(IC_M) | FLAG(IC_H) | FLAG(IC_COENG))) {
+          && (!indic_is_one_of(&info[new_pos],
+                  FLAG(IC_M) | FLAG(IC_H) | FLAG(IC_COENG))
+              // A halant a ZWJ follows asks for a half form: not a place for it.
+              || (info[new_pos].category == IC_H && new_pos + 1 < end
+                  && info[new_pos + 1].category == IC_ZWJ))) {
         new_pos--;
       }
       // If there is no halant, nothing moves. If there is, only if it is not

@@ -1779,3 +1779,27 @@ TEST(ShapeIndic, AVowelSignWithNoConsonantIsGivenTheDottedCircle) {
   ASSERT_EQ(shape(font, V{0x93F}, request, &g), GFNT_OK);
   EXPECT_EQ(ids(g), (V{3, 6}));
 }
+
+TEST(ShapeIndic, TwoLeftVowelSignsComeBeforeTheirConsonantInTheOppositeOrder) {
+  // KA 2, vowel sign E 3, vowel sign EE 4: HarfBuzz puts the one typed second
+  // first.
+  Font font(small_font({}, 8, {{0xB95, 2}, {0xBC6, 3}, {0xBC7, 4}, {0x25CC, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "taml";
+  ASSERT_EQ(shape(font, V{0xB95, 0xBC6, 0xBC7}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 3, 2}));
+}
+
+TEST(ShapeIndic, ANuktaStaysWithTheLeftVowelSignItFollows) {
+  // KA 2, vowel sign I 3, nukta 4 (Bengali): the nukta follows its vowel sign
+  // to the front, but a nukta that followed the consonant stays behind it.
+  Font font(small_font({}, 8, {{0x995, 2}, {0x9BF, 3}, {0x9BC, 4}, {0x25CC, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "beng";
+  ASSERT_EQ(shape(font, V{0x995, 0x9BF, 0x9BC}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 4, 2}));
+  ASSERT_EQ(shape(font, V{0x995, 0x9BC, 0x9BF}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2, 4}));
+}

@@ -632,7 +632,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     gfnt_gpos_position_finish_offsets(&buf, native_rtl);
   }
   // A font with no `GPOS` does not say where a mark goes, so the shaper does.
-  if (!plan.tables[1].present) {
+  if (!plan.tables[1].present && plan.shaper->fallback_position) {
     gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
         !native_rtl, !native_rtl);
   }

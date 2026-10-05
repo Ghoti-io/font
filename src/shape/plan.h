@@ -194,6 +194,7 @@ const GFNT_Shaper * gfnt_shaper_select(GFNT_Tag script, GFNT_Tag chosen,
 extern const GFNT_Shaper gfnt_shaper_default;
 extern const GFNT_Shaper gfnt_shaper_arabic;
 extern const GFNT_Shaper gfnt_shaper_hebrew;
+extern const GFNT_Shaper gfnt_shaper_thai;
 
 /** Build the plan. On failure the plan is freed and zeroed. */
 GFNT_Result gfnt_plan_build(const GFNT_Face * face,

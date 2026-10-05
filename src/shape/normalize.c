@@ -463,10 +463,17 @@ bool gfnt_normalize(const GFNT_Face * face, GFNT_LInfo ** info, size_t * len,
             && gfnt_compose_pair(&c, out[starter].unicode, out[i].unicode,
                    &composed)
             && gfnt_nominal(&c, composed, &glyph)) {
+          uint32_t old_cluster = out[i].cluster;
+          size_t j;
+
           out[w] = out[i];
           gfnt_merge_clusters(out, w + 1, starter, w + 1);
           out[starter].cluster = out[w].cluster < out[starter].cluster
               ? out[w].cluster : out[starter].cluster;
+          // What follows in the cluster just merged, not yet copied, goes too.
+          for (j = i + 1; j < n && out[j].cluster == old_cluster; j++) {
+            out[j].cluster = out[starter].cluster;
+          }
           out[starter].unicode = composed;
           out[starter].glyph = glyph;
           gfnt_u_set_props(&out[starter]);

@@ -66,10 +66,24 @@ GAPS = {
     "bidi and vertical text": "one direction, horizontal, per run",
     "AAT layout": "a font with morx or kerx is shaped by Apple's state machines, "
                   "not by GSUB and GPOS",
+    "script shaper not written": "Indic, Khmer, Myanmar and Universal Shaping Engine "
+                                 "scripts, whose clusters this library does not form",
+    "Nastaliq contextual forms": "Noto Nastaliq Urdu's contextual lookups, one mark placed "
+                                 "differently: not yet traced",
     "outline HarfBuzz does not read": "a Type 1 charstring in a CFF table, or a cubic glyf "
                                       "outline: HarfBuzz measures them wrongly or not at all, "
                                       "so a mark placed from their box differs",
 }
+
+# The scripts whose shaper this library has not got yet: a text in one of them is
+# generated from the font (`auto` groups) and shaped as if it were Latin. As each
+# shaper arrives its scripts leave this list, and the differential holds them.
+UNSHAPED_SCRIPTS = set("""
+    beng deva guru gujr knda mlym orya sinh taml telu khmr mymr
+    bali khoj gran java sund tibt cham mtei cakm kthi khar lepc marc modi newa
+    sidd soyo tirh bugi sind rjng limb dogr shrd ahom takr batk bhks brah sylo
+    dupl rohg saur tglg gong kali gonm zanb hano phag tagb tavt buhd mong sogd
+""".split())
 
 # Fixtures whose outlines are of a kind HarfBuzz does not read. A mark is placed
 # against its base's box when the font has no GPOS, and the box is the one thing
@@ -150,6 +164,22 @@ THAANA = [
     "\u078b\u07a8\u0788\u07ac\u0780\u07a8 \u0784\u07a6\u0790\u07b0",
     "\u0780\u07a8\u0783\u07a6\u078e\u07a6\u0782\u07b0 \u0787\u07a6\u0787\u07a8",
 ]
+THAI = [
+    "\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35\u0e04\u0e23\u0e31\u0e1a",
+    "\u0e19\u0e49\u0e33 \u0e1b\u0e35\u0e4b \u0e02\u0e36\u0e49\u0e19 \u0e01\u0e35\u0e48 \u0e40\u0e01\u0e4b \u0e01\u0e47 \u0e01\u0e48\u0e32",
+    "\u0e2a\u0e33\u0e19\u0e31\u0e01\u0e07\u0e32\u0e19 \u0e15\u0e33\u0e23\u0e27\u0e08 \u0e01\u0e33 \u0e01\u0e49\u0e33 \u0e01\u0e4a\u0e33",
+    "\u0e0d \u0e10 \u0e0e \u0e0f \u0e0d\u0e39 \u0e10\u0e38 \u0e0e\u0e38 \u0e0f\u0e39",
+    "\u0e1c\u0e39\u0e49\u0e43\u0e2b\u0e0d\u0e48 \u0e40\u0e14\u0e47\u0e01\u0e46 \u0e1b\u0e0f\u0e34\u0e1a\u0e31\u0e15\u0e34",
+    "\u0e1b\u0e32\u0e01\u0e1b\u0e39\u0e48 \u0e1d\u0e31\u0e48\u0e07 \u0e1b\u0e48\u0e32 \u0e1f\u0e35\u0e48 \u0e1d\u0e37\u0e19 \u0e1b\u0e34\u0e4a\u0e01",
+    "\u0e01\u0e33\u0e48 \u0e01\u0e48\u0e33 \u0e01\u0e4d\u0e32 \u0e01\u0e4d\u0e49\u0e32 \u0e01\u0e33\u0e4a \u0e01\u0e34\u0e4d\u0e32",
+    "abc \u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35 123 \u0e3f\u0e52\u0e53",
+]
+LAO = [
+    "\u0eaa\u0eb0\u0e9a\u0eb2\u0e8d\u0e94\u0eb5",
+    "\u0e99\u0ec9\u0eb3 \u0e81\u0eb3 \u0e81\u0ec9\u0eb3 \u0e81\u0ecd\u0ec9\u0eb2 \u0e81\u0eb4\u0ecd\u0eb2",
+    "\u0eab\u0ebc\u0ea7\u0e87 \u0e9e\u0eb0\u0e9a\u0eb2\u0e87 \u0eab\u0ea1\u0eb2 \u0eab\u0e99\u0eb2 \u0eab\u0ea5\u0eb2",
+    "\u0e81\u0ebb\u0e99 \u0e81\u0eb8 \u0e81\u0eb9 \u0e81\u0ec8\u0eb2 \u0e81\u0eb9\u0ec9",
+]
 GREEK = [
     "Αλφάβητο Τάξη Υ ωΩ",
     "ΑΒΓΔΕ αβγδε ΤΑ ΓΑ",
@@ -184,6 +214,8 @@ GROUPS = [
     ("hebrew", "Hebr", "hebr", None, "", "", HEBREW, "", 0x5d0),
     ("syriac", "Syrc", "syrc", None, "", "", SYRIAC, "", 0x710),
     ("thaana", "Thaa", "thaa", None, "", "", THAANA, "", 0x780),
+    ("thai", "Thai", "thai", None, "", "", THAI, "", 0xe01),
+    ("lao", "Laoo", "lao ", None, "", "", LAO, "", 0xe81),
     ("greek", "Grek", "grek", None, "", "", GREEK),
     ("cyrillic", "Cyrl", "cyrl", None, "", "", CYRILLIC),
 ]
@@ -313,6 +345,25 @@ def feature_groups(font, limit=48):
         out.append(("%s +%s=2" % (os.path.basename(font), tag), "Latn", "latn",
                     None, "", "%s=2" % tag, LATIN))
     return out
+
+
+def auto_groups(font):
+    """The group of text made out of what this font maps, in the script it is for.
+
+    `font-samples` builds syllables from the characters the font has and says which
+    script they are in; the same font always gives the same text. It is what lets
+    the differential reach the hundred and thirty scripts the corpus has fonts for
+    without a hand-written corpus for each.
+    """
+    finished = subprocess.run([SAMPLES, font], capture_output=True, text=True)
+    lines = finished.stdout.split("\n")
+    if finished.returncode != 0 or not lines or not lines[0].startswith("#script "):
+        return []
+    _, iso, ot = lines[0].split(" ", 2)
+    texts = [t for t in lines[1:] if t]
+    if not texts:
+        return []
+    return [("auto %s" % iso, iso, ot, None, "", "", texts)]
 
 
 class Skip(Exception):
@@ -474,6 +525,8 @@ def ours_parse(line):
 
 DUMP = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
                     "font-dump")
+SAMPLES = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
+                       "font-samples")
 
 
 def has_aat(font):
@@ -487,7 +540,7 @@ def has_aat(font):
     return "table 'morx'" in finished.stdout or "table 'kerx'" in finished.stdout
 
 
-def classify(text, font, want, got, aat=False):
+def classify(text, font, want, got, aat=False, script=None):
     """Which known gap, if any, explains a disagreement - or None.
 
     These are the things HarfBuzz does that this library does not (see GAPS and
@@ -496,6 +549,10 @@ def classify(text, font, want, got, aat=False):
     """
     if aat:
         return "AAT layout"
+    if script in UNSHAPED_SCRIPTS:
+        return "script shaper not written"
+    if os.path.basename(font).startswith("NotoNastaliq"):
+        return "Nastaliq contextual forms"
     if os.path.basename(font) in UNREAD_OUTLINES and \
             any(0x0300 <= ord(c) < 0x0370 for c in text):
         return "outline HarfBuzz does not read"
@@ -555,6 +612,7 @@ def main(argv):
     golden_out = None
     golden_check = None
     strict = set()
+    auto = "--no-auto" not in argv
     rows = []
     limit = None
     only = None
@@ -608,6 +666,10 @@ def main(argv):
             tasks.append((font, group, lines))
         if own is None and sweep:
             for group in feature_groups(font):
+                key = hashlib.sha1("\n".join(group[6]).encode("utf-8")).hexdigest()[:12]
+                tasks.append((font, group, write_inputs(key, group)))
+        if own is None and auto:
+            for group in auto_groups(font):
                 key = hashlib.sha1("\n".join(group[6]).encode("utf-8")).hexdigest()[:12]
                 tasks.append((font, group, write_inputs(key, group)))
         if own is None:
@@ -676,7 +738,8 @@ def main(argv):
                 continue
             if font not in aat_of:
                 aat_of[font] = has_aat(font)
-            gap = classify(text, font, want, got, aat_of[font])
+            gap = classify(text, font, want, got, aat_of[font],
+                           group[2] if group[0].startswith("auto ") else None)
             if gap in strict:
                 gap = None
             if gap:

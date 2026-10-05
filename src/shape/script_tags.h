@@ -100,7 +100,7 @@ static const char gfnt_script_tags[176][5] = {
   "khoj", /* 72 */
   "sind", /* 73 */
   "krai", /* 74 */
-  "laoo", /* 75 */
+  "lao ", /* 75 */
   "latn", /* 76 */
   "lepc", /* 77 */
   "limb", /* 78 */

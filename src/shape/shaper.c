@@ -67,6 +67,9 @@ const GFNT_Shaper * gfnt_shaper_select(GFNT_Tag script, GFNT_Tag chosen,
   if (script == GFNT_TAG('h', 'e', 'b', 'r')) {
     return &gfnt_shaper_hebrew;
   }
+  if (script == GFNT_TAG('t', 'h', 'a', 'i') || script == GFNT_TAG('l', 'a', 'o', ' ')) {
+    return &gfnt_shaper_thai;
+  }
   if (gfnt_script_is_joining(script)) {
     // The others only when the font was made for the script.
     return horizontal && font_has_script ? &gfnt_shaper_arabic

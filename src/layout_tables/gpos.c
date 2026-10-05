@@ -496,8 +496,23 @@ static bool gfnt_gpos_mark_base(GFNT_LApply * c, size_t sub) {
   gfnt_liter_init(&it, c, false);
   it.lookup_props = GFNT_LF_IGNORE_MARKS;
   gfnt_liter_reset(&it, b->idx, 1);
-  if (!gfnt_liter_prev(&it)) {
-    return false;
+  for (;;) {
+    const GFNT_LInfo * found;
+
+    if (!gfnt_liter_prev(&it)) {
+      return false;
+    }
+    // A mark attaches to the first glyph of a multiple substitution's output, not
+    // to the others: those are skipped, and the search goes on behind them.
+    found = &b->info[it.idx];
+    if (!(found->props & GFNT_PROP_MULTIPLIED) || gfnt_l_lig_comp(found) == 0
+        || it.idx == 0
+        || gfnt_l_lig_id(found) != gfnt_l_lig_id(&b->info[it.idx - 1])
+        || gfnt_l_lig_comp(found)
+            != gfnt_l_lig_comp(&b->info[it.idx - 1]) + 1) {
+      break;
+    }
+    it.num_items++;
   }
   base_index = gfnt_l_coverage(c, gfnt_l_rel(sub, gfnt_lu16(c, sub + 4)),
       b->info[it.idx].glyph);

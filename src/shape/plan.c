@@ -51,26 +51,26 @@ void * gfnt_vec_grow(const GFNT_Allocator * a, void * data, size_t * capacity,
   return grown;
 }
 
-/** Scripts written right to left, by their OpenType tag. */
+/** Scripts written right to left, by their OpenType tag: HarfBuzz's list. */
 bool gfnt_script_native_rtl(GFNT_Tag script) {
   static const GFNT_Tag rtl[] = {
     GFNT_TAG('a', 'r', 'a', 'b'), GFNT_TAG('h', 'e', 'b', 'r'),
     GFNT_TAG('s', 'y', 'r', 'c'), GFNT_TAG('t', 'h', 'a', 'a'),
-    GFNT_TAG('n', 'k', 'o', ' '), GFNT_TAG('a', 'd', 'l', 'm'),
-    GFNT_TAG('m', 'a', 'n', 'd'), GFNT_TAG('m', 'e', 'n', 'd'),
-    GFNT_TAG('s', 'a', 'm', 'r'), GFNT_TAG('p', 'h', 'n', 'x'),
-    GFNT_TAG('r', 'o', 'h', 'g'), GFNT_TAG('h', 'a', 't', 'r'),
-    GFNT_TAG('s', 'o', 'g', 'd'), GFNT_TAG('s', 'o', 'g', 'o'),
-    GFNT_TAG('c', 'h', 'r', 's'), GFNT_TAG('o', 'u', 'g', 'r'),
-    GFNT_TAG('m', 'a', 'n', 'i'), GFNT_TAG('p', 'h', 'l', 'p'),
-    GFNT_TAG('p', 'h', 'l', 'i'), GFNT_TAG('p', 'r', 't', 'i'),
-    GFNT_TAG('a', 'v', 's', 't'), GFNT_TAG('k', 'h', 'a', 'r'),
-    GFNT_TAG('l', 'y', 'd', 'i'), GFNT_TAG('n', 'b', 'a', 't'),
-    GFNT_TAG('o', 'r', 'k', 'h'), GFNT_TAG('p', 'a', 'l', 'm'),
-    GFNT_TAG('s', 'a', 'r', 'b'), GFNT_TAG('s', 'a', 'm', 'r'),
-    GFNT_TAG('y', 'z', 'i', 'd'), GFNT_TAG('e', 'l', 'y', 'm'),
-    GFNT_TAG('h', 'a', 't', 'r'), GFNT_TAG('i', 'm', 'n', 'r'),
-    GFNT_TAG('c', 'p', 'r', 't'), GFNT_TAG('l', 'y', 'c', 'i'),
+    GFNT_TAG('c', 'p', 'r', 't'), GFNT_TAG('k', 'h', 'a', 'r'),
+    GFNT_TAG('p', 'h', 'n', 'x'), GFNT_TAG('n', 'k', 'o', ' '),
+    GFNT_TAG('l', 'y', 'd', 'i'), GFNT_TAG('a', 'v', 's', 't'),
+    GFNT_TAG('a', 'r', 'm', 'i'), GFNT_TAG('p', 'h', 'l', 'i'),
+    GFNT_TAG('p', 'r', 't', 'i'), GFNT_TAG('s', 'a', 'r', 'b'),
+    GFNT_TAG('o', 'r', 'k', 'h'), GFNT_TAG('s', 'a', 'm', 'r'),
+    GFNT_TAG('m', 'a', 'n', 'd'), GFNT_TAG('m', 'e', 'r', 'c'),
+    GFNT_TAG('m', 'e', 'r', 'o'), GFNT_TAG('m', 'a', 'n', 'i'),
+    GFNT_TAG('m', 'e', 'n', 'd'), GFNT_TAG('n', 'b', 'a', 't'),
+    GFNT_TAG('n', 'a', 'r', 'b'), GFNT_TAG('p', 'a', 'l', 'm'),
+    GFNT_TAG('p', 'h', 'l', 'p'), GFNT_TAG('h', 'a', 't', 'r'),
+    GFNT_TAG('a', 'd', 'l', 'm'), GFNT_TAG('r', 'o', 'h', 'g'),
+    GFNT_TAG('s', 'o', 'g', 'o'), GFNT_TAG('s', 'o', 'g', 'd'),
+    GFNT_TAG('e', 'l', 'y', 'm'), GFNT_TAG('c', 'h', 'r', 's'),
+    GFNT_TAG('y', 'e', 'z', 'i'), GFNT_TAG('o', 'u', 'g', 'r'),
   };
   size_t i;
 

@@ -534,9 +534,12 @@ static bool gfnt_gpos_mark_base(GFNT_LApply * c, size_t sub) {
       return false;
     }
     // A mark attaches to the first glyph of a multiple substitution's output, not
-    // to the others: those are skipped, and the search goes on behind them.
+    // to the others: those are skipped, and the search goes on behind them. A
+    // later one the font calls a base glyph is not skipped, as HarfBuzz does with
+    // the dotted circle Myanmar's blws puts after a space.
     found = &b->info[it.idx];
-    if (!(found->props & GFNT_PROP_MULTIPLIED) || gfnt_l_lig_comp(found) == 0
+    if (!(found->props & GFNT_PROP_MULTIPLIED) || (found->props & GFNT_PROP_BASE)
+        || gfnt_l_lig_comp(found) == 0
         || it.idx == 0
         || gfnt_l_lig_id(found) != gfnt_l_lig_id(&b->info[it.idx - 1])
         || gfnt_l_lig_comp(found)

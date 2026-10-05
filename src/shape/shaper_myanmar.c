@@ -182,7 +182,10 @@ static GFNT_Nfa * myanmar_grammar(void) {
   roots[MS_CONSONANT] = SEQ(SEQ(OPT(k),
       SEQ(SET(BIT(MC_C) | BIT(MC_RA) | BIT(MC_IV) | BIT(MC_GB)
           | BIT(MC_DOTTEDCIRCLE)), OPT(SYM(MC_VS)))), syllable_tail);
-  roots[MS_PUNCTUATION] = SEQ(SYM(MC_P), SYM(MC_IV));
+  // HarfBuzz's punctuation cluster is a punctuation mark and a plain vowel, a
+  // category that no character of its table has, so it never matches: the
+  // vowel after a mark starts a syllable of its own.
+  roots[MS_PUNCTUATION] = SEQ(SYM(MC_P), SYM(MC_COUNT));
   roots[MS_BROKEN] = SEQ(SEQ(OPT(k), OPT(SYM(MC_VS))), syllable_tail);
   roots[MS_NON_MYANMAR] = any;
   nfa = gfnt_nfa_compile(&b, roots, MS_COUNT);
@@ -342,6 +345,38 @@ static void myanmar_reorder_syllable(GFNT_ShapeCtx * ctx, size_t start,
       gfnt_merge_clusters(info, buf->len, j, i + 1);
       myanmar_move(buf, i, j);
     }
+  }
+  // HarfBuzz leaves a run of left-hand vowels in the opposite order to the one
+  // it was written in, each keeping the variation selector after it.
+  i = start;
+  while (i < end) {
+    size_t run_end = i;
+
+    if (info[i].position != MP_PRE_M) {
+      i++;
+      continue;
+    }
+    while (run_end < end && info[run_end].position == MP_PRE_M) {
+      run_end++;
+    }
+    // Move each later block, the vowel and what follows it, to the front in turn.
+    {
+      size_t k = i;
+
+      while (k < run_end) {
+        size_t block_end = k + 1;
+        size_t m;
+
+        while (block_end < run_end && info[block_end].category == MC_VS) {
+          block_end++;
+        }
+        for (m = 0; k > i && m < block_end - k; m++) {
+          myanmar_move(buf, k + m, i + m);
+        }
+        k = block_end;
+      }
+    }
+    i = run_end;
   }
 }
 

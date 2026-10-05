@@ -263,6 +263,15 @@ static void gfnt_arabic_apply_masks(const GFNT_ArabicData * data,
     prev = i;
     state = entry->next_state;
   }
+  // A Mongolian free variation selector takes the form of the letter before it,
+  // so that a lookup for the form can take the pair together.
+  for (i = 1; i < buf->len; i++) {
+    uint32_t u = buf->info[i].unicode;
+
+    if ((u >= 0x180B && u <= 0x180D) || u == 0x180F) {
+      action[i] = action[i - 1];
+    }
+  }
   for (i = 0; i < buf->len; i++) {
     buf->info[i].mask |= data->mask_array[action[i]];
   }

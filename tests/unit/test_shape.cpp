@@ -1890,6 +1890,32 @@ TEST(ShapeMyanmar, TheLeftVowelAndTheMedialRaGoBeforeTheConsonant) {
   EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 0);
 }
 
+TEST(ShapeMyanmar, TwoLeftVowelsComeOutInTheOppositeOrderToTheOneWritten) {
+  // VOWEL SIGN E 2, SHAN E 3, the dotted circle 4.
+  Font font(small_font({}, 8, {{0x1031, 2}, {0x1084, 3}, {0x25CC, 4}}));
+  Glyphs g;
+  Request request;
+  request.script = "mym2";
+  ASSERT_EQ(shape(font, V{0x1031, 0x1084}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2, 4}));
+  ASSERT_EQ(shape(font, V{0x1084, 0x1031}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 3, 4}));
+}
+
+TEST(ShapeMyanmar, UuStaysTheTwoLettersItWasMadeIntoUnlessAMarkFollows) {
+  // LETTER U 2, LETTER UU 3, VOWEL SIGN II 4, KA 5.
+  Font font(small_font({}, 8, {{0x1025, 2}, {0x1026, 3}, {0x102E, 4}, {0x1000, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "mym2";
+  ASSERT_EQ(shape(font, V{0x1026}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4}));
+  ASSERT_EQ(shape(font, V{0x1026, 0x1000}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4, 5}));
+  ASSERT_EQ(shape(font, V{0x1026, 0x102E}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 4}));
+}
+
 TEST(ShapeHangul, ATrailingJamoJoinsTheClusterOfASyllableTheFontHasButNotOtherwise) {
   // HIEUH 3, A 4, NIEUN 5, and the syllable HA 2 in one font and not in the other.
   Font with(small_font({}, 8, {{0xD558, 2}, {0x1112, 3}, {0x1161, 4},

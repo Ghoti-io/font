@@ -150,8 +150,11 @@ static uint8_t use_category(uint32_t u) {
   if (u == 0x11302 || u == 0x11303 || u == 0xAAB4 || u == 0x114C1) {
     return UC_VMABV; // Grantha anusvara and visarga, Tai Viet mai thung, Tirhuta sign visarga.
   }
-  if ((u >= 0x180B && u <= 0x180D) || u == 0x180F) {
+  if ((u >= 0x180B && u <= 0x180F)) {
     return UC_N;     // The Mongolian free variation selectors.
+  }
+  if ((u >= 0x1801 && u <= 0x1805) || u == 0x1808 || u == 0x1809) {
+    return UC_B;     // Mongolian punctuation that takes marks as a letter does.
   }
   // The Sinhala kunddaliya is punctuation in the Unicode data and takes marks like
   // a letter in HarfBuzz's.
@@ -500,7 +503,7 @@ static void use_find_syllables(GFNT_ShapeCtx * ctx) {
                 && (c == UC_ZWNJ || count < 2
                     || !use_conjunct_part(cats[count - 2]))))
         && use_next_is_base(buf, i)) {
-      cats[count] = UC_CGJ;
+      cats[count] = c == UC_ZWNJ ? UC_ZWNJ : UC_CGJ;
       where[count++] = i;
     }
     else if (c != UC_ZWNJ && c != UC_ZWJ) {

@@ -389,6 +389,7 @@ bool gfnt_normalize(const GFNT_Face * face, GFNT_LInfo ** info, size_t * len,
     size_t * capacity, const GFNT_Allocator * allocator, GFNT_NormMode mode,
     const GFNT_NormHooks * hooks) {
   GFNT_NormCtx c;
+  bool saw_marks;
   bool always_short_circuit = mode == GFNT_NORM_NONE;
   bool might_short_circuit = always_short_circuit
       || (mode != GFNT_NORM_DECOMPOSED
@@ -405,6 +406,7 @@ bool gfnt_normalize(const GFNT_Face * face, GFNT_LInfo ** info, size_t * len,
   c.hooks = hooks;
   c.in = *info;
   c.count = count;
+  saw_marks = false;
 
   // First pass: decompose. A run of characters that are not marks is a run of
   // simple clusters; the last of them is left to cluster with the marks that
@@ -436,6 +438,7 @@ bool gfnt_normalize(const GFNT_Face * face, GFNT_LInfo ** info, size_t * len,
     if (c.idx == count || c.oom) {
       break;
     }
+    saw_marks = true;
     for (end = c.idx + 1; end < count; end++) {
       if (!(c.in[end].flags & GFNT_GF_MARK)) {
         break;
@@ -483,8 +486,11 @@ bool gfnt_normalize(const GFNT_Face * face, GFNT_LInfo ** info, size_t * len,
     }
 
     // Third pass: recompose, where the font has the composite.
-    if (mode == GFNT_NORM_COMPOSED_DIACRITICS
-        || mode == GFNT_NORM_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT) {
+    // Text with no marks to speak of is not put together again: HarfBuzz leaves
+    // Myanmar's UU as the two letters it made when nothing follows it to
+    // cluster with.
+    if (saw_marks && (mode == GFNT_NORM_COMPOSED_DIACRITICS
+        || mode == GFNT_NORM_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT)) {
       size_t starter = 0;
       size_t w = 1;
 

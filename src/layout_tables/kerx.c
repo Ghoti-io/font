@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * Apple's `kerx` table: pair kerning, in HarfBuzz's way.
+ * Apple's `kerx` table: kerning and attachment, in HarfBuzz's way.
  *
  * A font with a version 2 `kerx` table is kerned by it and by nothing else: `GPOS` is not
  * run, and the `kern` table is not read, even when `kerx` has no subtable that

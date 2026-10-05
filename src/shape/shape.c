@@ -778,6 +778,26 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     }
   }
 
+  // Tracking, by the point size, when there is one and nobody asked for it off.
+  if (options->point_size > 0.0f && gfnt_trak_present(face)) {
+    bool on = true;
+
+    for (i = 0; i < options->feature_count; i++) {
+      const GFNT_ShapeFeature * f = &options->features[i];
+
+      if (f->tag == GFNT_TAG('t', 'r', 'a', 'k') && f->start == 0
+          && f->end == GFNT_SHAPE_END) {
+        on = f->value != 0;
+      }
+    }
+    if (on) {
+      result = gfnt_trak_apply(face, &buf, options->point_size, vertical, error);
+      if (result != GFNT_OK) {
+        goto done;
+      }
+    }
+  }
+
   // A mark takes no room of its own: its advance is folded into where it sits.
   // With a GPOS the font has already said where; without one, the mark is pulled
   // back over the base it follows.

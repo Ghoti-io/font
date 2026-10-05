@@ -64,9 +64,6 @@ FIXTURES = os.path.join(ROOT, "tests", "data", "fonts")
 # below visibly avoids them rather than quietly omitting them.
 GAPS = {
     "bidi text": "one direction per run",
-    "AAT layout": "a font with kerx is kerned by its subtables of formats 0, 1, 2 and 6, as HarfBuzz does,"
-                  " but not by format 4's anchor points, and one with trak is tracked by Apple's table "
-                  "(morx is read)",
     "outline HarfBuzz does not read": "a Type 1 charstring in a CFF table, or a cubic glyf "
                                       "outline: HarfBuzz measures them wrongly or not at all, "
                                       "so a mark placed from their box differs",
@@ -487,7 +484,7 @@ def hb_command(font, group, lines, out):
     name, iso, ot, lang, ot_lang, features, texts = group[:7]
     variations = group[7] if len(group) > 7 else ""
     parts = ["hb-shape", "--font-file=%s" % font, "--output-format=json",
-             "--no-glyph-names"]
+             "--no-glyph-names", "--font-ptem=%s" % POINT_SIZE]
     if iso:
         parts.append("--script=%s" % iso)
     if lang:
@@ -506,7 +503,7 @@ def hb_command(font, group, lines, out):
 def ours(font, group, lines):
     name, iso, ot, lang, ot_lang, features, texts = group[:7]
     variations = group[7] if len(group) > 7 else ""
-    argv = [DRIVER, "--batch"]
+    argv = [DRIVER, "--batch", "--ptem", POINT_SIZE]
     if variations:
         argv += ["--location", variations]
     if len(group) > 9 and group[9]:
@@ -560,6 +557,10 @@ def has_vertical(font):
     return b"vmtx" in data or b"VORG" in data
 
 
+# The size both sides shape at, so that a font with `trak` is tracked.
+POINT_SIZE = "12"
+
+
 def has_aat(font):
     """Whether the font carries Apple's layout tables, which HarfBuzz prefers.
 
@@ -578,8 +579,6 @@ def classify(text, font, want, got, aat=False, script=None):
     shape.h), recognised by their cause and not by the font or the string, so that
     a *new* kind of disagreement in the same fonts still fails the run.
     """
-    if aat:
-        return "AAT layout"
     if script in UNSHAPED_SCRIPTS:
         return "script shaper not written"
     if os.path.basename(font) in UNREAD_OUTLINES and \

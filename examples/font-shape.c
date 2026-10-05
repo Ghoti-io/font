@@ -31,6 +31,7 @@
  *                       neither, the way its script is written
  *   --ttb, --btt        the run reads top to bottom, or bottom to top
  *   --features <list>   as HarfBuzz's: `+liga,-kern,aalt=2,liga[3:5]`
+ *   --ptem <points>    the size in points, which Apple's `trak` tracks by
  *   --face <n>          which face of a collection
  *   --unicodes <list>   code points, as `U+0041,U+0056`, instead of <text>
  *   --batch             read one text per line from standard input and print each
@@ -226,6 +227,9 @@ int main(int argc, char ** argv) {
     else if (strcmp(argv[arg], "--btt") == 0) {
       options.direction = GFNT_DIRECTION_BTT;
       direction_given = true;
+    }
+    else if (strcmp(argv[arg], "--ptem") == 0 && arg + 1 < argc) {
+      options.point_size = strtof(argv[++arg], NULL);
     }
     else if (strcmp(argv[arg], "--features") == 0 && arg + 1 < argc) {
       features = argv[++arg];

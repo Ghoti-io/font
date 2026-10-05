@@ -156,6 +156,7 @@ struct Request {
   std::string location;  ///< `tag=value,...` in user coordinates, or empty.
   bool rtl = false;
   GFNT_Direction vertical = GFNT_DIRECTION_LTR;  ///< TTB or BTT, to override rtl.
+  float point_size = 0;  ///< For `trak`, or 0.
 };
 
 /** The normalised coordinates of a location: every axis at its default but the named. */
@@ -205,6 +206,7 @@ GFNT_Result shape(const Font & font, const std::vector<uint32_t> & text,
       : request.rtl ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
   options.features = features.empty() ? nullptr : features.data();
   options.feature_count = features.size();
+  options.point_size = request.point_size;
   std::vector<GFNT_F2Dot14> coordinates =
       normalised_location(font.face, request.location);
   GFNT_Variation located{coordinates.data(), coordinates.size(), GFNT_DELTA_ROUND_HALF_UP };
@@ -2857,6 +2859,46 @@ TEST(ShapeKerx, AnAttachmentCanNameAnchorsOfTheAnkrTable) {
   ASSERT_EQ(g.size(), 2u);
   EXPECT_EQ(g[1].x_offset, 25 - g[0].x_advance);
   EXPECT_EQ(g[1].y_offset, 34);
+}
+
+TEST(ShapeTrak, AdvancesGrowByTheTrackingForThePointSizeAndMoveHalfAsFar) {
+  // Version 1.0, a horizontal table at 12 with one track, zero, for sizes 10, 20
+  // and 40 whose values are 0, 100 and 300.
+  Bytes trak;
+  gfnttest::put_u32(trak, 0x00010000);
+  gfnttest::put_u16(trak, 0);
+  gfnttest::put_u16(trak, 12);
+  gfnttest::put_u16(trak, 0);
+  gfnttest::put_u16(trak, 0);
+  gfnttest::put_u16(trak, 1);
+  gfnttest::put_u16(trak, 3);
+  gfnttest::put_u32(trak, 12 + 8 + 8);   // the size table
+  gfnttest::put_u32(trak, 0);            // track 0.0
+  gfnttest::put_u16(trak, 256);
+  gfnttest::put_u16(trak, 12 + 8 + 8 + 12);   // its values
+  for (uint32_t size : {10u, 20u, 40u}) {
+    gfnttest::put_u32(trak, size << 16);
+  }
+  for (int16_t v : {0, 100, 300}) {
+    gfnttest::put_u16(trak, static_cast<uint16_t>(v));
+  }
+  Font font(small_font({{GFNT_TAG('t', 'r', 'a', 'k'), trak}}));
+  Glyphs g;
+  Request request;
+  EXPECT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+  const int32_t plain = g[0].x_advance;
+  // With no point size nothing is added.
+  request.point_size = 15;
+  ASSERT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+  EXPECT_EQ(g[0].x_advance, plain + 50);
+  EXPECT_EQ(g[0].x_offset, 25);
+  // A size below the first goes on along the first two.
+  request.point_size = 5;
+  ASSERT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+  EXPECT_EQ(g[0].x_advance, plain - 50);
+  request.features = "-trak";
+  ASSERT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+  EXPECT_EQ(g[0].x_advance, plain);
 }
 
 TEST(ShapeKerx, WithTuplesAValueIsTheOffsetOfTheFirstOfAListOfThem) {

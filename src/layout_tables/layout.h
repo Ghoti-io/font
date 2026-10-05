@@ -404,6 +404,13 @@ bool gfnt_kerx_present(const GFNT_Face * face);
 GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error);
 
+/**
+ * The `trak` table (trak.c): tracking for a point size. Present means version 1.0.
+ */
+bool gfnt_trak_present(const GFNT_Face * face);
+GFNT_Result gfnt_trak_apply(const GFNT_Face * face, GFNT_LBuffer * b,
+    float ptem, bool vertical, GFNT_Error * error);
+
 void gfnt_gpos_position_start(GFNT_LBuffer * b);
 void gfnt_gpos_position_finish_offsets(GFNT_LBuffer * b, bool rtl,
     bool vertical);

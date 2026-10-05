@@ -33,25 +33,23 @@
  *
  * **What it does not do, stated rather than approximated:**
  *
- *   * **A few characters sorted differently.** Arabic and the scripts that join
+ *   * **Scripts with a shaper of their own.** Arabic and the scripts that join
  *     like it (Syriac, Mongolian, N'Ko, Mandaic and the rest) are shaped with
  *     HarfBuzz's joining state machine and, for a font with no joining features,
  *     from the Unicode presentation forms; Hebrew has its own composition of
  *     letters and points; Thai and Lao move their SARA AM; Hangul jamo become the
  *     syllable the font has; the Indic scripts, Khmer, Myanmar and the Universal
  *     Shaping Engine's scripts cut a run into syllables, reorder them and select
- *     the forms the font's features make. In nine scripts a handful of
- *     characters are sorted into a different category than HarfBuzz's table
- *     gives them; `hb_diff.py` lists them.
+ *     the forms the font's features make.
  *   * **No bidirectional reordering.** A run is one direction: left to right,
  *     right to left, top to bottom or bottom to top. Vertical text is shaped as
  *     HarfBuzz shapes it for a font that is not variable; at a location in the
  *     design space a vertical run is refused.
  *   * **Apple's tables in part.** A font with `morx` is substituted by it and not
- *     by `GSUB`, as HarfBuzz does, and a version 2 `kerx` kerns by its pair
- *     subtables (formats 0, 1, 2 and 6) in place of `GPOS` and `kern`; `mort`, the
- *     anchor-point format 4 of `kerx`, `trak` (it needs a point size) and the rest
- *     of AAT are not read.
+ *     by `GSUB`, as HarfBuzz does, and a version 2 `kerx` kerns and attaches by its
+ *     subtables (formats 0, 1, 2, 4 and 6) in place of `GPOS` and `kern`; `trak`
+ *     tracks by the point size when one is given. `mort` and the rest of AAT are
+ *     not read.
  *   * **No device table for a pixel size.** Positions are in font units; a
  *     `VariationIndex` device table is read when a location is given.
  *
@@ -115,6 +113,7 @@ typedef struct GFNT_ShapeOptions {
   const GFNT_ShapeFeature * features; ///< Or NULL.
   size_t feature_count;               ///< How many entries @p features has.
   const GFNT_Variation * variation;   ///< The location in the design space, or NULL.
+  float point_size;                   ///< The size in points, or 0 for none: Apple's `trak` tracks by it.
 } GFNT_ShapeOptions;
 
 /**

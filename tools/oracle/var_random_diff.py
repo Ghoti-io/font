@@ -58,8 +58,13 @@ class VarGen:
         nreg = r.randint(1, 3)
         regions = b''
         for _ in range(nreg):
-            for _ in range(self.axes):
-                if r.random() < .75:
+            # A region with every peak zero is left out: it scales to one anywhere,
+            # and HarfBuzz applies it at an explicit default location where this
+            # library, which treats all-zero coordinates as the default instance,
+            # does not. No real font has one.
+            live = r.randrange(self.axes)
+            for ax in range(self.axes):
+                if ax == live or r.random() < .75:
                     peak = r.choice((0.5, 1.0, -1.0, -0.5, 0.25))
                     lo, hi = (0.0, 1.0) if peak > 0 else (-1.0, 0.0)
                     start = r.choice((lo, 0.0 if peak > 0 else peak - 0.5 if peak > -1 else -1.0))
@@ -147,8 +152,46 @@ def main(argv):
             o = r.randrange(len(counts))
             return o, r.randrange(counts[o])
         lookups = []
+        def anchor():
+            if r.random() < .15:
+                return u16(1, r.randint(-80, 80) & 0xFFFF, r.randint(-80, 80) & 0xFFFF)
+            d = []
+            for _ in range(2):
+                o, i2 = glyph_dev()
+                d.append(u16(o, i2, 0x8000))
+            if r.random() < .15:
+                d[0] = b''
+            offs = [10 if d[0] else 0, (10 + len(d[0])) if d[1] else 0]
+            return (u16(3, r.randint(-80, 80) & 0xFFFF, r.randint(-80, 80) & 0xFFFF, *offs)
+                    + d[0] + d[1])
+
+        def with_offsets(parts, head):
+            # parts: byte strings to place after a head of that size; offsets from the start
+            offs, body = [], b''
+            for part in parts:
+                offs.append(head + len(body))
+                body += part
+            return offs, body
+
         for _ in range(r.randint(1, 3)):
-            if r.random() < .5:
+            kind = r.random()
+            if kind < .25:
+                bases, marks = [1, 2, 3, 4], [5, 6, 7, 8]
+                mk = sorted(set(r.sample(marks, r.randint(1, 3))))
+                bs = sorted(set(r.sample(bases, r.randint(1, 3))))
+                manchors = [anchor() for _ in mk]
+                moffs, mbody = with_offsets(manchors, 2 + 4 * len(mk))
+                marray = u16(len(mk)) + b''.join(u16(0, o) for o in moffs) + mbody
+                banchors = [anchor() for _ in bs]
+                boffs, bbody = with_offsets(banchors, 2 + 2 * len(bs))
+                barray = u16(len(bs)) + b''.join(u16(o) for o in boffs) + bbody
+                mcov, bcov = cov1(mk), cov1(bs)
+                head = 12
+                sub = (u16(1, head, head + len(mcov), 1, head + len(mcov) + len(bcov),
+                           head + len(mcov) + len(bcov) + len(marray))
+                       + mcov + bcov + marray + barray)
+                lookups.append((4, sub))
+            elif kind < .6:
                 fmt = r.choice((0x40, 0x44, 0x10, 0x50, 0x41, 0xC0 | 0x04, 0x20 | 0x01))
                 cov = cov1(sorted(set(r.choice(GL) for _ in range(r.randint(1, 5)))))
                 devs = []
@@ -270,6 +313,8 @@ def main(argv):
         gdef = u16(1, 3, 0, 0, 0, 0, 0) + u32(0) * 0
         gdef = u16(1, 3) + u16(0, 0, 0, 0, 0) + u32(18)
         gdef += store
+        classes = u16(2, 1, 8) + u16(*([1] * 4 + [3] * 4))
+        gdef = gdef[:4] + u16(18 + len(store)) + gdef[6:] + classes
         hvar = u16(1, 0) + u32(20, 0, 0, 0) + store
         tables = {'fvar': fvar, 'GPOS': gpos, 'GDEF': gdef, 'HVAR': hvar}
         if use_avar:

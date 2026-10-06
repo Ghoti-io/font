@@ -703,6 +703,9 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
   if (plan->shaper->override_features) {
     plan->shaper->override_features(plan);
   }
+  if (plan->shaper->trailing_pause) {
+    gfnt_plan_pause(plan, plan->shaper->trailing_pause);
+  }
   if (plan->oom) {
     gfnt_plan_free(plan);
     return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,

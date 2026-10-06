@@ -1359,7 +1359,6 @@ static void indic_collect_features(GFNT_Plan * plan) {
   }
   gfnt_plan_enable(plan, GFNT_TAG('c', 'a', 'l', 't'), 0, 1);
   gfnt_plan_enable(plan, GFNT_TAG('c', 'l', 'i', 'g'), 0, 1);
-  gfnt_plan_pause(plan, gfnt_syllabic_clear_syllables);
 }
 
 static void indic_override_features(GFNT_Plan * plan) {
@@ -1462,6 +1461,7 @@ static const GFNT_NormHooks indic_hooks = {
 const GFNT_Shaper gfnt_shaper_indic = {
   .name = "indic",
   .collect_features = indic_collect_features,
+  .trailing_pause = gfnt_syllabic_clear_syllables,
   .override_features = indic_override_features,
   .data_create = indic_data_create,
   .data_destroy = indic_data_destroy,

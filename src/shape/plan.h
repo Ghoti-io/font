@@ -123,6 +123,11 @@ struct GFNT_Shaper {
   void (*collect_features)(GFNT_Plan * plan);
   /** Change what has been asked for, before the caller's own features. */
   void (*override_features)(GFNT_Plan * plan);
+  /**
+   * A pause after every feature there is, the caller's own included: the last
+   * stage of the shaper's features is the one the common features join.
+   */
+  GFNT_PauseFunc trailing_pause;
   /** Per-plan data, made once the features have their bits. NULL for none. */
   void * (*data_create)(const GFNT_Plan * plan, const GFNT_Allocator * allocator);
   void (*data_destroy)(void * data, const GFNT_Allocator * allocator);

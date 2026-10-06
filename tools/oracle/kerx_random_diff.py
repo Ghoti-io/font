@@ -33,6 +33,7 @@ from gsub_random_diff import u16, u32, base_font
 SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "kerx-random")
 GL = list(range(1, 9))
 KINDS = (0, 0, 1, 2, 6)
+ATTACH = (4, 5)   # format 4 with coordinates (5 stands for anchors from `ankr`)
 DONT = 0.0
 SUBS = 3
 CROSS = 0.15
@@ -53,6 +54,7 @@ def pad(b, n=4):
 class Gen:
     def __init__(self, seed):
         self.r = random.Random(seed)
+        self.has_ankr = False
 
     def pairs(self, k=None):
         r = self.r
@@ -120,12 +122,59 @@ class Gen:
         o_val = o_ent + len(ent)
         return u32(nclasses, o_cls, o_stt, o_ent, o_val) + cls + stt + ent + pad(u16(*[v & 0xFFFF for v in vals]))
 
+    def kerx4(self, anchors):
+        """An attachment machine: coordinates (action kind 2) or `ankr` anchors (kind 1)."""
+        r = self.r
+        nclasses = r.randint(5, 8)
+        nstates = r.randint(2, 5)
+        nentries = r.randint(2, 6)
+        classes = {g: r.choice(tuple(range(4, nclasses))) if r.random() < .9 else 1
+                   for g in range(1, 15)}
+        states = [[r.randrange(nentries) for _ in range(nclasses)] for _ in range(nstates)]
+        nact = 6
+        if anchors:
+            acts = b''.join(u16(r.randrange(4), r.randrange(4)) for _ in range(nact))
+            kind = 1
+        else:
+            acts = b''.join(s16(r.randint(-80, 80)) + s16(r.randint(-80, 80))
+                            + s16(r.randint(-80, 80)) + s16(r.randint(-80, 80)) for _ in range(nact))
+            kind = 2
+        entries = b''
+        for _ in range(nentries):
+            flags = (0x8000 if r.random() < .6 else 0) | (0x4000 if r.random() < DONT else 0)
+            entries += u16(r.randrange(nstates), flags, r.randrange(nact))
+        cls = pad(lookup8(classes))
+        stt = pad(b''.join(u16(*row) for row in states))
+        ent = pad(entries)
+        o_cls = 20
+        o_stt = o_cls + len(cls)
+        o_ent = o_stt + len(stt)
+        o_act = o_ent + len(ent)
+        return (u32(nclasses, o_cls, o_stt, o_ent, (kind << 30) | o_act)
+                + cls + stt + ent + pad(acts))
+
+    def ankr(self):
+        r = self.r
+        data = b''
+        offs = {}
+        for g in range(1, 15):
+            offs[g] = len(data)
+            n = r.randint(0, 4)
+            data += u32(n) + b''.join(s16(r.randint(-90, 90)) + s16(r.randint(-90, 90)) for _ in range(n))
+        lk = pad(lookup8(offs))
+        return u16(0, 0) + u32(12, 12 + len(lk)) + lk + data
+
     def kerx(self):
         n = self.r.randint(1, SUBS)
         subs = b''
         for _ in range(n):
             kind = self.r.choice(KINDS)
-            body = {0: self.kerx0, 1: self.kerx1, 2: self.kerx2, 6: self.kerx6}[kind]()
+            if kind in ATTACH:
+                body = self.kerx4(kind == 5)
+                self.has_ankr = self.has_ankr or kind == 5
+                kind = 4
+            else:
+                body = {0: self.kerx0, 1: self.kerx1, 2: self.kerx2, 6: self.kerx6}[kind]()
             cov = kind | (0x40000000 if self.r.random() < CROSS else 0)
             body = pad(body)
             subs += u32(12 + len(body), cov, 0) + body
@@ -154,6 +203,7 @@ def main(argv):
         elif a == "--table": table = argv[i + 1]
         elif a == "--direction": direction = argv[i + 1]
         elif a == "--kinds": KINDS = tuple(int(x) for x in argv[i + 1].split(","))
+        elif a == "--attach": KINDS = (4, 5)
         elif a == "--dont": DONT = float(argv[i + 1])
         elif a == "--subs": SUBS = int(argv[i + 1])
         elif a == "--cross": CROSS = float(argv[i + 1])
@@ -165,8 +215,11 @@ def main(argv):
         text = os.path.join(scratch, "s%d.txt" % seed)
         g = Gen(seed)
         with open(font, "wb") as h:
-            h.write(base_font(nglyphs=30, cmap_map=cmap,
-                              extra={table: g.kerx() if table == "kerx" else g.kern()}))
+            tab = g.kerx() if table == "kerx" else g.kern()
+            extra = {table: tab}
+            if g.has_ankr:
+                extra["ankr"] = g.ankr()
+            h.write(base_font(nglyphs=30, cmap_map=cmap, extra=extra))
         rr = random.Random(seed * 7)
         with open(text, "w") as h:
             h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 8)))

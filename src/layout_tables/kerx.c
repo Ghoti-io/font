@@ -430,17 +430,6 @@ static void kerx_format4(const GFNT_Reader * r, size_t subtable, size_t num_glyp
   }
 }
 
-/** Every glyph's vertical offset becomes the sum of its own and those before it. */
-static void kerx_sum_offsets(GFNT_LBuffer * b) {
-  int32_t run = 0;
-  size_t i;
-
-  for (i = 0; i < b->len; i++) {
-    run += b->pos[i].y_offset;
-    b->pos[i].y_offset = run;
-  }
-}
-
 /**
  * Every glyph rides on the one before it, so a shift of one carries on to all the
  * glyphs after it, except that a glyph set apart starts again from nothing. The
@@ -497,9 +486,11 @@ static void kerx_run(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
       if (kern) {
         b->pos[j].y_offset = kern;
       }
-      b->pos[j].attach_type = GFNT_ATTACH_CURSIVE;
-      b->pos[j].attach_chain = (int32_t)((int64_t)i - (int64_t)j);
-      b->has_attachment = true;
+      if (!b->pos[j].attach_type) {
+        b->pos[j].attach_type = GFNT_ATTACH_CURSIVE;
+        b->pos[j].attach_chain = (int32_t)((int64_t)i - (int64_t)j);
+        b->has_attachment = true;
+      }
     }
     else if (kern) {
       int32_t kern1 = kern >> 1;
@@ -526,6 +517,7 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
   size_t glyphs = 0;
   bool bad = false;
   bool shifts = false;
+  bool seen_cross = false;
 
   result = gfnt_face_table_reader(face, GFNT_TAG_kerx, &table, error);
   if (result != GFNT_OK) {
@@ -557,6 +549,19 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     if (!(coverage & KERX_VERTICAL)) {
       uint32_t format = coverage & 0xFFu;
 
+      if ((coverage & KERX_CROSS) && !seen_cross) {
+        size_t i;
+
+        // The first cross-stream subtable hangs every glyph on the one before it,
+        // over whatever an earlier subtable attached them to.
+        seen_cross = true;
+        for (i = 1; i < b->len; i++) {
+          if (b->pos[i].attach_type) {
+            b->pos[i].attach_type = GFNT_ATTACH_CURSIVE;
+            b->pos[i].attach_chain = -1;
+          }
+        }
+      }
       if (format == 1) {
         bool flip = (coverage & KERX_DESCENDING) != 0;
 
@@ -575,11 +580,6 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
       else if (format == 4) {
         // The descending flag is not read here: the glyphs are met in order.
         kerx_format4(&table, cursor, glyphs, &ankr, have_ankr, b, &bad);
-        if (coverage & KERX_CROSS) {
-          // The glyphs are put where they hang, then each rides on the ones before.
-          gfnt_gpos_position_finish_offsets(b, false, false);
-          kerx_sum_offsets(b);
-        }
       }
       else if (!(coverage & KERX_DESCENDING)) {
         kerx_run(&table, cursor, glyphs, format, (coverage & KERX_CROSS) != 0,

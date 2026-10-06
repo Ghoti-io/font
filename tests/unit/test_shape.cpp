@@ -4961,12 +4961,29 @@ TEST(ShapeKerx, AnAttachmentSubtableHangsAGlyphFromTheMarkedOne) {
   EXPECT_EQ(g[1].y_offset, 30);
   // With nothing marked first, nothing hangs.
   EXPECT_EQ(kerx_shape(kerx, "BA")[1].y_offset, 0);
-  // Cross-stream, each glyph then rides on those before it.
+  // Cross-stream makes no difference to an attachment (HarfBuzz agrees on random
+  // tables): B hangs from the A before it and nothing sums.
   Glyphs c = kerx_shape(kerx_table({kerx_attachment(100, 50, 10, 20,
       0x40000000u)}), "ABAB");
   EXPECT_EQ(c[1].y_offset, 30);
-  EXPECT_EQ(c[2].y_offset, 30);
-  EXPECT_EQ(c[3].y_offset, 60);
+  EXPECT_EQ(c[2].y_offset, 0);
+  EXPECT_EQ(c[3].y_offset, 30);
+}
+
+TEST(ShapeKerx, TheFirstCrossStreamSubtableHangsEveryGlyphOverAnEarlierAttachment) {
+  // Values from HarfBuzz. An attachment hangs B from A and takes A's advance off
+  // B's offset. A cross-stream subtable after it hangs every glyph from the one
+  // before in a chain instead, so B keeps the plain difference; one that is
+  // itself cross-stream, after a cross-stream attachment, leaves the attachment.
+  Glyphs plain = kerx_shape(kerx_table({kerx_attachment(100, 50, 10, 20),
+      kerx_pairs({{1, 2, 7}}, 0x40000000u)}), "AB");
+  ASSERT_EQ(plain.size(), 2u);
+  EXPECT_EQ(plain[1].x_offset, 90);
+  EXPECT_EQ(plain[1].y_offset, 7);
+  Glyphs kept = kerx_shape(kerx_table({kerx_attachment(100, 50, 10, 20,
+      0x40000000u), kerx_pairs({{1, 2, 7}}, 0x40000000u)}), "AB");
+  ASSERT_EQ(kept.size(), 2u);
+  EXPECT_EQ(kept[1].x_offset, 90 - kept[0].x_advance);
 }
 
 TEST(ShapeKerx, AnAttachmentCanNameAnchorsOfTheAnkrTable) {

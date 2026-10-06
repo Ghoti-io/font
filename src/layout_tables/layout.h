@@ -65,7 +65,7 @@ extern "C" {
 /// How deep a lookup may nest another. HarfBuzz's HB_MAX_NESTING_LEVEL.
 #define GFNT_LAYOUT_MAX_NESTING 64u
 /// A buffer's operation budget is this times its length, but never under the minimum.
-#define GFNT_LAYOUT_OPS_FACTOR 64
+#define GFNT_LAYOUT_OPS_FACTOR 1024
 #define GFNT_LAYOUT_OPS_MINIMUM 16384
 /// The largest run this engine will shape. HarfBuzz's HB_BUFFER_MAX_LEN_DEFAULT.
 #define GFNT_LAYOUT_MAX_LEN 0x3FFFFFFFu

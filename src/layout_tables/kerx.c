@@ -206,11 +206,6 @@ static void kerx_format1(const GFNT_Reader * r, size_t subtable, size_t num_glyp
   size_t stack[KERX_STACK];
   size_t depth = 0;
   uint32_t state = 0;
-  int64_t ops = (int64_t)b->len * 64;
-
-  if (ops < 16384) {
-    ops = 16384;
-  }
   b->idx = 0;
   while (!*bad) {
     uint32_t klass = 0;
@@ -294,7 +289,7 @@ static void kerx_format1(const GFNT_Reader * r, size_t subtable, size_t num_glyp
     if (b->idx >= b->len) {
       break;
     }
-    if (!(flags & 0x4000u) || ops-- <= 0) {
+    if (!(flags & 0x4000u) || b->max_ops-- <= 0) {
       b->idx++;
     }
   }
@@ -353,11 +348,6 @@ static void kerx_format4(const GFNT_Reader * r, size_t subtable, size_t num_glyp
   uint32_t state = 0;
   bool mark_set = false;
   size_t mark = 0;
-  int64_t ops = (int64_t)b->len * 64;
-
-  if (ops < 16384) {
-    ops = 16384;
-  }
   b->idx = 0;
   while (!*bad) {
     uint32_t klass = 0;
@@ -434,7 +424,7 @@ static void kerx_format4(const GFNT_Reader * r, size_t subtable, size_t num_glyp
     if (b->idx >= b->len) {
       break;
     }
-    if (!(flags & 0x4000u) || ops-- <= 0) {
+    if (!(flags & 0x4000u) || b->max_ops-- <= 0) {
       b->idx++;
     }
   }

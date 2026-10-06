@@ -48,6 +48,7 @@ CORPORA = [
     ("morx-cover", "morx_random_diff.py", ["--seeds", "120", "--coverage", "--dont", "0"], []),
     ("morx-rtl", "morx_random_diff.py", ["--seeds", "100", "--dont", "0", "--direction", "rtl"], ["--rtl"]),
     ("morx-dont", "morx_random_diff.py", ["--seeds", "120", "--dont", "0.3"], []),
+    ("mort", "morx_random_diff.py", ["--mort", "--types", "0,1,2,4", "--dont", "0.2", "--coverage", "--seeds", "150"], []),
     ("kerx", "kerx_random_diff.py", ["--seeds", "100"], []),
     ("kerx-dont", "kerx_random_diff.py", ["--kinds", "1", "--dont", "0.4", "--seeds", "100"], []),
     ("kerx-rtl", "kerx_random_diff.py", ["--seeds", "80", "--direction", "rtl"], ["--rtl"]),

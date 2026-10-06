@@ -17,7 +17,7 @@ strings, glyph ids and clusters compared. Nothing is committed: every font is a
 function of its seed. A string that runs past the number of steps HarfBuzz allows,
 or hangs this library, is left out of the count.
 
-Usage: morx_random_diff.py [--seeds N] [--first K] [--reuse] [-v] [--driver PATH]
+Usage: morx_random_diff.py [--mort] [--seeds N] [--first K] [--reuse] [-v] [--driver PATH]
                            [--scratch DIR] [--types 0,1,2,4,5]
 """
 
@@ -36,6 +36,7 @@ SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "morx-random")
 GLYPHS = list(range(1, 15))
 DONT = 0.08
 COVER = False
+MORT = False
 DONT_INS = 0.0   # an insertion that does not advance may never stop
 
 
@@ -154,6 +155,88 @@ class Gen:
             tail = b''
         return header + clstab + statetab + enttab + tail
 
+    def mort_subtable(self, kind):
+        """A `mort` subtable body: state offsets in bytes, one-byte classes and states."""
+        r = self.r
+        if kind == 4:
+            m = {g: r.choice(GLYPHS) for g in GLYPHS if r.random() < .6}
+            return pad(lookup8(m, missing=None))
+        nclasses, nstates, nentries, classes, states = self.stx(kind)
+        clstab = pad(u16(1, 14) + bytes(classes[g] for g in range(1, 15)), 2)
+        statetab = pad(bytes(e for row in states for e in row), 2)
+        esize = {0: 4, 1: 8, 2: 4}[kind]
+        head = 10 if kind == 1 else 8
+        off_cls = head
+        off_state = off_cls + len(clstab)
+        off_ent = off_state + len(statetab)
+        off_extra = off_ent + esize * nentries
+        extra = b''
+
+        def row(s):
+            return off_state + s * nclasses
+
+        entries = []
+        if kind == 0:
+            for _ in range(nentries):
+                flags = r.choice((0, 0x8000, 0x2000, 0xA000)) | r.randint(0, 15)
+                if r.random() < DONT:
+                    flags |= 0x4000
+                entries.append(u16(row(r.randrange(nstates)), flags))
+        elif kind == 1:
+            nsub = r.randint(1, 3)
+            regions = []
+            for _ in range(nsub):
+                m = {g: r.choice(GLYPHS) for g in range(15) if g and r.random() < .5}
+                regions.append(u16(*[m.get(g, 0) for g in range(15)]))
+            base_word = off_extra // 2
+            for _ in range(nentries):
+                flags = r.choice((0, 0, 0x8000))
+                if r.random() < DONT:
+                    flags |= 0x4000
+                mark = r.choice((0xFFFF, 0xFFFF) + tuple(base_word + 15 * k for k in range(nsub)))
+                cur = r.choice((0xFFFF, 0xFFFF) + tuple(base_word + 15 * k for k in range(nsub)))
+                entries.append(u16(row(r.randrange(nstates)), flags, mark, cur))
+            extra = b''.join(regions)
+        elif kind == 2:
+            ncomp, nlig = 24, 20
+            nact = r.randint(2, 6)
+            off_act = off_extra
+            off_comp = off_act + 4 * nact
+            off_lig = off_comp + 2 * ncomp
+            comps = [off_lig + 2 * r.randrange(nlig - 6) if r.random() < .3 else 0
+                     for _ in range(ncomp)]
+            ligs = [r.choice(GLYPHS) for _ in range(nlig)]
+            actions = []
+            for i in range(nact):
+                v = r.randint(0, ncomp - 16)
+                last = 0x80000000 if r.random() < .4 or i == nact - 1 else 0
+                store = 0x40000000 if r.random() < .5 else 0
+                actions.append(last | store | (off_comp // 2 + v))
+            for _ in range(nentries):
+                flags = r.choice((0, 0x8000, 0x2000, 0xA000, 0x2000))
+                if r.random() < DONT:
+                    flags |= 0x4000
+                flags |= off_act + 4 * r.randrange(nact) if r.random() < .8 else 0
+                entries.append(u16(row(r.randrange(nstates)), flags))
+            extra = u32(*actions) + u16(*comps) + u16(*ligs)
+        enttab = b''.join(entries)
+        header = u16(nclasses, off_cls, off_state, off_ent)
+        if kind == 1:
+            header += u16(off_extra)
+        return header + clstab + statetab + enttab + extra
+
+    def mort(self, types, features=False):
+        n = self.r.randint(1, 3)
+        subs = b''
+        bits = (1, 2, 4, 8, 3, 6, 0xFFFFFFFF)
+        for _ in range(n):
+            kind = self.r.choice(types)
+            body = pad(self.mort_subtable(kind), 2)
+            flags = self.r.choice(bits) if features else 1
+            cov = kind | (self.r.choice((0, 0, 0x4000, 0x8000, 0x2000)) if COVER else 0)
+            subs += u16(8 + len(body), cov) + u32(flags) + body
+        return u32(0x00010000, 1) + u32(1, 12 + len(subs)) + u16(0, n) + subs
+
     def morx(self, types, features=False):
         n = self.r.randint(1, 3)
         subs = b''
@@ -207,8 +290,9 @@ def feat_table():
 
 
 def main(argv):
-    global DONT, COVER, DONT_INS
+    global DONT, COVER, DONT_INS, MORT
     COVER = '--coverage' in argv
+    MORT = '--mort' in argv
     direction = argv[argv.index('--direction') + 1] if '--direction' in argv else ''
     aatfeat = "--aatfeatures" in argv
     seeds, first, reuse, driver, scratch = 200, 0, False, G.DRIVER, SCRATCH
@@ -230,7 +314,7 @@ def main(argv):
         text = os.path.join(scratch, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap,
-                              extra=dict({'morx': Gen(seed).morx(types, aatfeat)}, **({'feat': feat_table()} if aatfeat else {}))))
+                              extra=dict({'mort': Gen(seed).mort(types)} if MORT else {'morx': Gen(seed).morx(types, aatfeat)}, **({'feat': feat_table()} if aatfeat else {}))))
         rr = random.Random(seed * 7)
         with open(text, "w") as h:
             h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 8)))

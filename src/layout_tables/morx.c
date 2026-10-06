@@ -409,7 +409,10 @@ static void ligature(Driver * d, size_t entry) {
           b->info[d->match[k]].glyph = DELETED;
         }
         d->match_length = cursor + 1;
-        merge(b, d->match[cursor], lig_end);
+        // A ligature's merge, unlike a rearrangement's, extends back over equal
+        // clusters.
+        gfnt_merge_clusters(b->info, b->len, d->match[cursor],
+            lig_end < b->len ? lig_end : b->len);
         // The sum is not cleared: the next store adds to it (in `mort`, it is
         // already an index by then).
       }

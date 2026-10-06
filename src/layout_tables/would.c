@@ -139,8 +139,7 @@ static bool gfnt_would_context(GFNT_LApply * c, size_t sub,
     uint32_t index = gfnt_l_class(c, classdef, glyphs[0]);
     GFNT_Matcher m = {GFNT_MATCH_CLASS, (uint32_t)classdef};
 
-    // The subtable's coverage is HarfBuzz's digest of the first glyph.
-    if (!gfnt_would_covers(c, sub, glyphs[0]) || index >= gfnt_lu16(c, sub + 6)) {
+    if (index >= gfnt_lu16(c, sub + 6)) {
       return false;
     }
     return gfnt_would_context_set(c,
@@ -150,11 +149,7 @@ static bool gfnt_would_context(GFNT_LApply * c, size_t sub,
   if (format == 3) {
     GFNT_Matcher m = {GFNT_MATCH_COVERAGE, (uint32_t)sub};
 
-    // The first glyph's coverage is the one test the rest of the match leaves out,
-    // and is made here as HarfBuzz's digest of the lookup does.
-    return gfnt_lu16(c, sub + 2) == n
-        && gfnt_l_coverage(c, gfnt_l_rel(sub, gfnt_lu16(c, sub + 6)), glyphs[0])
-            != GFNT_LAYOUT_NOT_COVERED
+    return gfnt_lu16(c, sub + 2) == n && n > 0
         && gfnt_would_input(c, m, sub + 8, glyphs, n);
   }
   return false;
@@ -216,7 +211,7 @@ static bool gfnt_would_chain(GFNT_LApply * c, size_t sub,
     uint32_t index = gfnt_l_class(c, classdef, glyphs[0]);
     GFNT_Matcher m = {GFNT_MATCH_CLASS, (uint32_t)classdef};
 
-    if (!gfnt_would_covers(c, sub, glyphs[0]) || index >= gfnt_lu16(c, sub + 10)) {
+    if (index >= gfnt_lu16(c, sub + 10)) {
       return false;
     }
     return gfnt_would_chain_set(c,
@@ -234,10 +229,7 @@ static bool gfnt_would_chain(GFNT_LApply * c, size_t sub,
     if (zero_context && (backtrack || lookahead)) {
       return false;
     }
-    // The first glyph's coverage is tested here, as HarfBuzz's digest does.
     return input == n && input > 0
-        && gfnt_l_coverage(c, gfnt_l_rel(sub, gfnt_lu16(c, input_at + 2)),
-               glyphs[0]) != GFNT_LAYOUT_NOT_COVERED
         && gfnt_would_input(c, m, input_at + 4, glyphs, n);
   }
   return false;
@@ -271,6 +263,41 @@ static bool gfnt_would_subtable(GFNT_LApply * c, uint16_t type, size_t sub,
   }
 }
 
+/**
+ * Whether the first coverage of subtable @p sub holds @p glyph. HarfBuzz tests the
+ * first glyph against the union of these over a lookup's subtables - its digest -
+ * and, for the class and coverage formats, nowhere else.
+ */
+static bool gfnt_would_digest(GFNT_LApply * c, uint16_t type, size_t sub,
+    uint32_t glyph) {
+  size_t at;
+
+  if (type == 7) {
+    if (gfnt_lu16(c, sub) != 1) {
+      return false;
+    }
+    type = gfnt_lu16(c, sub + 2);
+    sub += gfnt_lu32(c, sub + 4);
+    if (type == 7) {
+      return false;
+    }
+  }
+  if (type < 1 || type > 6) {
+    return false;
+  }
+  at = sub + 2;
+  if (type == 5 && gfnt_lu16(c, sub) == 3) {
+    at = sub + 6;
+  }
+  else if (type == 6 && gfnt_lu16(c, sub) == 3) {
+    size_t input_at = sub + 4 + 2 * (size_t)gfnt_lu16(c, sub + 2);
+
+    at = input_at + 2;
+  }
+  return gfnt_l_coverage(c, gfnt_l_rel(sub, gfnt_lu16(c, at)), glyph)
+      != GFNT_LAYOUT_NOT_COVERED;
+}
+
 bool gfnt_l_would_apply(GFNT_LApply * c, uint32_t lookup_index,
     const uint32_t * glyphs, size_t n, bool zero_context) {
   size_t offset;
@@ -280,6 +307,16 @@ bool gfnt_l_would_apply(GFNT_LApply * c, uint32_t lookup_index,
   uint16_t i;
 
   if (!n || !gfnt_l_lookup(c, lookup_index, &offset, &type, &flag, &count)) {
+    return false;
+  }
+  for (i = 0; i < count && !c->fault.bad; i++) {
+    size_t sub = gfnt_l_rel(offset, gfnt_lu16(c, offset + 6 + 2 * (size_t)i));
+
+    if (sub && gfnt_would_digest(c, type, sub, glyphs[0])) {
+      break;
+    }
+  }
+  if (i == count) {
     return false;
   }
   for (i = 0; i < count && !c->fault.bad; i++) {

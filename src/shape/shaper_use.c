@@ -356,7 +356,7 @@ static GFNT_Nfa * use_grammar(void) {
 
   gfnt_re_init(&b);
   zwnj = OPT(SYM(UC_ZWNJ));
-  h = SET(BIT(UC_H) | BIT(UC_HVM) | BIT(UC_SK));
+  h = SET(BIT(UC_H) | BIT(UC_HVM) | BIT(UC_SK) | BIT(UC_VMH));
   cons_mod = SEQ(SEQ(STAR(SYM(UC_CMABV)), STAR(SYM(UC_CMBLW))),
       STAR(SEQ(SEQ(ALT(SEQ(SEQ(SEQ(OPT(SYM(UC_ZWJ)), h), OPT(SYM(UC_ZWJ))),
                            SYM(UC_B)), SYM(UC_SUB)), OPT(SYM(UC_VS))),
@@ -674,7 +674,8 @@ static void use_setup_syllables(GFNT_ShapeCtx * ctx) {
 }
 
 static bool use_is_halant(const GFNT_LInfo * info) {
-  return (info->category == UC_H || info->category == UC_HVM)
+  return (info->category == UC_H || info->category == UC_HVM
+          || info->category == UC_VMH)
       && !(info->props & GFNT_PROP_LIGATED);
 }
 

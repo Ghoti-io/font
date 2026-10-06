@@ -21,7 +21,8 @@
 /**
  * @file
  *
- * Apple's glyph substitution: the extended glyph metamorphosis table, `morx`.
+ * Apple's glyph substitution: the extended glyph metamorphosis table, `morx`,
+ * and its older 16-bit form, `mort`.
  *
  * Where a font carries it and no `GSUB`, it is what turns characters into the
  * forms they are drawn in. A chain is chosen by the features the caller named
@@ -38,6 +39,7 @@
 #include <ghoti.io/font/shape.h>
 
 #define GFNT_TAG_morx GFNT_TAG('m', 'o', 'r', 'x')
+#define GFNT_TAG_mort GFNT_TAG('m', 'o', 'r', 't')
 #define GFNT_TAG_feat GFNT_TAG('f', 'e', 'a', 't')
 
 #define DELETED 0xFFFFu
@@ -49,7 +51,8 @@
 #define MAX_RANGES (2 * MAX_WANTED + 1)
 
 typedef struct Ctx {
-  const GFNT_Reader * r;   ///< The `morx` table.
+  const GFNT_Reader * r;   ///< The `morx` (or `mort`) table.
+  bool old;                ///< `mort`: 16-bit counts and offsets, byte-indexed states.
   GFNT_LBuffer * buf;
   size_t num_glyphs;
   bool bad;
@@ -62,6 +65,16 @@ typedef struct Ctx {
 
 static uint16_t u16(Ctx * c, size_t at) {
   return gfnt_lr_u16(c->r, at, &c->bad);
+}
+
+static uint8_t u8(Ctx * c, size_t at) {
+  uint8_t value = 0;
+
+  if (gfnt_reader_u8_at(c->r, at, &value) != GFNT_OK) {
+    c->bad = true;
+    return 0;
+  }
+  return value;
 }
 
 static uint32_t u32(Ctx * c, size_t at) {
@@ -99,10 +112,20 @@ typedef struct Machine {
   size_t class_table;
   size_t state_array;
   size_t entry_table;
+  uint32_t first_glyph, glyph_count;   ///< `mort`: the class array's range.
 } Machine;
 
 static void machine_open(Ctx * c, size_t base, Machine * m) {
   m->start = base;
+  if (c->old) {
+    m->classes = u16(c, base);
+    m->class_table = base + u16(c, base + 2);
+    m->state_array = base + u16(c, base + 4);
+    m->entry_table = base + u16(c, base + 6);
+    m->first_glyph = u16(c, m->class_table);
+    m->glyph_count = u16(c, m->class_table + 2);
+    return;
+  }
   m->classes = u32(c, base);
   m->class_table = base + u32(c, base + 4);
   m->state_array = base + u32(c, base + 8);
@@ -114,6 +137,15 @@ static uint32_t machine_class(Ctx * c, const Machine * m, uint32_t glyph) {
 
   if (glyph == DELETED) {
     return CLASS_DELETED;
+  }
+  if (c->old) {
+    uint32_t at;
+
+    if (glyph < m->first_glyph || glyph - m->first_glyph >= m->glyph_count) {
+      return CLASS_OUT_OF_BOUNDS;
+    }
+    at = glyph - m->first_glyph;
+    return u8(c, m->class_table + 4 + at);
   }
   if (!lookup_value(c, m->class_table, glyph, &value)) {
     return CLASS_OUT_OF_BOUNDS;
@@ -128,6 +160,10 @@ static size_t machine_entry(Ctx * c, const Machine * m, uint32_t state,
 
   if (klass >= m->classes) {
     klass = CLASS_OUT_OF_BOUNDS;
+  }
+  if (c->old) {
+    index = u8(c, m->state_array + (size_t)state * m->classes + klass);
+    return m->entry_table + (size_t)index * entry_size;
   }
   index = u16(c, m->state_array + 2 * ((size_t)state * m->classes + klass));
   return m->entry_table + (size_t)index * entry_size;
@@ -216,21 +252,48 @@ static void contextual(Driver * d, size_t entry) {
   uint16_t current_index = u16(c, entry + 6);
   uint16_t glyph;
 
-  if (d->mark_set && mark_index != 0xFFFF && d->mark < b->len) {
-    uint32_t off = u32(c, d->subst_table + 4 * (size_t)mark_index);
+  // At the end of the text neither substitution is made unless a mark was set.
+  if (b->idx >= b->len && !d->mark_set) {
+    return;
+  }
+  // A `mort` machine substitutes at the mark whether or not it was set, which
+  // leaves the mark at the first glyph.
+  if ((d->mark_set || c->old) && mark_index != 0xFFFF && d->mark < b->len) {
+    if (c->old) {
+      // The offset counts 16-bit words from the start of the state table, and
+      // the glyph is an index from there.
+      glyph = u16(c, d->m.start + 2 * ((size_t)mark_index
+          + b->info[d->mark].glyph));
+      if (!c->bad && glyph) {
+        b->info[d->mark].glyph = glyph;
+      }
+    }
+    else {
+      uint32_t off = u32(c, d->subst_table + 4 * (size_t)mark_index);
 
-    if (!c->bad && lookup_value(c, d->subst_table + off,
-            b->info[d->mark].glyph, &glyph)) {
-      b->info[d->mark].glyph = glyph;
+      if (!c->bad && lookup_value(c, d->subst_table + off,
+              b->info[d->mark].glyph, &glyph)) {
+        b->info[d->mark].glyph = glyph;
+      }
     }
   }
   if (current_index != 0xFFFF && b->len) {
     size_t at = b->idx < b->len ? b->idx : b->len - 1;
-    uint32_t off = u32(c, d->subst_table + 4 * (size_t)current_index);
 
-    if (!c->bad && lookup_value(c, d->subst_table + off, b->info[at].glyph,
-            &glyph)) {
-      b->info[at].glyph = glyph;
+    if (c->old) {
+      glyph = u16(c, d->m.start + 2 * ((size_t)current_index
+          + b->info[at].glyph));
+      if (!c->bad && glyph) {
+        b->info[at].glyph = glyph;
+      }
+    }
+    else {
+      uint32_t off = u32(c, d->subst_table + 4 * (size_t)current_index);
+
+      if (!c->bad && lookup_value(c, d->subst_table + off, b->info[at].glyph,
+              &glyph)) {
+        b->info[at].glyph = glyph;
+      }
     }
   }
   if (flags & 0x8000) {
@@ -243,7 +306,7 @@ static void ligature(Driver * d, size_t entry) {
   Ctx * c = d->c;
   GFNT_LBuffer * b = c->buf;
   uint16_t flags = u16(c, entry + 2);
-  uint16_t action_index = u16(c, entry + 4);
+  uint16_t action_index = c->old ? 0 : u16(c, entry + 4);
 
   if (flags & 0x8000) {
     if (d->match_length == MAX_STACK) {
@@ -252,11 +315,22 @@ static void ligature(Driver * d, size_t entry) {
     }
     d->match[d->match_length++] = b->idx;
   }
-  if (flags & 0x2000) {
+  if (c->old ? (flags & 0x3FFF) != 0 : (flags & 0x2000) != 0) {
     size_t cursor = d->match_length;
     size_t action_at = d->lig_action + 4 * (size_t)action_index;
     uint32_t ligature_idx = 0;
     uint32_t action;
+
+    if (c->old) {
+      // A byte offset from the start of the state table, to a whole action.
+      size_t rel = d->lig_action - d->m.start;
+
+      if ((flags & 0x3FFFu) < rel) {
+        c->bad = true;
+        return;
+      }
+      action_at = d->lig_action + 4 * (((flags & 0x3FFFu) - rel) / 4);
+    }
 
     if (!d->match_length || b->idx >= b->len) {
       return;
@@ -279,9 +353,20 @@ static void ligature(Driver * d, size_t entry) {
       }
       cursor--;
       comp = b->info[d->match[cursor]].glyph + offset;
-      ligature_idx += u16(c, d->lig_component + 2 * (size_t)comp);
+      ligature_idx += c->old ? u16(c, d->m.start + 2 * (size_t)comp)
+          : u16(c, d->lig_component + 2 * (size_t)comp);
       if (action & 0xC0000000u) {
-        uint16_t lig = u16(c, d->lig_ligature + 2 * (size_t)ligature_idx);
+        size_t rel = d->lig_ligature - d->m.start;
+        uint16_t lig;
+
+        if (c->old) {
+          if (ligature_idx < rel) {
+            c->bad = true;
+            return;
+          }
+          ligature_idx = (uint32_t)((ligature_idx - rel) / 2);
+        }
+        lig = u16(c, d->lig_ligature + 2 * (size_t)ligature_idx);
         size_t lig_end = d->match[d->match_length - 1] + 1;
         size_t k;
 
@@ -295,7 +380,8 @@ static void ligature(Driver * d, size_t entry) {
         }
         d->match_length = cursor + 1;
         merge(b, d->match[cursor], lig_end);
-        ligature_idx = 0;
+        // The sum is not cleared: the next store adds to it (in `mort`, it is
+        // already an index by then).
       }
       action_at += 4;
     } while (!(action & 0x80000000u));
@@ -308,13 +394,17 @@ static bool insert_glyphs(Driver * d, size_t at, size_t src_glyph_index,
   size_t i;
 
   // All of the glyphs or none: the array must lie in the table.
-  (void)u16(d->c, d->insert_actions + 2 * (src_glyph_index + count - 1));
+  // In `mort` the list is at twice the offset, and HarfBuzz starts one byte in.
+  size_t base = d->c->old ? d->insert_actions + 2 * src_glyph_index + 1
+      : d->insert_actions + 2 * src_glyph_index;
+
+  (void)u16(d->c, base + 2 * (count - 1));
   if (d->c->bad) {
     return false;
   }
   for (i = 0; i < count; i++) {
     GFNT_LInfo info;
-    uint16_t glyph = u16(d->c, d->insert_actions + 2 * (src_glyph_index + i));
+    uint16_t glyph = u16(d->c, base + 2 * i);
 
     if (d->c->bad) {
       return false;
@@ -404,17 +494,24 @@ static void drive(Driver * d, int type, size_t body) {
       break;
     case CONTEXTUAL:
       d->entry_size = 8;
-      d->subst_table = body + u32(c, body + 16);
+      d->subst_table = c->old ? 0 : body + u32(c, body + 16);
       break;
     case LIGATURE:
-      d->entry_size = 6;
-      d->lig_action = body + u32(c, body + 16);
-      d->lig_component = body + u32(c, body + 20);
-      d->lig_ligature = body + u32(c, body + 24);
+      d->entry_size = c->old ? 4 : 6;
+      if (c->old) {
+        d->lig_action = body + u16(c, body + 8);
+        d->lig_component = body + u16(c, body + 10);
+        d->lig_ligature = body + u16(c, body + 12);
+      }
+      else {
+        d->lig_action = body + u32(c, body + 16);
+        d->lig_component = body + u32(c, body + 20);
+        d->lig_ligature = body + u32(c, body + 24);
+      }
       break;
     default:
       d->entry_size = 8;
-      d->insert_actions = body + u32(c, body + 16);
+      d->insert_actions = c->old ? body : body + u32(c, body + 16);
       break;
   }
   if (c->bad) {
@@ -456,6 +553,11 @@ static void drive(Driver * d, int type, size_t body) {
       return;
     }
     state = new_state;
+    if (c->old) {
+      // A `mort` state is the byte offset of its row in the state array.
+      state = (uint32_t)(((int32_t)new_state - (int32_t)(d->m.state_array
+          - d->m.start)) / (int32_t)(d->m.classes ? d->m.classes : 1));
+    }
     if (b->idx >= b->len) {
       break;
     }
@@ -644,7 +746,7 @@ static uint32_t chain_flags(Ctx * c, size_t chain, uint32_t flags,
       continue;
     }
     for (f = 0; f < nfeat && !c->bad; f++) {
-      size_t fe = chain + 16 + 12 * (size_t)f;
+      size_t fe = chain + (c->old ? 12 : 16) + 12 * (size_t)f;
 
       if (u16(c, fe) == wanted[w].type && u16(c, fe + 2) == wanted[w].setting) {
         flags &= u32(c, fe + 8);
@@ -656,7 +758,11 @@ static uint32_t chain_flags(Ctx * c, size_t chain, uint32_t flags,
 }
 
 bool gfnt_morx_present(const GFNT_Face * face) {
-  return gfnt_face_has_table(face, GFNT_TAG_morx);
+  // HarfBuzz reads `mort` only where the font has no `GSUB`: Konatu.ttf carries
+  // both, and its `mort` is not used.
+  return gfnt_face_has_table(face, GFNT_TAG_morx)
+      || (gfnt_face_has_table(face, GFNT_TAG_mort)
+          && !gfnt_face_has_table(face, GFNT_TAG('G', 'S', 'U', 'B')));
 }
 
 GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
@@ -674,12 +780,16 @@ GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
   size_t ncuts = 0;
   GFNT_Result result;
 
-  result = gfnt_face_table_reader(face, GFNT_TAG_morx, &table, error);
+  bool old = !gfnt_face_has_table(face, GFNT_TAG_morx);
+
+  result = gfnt_face_table_reader(face, old ? GFNT_TAG_mort : GFNT_TAG_morx,
+      &table, error);
   if (result != GFNT_OK) {
     return result;
   }
   (void)gfnt_face_num_glyphs(face, &glyphs, NULL);
   memset(&c, 0, sizeof c);
+  c.old = old;
   c.r = &table;
   c.buf = buf;
   c.num_glyphs = glyphs;
@@ -724,15 +834,16 @@ GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
   for (ch = 0; ch < chains && !c.bad; ch++) {
     uint32_t defaults = u32(&c, at);
     uint32_t length = u32(&c, at + 4);
-    uint32_t nfeat = u32(&c, at + 8);
-    uint32_t nsub = u32(&c, at + 12);
-    size_t sub_at = at + 16 + 12 * (size_t)nfeat;
+    uint32_t nfeat = old ? u16(&c, at + 8) : u32(&c, at + 8);
+    uint32_t nsub = old ? u16(&c, at + 10) : u32(&c, at + 12);
+    size_t head = old ? 12 : 16;
+    size_t sub_at = at + head + 12 * (size_t)nfeat;
     uint32_t s;
     size_t r;
 
     // The feature entries have to fit in the chain: a count that does not is a
     // damaged table, and is not walked.
-    if (c.bad || length < 16 || nfeat > (length - 16) / 12) {
+    if (c.bad || length < head || nfeat > (length - head) / 12) {
       break;
     }
     c.nranges = ncuts;
@@ -742,15 +853,26 @@ GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
           cuts[r]);
     }
     for (s = 0; s < nsub && !c.bad; s++) {
-      uint32_t len = u32(&c, sub_at);
-      uint32_t coverage = u32(&c, sub_at + 4);
-      uint32_t sub_flags = u32(&c, sub_at + 8);
-      int type = (int)(coverage & 0xFF);
+      uint32_t len = old ? u16(&c, sub_at) : u32(&c, sub_at);
+      uint32_t coverage;
+      uint32_t sub_flags = u32(&c, sub_at + (old ? 4 : 8));
+      size_t shead = old ? 8 : 12;
+      int type;
       bool reverse;
       bool any = false;
       Driver d;
 
-      if (c.bad || len < 12) {
+      if (old) {
+        // The 16-bit coverage word keeps the morx flags in its top bits.
+        uint32_t word = u16(&c, sub_at + 2);
+
+        coverage = ((word & 0xF000u) << 16) | (word & 0xFFu);
+      }
+      else {
+        coverage = u32(&c, sub_at + 4);
+      }
+      type = (int)(coverage & 0xFF);
+      if (c.bad || len < shead) {
         break;
       }
       for (r = 0; r < ncuts; r++) {
@@ -780,10 +902,10 @@ GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
         case CONTEXTUAL:
         case LIGATURE:
         case INSERTION:
-          drive(&d, type, sub_at + 12);
+          drive(&d, type, sub_at + shead);
           break;
         case NONCONTEXTUAL:
-          noncontextual(&c, sub_at + 12);
+          noncontextual(&c, sub_at + shead);
           break;
         default:
           break;

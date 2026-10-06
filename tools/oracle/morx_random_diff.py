@@ -37,6 +37,7 @@ GLYPHS = list(range(1, 15))
 DONT = 0.08
 COVER = False
 MORT = False
+DELETE = 0.0   # the chance that a substitution makes the glyph 0xFFFF, which is deleted
 DONT_INS = 0.0   # an insertion that does not advance may never stop
 
 
@@ -55,6 +56,9 @@ class Gen:
 
     def g(self):
         return self.r.choice(GLYPHS)
+
+    def out(self):
+        return 0xFFFF if self.r.random() < DELETE else self.r.choice(GLYPHS)
 
     def classes(self, nclasses):
         # Every glyph in 1..14 has a class; 0 and 1 are for the end of text and glyphs
@@ -76,7 +80,7 @@ class Gen:
     def subtable(self, kind):
         r = self.r
         if kind == 4:
-            m = {g: r.choice(GLYPHS) for g in GLYPHS if r.random() < .6}
+            m = {g: self.out() for g in GLYPHS if r.random() < .6}
             return pad(lookup8(m, missing=None))
         nclasses, nstates, nentries, classes, states = self.stx(kind)
         clstab = pad(lookup8(classes))
@@ -91,7 +95,7 @@ class Gen:
                 entries.append(u16(r.randrange(nstates), flags))
         elif kind == 1:
             nsub = r.randint(1, 3)
-            subs = [{g: r.choice(GLYPHS) for g in GLYPHS if r.random() < .5}
+            subs = [{g: self.out() for g in GLYPHS if r.random() < .5}
                     for _ in range(nsub)]
             for _ in range(nentries):
                 flags = r.choice((0, 0, 0x8000))
@@ -290,7 +294,7 @@ def feat_table():
 
 
 def main(argv):
-    global DONT, COVER, DONT_INS, MORT
+    global DONT, COVER, DONT_INS, MORT, DELETE
     COVER = '--coverage' in argv
     MORT = '--mort' in argv
     direction = argv[argv.index('--direction') + 1] if '--direction' in argv else ''
@@ -305,6 +309,7 @@ def main(argv):
         elif a == "--scratch": scratch = argv[i + 1]
         elif a == "--dont": DONT = float(argv[i + 1])
         elif a == "--dontins": DONT_INS = float(argv[i + 1])
+        elif a == "--delete": DELETE = float(argv[i + 1])
         elif a == "--types": types = tuple(int(x) for x in argv[i + 1].split(","))
     os.makedirs(scratch, exist_ok=True)
     cmap = {65 + i: i + 1 for i in range(8)}

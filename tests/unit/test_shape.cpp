@@ -4263,6 +4263,32 @@ TEST(ShapeMorx, AMachineSkipsTheGlyphsOutsideTheRangeOfAFeatureAndStartsOverAfte
   EXPECT_EQ(ids(g), (V{1, 1, 9, 1, 1}));
 }
 
+TEST(Shape, ADefaultIgnorableWithNoGlyphGivesItsClusterToTheGlyphAfterItInDrawingOrder) {
+  // ALEF, ZWNJ, BEH in a font with no glyph for the ZWNJ and none for the space: the
+  // ZWNJ is taken out and the BEH, which is drawn before the ALEF, takes its cluster
+  // (HarfBuzz 10.2.0: BEH 1, ALEF 0). In a left-to-right run it is the glyph before
+  // that takes it: a ZWSP then A-DOT-BELOW, whose ZWSP goes to the A and its mark
+  // together.
+  Font arab(small_font({}, 30, {{0x627, 1}, {0x628, 2}}));
+  Font latn(small_font({}, 30, {{0x61, 1}, {0x323, 2}, {0x1EA1, 0}}));
+  Glyphs g;
+  Request request;
+
+  request.script = "arab";
+  request.rtl = true;
+  ASSERT_EQ(shape(arab, V{0x627, 0x200C, 0x628}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].glyph, 2u);
+  EXPECT_EQ(g[0].cluster, 1u);
+  EXPECT_EQ(g[1].glyph, 1u);
+  EXPECT_EQ(g[1].cluster, 0u);
+  request = Request();
+  ASSERT_EQ(shape(latn, V{0x200B, 0x1EA1}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].cluster, 0u);
+  EXPECT_EQ(g[1].cluster, 0u);
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

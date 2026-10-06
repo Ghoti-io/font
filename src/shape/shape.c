@@ -787,6 +787,12 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
         !native_rtl, !native_rtl);
   }
+  // The run is turned into the order it is drawn in before the default-ignorables
+  // are dealt with, so that the clusters of those taken out go the way HarfBuzz
+  // sends them in right-to-left text.
+  if (native_rtl) {
+    gfnt_lbuf_reverse(&buf);
+  }
   // Default-ignorables: drawn as nothing, once the positions are made (the lookups
   // have seen the glyphs the font gave them, not the space that replaces them). The space glyph stands in for them if
   // the font has one, so that the run keeps its length and its clusters; a font
@@ -821,10 +827,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
             continue;
           }
           if (i + 1 < buf.len) {
-            buf.info[i + 1].cluster = cluster < buf.info[i + 1].cluster
-                ? cluster : buf.info[i + 1].cluster;
-            cluster = buf.info[i + 1].cluster;
-            (void)cluster;
+            // Forward: the whole cluster after it takes the lower number.
+            gfnt_merge_clusters(buf.info, buf.len, i, i + 2);
           }
           continue;
         }
@@ -838,9 +842,6 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     buf.len = kept;
   }
 
-  if (native_rtl) {
-    gfnt_lbuf_reverse(&buf);
-  }
 
   run.glyphs = allocator->calloc_fn(allocator->ctx, buf.len ? buf.len : 1,
       sizeof *run.glyphs);

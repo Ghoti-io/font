@@ -964,7 +964,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx
+check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-norm
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -1028,6 +1028,12 @@ check-oracle-gpos: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --userfeatures --seeds 200
 	@for s in mixed arab hebr thai khmr mym2 tibt hang sinh bali beng taml; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --script $$s --seeds 200 || exit 1; \
+	done
+
+check-oracle-norm: ## Shape random cmaps over composing characters here and in HarfBuzz and compare
+check-oracle-norm: $(EXAMPLES)
+	@for s in latn hang arab; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/norm_random_diff.py --script $$s --seeds 300 || exit 1; \
 	done
 
 check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz

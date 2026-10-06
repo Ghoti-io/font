@@ -407,6 +407,11 @@ static bool insert_glyphs(Driver * d, size_t at, size_t src_glyph_index,
   size_t base = d->c->old ? d->insert_actions + 2 * src_glyph_index + 1
       : d->insert_actions + 2 * src_glyph_index;
 
+  // A run that has spent its step budget takes no more glyphs, as in HarfBuzz.
+  if (b->max_ops < 0) {
+    return false;
+  }
+  b->max_ops -= (int64_t)count;
   (void)u16(d->c, base + 2 * (count - 1));
   if (d->c->bad) {
     return false;

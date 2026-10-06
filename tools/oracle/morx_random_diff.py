@@ -207,7 +207,7 @@ def feat_table():
 
 
 def main(argv):
-    global DONT, COVER
+    global DONT, COVER, DONT_INS
     COVER = '--coverage' in argv
     direction = argv[argv.index('--direction') + 1] if '--direction' in argv else ''
     aatfeat = "--aatfeatures" in argv
@@ -220,6 +220,7 @@ def main(argv):
         elif a == "--driver": driver = argv[i + 1]
         elif a == "--scratch": scratch = argv[i + 1]
         elif a == "--dont": DONT = float(argv[i + 1])
+        elif a == "--dontins": DONT_INS = float(argv[i + 1])
         elif a == "--types": types = tuple(int(x) for x in argv[i + 1].split(","))
     os.makedirs(scratch, exist_ok=True)
     cmap = {65 + i: i + 1 for i in range(8)}

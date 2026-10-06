@@ -151,8 +151,8 @@ static GFNT_Nfa * khmer_grammar(void) {
       ALT(tail, SEQ(OPT(joiner), SYM(KC_COENG)))),
       // Subscripts may also follow the vowels, and then take no more of them
       // (found by where HarfBuzz puts a dotted circle).
-      SEQ(SEQ(ALT(first_cn, SET(BIT(KC_PLACEHOLDER) | BIT(KC_DOTTEDCIRCLE))),
-          tail), coeng_c));
+      SEQ(SEQ(SEQ(ALT(first_cn, SET(BIT(KC_PLACEHOLDER) | BIT(KC_DOTTEDCIRCLE))),
+          STAR(coeng_cn)), tail), coeng_c));
   {
     GFNT_Re robatic = SEQ(OPT(joiner), SYM(KC_ROBATIC));
     GFNT_Re coeng = SEQ(OPT(joiner), SYM(KC_COENG));

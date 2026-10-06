@@ -1015,6 +1015,9 @@ check-oracle-gsub: $(EXAMPLES)
 check-oracle-gpos: ## Shape random GPOS lookups here and in HarfBuzz and compare
 check-oracle-gpos: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --seeds 1000
+	@for s in arab hebr thai khmr mym2 tibt hang sinh bali beng taml; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --script $$s --seeds 200 || exit 1; \
+	done
 
 check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz
 check-oracle-would: $(EXAMPLES)

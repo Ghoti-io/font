@@ -204,7 +204,7 @@ def random_set():
     return random_set.r.randrange(2)
 
 
-def build_gpos(seed):
+def build_gpos(seed, script_tag='latn'):
     gen = PGen(seed)
     r = gen.r
     lookups = []
@@ -232,7 +232,7 @@ def build_gpos(seed):
         pos += len(b)
     flist = u16(len(feats)) + frec + b''.join(bodies)
     script = u16(4, 0) + u16(0, 0xffff, len(feats), *range(len(feats)))
-    scripts = ['DFLT', 'latn']
+    scripts = sorted(set(['DFLT', 'latn', script_tag]))
     slhdr = 2 + 6 * len(scripts)
     sl, body = u16(len(scripts)), b''
     for sc in scripts:
@@ -252,29 +252,39 @@ def build_gpos(seed):
 
 def main(argv):
     seeds, first, reuse, driver, scratch = 200, 0, False, G.DRIVER, SCRATCH
+    script = 'latn'
     for i, a in enumerate(argv):
         if a == "--seeds": seeds = int(argv[i + 1])
         elif a == "--first": first = int(argv[i + 1])
         elif a == "--reuse": reuse = True
         elif a == "--driver": driver = argv[i + 1]
         elif a == "--scratch": scratch = argv[i + 1]
+        elif a == "--script": script = argv[i + 1]
     os.makedirs(scratch, exist_ok=True)
     cmap = {65 + i: i + 1 for i in range(8)}
+    iso, ot, tags_ = 'Latn', 'latn', None
+    if script != 'latn':
+        iso, ot, chars, _ = G.OTHER[script]
+        chars = list(chars) + [chars[0] + 1, chars[1] + 1]
+        cmap = {c: i + 1 for i, c in enumerate(chars)}
+        alphabet = ''.join(chr(c) for c in chars)
     lines = []
     for seed in range(first, first + seeds):
         font = os.path.join(scratch, "s%d.ttf" % seed)
         text = os.path.join(scratch, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra={
-                'GPOS': build_gpos(seed), 'GDEF': gdef(),
-                'GSUB': G.build_gsub(seed + 5000, GL, ['ccmp', 'liga', 'calt'])}))
+                'GPOS': build_gpos(seed, ot), 'GDEF': gdef(),
+                'GSUB': G.build_gsub(seed + 5000, GL, ['ccmp', 'liga', 'calt'],
+                                     script_tag=None if script == 'latn' else ot)}))
         rr = random.Random(seed * 7)
-        with open(text, "w") as h:
-            h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 7))) + "\n"
+        with open(text, "w", encoding="utf-8") as h:
+            h.write(''.join(''.join((alphabet[rr.randrange(8)] if script != 'latn' else chr(65 + rr.randrange(8)))
+                                    for _ in range(rr.randint(1, 7))) + "\n"
                             for _ in range(12)))
         lines.append("hb-shape --font-file='%s' --output-format=json "
-                     "--no-glyph-names --script=Latn --text-file='%s' > '%s.hb'"
-                     % (font, text, font))
+                     "--no-glyph-names --script=%s --text-file='%s' > '%s.hb'"
+                     % (font, iso, text, font))
     runner = os.path.join(scratch, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
@@ -294,10 +304,10 @@ def main(argv):
         with open(font + ".hb", encoding="utf-8") as h:
             hb = [json.loads(l) if l.startswith("[") else [] for l in h.read().split("\n")[:-1]]
         with open(text, "rb") as h:
-            ours = subprocess.run([driver, "--batch", "--script", "latn", font],
+            ours = subprocess.run([driver, "--batch", "--script", ot, font],
                                   stdin=h, capture_output=True, text=True)
         mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
-        txt = open(text).read().split("\n")
+        txt = open(text, encoding="utf-8").read().split("\n")
         for i, (a, b) in enumerate(zip(hb, mine)):
             compared += 1
             if norm(a) != norm(b):

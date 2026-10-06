@@ -167,9 +167,12 @@ static bool gfnt_gpos_apply_value(GFNT_LApply * c, uint32_t format, size_t base,
     applied = true;
   }
   if (format & GFNT_VF_X_ADVANCE) {
-    pos->x_advance += gfnt_ls16(c, values);
+    // Only horizontal text moves the pen along x, as only vertical moves it along y.
+    if (!c->vertical) {
+      pos->x_advance += gfnt_ls16(c, values);
+      applied = true;
+    }
     values += 2;
-    applied = true;
   }
   if (format & GFNT_VF_Y_ADVANCE) {
     // Only vertical text moves the pen along y; in horizontal text the value is
@@ -193,8 +196,10 @@ static bool gfnt_gpos_apply_value(GFNT_LApply * c, uint32_t format, size_t base,
       values += 2;
     }
     if (format & GFNT_VF_X_ADV_DEVICE) {
-      pos->x_advance += gfnt_gpos_round(c, gfnt_gpos_device_delta(c,
-          gfnt_l_rel(base, gfnt_lu16(c, values))));
+      if (!c->vertical) {
+        pos->x_advance += gfnt_gpos_round(c, gfnt_gpos_device_delta(c,
+            gfnt_l_rel(base, gfnt_lu16(c, values))));
+      }
       values += 2;
     }
     if (format & GFNT_VF_Y_ADV_DEVICE) {

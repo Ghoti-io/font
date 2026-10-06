@@ -2045,6 +2045,30 @@ TEST(ShapeAllocation, EveryAllocationRefusedInTurnInTheScriptShapersToo) {
 
 // --- vertical text and mirroring ---------------------------------------------------
 
+static const std::vector<uint8_t> k_vertxadv = {
+       0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x24, 0x00, 0x32, 0x00, 0x02,
+       0x44, 0x46, 0x4C, 0x54, 0x00, 0x0E, 0x6C, 0x61, 0x74, 0x6E, 0x00, 0x0E,
+       0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x01, 0x00, 0x00,
+       0x00, 0x01, 0x6B, 0x65, 0x72, 0x6E, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01,
+       0x00, 0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+       0x00, 0x08, 0x00, 0x01, 0x00, 0x08, 0x00, 0x04, 0x00, 0x32, 0x00, 0x01,
+       0x00, 0x01, 0x00, 0x01};
+
+TEST(ShapeVertical, AnXAdvanceAdjustmentIsLeftOutOfVerticalText) {
+  // A `kern` single adjustment of 50 units of x advance to glyph A. In horizontal
+  // text A is 550 wide; in vertical text the pen moves along y only and the value
+  // is dropped. (HarfBuzz 10.2.0.)
+  Glyphs h = shape_vertical(small_font({{GFNT_TAG('G', 'P', 'O', 'S'), k_vertxadv}}),
+      cps("A"), GFNT_DIRECTION_LTR);
+  Glyphs v = shape_vertical(small_font({{GFNT_TAG('G', 'P', 'O', 'S'), k_vertxadv}}),
+      cps("A"), GFNT_DIRECTION_TTB);
+
+  ASSERT_EQ(h.size(), 1u);
+  EXPECT_EQ(h[0].x_advance, 550);
+  ASSERT_EQ(v.size(), 1u);
+  EXPECT_EQ(v[0].x_advance, 0);
+}
+
 TEST(ShapeVertical, AdvancesComeFromVmtxAndTheOriginFromVorg) {
   Glyphs g = shape_vertical(small_font(vertical_tables(1, true)), cps("AB"),
       GFNT_DIRECTION_TTB);

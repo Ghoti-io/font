@@ -260,6 +260,9 @@ def main(argv):
         elif a == "--driver": driver = argv[i + 1]
         elif a == "--scratch": scratch = argv[i + 1]
         elif a == "--script": script = argv[i + 1]
+    userfeat = "--userfeatures" in argv
+    direction = argv[argv.index("--direction") + 1] if "--direction" in argv else ""
+    ftags = ['kern', 'mark', 'mkmk', 'curs', 'dist', 'abvm', 'liga', 'calt', 'ccmp']
     os.makedirs(scratch, exist_ok=True)
     cmap = {65 + i: i + 1 for i in range(8)}
     iso, ot, tags_ = 'Latn', 'latn', None
@@ -282,9 +285,14 @@ def main(argv):
             h.write(''.join(''.join((alphabet[rr.randrange(8)] if script != 'latn' else chr(65 + rr.randrange(8)))
                                     for _ in range(rr.randint(1, 7))) + "\n"
                             for _ in range(12)))
+        opt = ""
+        if userfeat:
+            opt += " --features='%s'" % G.features_for(seed, ftags)
+        if direction:
+            opt += " --direction=%s" % direction
         lines.append("hb-shape --font-file='%s' --output-format=json "
-                     "--no-glyph-names --script=%s --text-file='%s' > '%s.hb'"
-                     % (font, iso, text, font))
+                     "--no-glyph-names --script=%s%s --text-file='%s' > '%s.hb'"
+                     % (font, iso, opt, text, font))
     runner = os.path.join(scratch, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
@@ -304,7 +312,9 @@ def main(argv):
         with open(font + ".hb", encoding="utf-8") as h:
             hb = [json.loads(l) if l.startswith("[") else [] for l in h.read().split("\n")[:-1]]
         with open(text, "rb") as h:
-            ours = subprocess.run([driver, "--batch", "--script", ot, font],
+            extra = (["--features", G.features_for(seed, ftags)] if userfeat else []) + \
+                    ({"rtl": ["--rtl"], "ltr": [], "ttb": ["--ttb"], "btt": ["--btt"]}[direction] if direction else [])
+            ours = subprocess.run([driver, "--batch", "--script", ot] + extra + [font],
                                   stdin=h, capture_output=True, text=True)
         mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
         txt = open(text, encoding="utf-8").read().split("\n")

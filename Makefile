@@ -683,7 +683,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback
+.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
 .PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
@@ -1050,9 +1050,10 @@ check-oracle-fallback: $(EXAMPLES)
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/fallback_random_diff.py --set $$s --direction ttb --seeds 200 || exit 1; \
 	done
 
-check-oracle-uvs: ## Shape random variation-sequence cmaps here and in HarfBuzz and compare
+check-oracle-uvs: ## Shape random variation-sequence cmaps and metrics tables here and in HarfBuzz and compare
 check-oracle-uvs: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/uvs_random_diff.py --seeds 300
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/metrics_random_diff.py --seeds 300
 
 check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz
 check-oracle-would: $(EXAMPLES)

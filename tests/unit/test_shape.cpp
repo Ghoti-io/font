@@ -3606,6 +3606,27 @@ TEST(ShapeArabic, AMarkAndALetterLigatedAreNoMarkToThePlacementOfMarks) {
   EXPECT_NE(g[0].x_advance, 0);
 }
 
+TEST(ShapeKhmer, ASubscriptMayFollowTheVowelsOfTheBaseButOnlyOne) {
+  // KA, VOWEL SIGN AA, COENG, KHA is one syllable in HarfBuzz 10.2.0 and gets no
+  // dotted circle; a second subscript after it, or a coeng with no consonant, does.
+  const std::vector<std::pair<uint32_t, uint16_t>> cmap = {
+      {0x1780, 9}, {0x1781, 10}, {0x1782, 14}, {0x17D2, 11}, {0x17B6, 12},
+      {0x25CC, 20}};
+  Font font(small_font({}, 40, cmap));
+  Glyphs g;
+  Request request;
+
+  ASSERT_EQ(font.result, GFNT_OK);
+  request.script = "khmr";
+  ASSERT_EQ(shape(font, V{0x1780, 0x17B6, 0x17D2, 0x1781}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{9, 12, 11, 10}));
+  ASSERT_EQ(shape(font, V{0x1780, 0x17B6, 0x17D2, 0x1781, 0x17D2, 0x1782}, request,
+                &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{9, 12, 11, 10, 20, 11, 14}));
+  ASSERT_EQ(shape(font, V{0x1780, 0x17B6, 0x17D2}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{9, 12, 20, 11}));
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

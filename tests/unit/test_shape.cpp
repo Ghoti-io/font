@@ -2382,6 +2382,24 @@ TEST(ShapeMorx, ARearrangementMovesGlyphsAndMergesTheirClusters) {
   EXPECT_EQ(morx_run(font, "AEFD"), (P{{4, 0}, {6, 0}, {5, 0}, {1, 0}}));
 }
 
+TEST(ShapeMorx, AMergeIsNotExtendedBackPastTheMachinesOwnPosition) {
+  // The first subtable swaps B and C, which joins their clusters. The second runs
+  // from the end of the text backwards over C B A, marks the C and swaps it with
+  // the A at the end of the text: the merge covers C and A, and does not reach back
+  // to the B that shares the C's cluster, so the B keeps its own.
+  Bytes first = state_table(5, {4, 4, 4},
+      {{0, 0, 0, 0, 1}, {0, 0, 0, 0, 2}, {0, 0, 0, 0, 3}, {0, 0, 0, 0, 0}},
+      {words({0, 0}), words({1, 0}), words({2, 0x8000}), words({3, 0x2001})}, 0);
+  Bytes second = state_table(5, {4, 4, 4},
+      {{0, 0, 0, 0, 1}, {0, 0, 0, 0, 2}, {0, 0, 0, 0, 3}, {4, 0, 0, 0, 0},
+          {0, 0, 0, 0, 0}},
+      {words({0, 0}), words({1, 0}), words({2, 0x8000}), words({3, 0}),
+          words({4, 0x2001})}, 0);
+  Bytes font = morx_font(morx_table(1, {}, {morx_subtable(0, 0, 1, first),
+      morx_subtable(0, 0x40, 1, second)}));
+  EXPECT_EQ(morx_run(font, "ABC"), (P{{3, 0}, {1, 0}, {2, 1}}));
+}
+
 TEST(ShapeMorx, AnInsertionPutsGlyphsAfterTheCurrentGlyphInItsCluster) {
   // An A inserts two glyphs, 30 and 31, behind itself.
   Bytes body = state_table(6, {4, 5}, {{0, 0, 0, 0, 1, 0}},

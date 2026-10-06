@@ -192,8 +192,28 @@ static void merge(GFNT_LBuffer * b, size_t start, size_t end) {
   if (end > b->len) {
     end = b->len;
   }
-  if (start < end) {
-    gfnt_merge_clusters(b->info, b->len, start, end);
+  if (end - start >= 2 && start < end) {
+    GFNT_LInfo * info = b->info;
+    uint32_t cluster = info[start].cluster;
+    size_t i;
+
+    for (i = start + 1; i < end; i++) {
+      if (info[i].cluster < cluster) {
+        cluster = info[i].cluster;
+      }
+    }
+    while (end < b->len && info[end - 1].cluster == info[end].cluster) {
+      end++;
+    }
+    // The range is only extended back past the machine's own position, which it
+    // is never before: a machine's glyphs before @c idx are not a cluster's tail.
+    while (b->idx < start && start > 0
+        && info[start - 1].cluster == info[start].cluster) {
+      start--;
+    }
+    for (i = start; i < end; i++) {
+      info[i].cluster = cluster;
+    }
   }
 }
 

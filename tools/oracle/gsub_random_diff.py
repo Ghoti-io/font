@@ -252,7 +252,7 @@ def lookup_table(typ,flag,subs):
     hdr=6+2*len(subs); offs=[];body=b''
     for x in subs: offs.append(hdr+len(body)); body+=x
     return u16(typ,flag,len(subs),*offs)+body
-def build_gsub(seed,gl,tags,override=None,old_spec=False,script_tag=None):
+def build_gsub(seed,gl,tags,override=None,old_spec=False,script_tag=None,langs=False):
     gen=Gen(seed,gl); r=gen.r
     lookups=[]
     for _ in range(3):
@@ -279,7 +279,24 @@ def build_gsub(seed,gl,tags,override=None,old_spec=False,script_tag=None):
     for (t,ls),b in zip(feats,fbodies): frec+=t.encode()+u16(pos); pos+=len(b)
     flist=u16(len(feats))+frec+b''.join(fbodies)
     langsys=u16(0,0xffff,len(feats),*range(len(feats)))
-    script=u16(4,0)+langsys
+    if langs:
+        # Language systems with their own feature lists, a required feature in some;
+        # the random choices come from a generator of their own so the lookups above
+        # are the same with and without them.
+        lr=random.Random(seed*31+7)
+        lt=sorted(lr.sample(['TRK ','DEU ','ENG ','FRA ','ROM '],lr.randint(1,4)))
+        ls=[]
+        for _ in lt:
+            idx=sorted(set(lr.randrange(len(feats)) for _ in range(lr.randint(0,len(feats)))))
+            req=lr.choice((0xffff,0xffff,lr.randrange(len(feats))))
+            ls.append(u16(0,req,len(idx),*idx))
+        base=2+2+6*len(lt)
+        offs=[]; pos=4+6*len(lt)
+        for b in ls: offs.append(pos); pos+=len(b)
+        script=u16(pos,len(lt))+b''.join(t.encode()+u16(o) for t,o in zip(lt,offs))+b''.join(ls)+langsys
+        build_gsub.langs=lt
+    else:
+        script=u16(4,0)+langsys
     # Sorted, because a reader bisects them. An old-spec font has no 'dev2'.
     scripts=['DFLT','deva','latn'] if old_spec else ['DFLT','dev2','deva','latn']
     if script_tag: scripts=sorted(["DFLT",script_tag,"latn"])
@@ -420,6 +437,14 @@ def texts_for(script, seed):
             for _ in range(12)]
 
 
+BCP47 = {'TRK ': 'tr', 'DEU ': 'de', 'ENG ': 'en', 'FRA ': 'fr', 'ROM ': 'ro', 'ZZZ ': 'xx'}
+
+
+def language_for(seed):
+    r = random.Random(seed * 3 + 11)
+    return r.choice(('TRK ', 'DEU ', 'ENG ', 'FRA ', 'ROM ', 'ZZZ ', '', ''))
+
+
 def features_for(seed, tags):
     """A random list of user features, as hb-shape and the driver both read it."""
     r = random.Random(seed * 13 + 5)
@@ -455,6 +480,7 @@ def main(argv):
         elif a == "--scratch":
             SCRATCH = argv[i + 1]
     userfeat = "--userfeatures" in argv
+    langs = "--languages" in argv
     direction = argv[argv.index("--direction") + 1] if "--direction" in argv else ""
     cmap = LATIN if script == "latn" else DEVA
     tags = TAGS_LATIN + TAGS_DEVA
@@ -477,7 +503,7 @@ def main(argv):
         text = os.path.join(SCRATCH, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra={
-                'GSUB': build_gsub(seed, GLYPHS, tags, old_spec=old,
+                'GSUB': build_gsub(seed, GLYPHS, tags, old_spec=old, langs=langs,
                                    script_tag=OTHER[script][1] if script in OTHER else None)}))
         with open(text, "w", encoding="utf-8") as h:
             h.write(''.join(t + "\n" for t in texts_for(script, seed)))
@@ -487,6 +513,10 @@ def main(argv):
             fopt = " --features='%s'" % fs
         if direction:
             fopt += " --direction=%s" % direction
+        if langs:
+            lang = language_for(seed)
+            if lang:
+                fopt += " --language=%s" % BCP47[lang]
         lines.append("hb-shape --font-file='%s' --output-format=json "
                      "--no-glyph-names --script=%s%s --text-file='%s' > '%s.hb'"
                      % (font, iso, fopt, text, font))
@@ -514,6 +544,8 @@ def main(argv):
                   for l in h.read().split("\n")[:-1]]
         with open(text, "rb") as h:
             extra = ["--features", features_for(seed, tags)] if userfeat else []
+            if langs and language_for(seed):
+                extra += ["--language", language_for(seed)]
             if direction:
                 extra += {"rtl": ["--rtl"], "ltr": [], "ttb": ["--ttb"], "btt": ["--btt"]}[direction]
             ours = subprocess.run([DRIVER, "--batch", "--script", ot] + extra + [font],

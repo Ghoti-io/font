@@ -27,6 +27,9 @@
  *
  *   --script <tag>, --language <tag>, --rtl, --features <list>, --face <n>
  *                       as for font-shape
+ *   --bidi <ltr|rtl|auto>
+ *                       the text mixes directions: run the Unicode
+ *                       Bidirectional Algorithm with that paragraph direction
  *   --fallback <font>   a face to draw with where the first lacks a character;
  *                       repeatable, in order of preference
  *   --location <list>   a location in a variable font's design space, as
@@ -228,6 +231,8 @@ int main(int argc, char ** argv) {
   int baseline;
   uint8_t * canvas;
   size_t i;
+  bool bidi = false;
+  GFNT_BidiDirection bidi_direction = GFNT_BIDI_LTR;
 
   memset(&options, 0, sizeof options);
   for (arg = 1; arg < argc; arg++) {
@@ -252,6 +257,13 @@ int main(int argc, char ** argv) {
     else if (strcmp(argv[arg], "--fallback") == 0 && arg + 1 < argc
         && fallbacks < 8) {
       fallback_path[fallbacks++] = argv[++arg];
+    }
+    else if (strcmp(argv[arg], "--bidi") == 0 && arg + 1 < argc) {
+      const char * d = argv[++arg];
+
+      bidi = true;
+      bidi_direction = !strcmp(d, "rtl") ? GFNT_BIDI_RTL
+          : !strcmp(d, "auto") ? GFNT_BIDI_AUTO : GFNT_BIDI_LTR;
     }
     else if (strcmp(argv[arg], "--margin") == 0 && arg + 1 < argc) {
       margin = atoi(argv[++arg]);
@@ -368,8 +380,10 @@ int main(int argc, char ** argv) {
     list_upem[i + 1] = fallback_upem[i];
   }
   memset(&runs, 0, sizeof runs);
-  if (gfnt_faces_shape(list_faces, fallbacks + 1, codepoints, (size_t)count,
-          &options, NULL, &runs, &error) != GFNT_OK) {
+  if ((bidi ? gfnt_faces_shape_bidi(list_faces, fallbacks + 1, codepoints,
+                  (size_t)count, bidi_direction, &options, NULL, &runs, &error)
+            : gfnt_faces_shape(list_faces, fallbacks + 1, codepoints,
+                  (size_t)count, &options, NULL, &runs, &error)) != GFNT_OK) {
     gfnt_error_dump(&error, stderr);
     gfnt_face_free(face);
     gfnt_blob_destroy(blob);

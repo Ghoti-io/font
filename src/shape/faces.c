@@ -28,6 +28,7 @@
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/shape.h>
+#include <ghoti.io/unicode/bidi.h>
 #include <ghoti.io/unicode/char.h>
 #include <stdlib.h>
 #include <string.h>
@@ -376,4 +377,145 @@ void gfnt_face_runs_free(GFNT_FaceRuns * runs) {
     runs->allocator->free_fn(runs->allocator->ctx, runs->runs);
   }
   memset(runs, 0, sizeof *runs);
+}
+
+/** Shape one level run into @p out, rebased to the whole text. */
+static GFNT_Result bidi_part(const GFNT_Face * const * faces, size_t face_count,
+    const uint32_t * codepoints, size_t start, size_t length, bool rtl,
+    const GFNT_ShapeOptions * options, const GFNT_Allocator * allocator,
+    GFNT_FaceRuns * out, GFNT_Error * error) {
+  GFNT_ShapeOptions part = *options;
+  GFNT_ShapeFeature * features = NULL;
+  GFNT_Result r;
+
+  part.direction = rtl ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
+  r = cut_features(options, start, length, allocator, &features,
+      &part.feature_count);
+  if (r != GFNT_OK) {
+    return gfnt_error_set(error, r, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for the features of a level run");
+  }
+  part.features = features;
+  r = gfnt_faces_shape(faces, face_count, codepoints + start, length, &part,
+      allocator, out, error);
+  if (features) {
+    allocator->free_fn(allocator->ctx, features);
+  }
+  for (size_t i = 0; r == GFNT_OK && i < out->count; i++) {
+    out->runs[i].start += start;
+    for (size_t g = 0; g < out->runs[i].run.count; g++) {
+      out->runs[i].run.glyphs[g].cluster += (uint32_t)start;
+    }
+  }
+  return r;
+}
+
+GFNT_Result gfnt_faces_shape_bidi(const GFNT_Face * const * faces,
+    size_t face_count, const uint32_t * codepoints, size_t count,
+    GFNT_BidiDirection paragraph, const GFNT_ShapeOptions * options,
+    const GFNT_Allocator * allocator, GFNT_FaceRuns * out, GFNT_Error * error) {
+  static const GFNT_ShapeOptions defaults;
+  uint8_t * levels = NULL;
+  size_t * run_start = NULL;
+  uint8_t * run_level = NULL;
+  size_t * order = NULL;
+  GFNT_FaceRuns * parts = NULL;
+  size_t nruns = 0;
+  size_t total = 0;
+  GFNT_FaceRuns result;
+  GFNT_Result r = GFNT_OK;
+  GUNI_BidiDirection dir;
+
+  gfnt_error_clear(error);
+  if (!faces || !face_count || !out || (count && !codepoints)
+      || (unsigned)paragraph > GFNT_BIDI_AUTO) {
+    return GFNT_ERR_INVALID;
+  }
+  if (!options) {
+    options = &defaults;
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  // Vertical text has no bidi levels of its own: it is shaped as one run.
+  if (options->direction == GFNT_DIRECTION_TTB
+      || options->direction == GFNT_DIRECTION_BTT || count == 0) {
+    return gfnt_faces_shape(faces, face_count, codepoints, count, options,
+        allocator, out, error);
+  }
+  dir = paragraph == GFNT_BIDI_RTL ? GUNI_BIDI_RTL
+      : paragraph == GFNT_BIDI_AUTO ? GUNI_BIDI_AUTO : GUNI_BIDI_LTR;
+  levels = allocator->calloc_fn(allocator->ctx, count, sizeof *levels);
+  run_start = allocator->calloc_fn(allocator->ctx, count + 1, sizeof *run_start);
+  run_level = allocator->calloc_fn(allocator->ctx, count, sizeof *run_level);
+  order = allocator->calloc_fn(allocator->ctx, count, sizeof *order);
+  parts = allocator->calloc_fn(allocator->ctx, count, sizeof *parts);
+  memset(&result, 0, sizeof result);
+  result.allocator = allocator;
+  if (!levels || !run_start || !run_level || !order || !parts) {
+    r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for the bidirectional levels");
+    goto done;
+  }
+  if (guni_bidi_levels_with_allocator(codepoints, count, dir, NULL, levels,
+          count, NULL, NULL) != GUNI_OK) {
+    r = gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+        "the text is too long for the bidirectional algorithm");
+    goto done;
+  }
+  for (size_t i = 0; i < count; i++) {
+    if (i == 0 || levels[i] != levels[i - 1]) {
+      run_start[nruns] = i;
+      run_level[nruns++] = levels[i];
+    }
+  }
+  run_start[nruns] = count;
+  for (size_t k = 0; k < nruns && r == GFNT_OK; k++) {
+    r = bidi_part(faces, face_count, codepoints, run_start[k],
+        run_start[k + 1] - run_start[k], (run_level[k] & 1) != 0, options,
+        allocator, &parts[k], error);
+    total += parts[k].count;
+  }
+  if (r == GFNT_OK
+      && guni_bidi_reorder(run_level, nruns, order, count) != GUNI_OK) {
+    r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "the level runs could not be put in visual order");
+  }
+  if (r == GFNT_OK) {
+    result.runs = allocator->calloc_fn(allocator->ctx, total ? total : 1,
+        sizeof *result.runs);
+    if (!result.runs) {
+      r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "no memory for the stretches");
+    }
+  }
+  if (r == GFNT_OK) {
+    // The stretches of each level run are already in visual order within it;
+    // the level runs are taken in the order the reordering gives.
+    for (size_t v = 0; v < nruns; v++) {
+      GFNT_FaceRuns * p = &parts[order[v]];
+
+      for (size_t i = 0; i < p->count; i++) {
+        result.runs[result.count++] = p->runs[i];
+      }
+      if (p->runs) {
+        allocator->free_fn(allocator->ctx, p->runs);
+        p->runs = NULL;
+        p->count = 0;
+      }
+    }
+    *out = result;
+  }
+done:
+  if (parts) {
+    for (size_t k = 0; k < count; k++) {
+      gfnt_face_runs_free(&parts[k]);
+    }
+  }
+  allocator->free_fn(allocator->ctx, parts);
+  allocator->free_fn(allocator->ctx, order);
+  allocator->free_fn(allocator->ctx, run_level);
+  allocator->free_fn(allocator->ctx, run_start);
+  allocator->free_fn(allocator->ctx, levels);
+  return r;
 }

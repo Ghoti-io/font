@@ -41,10 +41,11 @@
  *     syllable the font has; the Indic scripts, Khmer, Myanmar and the Universal
  *     Shaping Engine's scripts cut a run into syllables, reorder them and select
  *     the forms the font's features make.
- *   * **No bidirectional reordering.** A run is one direction: left to right,
- *     right to left, top to bottom or bottom to top. Vertical text is shaped as
- *     HarfBuzz shapes it for a font that is not variable; at a location in the
- *     design space a vertical run is refused.
+ *   * **One direction per run.** ::gfnt_face_shape() and ::gfnt_faces_shape()
+ *     take a run that is left to right, right to left, top to bottom or bottom
+ *     to top; ::gfnt_faces_shape_bidi() splits a mixed paragraph into such runs.
+ *     Vertical text is shaped as HarfBuzz shapes it for a font that is not
+ *     variable; at a location in the design space a vertical run is refused.
  *   * **Apple's tables in part.** A font with `morx` (or the older `mort`) is
  *     substituted by it and not by `GSUB`, as HarfBuzz does, and a version 2
  *     `kerx` kerns and attaches by its subtables (formats 0, 1, 2, 4 and 6) in
@@ -236,6 +237,38 @@ GFNT_API GFNT_Result gfnt_faces_shape(const GFNT_Face * const * faces,
     size_t face_count, const uint32_t * codepoints, size_t count,
     const GFNT_ShapeOptions * options, const GFNT_Allocator * allocator,
     GFNT_FaceRuns * out, GFNT_Error * error);
+
+/** @brief The direction of a paragraph's base level, for ::gfnt_faces_shape_bidi(). */
+typedef enum GFNT_BidiDirection {
+  GFNT_BIDI_LTR = 0,  ///< Paragraph level 0.
+  GFNT_BIDI_RTL,      ///< Paragraph level 1.
+  GFNT_BIDI_AUTO      ///< The first strong character decides (UAX #9, P2 and P3).
+} GFNT_BidiDirection;
+
+/**
+ * @brief Shape a paragraph that mixes left-to-right and right-to-left text.
+ *
+ * Runs the Unicode Bidirectional Algorithm (UAX #9) over the text, shapes each
+ * run of one embedding level as ::gfnt_faces_shape() does, in its own direction
+ * (an odd level reads right to left), and returns the stretches in visual order
+ * for one line: drawing them one after another, each where the last one's pen
+ * stopped, draws the paragraph. @p options->direction is not read, except that a
+ * vertical one shapes the text as a single run with no reordering. The clusters
+ * and starts are indices into the whole text.
+ *
+ * The text is one paragraph on one line: the caller splits paragraphs and
+ * breaks lines (the levels of a line are what a line break would reorder). A
+ * ligature or a join does not span two level runs, and a character's mirror image
+ * is chosen as in ::gfnt_faces_shape() for a right-to-left run.
+ *
+ * @param paragraph The paragraph's base direction.
+ * @return As ::gfnt_faces_shape(); ::GFNT_ERR_LIMIT for a text the algorithm will
+ *   not take, and ::GFNT_ERR_INVALID for a direction that is not one of the three.
+ */
+GFNT_API GFNT_Result gfnt_faces_shape_bidi(const GFNT_Face * const * faces,
+    size_t face_count, const uint32_t * codepoints, size_t count,
+    GFNT_BidiDirection paragraph, const GFNT_ShapeOptions * options,
+    const GFNT_Allocator * allocator, GFNT_FaceRuns * out, GFNT_Error * error);
 
 /** @brief Release the stretches and their glyphs. A zeroed one is harmless. */
 GFNT_API void gfnt_face_runs_free(GFNT_FaceRuns * runs);

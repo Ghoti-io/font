@@ -27,6 +27,8 @@
  *
  *   --script <tag>      the OpenType script tag, as `latn`
  *   --language <tag>    the OpenType language system tag, as `TRK `
+ *   --bidi <ltr|rtl|auto>   (with --batch) shape each line as a mixed-direction
+ *                       paragraph, glyphs in visual order
  *   --rtl, --ltr        the run reads right to left, or left to right; with
  *                       neither, the way its script is written
  *   --ttb, --btt        the run reads top to bottom, or bottom to top
@@ -194,6 +196,8 @@ int main(int argc, char ** argv) {
   size_t i;
   bool layout = false;
   bool batch = false;
+  bool bidi = false;
+  GFNT_BidiDirection bidi_direction = GFNT_BIDI_LTR;
   const char * location = NULL;
   GFNT_F2Dot14 normalised[64];
   GFNT_Variation variation;
@@ -227,6 +231,13 @@ int main(int argc, char ** argv) {
     else if (strcmp(argv[arg], "--btt") == 0) {
       options.direction = GFNT_DIRECTION_BTT;
       direction_given = true;
+    }
+    else if (strcmp(argv[arg], "--bidi") == 0 && arg + 1 < argc) {
+      const char * d = argv[++arg];
+
+      bidi = true;
+      bidi_direction = !strcmp(d, "rtl") ? GFNT_BIDI_RTL
+          : !strcmp(d, "auto") ? GFNT_BIDI_AUTO : GFNT_BIDI_LTR;
     }
     else if (strcmp(argv[arg], "--ptem") == 0 && arg + 1 < argc) {
       options.point_size = strtof(argv[++arg], NULL);
@@ -437,6 +448,31 @@ int main(int argc, char ** argv) {
       if (!direction_given) {
         line_options.direction = gfnt_shape_script_direction(options.script
             ? options.script : gfnt_shape_script_of(codepoints, (size_t)n));
+      }
+      if (bidi) {
+        GFNT_FaceRuns runs;
+        const GFNT_Face * one = face;
+
+        memset(&runs, 0, sizeof runs);
+        if (gfnt_faces_shape_bidi(&one, 1, codepoints, (size_t)n,
+                bidi_direction, &line_options, NULL, &runs, &error)
+            != GFNT_OK) {
+          printf("{\"error\":\"%s\"}\n", gfnt_result_string(error.result));
+          continue;
+        }
+        printf("[");
+        for (size_t r = 0, first = 1; r < runs.count; r++) {
+          for (i = 0; i < runs.runs[r].run.count; i++, first = 0) {
+            const GFNT_ShapedGlyph * g = &runs.runs[r].run.glyphs[i];
+
+            printf("%s{\"g\":%u,\"cl\":%u,\"dx\":%d,\"dy\":%d,\"ax\":%d,"
+                "\"ay\":%d}", first ? "" : ",", g->glyph, g->cluster,
+                g->x_offset, g->y_offset, g->x_advance, g->y_advance);
+          }
+        }
+        printf("]\n");
+        gfnt_face_runs_free(&runs);
+        continue;
       }
       if (gfnt_face_shape(face, codepoints, (size_t)n, &line_options, NULL,
               &run, &error) != GFNT_OK) {

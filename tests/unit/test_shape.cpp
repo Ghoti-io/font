@@ -2540,6 +2540,72 @@ TEST(ShapeMort, AnInsertionListIsAtTwiceItsOffsetPlusOne) {
   EXPECT_EQ(morx_run(font, "AB"), (P{{1, 0}, {30, 0}, {31, 0}, {2, 1}}));
 }
 
+// ---- Bidirectional text ----
+
+namespace {
+
+/** What one letter of a bidi test font is drawn as: A-D are glyphs 1-4, Hebrew
+ * alef, bet and gimel are glyphs 20, 21 and 22, and a space is 30. */
+Bytes bidi_font() {
+  return small_font({}, 40,
+      {{0x05D0, 20}, {0x05D1, 21}, {0x05D2, 22}, {0x0020, 30}, {'(', 31},
+          {')', 32}});
+}
+
+std::vector<Placed> bidi_run(const Bytes & font_bytes,
+    const std::u32string & text, GFNT_BidiDirection paragraph) {
+  Font font(font_bytes);
+  EXPECT_EQ(font.result, GFNT_OK);
+  std::vector<uint32_t> text_cps(text.begin(), text.end());
+  const GFNT_Face * faces[1] = {font.face};
+  GFNT_FaceRuns runs;
+  memset(&runs, 0, sizeof runs);
+  EXPECT_EQ(gfnt_faces_shape_bidi(faces, 1, text_cps.data(), text_cps.size(),
+                paragraph, nullptr, nullptr, &runs, nullptr),
+      GFNT_OK);
+  std::vector<Placed> out;
+  for (size_t r = 0; r < runs.count; r++) {
+    for (size_t g = 0; g < runs.runs[r].run.count; g++) {
+      out.push_back({runs.runs[r].run.glyphs[g].glyph,
+          runs.runs[r].run.glyphs[g].cluster});
+    }
+  }
+  gfnt_face_runs_free(&runs);
+  return out;
+}
+
+}  // namespace
+
+TEST(ShapeBidi, ARightToLeftRunInsideLeftToRightTextIsReversedInPlace) {
+  // "AB " then alef bet gimel then " CD": the Hebrew reads from the right.
+  Bytes font = bidi_font();
+  EXPECT_EQ(bidi_run(font, U"AB \u05D0\u05D1\u05D2 CD", GFNT_BIDI_LTR),
+      (P{{1, 0}, {2, 1}, {30, 2}, {22, 5}, {21, 4}, {20, 3}, {30, 6}, {3, 7},
+          {4, 8}}));
+}
+
+TEST(ShapeBidi, ARightToLeftParagraphPutsItsFirstRunOnTheRight) {
+  // Alef bet, a space, then AB: in a right-to-left paragraph the Latin sits to the
+  // left of the Hebrew, and the space between the two follows the paragraph.
+  Bytes font = bidi_font();
+  EXPECT_EQ(bidi_run(font, U"\u05D0\u05D1 AB", GFNT_BIDI_RTL),
+      (P{{1, 3}, {2, 4}, {30, 2}, {21, 1}, {20, 0}}));
+  // With no direction given the first strong character decides: here, the same.
+  EXPECT_EQ(bidi_run(font, U"\u05D0\u05D1 AB", GFNT_BIDI_AUTO),
+      (P{{1, 3}, {2, 4}, {30, 2}, {21, 1}, {20, 0}}));
+  // And plain Latin in an automatic paragraph stays left to right.
+  EXPECT_EQ(bidi_run(font, U"AB", GFNT_BIDI_AUTO), (P{{1, 0}, {2, 1}}));
+}
+
+TEST(ShapeBidi, ABracketPairIsMirroredWithTheRunItIsIn) {
+  // In a right-to-left paragraph the parentheses around AB are on its level and
+  // drawn as each other's mirror image: the glyph of ")" stands left of AB and
+  // that of "(" right of it, and AB itself, one level deeper, reads left to right.
+  Bytes font = bidi_font();
+  EXPECT_EQ(bidi_run(font, U"\u05D0 (AB) \u05D1", GFNT_BIDI_RTL),
+      (P{{21, 7}, {30, 6}, {31, 5}, {1, 3}, {2, 4}, {32, 2}, {30, 1}, {20, 0}}));
+}
+
 // ---- Font fallback ----
 
 namespace {

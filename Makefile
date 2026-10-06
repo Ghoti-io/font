@@ -683,7 +683,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb
+.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
 .PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
@@ -964,6 +964,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
+check-oracle: check-oracle-gsub
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -1004,6 +1005,10 @@ check-oracle-metrics: $(EXAMPLES)
 # own cases, whose recorded answers (tests/data/golden/shape.txt) are checked
 # against HarfBuzz here so that the unit suite's copy of them cannot go stale.
 # See tools/oracle/hb_diff.py for what is explained by a named gap and what is not.
+check-oracle-gsub: ## Shape random GSUB lookups here and in HarfBuzz and compare
+check-oracle-gsub: $(EXAMPLES)
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --seeds 1000
+
 check-oracle-hb: ## Diff what every corpus string shapes to against HarfBuzz
 check-oracle-hb: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/hb_diff.py --quiet \

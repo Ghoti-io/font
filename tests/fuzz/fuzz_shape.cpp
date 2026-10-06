@@ -9,6 +9,9 @@
  * nested lookup index past the end of the lookup list. A fuzzer given `GSUB`
  * alone cannot write the `GDEF` that changes which of its glyphs are skipped.
  *
+ * With the bidirectional alphabet (the last one) the text is also shaped as a
+ * paragraph, and each code point must be in exactly one stretch.
+ *
  * With bit 0x80 of the options the first two thirds are Apple's `morx` (`mort` with
  * 0x40 too) and `feat`
  * instead of `GSUB` and `GPOS`; with bit 0x40 they are `kerx` and `kern`, the second
@@ -132,6 +135,12 @@ const std::vector<Alphabet> & alphabets() {
       {"hebr", {0x05D0, 0x05D1, 0x05B0, 0x05BC, 0x05C1, 0xFB31, 0x200D}},
       {"sinh", {0x0D9A, 0x0DBB, 0x0DCA, 0x0DD9, 0x0DDC, 0x0DCF, 0x0D82, 0x200D,
           0x25CC}},
+      // The last one is the bidirectional alphabet: letters of both directions,
+      // digits, brackets and spaces, and the explicit embeddings and isolates.
+      {"latn", {0x41, 0x42, 0x43, 0x05D0, 0x05D1, 0x0627, 0x0628, 0x0644, 0x31,
+          0x32, 0x0661, 0x28, 0x29, 0x5B, 0x5D, 0x20, 0x2C, 0x2E, 0x2B, 0x200E,
+          0x200F, 0x061C, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066,
+          0x2067, 0x2068, 0x2069}},
   };
   return table;
 }
@@ -338,6 +347,48 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         }
       }
     }
+  }
+  if (alphabet == &alphabets().back()) {
+    // The bidirectional alphabet: the same text as a paragraph. However it is
+    // split and ordered, each code point is in exactly one stretch, the glyphs'
+    // clusters are positions in the text, and asking twice gives one answer.
+    const GFNT_BidiDirection paragraph =
+        (GFNT_BidiDirection)(options & 0x20u ? (options & 0x10u ? 1 : 2) : 0);
+    const GFNT_Face * faces[1] = {face};
+    GFNT_FaceRuns one{};
+    GFNT_FaceRuns two{};
+    const GFNT_Result c = gfnt_faces_shape_bidi(faces, 1, text.data(),
+        text.size(), paragraph, &shape_options, nullptr, &one, &error);
+    const GFNT_Result d = gfnt_faces_shape_bidi(faces, 1, text.data(),
+        text.size(), paragraph, &shape_options, nullptr, &two, &error);
+
+    check(c == d);
+    check(c == GFNT_OK || c == GFNT_ERR_CORRUPT || c == GFNT_ERR_UNSUPPORTED
+        || c == GFNT_ERR_LIMIT || c == GFNT_ERR_OOM);
+    if (c == GFNT_OK) {
+      std::vector<unsigned char> seen(text.size(), 0);
+
+      check(one.count == two.count);
+      for (size_t r = 0; r < one.count; ++r) {
+        check(one.runs[r].start + one.runs[r].length <= text.size());
+        for (size_t k = 0; k < one.runs[r].length; ++k) {
+          check(!seen[one.runs[r].start + k]);
+          seen[one.runs[r].start + k] = 1;
+        }
+        check(one.runs[r].run.count == two.runs[r].run.count);
+        for (size_t i = 0; i < one.runs[r].run.count; ++i) {
+          check(one.runs[r].run.glyphs[i].cluster < text.size());
+          check(one.runs[r].run.glyphs[i].glyph == two.runs[r].run.glyphs[i].glyph
+              && one.runs[r].run.glyphs[i].cluster
+                  == two.runs[r].run.glyphs[i].cluster);
+        }
+      }
+      for (size_t i = 0; i < text.size(); ++i) {
+        check(seen[i]);
+      }
+    }
+    gfnt_face_runs_free(&one);
+    gfnt_face_runs_free(&two);
   }
   gfnt_shaped_run_free(&first);
   gfnt_shaped_run_free(&second);

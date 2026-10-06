@@ -84,12 +84,12 @@ TOTAL = 60
 
 # How far two readers' normalised 2.14 coordinates may differ, by reference.
 #
-# One unit against fontTools, whose float arithmetic can land a tie either side.
-# **None against FreeType**: this library's normalisation is FreeType's own
-# arithmetic - 16.16 with half-away rounding at each division and (x + 2) >> 2 to
-# 2.14 - so the two must agree to the bit, and a unit of slack would hide exactly
-# the difference that choice was made to remove.
-NORMAL_ALLOWANCE = {"fontTools": 1, "FreeType": 0}
+# The ratio is rounded once, to 2.14, as HarfBuzz does (a randomised comparison
+# against it, var_random_diff.py, holds at no difference). fontTools lands a tie
+# either side, so one unit; FreeType goes through 16.16 and rounds twice, so it is a
+# unit off for about one location in twenty. Zero against either would hide
+# nothing worth finding and would fail on the references' own arithmetic.
+NORMAL_ALLOWANCE = {"fontTools": 1, "FreeType": 1}
 # And how far two readers' 26.6 coordinates may, by what kind of glyph it is.
 #
 # One 64th for a simple glyph: its points are a stored integer plus a delta that

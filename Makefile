@@ -1054,6 +1054,8 @@ check-oracle-uvs: ## Shape random variation-sequence cmaps and metrics tables he
 check-oracle-uvs: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/uvs_random_diff.py --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/metrics_random_diff.py --seeds 300
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/var_random_diff.py --seeds 300
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/var_random_diff.py --seeds 300 --avar
 
 check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz
 check-oracle-would: $(EXAMPLES)

@@ -519,56 +519,70 @@ GFNT_Result gfnt_face_instance_at(const GFNT_Face * face, size_t index,
   return GFNT_OK;
 }
 
-/** One axis: clamp, then the default-relative linear map, in 16.16. */
-static int32_t gfnt_axis_normalise(const GFNT_Axis * axis, int32_t value) {
+/**
+ * One axis normalised straight to 2.14: the exact ratio of the two spans, rounded
+ * once, a tie away from zero. HarfBuzz and fontTools compute it as a float and
+ * round once (a few ties land the other way there, from float error); going through 16.16 first, as FreeType does, rounds twice
+ * and lands a unit off for some values.
+ */
+static int32_t gfnt_axis_normalise14(const GFNT_Axis * axis, int32_t value) {
+  int64_t num;
+  int64_t den;
+  int64_t scaled;
+
   if (value < axis->min) {
     value = axis->min;
   }
   if (value > axis->max) {
     value = axis->max;
   }
-  // `def - min` and `max - def` are the two spans, and each is positive here
-  // because the value is on that side of the default - which is why a default
-  // equal to one end never divides by zero: nothing is on the other side of it.
+  if (value == axis->def) {
+    return 0;
+  }
   if (value < axis->def) {
-    return -(int32_t)gfnt_round_div(
-        ((int64_t)axis->def - value) * 65536, (int64_t)axis->def - axis->min);
+    num = (int64_t)axis->def - value;
+    den = (int64_t)axis->def - axis->min;
   }
-  if (value > axis->def) {
-    return (int32_t)gfnt_round_div(
-        ((int64_t)value - axis->def) * 65536, (int64_t)axis->max - axis->def);
+  else {
+    num = (int64_t)value - axis->def;
+    den = (int64_t)axis->max - axis->def;
   }
-  return 0;
+  scaled = (2 * num * 16384 + den) / (2 * den);
+  return (int32_t)(value < axis->def ? -scaled : scaled);
 }
 
-/** One axis's `avar` segment map, applied to a 16.16 normalised value. */
+/**
+ * One axis's `avar` segment map, applied to a 2.14 normalised value.
+ *
+ * The interpolation is done in 2.14 and rounded once, as HarfBuzz does; widening
+ * to 16.16 first and narrowing afterwards rounds twice and lands a unit off.
+ */
 static int32_t gfnt_avar_map(const GFNT_Avar * avar, size_t axis, int32_t value) {
   const GFNT_AvarPair * pairs = avar->pairs + avar->first[axis];
   size_t count = avar->count[axis];
   size_t i;
 
-  // The pairs are 2.14 and the value is 16.16, so each is widened by two bits.
   if (count == 0) {
     return value;
   }
-  if (value <= (int32_t)pairs[0].from * 4) {
+  if (value <= (int32_t)pairs[0].from) {
     // Before the first pair, or on it: the map's own offset carries on, which is
     // what fontTools does and what a map that covers -1..1 never reaches.
-    return value + ((int32_t)pairs[0].to - pairs[0].from) * 4;
+    return value + ((int32_t)pairs[0].to - pairs[0].from);
   }
   for (i = 1; i < count; ++i) {
-    if (value <= (int32_t)pairs[i].from * 4) {
+    if (value <= (int32_t)pairs[i].from) {
       break;
     }
   }
   if (i == count) {
-    return value + ((int32_t)pairs[count - 1].to - pairs[count - 1].from) * 4;
+    return value + ((int32_t)pairs[count - 1].to - pairs[count - 1].from);
   }
   {
-    int64_t f0 = (int64_t)pairs[i - 1].from * 4;
-    int64_t f1 = (int64_t)pairs[i].from * 4;
-    int64_t t0 = (int64_t)pairs[i - 1].to * 4;
-    int64_t t1 = (int64_t)pairs[i].to * 4;
+    int64_t f0 = pairs[i - 1].from;
+    int64_t f1 = pairs[i].from;
+    int64_t t0 = pairs[i - 1].to;
+    int64_t t1 = pairs[i].to;
 
     return (int32_t)(t0 + gfnt_round_div(((int64_t)value - f0) * (t1 - t0),
         f1 - f0));
@@ -670,16 +684,15 @@ GFNT_Result gfnt_face_normalize(const GFNT_Face * face,
   }
   for (size_t i = 0; i < fvar->axis_count; ++i) {
     int32_t value = i < count ? user_coordinates[i] : fvar->axes[i].def;
-    int32_t normalised = gfnt_axis_normalise(&fvar->axes[i], value);
+    int32_t exact = gfnt_axis_normalise14(&fvar->axes[i], value);
+    int32_t normalised = exact;
     int64_t narrow;
 
     if (avar) {
       normalised = gfnt_avar_map(avar, i, normalised);
     }
-    // 16.16 to 2.14: two bits go, rounding half up (floor of x + 2 over 4),
-    // which is FreeType's FT_fixedToFdot14 and the reason the two readers can
-    // agree to the bit. Clamped, because a map may carry a value past one.
-    narrow = gfnt_floor_div((int64_t)normalised + 2, 4);
+    // Clamped, because a map may carry a value past one.
+    narrow = normalised;
     if (narrow > 16384) {
       narrow = 16384;
     }

@@ -280,11 +280,11 @@ TEST(Variation, NormalisationIsLinearOnEachSideOfTheDefault) {
   }
 }
 
-TEST(Variation, TheRoundingToTwoPointFourteenIsHalfUpAndNotTruncation) {
-  // The 16.16 value is exactly the user coordinate on an axis whose span is one,
-  // so what is being tested is the last step alone: two bits are dropped, and
-  // the rule is the one FreeType uses - add two, then floor - which rounds a tie
-  // towards positive infinity and not away from zero.
+TEST(Variation, TheRoundingToTwoPointFourteenIsToNearestAndNotTruncation) {
+  // The user coordinate is exactly a multiple of 1/65536 on an axis whose span is
+  // one, so what is being tested is the one rounding to 2.14: the ratio is rounded
+  // once, to nearest, a tie away from zero. (Rounding to 16.16 first and then
+  // again, as FreeType does, lands a unit off for some values.)
   Variable font(build_fvar({{"test", fix(-1), 0, fix(1), 0, 0}}, {}));
   struct Case {
     int32_t user;
@@ -296,7 +296,7 @@ TEST(Variation, TheRoundingToTwoPointFourteenIsHalfUpAndNotTruncation) {
     {2, 1, "a positive tie rounds up"},
     {3, 1, "three quarters rounds up"},
     {-1, 0, "a negative quarter rounds up to zero"},
-    {-2, 0, "a negative tie rounds towards positive infinity, not away from zero"},
+    {-2, -1, "a negative tie rounds away from zero"},
     {-3, -1, "negative three quarters rounds to -1"},
     // 2/3 of the span is 43,691 in 16.16 and 10,922.75 in 2.14, which truncation
     // takes to 10,922: the case where the two rules differ for a value that is
@@ -309,6 +309,16 @@ TEST(Variation, TheRoundingToTwoPointFourteenIsHalfUpAndNotTruncation) {
     ASSERT_EQ(font.normalise({test.user}, &out), GFNT_OK) << test.why;
     EXPECT_EQ(out[0], test.normalised) << test.why;
   }
+}
+
+TEST(Variation, TheRatioIsRoundedOnceNotThroughSixteenPointSixteen) {
+  // 160 on 0..100..200 is 0.6 of the upper span: 9830.4 in 2.14. Through 16.16 it
+  // is 39322 and then 9830.5, which a half-up step takes to 9831.
+  Variable font(build_fvar({{"test", fix(0), fix(100), fix(200), 0, 0}}, {}));
+  std::vector<GFNT_F2Dot14> out;
+
+  ASSERT_EQ(font.normalise({fix(160)}, &out), GFNT_OK);
+  EXPECT_EQ(out[0], 9830);
 }
 
 TEST(Variation, AnAxisNotGivenTakesItsDefault) {

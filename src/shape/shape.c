@@ -785,7 +785,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // A font with no `GPOS` does not say where a mark goes, so the shaper does.
   if (!plan.tables[1].present && plan.shaper->fallback_position) {
     gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
-        !native_rtl, !native_rtl);
+        !native_rtl, !native_rtl, vertical);
   }
   // The run is turned into the order it is drawn in before the default-ignorables
   // are dealt with, so that the clusters of those taken out go the way HarfBuzz

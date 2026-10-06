@@ -4348,6 +4348,23 @@ TEST(ShapeHebrew, AMetegAfterAPatahAndAShevaTradesPlacesWithTheSheva) {
   EXPECT_EQ(ids(g), (V{2, 4, 3, 1}));
 }
 
+TEST(ShapeVertical, TheIndicShaperIsAsKindToVerticalTextAsToHorizontal) {
+  // A Devanagari mark keeps its place in the line in vertical text: the shaper that
+  // would leave it its advance horizontally leaves it its advance here too, where
+  // the default shaper would take it away. (HarfBuzz 10.2.0.)
+  Font font(small_font({}, 30, {{0x915, 1}, {0x952, 2}}));
+  Glyphs g;
+  Request request;
+
+  ASSERT_EQ(font.result, GFNT_OK);
+  request.script = "dev2";
+  request.vertical = GFNT_DIRECTION_TTB;
+  ASSERT_EQ(shape(font, V{0x915, 0x952}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].y_advance, -1000);
+  EXPECT_EQ(g[1].y_advance, -1000);
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

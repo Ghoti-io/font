@@ -179,7 +179,7 @@ void gfnt_fallback_recategorize_marks(GFNT_LBuffer * buf) {
 /** Place one mark against the box of what it sits on, and grow the box by it. */
 static void gfnt_position_mark(const GFNT_Face * face, GFNT_LBuffer * buf,
     const GFNT_Variation * variation, uint32_t upem, GFNT_Extents * base,
-    size_t i, uint8_t klass, bool ltr) {
+    size_t i, uint8_t klass, int ltr) {
   GFNT_Extents mark;
   GFNT_LPos * pos = &buf->pos[i];
   int32_t y_gap = (int32_t)(upem / 16);
@@ -194,13 +194,18 @@ static void gfnt_position_mark(const GFNT_Face * face, GFNT_LBuffer * buf,
   switch (klass) {
     case GFNT_CCC_DOUBLE_BELOW:
     case GFNT_CCC_DOUBLE_ABOVE:
-      if (ltr) {
+      // Only in horizontal text: vertical text centres the mark like any other.
+      if (ltr > 0) {
         pos->x_offset += base->x_bearing + base->width - mark.width / 2
             - mark.x_bearing;
+        break;
       }
-      else {
+      if (ltr < 0) {
         pos->x_offset += base->x_bearing - mark.width / 2 - mark.x_bearing;
+        break;
       }
+      pos->x_offset += base->x_bearing + (base->width - mark.width) / 2
+          - mark.x_bearing;
       break;
     case GFNT_CCC_ATTACHED_BELOW_LEFT:
     case GFNT_CCC_BELOW_LEFT:
@@ -282,7 +287,8 @@ static void gfnt_zero_mark_advances(GFNT_LBuffer * buf, size_t start,
 
 static void gfnt_position_around_base(const GFNT_Face * face,
     GFNT_LBuffer * buf, const GFNT_Variation * variation, uint32_t upem,
-    size_t base, size_t end, bool adjust, bool forward, bool horizontal_ltr) {
+    size_t base, size_t end, bool adjust, bool forward, bool horizontal_ltr,
+    bool vertical) {
   GFNT_LInfo * info = buf->info;
   GFNT_Extents base_extents;
   GFNT_Extents component;
@@ -351,7 +357,7 @@ static void gfnt_position_around_base(const GFNT_Face * face,
         cluster = component;
       }
       gfnt_position_mark(face, buf, variation, upem, &cluster, i, klass,
-          forward && horizontal_ltr);
+          vertical ? 0 : (forward && horizontal_ltr) ? 1 : -1);
       buf->pos[i].x_advance = 0;
       buf->pos[i].y_advance = 0;
       buf->pos[i].x_offset += x_offset;
@@ -370,7 +376,7 @@ static void gfnt_position_around_base(const GFNT_Face * face,
 
 static void gfnt_position_cluster(const GFNT_Face * face, GFNT_LBuffer * buf,
     const GFNT_Variation * variation, uint32_t upem, size_t start, size_t end,
-    bool adjust, bool forward, bool horizontal_ltr) {
+    bool adjust, bool forward, bool horizontal_ltr, bool vertical) {
   size_t i;
 
   if (end - start < 2) {
@@ -386,7 +392,7 @@ static void gfnt_position_cluster(const GFNT_Face * face, GFNT_LBuffer * buf,
         }
       }
       gfnt_position_around_base(face, buf, variation, upem, i, j, adjust,
-          forward, horizontal_ltr);
+          forward, horizontal_ltr, vertical);
       i = j - 1;
     }
   }
@@ -394,7 +400,7 @@ static void gfnt_position_cluster(const GFNT_Face * face, GFNT_LBuffer * buf,
 
 void gfnt_fallback_mark_position(const GFNT_Face * face, GFNT_LBuffer * buf,
     const GFNT_Variation * variation, bool adjust_offsets_when_zeroing,
-    bool forward, bool horizontal_ltr) {
+    bool forward, bool horizontal_ltr, bool vertical) {
   uint16_t upem = 0;
   size_t start = 0;
   size_t i;
@@ -404,10 +410,10 @@ void gfnt_fallback_mark_position(const GFNT_Face * face, GFNT_LBuffer * buf,
   for (i = 1; i < buf->len; i++) {
     if (!(buf->info[i].flags & GFNT_GF_MARK)) {
       gfnt_position_cluster(face, buf, variation, upem, start, i,
-          adjust_offsets_when_zeroing, forward, horizontal_ltr);
+          adjust_offsets_when_zeroing, forward, horizontal_ltr, vertical);
       start = i;
     }
   }
   gfnt_position_cluster(face, buf, variation, upem, start, buf->len,
-      adjust_offsets_when_zeroing, forward, horizontal_ltr);
+      adjust_offsets_when_zeroing, forward, horizontal_ltr, vertical);
 }

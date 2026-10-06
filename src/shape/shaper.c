@@ -115,27 +115,24 @@ const GFNT_Shaper * gfnt_shaper_select(GFNT_Tag script, GFNT_Tag chosen,
     return &gfnt_shaper_thai;
   }
   if (script == GFNT_TAG('h', 'a', 'n', 'g')) {
-    return horizontal ? &gfnt_shaper_hangul : &gfnt_shaper_default;
+    return &gfnt_shaper_hangul;
   }
   if (script == GFNT_TAG('m', 'y', 'm', 'r')) {
     // Only a font made for the new script tag is shaped as Myanmar; one with the
     // old 'mymr' alone has the default shaper's features (found by one lookup
     // under each feature tag).
-    return horizontal && font_has_script
+    return font_has_script
             && (chosen == GFNT_TAG('m', 'y', 'm', '2') || chosen == 0)
         ? &gfnt_shaper_myanmar : &gfnt_shaper_default;
   }
   if (script == GFNT_TAG('k', 'h', 'm', 'r')) {
-    return horizontal && font_has_script ? &gfnt_shaper_khmer
-                                         : &gfnt_shaper_default;
+    return font_has_script ? &gfnt_shaper_khmer : &gfnt_shaper_default;
   }
   if (gfnt_script_is_indic(script)) {
-    return horizontal && font_has_script ? &gfnt_shaper_indic
-                                         : &gfnt_shaper_default;
+    return font_has_script ? &gfnt_shaper_indic : &gfnt_shaper_default;
   }
   if (gfnt_script_is_use(script)) {
-    return horizontal && font_has_script ? &gfnt_shaper_use
-                                         : &gfnt_shaper_default;
+    return font_has_script ? &gfnt_shaper_use : &gfnt_shaper_default;
   }
   if (gfnt_script_is_joining(script)) {
     // The others only when the font was made for the script.

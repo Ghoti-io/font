@@ -1016,6 +1016,9 @@ check-oracle-gsub: $(EXAMPLES)
 	done
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --languages --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --scriptsets --seeds 300
+	@for s in hang khmr sinh arab; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script $$s --direction ttb --seeds 200 || exit 1; \
+	done
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script mixed --seeds 200
 	@for s in latn khmr arab mixed; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script $$s --seeds 300 --userfeatures || exit 1; \
@@ -1040,8 +1043,11 @@ check-oracle-norm: $(EXAMPLES)
 
 check-oracle-fallback: ## Place marks over random glyph boxes, with no GPOS, here and in HarfBuzz
 check-oracle-fallback: $(EXAMPLES)
-	@for s in latn hebr arab thai deva; do \
+	@for s in latn spaces hebr arab thai deva khmr mymr tibt bali; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/fallback_random_diff.py --set $$s --seeds 200 || exit 1; \
+	done
+	@for s in latn deva khmr thai; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/fallback_random_diff.py --set $$s --direction ttb --seeds 200 || exit 1; \
 	done
 
 check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz

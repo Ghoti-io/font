@@ -65,7 +65,7 @@ bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
  */
 void gfnt_fallback_mark_position(const GFNT_Face * face, GFNT_LBuffer * buf,
     const GFNT_Variation * variation, bool adjust_offsets_when_zeroing,
-    bool forward, bool horizontal_ltr);
+    bool forward, bool horizontal_ltr, bool vertical);
 
 /** The combining classes a script's marks are positioned as. */
 void gfnt_fallback_recategorize_marks(GFNT_LBuffer * buf);

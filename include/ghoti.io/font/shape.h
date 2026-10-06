@@ -205,6 +205,25 @@ typedef struct GFNT_FaceRuns {
 } GFNT_FaceRuns;
 
 /**
+ * @brief A script's baseline from the `BASE` table, such as `ideo` or `romn`.
+ *
+ * The script is looked up by its own tag and then as `DFLT`. A reference-point
+ * coordinate (format 2) is read as its stated value, as for a `GPOS` anchor.
+ *
+ * @param face The face.
+ * @param baseline The baseline's tag, as GFNT_TAG('i','d','e','o').
+ * @param vertical Non-zero for the vertical axis' baselines, 0 for the horizontal's.
+ * @param script The OpenType script tag.
+ * @param variation The location in the design space, or NULL.
+ * @param ppem The size in pixels per em for a hinting device table, or 0.
+ * @param out Receives the coordinate in font units. Written only on success.
+ * @return true when the table gives that baseline for that script.
+ */
+GFNT_API bool gfnt_face_baseline(const GFNT_Face * face, GFNT_Tag baseline,
+    int vertical, GFNT_Tag script, const GFNT_Variation * variation,
+    uint32_t ppem, int32_t * out);
+
+/**
  * @brief The caret positions `GDEF` gives inside a ligature glyph.
  *
  * A text editor puts the cursor between the components of a ligature at these

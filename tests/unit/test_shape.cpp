@@ -2529,6 +2529,37 @@ TEST(ShapeCarets, AGdefListsWhereTheCursorGoesInsideALigature) {
   EXPECT_EQ(gfnt_face_ligature_carets(font.face, 5, 0, nullptr, 0, carets, 1), 2u);
 }
 
+// --- BASE ---------------------------------------------------------------------------
+
+TEST(ShapeBase, ABaselineIsReadByScriptAndTagAndScaledByItsDeviceTable) {
+  // latn has ideo at -120 and romn at 0 with a hinting device table for sizes 8
+  // and 9 (deltas 1 and -1). Nothing here is checked against HarfBuzz, whose
+  // command line does not print baselines: the bytes follow the specification.
+  std::vector<uint8_t> font_bytes = small_font({{GFNT_TAG('B', 'A', 'S', 'E'),
+      {0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x04, 0x00, 0x0E,
+       0x00, 0x02, 0x69, 0x64, 0x65, 0x6F, 0x72, 0x6F, 0x6D, 0x6E, 0x00, 0x01,
+       0x6C, 0x61, 0x74, 0x6E, 0x00, 0x08, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00,
+       0x00, 0x01, 0x00, 0x02, 0x00, 0x08, 0x00, 0x0C, 0x00, 0x01, 0xFF, 0x88,
+       0x00, 0x03, 0x00, 0x00, 0x00, 0x06, 0x00, 0x08, 0x00, 0x09, 0x00, 0x03,
+       0x01, 0xFF}}});
+  Font font(font_bytes);
+  ASSERT_EQ(font.result, GFNT_OK);
+  int32_t value = 99;
+
+  EXPECT_TRUE(gfnt_face_baseline(font.face, GFNT_TAG('i', 'd', 'e', 'o'), 0,
+      GFNT_TAG('l', 'a', 't', 'n'), nullptr, 0, &value));
+  EXPECT_EQ(value, -120);
+  EXPECT_TRUE(gfnt_face_baseline(font.face, GFNT_TAG('r', 'o', 'm', 'n'), 0,
+      GFNT_TAG('l', 'a', 't', 'n'), nullptr, 8, &value));
+  EXPECT_EQ(value, 125);
+  EXPECT_FALSE(gfnt_face_baseline(font.face, GFNT_TAG('h', 'a', 'n', 'g'), 0,
+      GFNT_TAG('l', 'a', 't', 'n'), nullptr, 0, &value));
+  EXPECT_FALSE(gfnt_face_baseline(font.face, GFNT_TAG('i', 'd', 'e', 'o'), 0,
+      GFNT_TAG('g', 'r', 'e', 'k'), nullptr, 0, &value));
+  EXPECT_FALSE(gfnt_face_baseline(font.face, GFNT_TAG('i', 'd', 'e', 'o'), 1,
+      GFNT_TAG('l', 'a', 't', 'n'), nullptr, 0, &value));
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

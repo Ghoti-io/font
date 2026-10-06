@@ -35,6 +35,7 @@ from gsub_random_diff import u16, u32, base_font
 SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "morx-random")
 GLYPHS = list(range(1, 15))
 DONT = 0.08
+COVER = False
 DONT_INS = 0.0   # an insertion that does not advance may never stop
 
 
@@ -161,7 +162,8 @@ class Gen:
             kind = self.r.choice(types)
             body = self.subtable(kind)
             flags = self.r.choice(bits) if features else 1
-            subs += u32(12 + len(body), kind, flags) + body
+            cov = kind | (self.r.choice((0, 0, 0x40000000, 0x80000000, 0x20000000, 0x10000000 | 0x40000000)) if COVER else 0)
+            subs += u32(12 + len(body), cov, flags) + body
         feats = b''
         nf = 0
         if features:
@@ -205,7 +207,9 @@ def feat_table():
 
 
 def main(argv):
-    global DONT
+    global DONT, COVER
+    COVER = '--coverage' in argv
+    direction = argv[argv.index('--direction') + 1] if '--direction' in argv else ''
     aatfeat = "--aatfeatures" in argv
     seeds, first, reuse, driver, scratch = 200, 0, False, G.DRIVER, SCRATCH
     types = (0, 1, 2, 4, 5)
@@ -231,6 +235,8 @@ def main(argv):
             h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 8)))
                             + "\n" for _ in range(12)))
         opt = " --features='%s'" % features_for(seed) if aatfeat else ""
+        if direction:
+            opt += " --direction=%s" % direction
         lines.append("hb-shape --font-file='%s' --output-format=json%s "
                      "--no-glyph-names --text-file='%s' > '%s.hb' 2>/dev/null"
                      % (font, opt, text, font))
@@ -259,6 +265,8 @@ def main(argv):
         try:
             with open(text, "rb") as h:
                 extra = ["--features", features_for(seed)] if aatfeat else []
+                if direction:
+                    extra += {"rtl": ["--rtl"], "ttb": ["--ttb"], "btt": ["--btt"], "ltr": []}[direction]
                 ours = subprocess.run([driver, "--batch", "--script", "latn"] + extra + [font],
                                       stdin=h, capture_output=True, text=True, timeout=20)
         except subprocess.TimeoutExpired:

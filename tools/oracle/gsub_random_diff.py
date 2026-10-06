@@ -395,6 +395,10 @@ OTHER = {
               'calt', 'clig', 'liga', 'rlig']),
     'laoo': ('Laoo', 'lao ', [0xE81, 0xE82, 0xEB3, 0xEB1, 0xEC0, 0xEC8],
              ['ccmp', 'locl', 'liga', 'calt', 'clig', 'rlig']),
+    'mixed': ('Latn', 'latn', [0x65, 0x301, 0xE9, 0x200D, 0x20, 0x2044, 0x31, 0x32,
+                               0x28, 0x29, 0xA0, 0xAD, 0x34F, 0x200C],
+              ['ccmp', 'locl', 'liga', 'calt', 'clig', 'rlig', 'frac', 'numr', 'dnom',
+               'rtlm', 'ltrm', 'kern', 'mark', 'mkmk']),
     'sinh': ('Sinh', 'sinh', [0xD9A, 0xD9B, 0xDCA, 0xDCF, 0xDD9, 0xDD2],
              ['ccmp', 'locl', 'nukt', 'akhn', 'rphf', 'pref', 'blwf', 'half', 'pstf',
               'vatu', 'cjct', 'pres', 'abvs', 'blws', 'psts', 'haln', 'calt', 'clig',
@@ -406,7 +410,7 @@ def texts_for(script, seed):
     r = random.Random(seed * 7)
     if script in OTHER:
         alphabet = ''.join(chr(c) for c in OTHER[script][2])
-        return [''.join(r.choice(alphabet) for _ in range(r.randint(2, 6)))
+        return [''.join(r.choice(alphabet) for _ in range(r.randint(2, 7)))
                 for _ in range(12)]
     if script == "latn":
         return [''.join(chr(65 + r.randrange(8)) for _ in range(r.randint(1, 6)))

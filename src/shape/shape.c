@@ -274,6 +274,10 @@ static void gfnt_setup_fraction_masks(const GFNT_Plan * plan,
       while (end < buf->len && buf->info[end].gc == GUNI_GC_DECIMAL_NUMBER) {
         end++;
       }
+      // A slash with no digit on one side, or on either, is left alone.
+      if (start == i || end == i + 1) {
+        continue;
+      }
       for (j = start; j < i; j++) {
         buf->info[j].mask |= plan->numr_mask | plan->frac_mask;
       }

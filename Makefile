@@ -1035,9 +1035,12 @@ check-oracle-would: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/would_random_diff.py 300 5
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/would_random_diff.py 300 6
 
-check-oracle-morx: ## Shape random AAT morx chains here and in HarfBuzz and compare
+check-oracle-morx: ## Shape random AAT morx, kerx and kern tables here and in HarfBuzz and compare
 check-oracle-morx: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 500 --dont 0
+	@for t in kerx kern; do for d in "" rtl ttb; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table $$t $${d:+--direction $$d} --seeds 200 || exit 1; \
+	done; done
 
 check-oracle-hb: ## Diff what every corpus string shapes to against HarfBuzz
 check-oracle-hb: $(EXAMPLES)

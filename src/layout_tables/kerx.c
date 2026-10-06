@@ -476,7 +476,6 @@ static void kerx_run(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
     bool * bad) {
   GFNT_LIter it;
   size_t idx = 0;
-  int32_t carry = 0;
 
   while (idx < b->len && !*bad) {
     size_t i = idx;
@@ -497,8 +496,15 @@ static void kerx_run(const GFNT_Reader * r, size_t subtable, size_t num_glyphs,
     kern = kerx_pair(r, subtable, num_glyphs, format, b->info[i].glyph,
         b->info[j].glyph, tuples, bad);
     if (cross) {
-      carry += kern;
-      b->pos[j].y_offset += carry;
+      // The glyph hangs from the one before it, and what it is shifted by is its own
+      // and what that one is shifted by. A pair with a value sets the glyph's own
+      // shift, replacing what an earlier subtable gave it; one without leaves it.
+      if (kern) {
+        b->pos[j].y_offset = kern;
+      }
+      b->pos[j].attach_type = GFNT_ATTACH_CURSIVE;
+      b->pos[j].attach_chain = (int32_t)((int64_t)i - (int64_t)j);
+      b->has_attachment = true;
     }
     else if (kern) {
       int32_t kern1 = kern >> 1;

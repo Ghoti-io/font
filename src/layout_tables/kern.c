@@ -96,14 +96,30 @@ static int32_t gfnt_kern_format2(const GFNT_Reader * r, size_t subtable,
   return (int16_t)gfnt_lr_u16(r, array + l + k, bad);
 }
 
-/** The kerning of a pair: the sum over every horizontal subtable. */
-static int32_t gfnt_kern_pair(const GFNT_Reader * r, uint32_t left,
-    uint32_t right, bool * bad) {
+/** One subtable's value for a pair, or 0. */
+static int32_t gfnt_kern_subtable_pair(const GFNT_Reader * r, size_t cursor,
+    size_t header, uint32_t format, uint32_t left, uint32_t right, bool * bad) {
+  if (format == 0) {
+    return gfnt_kern_format0(r, cursor, header, left, right, bad);
+  }
+  if (format == 2) {
+    return gfnt_kern_format2(r, cursor, header, left, right, bad);
+  }
+  return 0;
+}
+
+/**
+ * Run every horizontal subtable over the run in turn, as HarfBuzz does: each one
+ * splits its own values between the two glyphs of a pair, and a cross-stream one
+ * hangs the second glyph from the first and sets that glyph's own shift, which
+ * what an earlier subtable gave it yields to.
+ */
+static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer * b,
+    uint32_t kern_mask, bool * bad) {
   uint32_t version = gfnt_lr_u16(r, 0, bad);
   size_t cursor;
   uint32_t tables;
-  uint32_t i;
-  int32_t total = 0;
+  uint32_t t;
   bool apple = false;
 
   if (version == 0) {
@@ -116,15 +132,16 @@ static int32_t gfnt_kern_pair(const GFNT_Reader * r, uint32_t left,
     cursor = 8;
   }
   else {
-    return 0;
+    return;
   }
-  for (i = 0; i < tables && !*bad; i++) {
+  for (t = 0; t < tables && !*bad; t++) {
     size_t length;
     uint32_t coverage;
     uint32_t format;
     size_t header;
     bool horizontal;
     bool cross;
+    size_t idx = 0;
 
     if (apple) {
       length = gfnt_lr_u32(r, cursor, bad);
@@ -145,26 +162,57 @@ static int32_t gfnt_kern_pair(const GFNT_Reader * r, uint32_t left,
     if (*bad || length < header) {
       break;
     }
-    if (horizontal && !cross) {
-      if (format == 0) {
-        total += gfnt_kern_format0(r, cursor, header, left, right, bad);
-      }
-      else if (format == 2) {
-        total += gfnt_kern_format2(r, cursor, header, left, right, bad);
+    if (horizontal && (format == 0 || format == 2)) {
+      GFNT_LIter it;
+
+      while (idx < b->len && !*bad) {
+        size_t i = idx;
+        size_t j;
+        int32_t kern;
+
+        if (!(b->info[idx].mask & kern_mask)) {
+          idx++;
+          continue;
+        }
+        gfnt_liter_init(&it, c, false);
+        gfnt_liter_reset(&it, idx, 1);
+        if (!gfnt_liter_next(&it)) {
+          idx++;
+          continue;
+        }
+        j = it.idx;
+        kern = gfnt_kern_subtable_pair(r, cursor, header, format, b->info[i].glyph,
+            b->info[j].glyph, bad);
+        if (cross) {
+          if (kern) {
+            b->pos[j].y_offset = kern;
+          }
+          b->pos[j].attach_type = GFNT_ATTACH_CURSIVE;
+          b->pos[j].attach_chain = (int32_t)((int64_t)i - (int64_t)j);
+          b->has_attachment = true;
+        }
+        else if (kern) {
+          // The pair's kerning is shared between the two glyphs, so that a ligature
+          // caret or a break between them still has a sensible width.
+          int32_t kern1 = kern >> 1;
+          int32_t kern2 = kern - kern1;
+
+          b->pos[i].x_advance += kern1;
+          b->pos[j].x_advance += kern2;
+          b->pos[j].x_offset += kern2;
+        }
+        idx = j;
       }
     }
     cursor += length;
   }
-  return total;
 }
 
 GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error) {
   GFNT_Reader table;
   GFNT_LApply c;
-  GFNT_LIter it;
   bool bad = false;
-  size_t idx = 0;
   GFNT_Result result;
 
   if (!gfnt_face_has_table(face, GFNT_TAG_kern)) {
@@ -184,35 +232,7 @@ GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
   c.is_gpos = true;
   c.auto_zwnj = true;
   c.auto_zwj = true;
-  while (idx < b->len && !bad) {
-    size_t i = idx;
-    size_t j;
-    int32_t kern;
-
-    if (!(b->info[idx].mask & kern_mask)) {
-      idx++;
-      continue;
-    }
-    gfnt_liter_init(&it, &c, false);
-    gfnt_liter_reset(&it, idx, 1);
-    if (!gfnt_liter_next(&it)) {
-      idx++;
-      continue;
-    }
-    j = it.idx;
-    kern = gfnt_kern_pair(&table, b->info[i].glyph, b->info[j].glyph, &bad);
-    if (kern) {
-      // The pair's kerning is shared between the two glyphs, so that a ligature
-      // caret or a break between them still has a sensible width.
-      int32_t kern1 = kern >> 1;
-      int32_t kern2 = kern - kern1;
-
-      b->pos[i].x_advance += kern1;
-      b->pos[j].x_advance += kern2;
-      b->pos[j].x_offset += kern2;
-    }
-    idx = j;
-  }
+  gfnt_kern_run(&table, &c, b, kern_mask, &bad);
   if (bad) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_kern, 0,
         GFNT_GLYPH_NONE, "the kern table reads past itself");

@@ -430,7 +430,7 @@ static void myanmar_collect_features(GFNT_Plan * plan) {
   gfnt_plan_enable(plan, GFNT_TAG('c', 'c', 'm', 'p'), GFNT_PF_PER_SYLLABLE, 1);
   gfnt_plan_pause(plan, myanmar_reorder);
   for (i = 0; i < sizeof basic / sizeof basic[0]; i++) {
-    gfnt_plan_enable(plan, basic[i], GFNT_PF_MANUAL_ZWJ, 1);
+    gfnt_plan_enable(plan, basic[i], GFNT_PF_MANUAL_ZWJ | GFNT_PF_PER_SYLLABLE, 1);
     gfnt_plan_pause(plan, NULL);
   }
   gfnt_plan_pause(plan, gfnt_syllabic_clear_syllables);
@@ -477,6 +477,6 @@ const GFNT_Shaper gfnt_shaper_myanmar = {
   .data_destroy = myanmar_data_destroy,
   .normalization = GFNT_NORM_COMPOSED_DIACRITICS_NO_SHORT_CIRCUIT,
   .setup_masks = myanmar_setup_masks,
-  .zero_width_marks = 0,
+  .zero_width_marks = 1,
   .fallback_position = false,
 };

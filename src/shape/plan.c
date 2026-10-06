@@ -481,7 +481,8 @@ static void gfnt_plan_compile_features(GFNT_Plan * plan) {
         ? 0 : gfnt_bit_storage(f->max_value);
 
     f->mask = 0;
-    if (!f->max_value || next_bit + bits >= 31) {
+    if (!f->max_value || next_bit + bits >= 31
+        || (!f->found && !(f->flags & GFNT_PF_HAS_FALLBACK))) {
       continue;
     }
     if (bits == 0) {
@@ -596,7 +597,11 @@ static void gfnt_plan_collect_default(GFNT_Plan * plan) {
   }
   else {
     for (i = 0; i < sizeof horizontal / sizeof horizontal[0]; i++) {
-      gfnt_plan_enable(plan, horizontal[i], 0, 1);
+      // Kerning has a fallback in the kern table, so `kern` keeps its mask though
+      // the font has no such feature.
+      gfnt_plan_enable(plan, horizontal[i],
+          horizontal[i] == GFNT_TAG('k', 'e', 'r', 'n') ? GFNT_PF_HAS_FALLBACK : 0,
+          1);
     }
   }
 }
@@ -716,6 +721,30 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
         "no memory for the shaping plan");
   }
   plan->gsub_stages = (size_t)plan->gsub_stage + 1;
+  // A feature the font does not have in either table is given no mask bit, which is
+  // what HarfBuzz does, and which matters to an alternate lookup that two features
+  // share: it reads the feature's value out of the bits between them.
+  for (i = 0; i < plan->feature_count; i++) {
+    GFNT_PlanFeature * f = &plan->features[i];
+
+    f->found = false;
+    for (t = 0; t < 2; t++) {
+      GFNT_TableState * s = &state[t];
+      uint32_t index;
+
+      if (!plan->tables[t].present) {
+        continue;
+      }
+      index = s->langsys ? gfnt_find_feature(&s->c, s->langsys, f->tag)
+                         : GFNT_NO_FEATURE;
+      if (index == GFNT_NO_FEATURE && (f->flags & GFNT_PF_GLOBAL_SEARCH)) {
+        index = gfnt_find_feature_anywhere(&s->c, f->tag);
+      }
+      if (index != GFNT_NO_FEATURE) {
+        f->found = true;
+      }
+    }
+  }
   gfnt_plan_compile_features(plan);
   plan->kern_mask = gfnt_plan_mask(plan, plan->vertical
       ? GFNT_TAG('v', 'k', 'r', 'n') : GFNT_TAG('k', 'e', 'r', 'n'));

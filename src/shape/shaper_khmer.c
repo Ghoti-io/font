@@ -311,7 +311,7 @@ static void khmer_collect_features(GFNT_Plan * plan) {
   gfnt_plan_enable(plan, GFNT_TAG('l', 'o', 'c', 'l'), GFNT_PF_PER_SYLLABLE, 1);
   gfnt_plan_enable(plan, GFNT_TAG('c', 'c', 'm', 'p'), GFNT_PF_PER_SYLLABLE, 1);
   for (i = 0; i < KF_BASIC; i++) {
-    gfnt_plan_add(plan, basic[i], GFNT_PF_MANUAL_ZWNJ | GFNT_PF_MANUAL_ZWJ);
+    gfnt_plan_add(plan, basic[i], GFNT_PF_MANUAL_ZWNJ | GFNT_PF_MANUAL_ZWJ | GFNT_PF_PER_SYLLABLE);
   }
   gfnt_plan_pause(plan, gfnt_syllabic_clear_syllables);
   for (i = 0; i < sizeof other / sizeof other[0]; i++) {

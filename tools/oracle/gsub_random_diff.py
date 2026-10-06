@@ -26,7 +26,7 @@ orders glyphs after `blwf`, `pstf`, `vatu` and `rphf`, which are not (about one
 string in ten); `--script deva` shows them and is not part of the gate. See
 notes/font/SHAPING.md, "Random lookups".
 
-Usage: gsub_random_diff.py [--seeds N] [--first K] [--script latn|deva|deva-old]
+Usage: gsub_random_diff.py [--seeds N] [--first K] [--script latn|deva|deva-old|khmr|mym2|arab|thai|hang|tibt|bali|sinh]
                            [--reuse] [-v] [--driver PATH] [--scratch DIR]
 
 `--reuse` takes HarfBuzz's answers from the `.hb` files a previous run left in the
@@ -252,7 +252,7 @@ def lookup_table(typ,flag,subs):
     hdr=6+2*len(subs); offs=[];body=b''
     for x in subs: offs.append(hdr+len(body)); body+=x
     return u16(typ,flag,len(subs),*offs)+body
-def build_gsub(seed,gl,tags,override=None,old_spec=False):
+def build_gsub(seed,gl,tags,override=None,old_spec=False,script_tag=None):
     gen=Gen(seed,gl); r=gen.r
     lookups=[]
     for _ in range(3):
@@ -282,6 +282,7 @@ def build_gsub(seed,gl,tags,override=None,old_spec=False):
     script=u16(4,0)+langsys
     # Sorted, because a reader bisects them. An old-spec font has no 'dev2'.
     scripts=['DFLT','deva','latn'] if old_spec else ['DFLT','dev2','deva','latn']
+    if script_tag: scripts=sorted(["DFLT",script_tag,"latn"])
     slhdr=2+6*len(scripts); sl=u16(len(scripts)); body=b''
     for sc in scripts: sl+=sc.encode()+u16(slhdr+len(body)); body+=script
     sl+=body
@@ -300,8 +301,41 @@ TAGS_DEVA = ['nukt', 'akhn', 'rphf', 'pref', 'blwf', 'half', 'pstf', 'vatu',
              'cjct', 'pres', 'abvs', 'blws', 'psts', 'haln']
 
 
+# Other scripts: (ISO 15924 tag for HarfBuzz, OpenType tag for us, six characters
+# mapped to glyphs 9..14, the feature tags a lookup may sit under).
+OTHER = {
+    'khmr': ('Khmr', 'khmr', [0x1780, 0x1781, 0x17D2, 0x17B6, 0x17C1, 0x17C9],
+             ['ccmp', 'locl', 'pref', 'blwf', 'abvf', 'pstf', 'cfar', 'pres', 'abvs',
+              'blws', 'psts', 'clig', 'calt', 'liga', 'rlig']),
+    'mym2': ('Mymr', 'mym2', [0x1000, 0x1001, 0x1039, 0x103B, 0x1031, 0x1036],
+             ['ccmp', 'locl', 'rphf', 'pref', 'blwf', 'pstf', 'pres', 'abvs', 'blws',
+              'psts', 'clig', 'calt', 'liga', 'rlig']),
+    'arab': ('Arab', 'arab', [0x628, 0x62C, 0x644, 0x627, 0x64E, 0x651],
+             ['ccmp', 'locl', 'isol', 'fina', 'fin2', 'fin3', 'medi', 'med2', 'init',
+              'rlig', 'calt', 'liga', 'clig', 'mset']),
+    'thai': ('Thai', 'thai', [0xE01, 0xE02, 0xE33, 0xE31, 0xE40, 0xE48],
+             ['ccmp', 'locl', 'liga', 'calt', 'clig', 'rlig']),
+    'hang': ('Hang', 'hang', [0x1100, 0x1161, 0x11A8, 0x1101, 0x1162, 0x11A9],
+             ['ccmp', 'locl', 'ljmo', 'vjmo', 'tjmo', 'liga', 'calt', 'clig', 'rlig']),
+    'tibt': ('Tibt', 'tibt', [0xF40, 0xF41, 0xF71, 0xF72, 0xF90, 0xF74],
+             ['ccmp', 'locl', 'abvs', 'blws', 'liga', 'calt', 'clig', 'rlig']),
+    'bali': ('Bali', 'bali', [0x1B13, 0x1B14, 0x1B44, 0x1B35, 0x1B36, 0x1B3A],
+             ['ccmp', 'locl', 'nukt', 'akhn', 'rphf', 'pref', 'rkrf', 'abvf', 'half',
+              'pstf', 'vatu', 'cjct', 'blwf', 'pres', 'abvs', 'blws', 'psts', 'haln',
+              'calt', 'clig', 'liga', 'rlig']),
+    'sinh': ('Sinh', 'sinh', [0xD9A, 0xD9B, 0xDCA, 0xDCF, 0xDD9, 0xDD2],
+             ['ccmp', 'locl', 'nukt', 'akhn', 'rphf', 'pref', 'blwf', 'half', 'pstf',
+              'vatu', 'cjct', 'pres', 'abvs', 'blws', 'psts', 'haln', 'calt', 'clig',
+              'liga', 'rlig']),
+}
+
+
 def texts_for(script, seed):
     r = random.Random(seed * 7)
+    if script in OTHER:
+        alphabet = ''.join(chr(c) for c in OTHER[script][2])
+        return [''.join(r.choice(alphabet) for _ in range(r.randint(2, 6)))
+                for _ in range(12)]
     if script == "latn":
         return [''.join(chr(65 + r.randrange(8)) for _ in range(r.randint(1, 6)))
                 for _ in range(12)]
@@ -327,11 +361,17 @@ def main(argv):
         elif a == "--scratch":
             SCRATCH = argv[i + 1]
     cmap = LATIN if script == "latn" else DEVA
+    tags = TAGS_LATIN + TAGS_DEVA
+    if script in OTHER:
+        cmap = {c: 9 + i for i, c in enumerate(OTHER[script][2])}
+        tags = OTHER[script][3]
     old = script == "deva-old"
     if old:
         script = "deva"
     iso, ot = (("Latn", "latn") if script == "latn"
                else ("Deva", "deva" if old else "dev2"))
+    if script in OTHER:
+        iso, ot = OTHER[script][0], OTHER[script][1]
     os.makedirs(SCRATCH, exist_ok=True)
     lines = []
     for seed in range(first, first + seeds):
@@ -339,8 +379,8 @@ def main(argv):
         text = os.path.join(SCRATCH, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra={
-                'GSUB': build_gsub(seed, GLYPHS, TAGS_LATIN + TAGS_DEVA,
-                                       old_spec=old)}))
+                'GSUB': build_gsub(seed, GLYPHS, tags, old_spec=old,
+                                   script_tag=OTHER[script][1] if script in OTHER else None)}))
         with open(text, "w", encoding="utf-8") as h:
             h.write(''.join(t + "\n" for t in texts_for(script, seed)))
         lines.append("hb-shape --font-file='%s' --output-format=json "

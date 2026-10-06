@@ -61,6 +61,7 @@ typedef struct Ctx {
   size_t bounds[MAX_RANGES + 1];
   uint32_t rflags[MAX_RANGES];
   uint32_t sub_flags;      ///< The subtable being run.
+  int64_t ops;             ///< What is left of the budget for non-advancing steps.
 } Ctx;
 
 static uint16_t u16(Ctx * c, size_t at) {
@@ -313,7 +314,9 @@ static void ligature(Driver * d, size_t entry) {
       memmove(d->match, d->match + 1, (MAX_STACK - 1) * sizeof d->match[0]);
       d->match_length--;
     }
-    d->match[d->match_length++] = b->idx;
+    if (!d->match_length || d->match[d->match_length - 1] != b->idx) {
+      d->match[d->match_length++] = b->idx;
+    }
   }
   if (c->old ? (flags & 0x3FFF) != 0 : (flags & 0x2000) != 0) {
     size_t cursor = d->match_length;
@@ -487,11 +490,6 @@ static void drive(Driver * d, int type, size_t body) {
   GFNT_LBuffer * b = c->buf;
   uint32_t state = 0;
   bool last_ok = true;
-  int64_t ops = (int64_t)b->len * 64;
-
-  if (ops < 16384) {
-    ops = 16384;
-  }
   machine_open(c, body, &d->m);
   if (c->bad) {
     return;
@@ -584,7 +582,7 @@ static void drive(Driver * d, int type, size_t body) {
     if (b->idx >= b->len) {
       break;
     }
-    if (!(flags & 0x4000) || ops-- <= 0) {
+    if (!(flags & 0x4000) || c->ops-- <= 0) {
       b->idx++;
     }
   }
@@ -831,6 +829,10 @@ GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
   c.old = old;
   c.r = &table;
   c.buf = buf;
+  c.ops = (int64_t)buf->len * 1024;
+  if (c.ops < 16384) {
+    c.ops = 16384;
+  }
   c.num_glyphs = glyphs;
   wanted_count = collect_wanted(face, features, feature_count, wanted);
   // The clusters where a request starts or stops cut the run into ranges.

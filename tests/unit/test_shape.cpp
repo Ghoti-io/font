@@ -2410,6 +2410,27 @@ TEST(ShapeMorx, AContextualSubtableSubstitutesTheMarkedAndTheCurrentGlyph) {
   EXPECT_EQ(morx_run(font, "XAC"), (P{{24, 0}, {1, 1}, {32, 2}}));
 }
 
+TEST(ShapeMorx, ARunawayMachineStopsAtAThousandAndTwentyFourStepsAGlyphSharedByTheSubtables) {
+  // Every glyph is substituted by the next of A, B, C and the entry does not
+  // advance, so the machine never stops of itself. HarfBuzz lets it take
+  // 1024 steps per glyph of the run, at least 16384, once for the whole chain; the
+  // glyph the first A ends as shows how many it was allowed.
+  Bytes body = state_table(5, {4, 4, 4}, {{0, 0, 0, 0, 0}, {0, 0, 0, 0, 0}},
+      {words({0, 0x4000, 0xFFFF, 0})}, 1);
+  Bytes cycle = lookup6({{1, 2}, {2, 3}, {3, 1}});
+  patch32(body, 16, static_cast<uint32_t>(body.size()));
+  body = cat({body, longs({4}), cycle});
+  Bytes one = morx_font(morx_table(1, {}, {morx_subtable(1, 0, 1, body)}));
+  Bytes two = morx_font(morx_table(1, {},
+      {morx_subtable(1, 0, 1, body), morx_subtable(1, 0, 1, body)}));
+  EXPECT_EQ(morx_run(one, "A")[0].glyph, 3u);
+  EXPECT_EQ(morx_run(one, std::string(17, 'A'))[0].glyph, 1u);
+  EXPECT_EQ(morx_run(one, std::string(30, 'A'))[0].glyph, 2u);
+  // The second subtable has nothing left: it takes one step on each glyph.
+  EXPECT_EQ(morx_run(two, "A")[0].glyph, 1u);
+  EXPECT_EQ(morx_run(two, std::string(17, 'A'))[0].glyph, 2u);
+}
+
 TEST(ShapeMorx, FeaturesSelectSubtablesFirstRequestWinsAndRangesAreHonoured) {
   // Subtable 1 (flag 1, on by default) maps A; subtable 2 (flag 2) maps B and is
   // turned on by the common-ligatures selector of the ligature feature.

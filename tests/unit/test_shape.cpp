@@ -2431,6 +2431,24 @@ TEST(ShapeMorx, ARunawayMachineStopsAtAThousandAndTwentyFourStepsAGlyphSharedByT
   EXPECT_EQ(morx_run(two, std::string(17, 'A'))[0].glyph, 2u);
 }
 
+TEST(ShapeMorx, AnInsertionThatDoesNotAdvanceRunsAgainOverWhatItAppendedAtTheEnd) {
+  // A and B each put glyph 5 (list index 2) behind the marked glyph; at the end of
+  // the text state 1 takes entry 0, which appends glyph 8 and does not advance.
+  // HarfBuzz then runs the machine again from state 0 with the appended glyph as
+  // the current one, which inserts one more 5.
+  Bytes body = state_table(5, {4, 4}, {{2, 1, 2, 2, 2}, {0, 2, 0, 2, 2}},
+      {words({0, 0x4420, 0, 0xFFFF}), words({0, 0x0400, 4, 4}),
+          words({1, 0x0001, 2, 2})}, 1);
+  patch32(body, 16, static_cast<uint32_t>(body.size()));
+  body = cat({body, words({8, 11, 5, 9, 9, 11, 8, 12, 3, 4})});
+  Bytes font = morx_font(morx_table(1, {}, {morx_subtable(5, 0, 1, body)}));
+  std::vector<uint32_t> glyphs;
+  for (const Placed & p : morx_run(font, "AB")) {
+    glyphs.push_back(p.glyph);
+  }
+  EXPECT_EQ(glyphs, (std::vector<uint32_t>{1, 5, 5, 5, 2, 8}));
+}
+
 TEST(ShapeMorx, FeaturesSelectSubtablesFirstRequestWinsAndRangesAreHonoured) {
   // Subtable 1 (flag 1, on by default) maps A; subtable 2 (flag 2) maps B and is
   // turned on by the common-ligatures selector of the ligature feature.

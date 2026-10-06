@@ -185,6 +185,7 @@ typedef struct Driver {
   size_t subst_table;       ///< Contextual: the array of lookup offsets.
   size_t lig_action, lig_component, lig_ligature;
   size_t insert_actions;
+  size_t shift;             ///< Insertion: what inserting has added to the position since it last advanced.
 } Driver;
 
 static void merge(GFNT_LBuffer * b, size_t start, size_t end) {
@@ -408,7 +409,7 @@ static bool insert_glyphs(Driver * d, size_t at, size_t src_glyph_index,
       : d->insert_actions + 2 * src_glyph_index;
 
   // A run that has spent its step budget takes no more glyphs, as in HarfBuzz.
-  if (b->max_ops < 0) {
+  if (b->max_ops < (int64_t)count) {
     return false;
   }
   b->max_ops -= (int64_t)count;
@@ -444,7 +445,9 @@ static void insertion(Driver * d, size_t entry) {
   uint16_t flags = u16(c, entry + 2);
   uint16_t current_index = u16(c, entry + 4);
   uint16_t marked_index = u16(c, entry + 6);
-  size_t mark_loc = b->idx;
+  // Where HarfBuzz's output stands: the position less what this glyph's own
+  // insertions have moved it by, which a step that does not advance leaves in.
+  size_t mark_loc = b->idx >= d->shift ? b->idx - d->shift : 0;
 
   if (marked_index != 0xFFFF && d->mark < b->len) {
     size_t count = flags & 0x1F;
@@ -455,6 +458,7 @@ static void insertion(Driver * d, size_t entry) {
       // HarfBuzz moves to the old position plus the count whichever side of
       // the current glyph they went in on.
       b->idx += count;
+      d->shift += count;
     }
   }
   if (flags & 0x8000) {
@@ -470,19 +474,18 @@ static void insertion(Driver * d, size_t entry) {
       size_t end = b->idx;
 
       if (insert_glyphs(d, at, current_index, count, b->idx)) {
-        b->idx = end + count + (before ? 0 : 0);
-        if (before) {
-          b->idx = end + count;
-        }
-        else {
-          b->idx = end + count;
-        }
+        b->idx = end + count;
+        d->shift += count;
       }
     }
     else if (count) {
       // At the end of the text: appended, taking the last glyph's cluster.
+      size_t old_len = b->len;
+
+      // A step that does not advance stays on the first glyph appended, so the
+      // machine runs again over it; one that advances has seen the end.
       if (b->len && insert_glyphs(d, b->len, current_index, count, b->len - 1)) {
-        b->idx = b->len;
+        b->idx = (flags & 0x4000) ? old_len : b->len;
       }
     }
   }
@@ -588,6 +591,7 @@ static void drive(Driver * d, int type, size_t body) {
     }
     if (!(flags & 0x4000) || b->max_ops-- <= 0) {
       b->idx++;
+      d->shift = 0;
     }
   }
 }

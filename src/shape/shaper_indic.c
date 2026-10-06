@@ -763,11 +763,21 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     if (base < end) {
       info[base].mask |= mask;
     }
-    // Post-base.
+    // Post-base. A left-hand matra is after the base in the text but goes in
+    // front of it, and takes the pre-base features for it (found with one lookup
+    // under each feature: HarfBuzz gives such a matra `half` and not `abvf`).
     mask = data->mask[IF_BLWF] | data->mask[IF_ABVF] | data->mask[IF_PSTF]
         | data->mask[IF_CJCT];
-    for (i = base + 1; i < end; i++) {
-      info[i].mask |= mask;
+    {
+      uint32_t before = data->mask[IF_HALF] | data->mask[IF_AKHN]
+          | data->mask[IF_CJCT];
+
+      if (config->blwf_mode == BLWF_PRE_AND_POST) {
+        before |= data->mask[IF_BLWF];
+      }
+      for (i = base + 1; i < end; i++) {
+        info[i].mask |= info[i].position < IP_BASE_C ? before : mask;
+      }
     }
   }
 
@@ -1282,10 +1292,10 @@ static void indic_collect_features(GFNT_Plan * plan) {
 
   // Before any lookup has run.
   gfnt_plan_pause(plan, indic_setup_syllables);
-  gfnt_plan_enable(plan, GFNT_TAG('l', 'o', 'c', 'l'), 0, 1);
+  gfnt_plan_enable(plan, GFNT_TAG('l', 'o', 'c', 'l'), GFNT_PF_PER_SYLLABLE, 1);
   // The Indic specifications do not require ccmp, but if there is a use of it,
   // it is typically at the beginning.
-  gfnt_plan_enable(plan, GFNT_TAG('c', 'c', 'm', 'p'), 0, 1);
+  gfnt_plan_enable(plan, GFNT_TAG('c', 'c', 'm', 'p'), GFNT_PF_PER_SYLLABLE, 1);
   gfnt_plan_pause(plan, indic_initial_reordering);
   // The basic features, one at a time, each limited to the glyphs the reordering
   // chose.
@@ -1317,6 +1327,13 @@ static void indic_collect_features(GFNT_Plan * plan) {
   gfnt_plan_enable(plan, GFNT_TAG('c', 'a', 'l', 't'), 0, 1);
   gfnt_plan_enable(plan, GFNT_TAG('c', 'l', 'i', 'g'), 0, 1);
   gfnt_plan_pause(plan, gfnt_syllabic_clear_syllables);
+}
+
+static void indic_override_features(GFNT_Plan * plan) {
+  // HarfBuzz leaves `liga` off for the Indic scripts, whatever else the plan
+  // enables (found by shaping one lookup under every feature tag: it was the
+  // only tag the two disagreed on). A caller's `+liga` still turns it on.
+  gfnt_plan_enable(plan, GFNT_TAG('l', 'i', 'g', 'a'), 0, 0);
 }
 
 static void * indic_data_create(const GFNT_Plan * plan,
@@ -1412,6 +1429,7 @@ static const GFNT_NormHooks indic_hooks = {
 const GFNT_Shaper gfnt_shaper_indic = {
   .name = "indic",
   .collect_features = indic_collect_features,
+  .override_features = indic_override_features,
   .data_create = indic_data_create,
   .data_destroy = indic_data_destroy,
   .preprocess_text = gfnt_vowel_constraints,

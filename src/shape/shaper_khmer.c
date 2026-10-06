@@ -308,8 +308,8 @@ static void khmer_collect_features(GFNT_Plan * plan) {
   gfnt_plan_pause(plan, khmer_setup_syllables);
   gfnt_plan_pause(plan, khmer_reorder);
   // Uniscribe does not pause between the basic features.
-  gfnt_plan_enable(plan, GFNT_TAG('l', 'o', 'c', 'l'), 0, 1);
-  gfnt_plan_enable(plan, GFNT_TAG('c', 'c', 'm', 'p'), 0, 1);
+  gfnt_plan_enable(plan, GFNT_TAG('l', 'o', 'c', 'l'), GFNT_PF_PER_SYLLABLE, 1);
+  gfnt_plan_enable(plan, GFNT_TAG('c', 'c', 'm', 'p'), GFNT_PF_PER_SYLLABLE, 1);
   for (i = 0; i < KF_BASIC; i++) {
     gfnt_plan_add(plan, basic[i], GFNT_PF_MANUAL_ZWNJ | GFNT_PF_MANUAL_ZWJ);
   }

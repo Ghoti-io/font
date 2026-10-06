@@ -424,10 +424,10 @@ static void myanmar_collect_features(GFNT_Plan * plan) {
 
   // Before any lookup has run.
   gfnt_plan_pause(plan, myanmar_setup_syllables);
-  gfnt_plan_enable(plan, GFNT_TAG('l', 'o', 'c', 'l'), 0, 1);
+  gfnt_plan_enable(plan, GFNT_TAG('l', 'o', 'c', 'l'), GFNT_PF_PER_SYLLABLE, 1);
   // The Indic specifications do not require ccmp, but if there is a use of it, it
   // is typically at the beginning.
-  gfnt_plan_enable(plan, GFNT_TAG('c', 'c', 'm', 'p'), 0, 1);
+  gfnt_plan_enable(plan, GFNT_TAG('c', 'c', 'm', 'p'), GFNT_PF_PER_SYLLABLE, 1);
   gfnt_plan_pause(plan, myanmar_reorder);
   for (i = 0; i < sizeof basic / sizeof basic[0]; i++) {
     gfnt_plan_enable(plan, basic[i], GFNT_PF_MANUAL_ZWJ, 1);

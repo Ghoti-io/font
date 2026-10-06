@@ -595,9 +595,6 @@ static void gfnt_plan_collect_default(GFNT_Plan * plan) {
       gfnt_plan_enable(plan, horizontal[i], 0, 1);
     }
   }
-  if (plan->shaper->override_features) {
-    plan->shaper->override_features(plan);
-  }
 }
 
 /** Per-table state kept from selecting the script to adding the lookups. */
@@ -699,6 +696,12 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
           "a feature's range ends before it starts");
     }
     gfnt_plan_add_feature(plan, f->tag, whole ? GFNT_PF_GLOBAL : 0, f->value);
+  }
+  // After the caller's features, as HarfBuzz does it: a shaper that turns a
+  // feature off (Khmer and Indic `liga`, Hangul `calt`) is not overruled by a
+  // `+liga` in the caller's list.
+  if (plan->shaper->override_features) {
+    plan->shaper->override_features(plan);
   }
   if (plan->oom) {
     gfnt_plan_free(plan);

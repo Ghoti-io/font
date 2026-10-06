@@ -32,7 +32,7 @@ from gsub_random_diff import u16, u32, base_font
 
 SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "kerx-random")
 GL = list(range(1, 9))
-KINDS = (0, 0, 1, 2)
+KINDS = (0, 0, 1, 2, 6)
 DONT = 0.0
 SUBS = 3
 CROSS = 0.15
@@ -79,6 +79,18 @@ class Gen:
         base = 12 + 16
         return (u32(row, base, base + len(lt), base + len(lt) + len(rt)) + lt + rt + arr)
 
+    def kerx6(self):
+        r = self.r
+        nr, nc = r.randint(2, 4), r.randint(2, 4)
+        rows = {g: r.randrange(nr) * nc for g in GL if r.random() < .8}
+        cols = {g: r.randrange(nc) for g in GL if r.random() < .8}
+        arr = pad(b''.join(s16(r.randint(-120, 120)) for _ in range(nr * nc)))
+        rt, ct = pad(lookup8(rows, 1, 8)), pad(lookup8(cols, 1, 8))
+        base = 12 + 24
+        return (u32(0) + u16(nr, nc) + u32(base, base + len(rt), base + len(rt) + len(ct),
+                                           base + len(rt) + len(ct) + len(arr))
+                + rt + ct + arr + pad(b'\0\0'))
+
     def kerx1(self):
         r = self.r
         nclasses = r.randint(5, 8)
@@ -113,7 +125,7 @@ class Gen:
         subs = b''
         for _ in range(n):
             kind = self.r.choice(KINDS)
-            body = {0: self.kerx0, 1: self.kerx1, 2: self.kerx2}[kind]()
+            body = {0: self.kerx0, 1: self.kerx1, 2: self.kerx2, 6: self.kerx6}[kind]()
             cov = kind | (0x40000000 if self.r.random() < CROSS else 0)
             body = pad(body)
             subs += u32(12 + len(body), cov, 0) + body

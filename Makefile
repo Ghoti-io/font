@@ -1038,6 +1038,7 @@ check-oracle-would: $(EXAMPLES)
 check-oracle-morx: ## Shape random AAT morx, kerx and kern tables here and in HarfBuzz and compare
 check-oracle-morx: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 500 --dont 0
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 500 --dont 0 --aatfeatures
 	@for t in kerx kern; do for d in "" rtl ttb; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table $$t $${d:+--direction $$d} --seeds 200 || exit 1; \
 	done; done

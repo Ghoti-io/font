@@ -486,6 +486,7 @@ static void drive(Driver * d, int type, size_t body) {
   Ctx * c = d->c;
   GFNT_LBuffer * b = c->buf;
   uint32_t state = 0;
+  bool last_ok = true;
   int64_t ops = (int64_t)b->len * 64;
 
   if (ops < 16384) {
@@ -530,10 +531,25 @@ static void drive(Driver * d, int type, size_t body) {
   d->match_length = 0;
   b->idx = 0;
   for (;;) {
-    uint32_t klass = b->idx < b->len
-        ? (actionable(c, b->idx)
-              ? machine_class(c, &d->m, b->info[b->idx].glyph)
-              : CLASS_OUT_OF_BOUNDS)
+    uint32_t klass;
+
+    // A glyph the subtable is not enabled for is passed over, and the machine starts
+    // again from the start of text after it. The end of the text is a step of its own
+    // only where the range of the last glyph met enables the subtable (the glyph itself
+    // may have moved by then).
+    if (b->idx < b->len) {
+      last_ok = actionable(c, b->idx);
+      if (!last_ok) {
+        state = 0;
+        b->idx++;
+        continue;
+      }
+    }
+    else if (b->len && !last_ok) {
+      break;
+    }
+    klass = b->idx < b->len
+        ? machine_class(c, &d->m, b->info[b->idx].glyph)
         : CLASS_END_OF_TEXT;
     size_t entry = machine_entry(c, &d->m, state, klass, d->entry_size);
     uint16_t new_state = u16(c, entry);
@@ -726,39 +742,55 @@ static size_t collect_wanted(const GFNT_Face * face,
       }
     }
   }
+  // HarfBuzz takes them by type, the order they were asked for kept within a type;
+  // the flags of a chain are the same only if the requests are met in that order.
+  for (i = 1; i < n; i++) {
+    Wanted w = out[i];
+    size_t j = i;
+
+    while (j > 0 && out[j - 1].type > w.type) {
+      out[j] = out[j - 1];
+      j--;
+    }
+    out[j] = w;
+  }
   return n;
 }
 
 /** The flags of a chain for the clusters from @p at on: defaults, then the active requests. */
 static uint32_t chain_flags(Ctx * c, size_t chain, uint32_t flags,
     uint32_t nfeat, const Wanted * wanted, size_t count, size_t at) {
-  size_t w;
-  size_t v;
+  uint32_t f;
 
-  for (w = 0; w < count; w++) {
-    uint32_t f;
-    bool shadowed = false;
+  // The chain's own entries are taken in their order, and each that a request names
+  // is applied once, as HarfBuzz does.
+  for (f = 0; f < nfeat && !c->bad; f++) {
+    size_t fe = chain + (c->old ? 12 : 16) + 12 * (size_t)f;
+    uint16_t type = u16(c, fe);
+    uint16_t setting = u16(c, fe + 2);
+    size_t w;
+    size_t v;
+    bool named = false;
 
-    if (at < wanted[w].start || at >= wanted[w].end) {
-      continue;
-    }
-    // Of requests for the same setting, the first one made is the one that holds.
-    for (v = 0; v < w && !shadowed; v++) {
-      shadowed = at >= wanted[v].start && at < wanted[v].end
-          && wanted[v].type == wanted[w].type
-          && (wanted[w].exclusive
-              || (wanted[v].setting & ~1u) == (wanted[w].setting & ~1u));
-    }
-    if (shadowed) {
-      continue;
-    }
-    for (f = 0; f < nfeat && !c->bad; f++) {
-      size_t fe = chain + (c->old ? 12 : 16) + 12 * (size_t)f;
+    for (w = 0; w < count && !named; w++) {
+      bool shadowed = false;
 
-      if (u16(c, fe) == wanted[w].type && u16(c, fe + 2) == wanted[w].setting) {
-        flags &= u32(c, fe + 8);
-        flags |= u32(c, fe + 4);
+      if (at < wanted[w].start || at >= wanted[w].end
+          || wanted[w].type != type || wanted[w].setting != setting) {
+        continue;
       }
+      // Of requests for the same setting, the first one made is the one that holds.
+      for (v = 0; v < w && !shadowed; v++) {
+        shadowed = at >= wanted[v].start && at < wanted[v].end
+            && wanted[v].type == wanted[w].type
+            && (wanted[w].exclusive
+                || (wanted[v].setting & ~1u) == (wanted[w].setting & ~1u));
+      }
+      named = !shadowed;
+    }
+    if (named) {
+      flags &= u32(c, fe + 8);
+      flags |= u32(c, fe + 4);
     }
   }
   return flags;

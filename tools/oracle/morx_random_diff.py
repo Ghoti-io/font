@@ -153,20 +153,60 @@ class Gen:
             tail = b''
         return header + clstab + statetab + enttab + tail
 
-    def morx(self, types):
+    def morx(self, types, features=False):
         n = self.r.randint(1, 3)
         subs = b''
+        bits = (1, 2, 4, 8, 3, 6, 0xFFFFFFFF)
         for _ in range(n):
             kind = self.r.choice(types)
             body = self.subtable(kind)
-            subs += u32(12 + len(body), kind, 1) + body
-        chain = u32(1, 12 + 4 + len(subs) + 0, 0, n)
-        chain = u32(1, 16 + len(subs), 0, n) + subs
+            flags = self.r.choice(bits) if features else 1
+            subs += u32(12 + len(body), kind, flags) + body
+        feats = b''
+        nf = 0
+        if features:
+            pool = [(1, 2), (1, 3), (1, 4), (1, 5), (11, 1), (11, 0), (37, 1), (37, 0), (0, 0), (0, 1)]
+            required = [(1, 2), (1, 4), (37, 1), (11, 1)]
+            for t, sel in required + self.r.sample(pool, self.r.randint(0, 3)):
+                enable = self.r.choice((0, 2, 4, 8, 6, 3, 0xE))
+                disable = self.r.choice((0xFFFFFFFF, 0xFFFFFFFD, 0xFFFFFFFB, 0xFFFFFFF1, 1))
+                feats += u16(t, sel) + u32(enable, disable)
+                nf += 1
+        chain = u32(1, 16 + len(feats) + len(subs), nf, n) + feats + subs
         return u32(0x00020000, 1) + chain
+
+
+AAT_TAGS = ('liga', 'dlig', 'smcp', 'frac', 'liga', 'smcp')
+
+
+def features_for(seed):
+    r = random.Random(seed * 17 + 3)
+    out = []
+    for _ in range(r.randint(0, 3)):
+        t = r.choice(AAT_TAGS)
+        k = r.randrange(5)
+        if k == 4:
+            a = r.randrange(0, 4)
+            out.append("%s[%d:%d]" % (t, a, a + r.randint(1, 4)))
+        else:
+            out.append(r.choice(("+", "-", "")) + t)
+    return ",".join(out) or "kern"
+
+
+def feat_table():
+    """A `feat` table that lets the features the chains name be asked for."""
+    feats = [(0, [0, 1]), (1, [2, 3, 4, 5]), (11, [0, 1]), (37, [0, 1])]
+    head = 12 + 12 * len(feats)
+    names, settings = b'', b''
+    for t, sels in feats:
+        names += u16(t, len(sels)) + u32(head + len(settings)) + u16(0x8000 if t in (1,) else 0, 0)
+        settings += b''.join(u16(x, 0) for x in sels)
+    return u32(0x00010000) + u16(len(feats), 0) + u32(0) + names + settings
 
 
 def main(argv):
     global DONT
+    aatfeat = "--aatfeatures" in argv
     seeds, first, reuse, driver, scratch = 200, 0, False, G.DRIVER, SCRATCH
     types = (0, 1, 2, 4, 5)
     for i, a in enumerate(argv):
@@ -185,14 +225,15 @@ def main(argv):
         text = os.path.join(scratch, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap,
-                              extra={'morx': Gen(seed).morx(types)}))
+                              extra=dict({'morx': Gen(seed).morx(types, aatfeat)}, **({'feat': feat_table()} if aatfeat else {}))))
         rr = random.Random(seed * 7)
         with open(text, "w") as h:
             h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 8)))
                             + "\n" for _ in range(12)))
-        lines.append("hb-shape --font-file='%s' --output-format=json "
+        opt = " --features='%s'" % features_for(seed) if aatfeat else ""
+        lines.append("hb-shape --font-file='%s' --output-format=json%s "
                      "--no-glyph-names --text-file='%s' > '%s.hb' 2>/dev/null"
-                     % (font, text, font))
+                     % (font, opt, text, font))
     runner = os.path.join(scratch, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
@@ -217,7 +258,8 @@ def main(argv):
             continue
         try:
             with open(text, "rb") as h:
-                ours = subprocess.run([driver, "--batch", "--script", "latn", font],
+                extra = ["--features", features_for(seed)] if aatfeat else []
+                ours = subprocess.run([driver, "--batch", "--script", "latn"] + extra + [font],
                                       stdin=h, capture_output=True, text=True, timeout=20)
         except subprocess.TimeoutExpired:
             skipped += 1

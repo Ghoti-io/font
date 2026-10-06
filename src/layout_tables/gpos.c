@@ -577,26 +577,28 @@ static bool gfnt_gpos_mark_base(GFNT_LApply * c, size_t sub) {
     if (!gfnt_liter_prev(&it)) {
       return false;
     }
-    // A mark attaches to the first glyph of a multiple substitution's output, not
-    // to the others: those are skipped, and the search goes on behind them. A
-    // later one the font calls a base glyph is not skipped, as HarfBuzz does with
-    // the dotted circle Myanmar's blws puts after a space.
+    // The nearest glyph the base coverage holds takes the mark, and the search goes
+    // back past one that is not covered only while it is a later glyph of a
+    // multiple substitution's output (found by experiment; a covered one is never
+    // passed over, as HarfBuzz does with the dotted circle Myanmar's blws puts
+    // after a space).
     found = &b->info[it.idx];
-    if (!(found->props & GFNT_PROP_MULTIPLIED) || (found->props & GFNT_PROP_BASE)
+    base_index = gfnt_l_coverage(c, gfnt_l_rel(sub, gfnt_lu16(c, sub + 4)),
+        found->glyph);
+    if (base_index != GFNT_LAYOUT_NOT_COVERED
+        && (uint32_t)base_index < gfnt_lu16(c, base_array)) {
+      break;
+    }
+    if (!(found->props & GFNT_PROP_MULTIPLIED)
         || gfnt_l_lig_comp(found) == 0
         || it.idx == 0
+        || (b->info[it.idx - 1].props & GFNT_PROP_MARK)
         || gfnt_l_lig_id(found) != gfnt_l_lig_id(&b->info[it.idx - 1])
         || gfnt_l_lig_comp(found)
             != gfnt_l_lig_comp(&b->info[it.idx - 1]) + 1) {
-      break;
+      return false;
     }
     it.num_items++;
-  }
-  base_index = gfnt_l_coverage(c, gfnt_l_rel(sub, gfnt_lu16(c, sub + 4)),
-      b->info[it.idx].glyph);
-  if (base_index == GFNT_LAYOUT_NOT_COVERED
-      || (uint32_t)base_index >= gfnt_lu16(c, base_array)) {
-    return false;
   }
   return gfnt_gpos_mark_attach(c, mark_array, (uint32_t)mark_index, base_array,
       base_array + 2 + 2 * (size_t)class_count * (size_t)base_index,

@@ -17,6 +17,9 @@ context and chain context with nested positioning lookups), shaped with a dozen
 strings each, advances and offsets compared. Nothing is committed: every font is
 a function of its seed.
 
+A GSUB of random ligature, multiple and context lookups goes in too, so that marks
+meet ligature components and cursive runs meet substituted glyphs.
+
 Usage: gpos_random_diff.py [--seeds N] [--first K] [--reuse] [--driver PATH]
                            [--scratch DIR]
 """
@@ -104,7 +107,7 @@ class PGen:
                    n1, n2) + recs + cov + cd1 + cd2
 
     def cursive(self):
-        cs = self.gset()
+        cs = self.gset(k=self.r.randint(3, 8))
         cov = cov1(cs)
         recs, body = [], b''
         hdr = 6 + 4 * len(cs) + len(cov)
@@ -211,7 +214,7 @@ def build_gpos(seed):
                         [gen.single() if t == 1 else gen.pair() for _ in range(r.randint(1, 2))]))
     cg = G.Gen(seed * 3 + 1, GL)
     for _ in range(r.randint(2, 5)):
-        k = r.choice((1, 2, 2, 3, 4, 4, 5, 5, 6, 7, 8))
+        k = r.choice((1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8))
         if k == 1: subs = [gen.single()]
         elif k == 2: subs = [gen.pair() for _ in range(r.randint(1, 2))]
         elif k == 3: subs = [gen.cursive()]
@@ -263,7 +266,8 @@ def main(argv):
         text = os.path.join(scratch, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra={
-                'GPOS': build_gpos(seed), 'GDEF': gdef()}))
+                'GPOS': build_gpos(seed), 'GDEF': gdef(),
+                'GSUB': G.build_gsub(seed + 5000, GL, ['ccmp', 'liga', 'calt'])}))
         rr = random.Random(seed * 7)
         with open(text, "w") as h:
             h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 7))) + "\n"

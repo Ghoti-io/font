@@ -517,6 +517,10 @@ static int indic_consonant_position(const GFNT_ShapeCtx * ctx,
       || indic_would(ctx, data, IF_PREF, glyphs + 1, 2)) {
     return IP_POST_C;
   }
+  if (indic_would(ctx, data, IF_VATU, glyphs, 2)
+      || indic_would(ctx, data, IF_VATU, glyphs + 1, 2)) {
+    return IP_POST_C;
+  }
   return IP_BASE_C;
 }
 

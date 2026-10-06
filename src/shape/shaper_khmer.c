@@ -122,7 +122,7 @@ static uint8_t khmer_category(uint32_t u) {
 static GFNT_Nfa * khmer_grammar(void) {
   GFNT_ReBuilder b;
   GFNT_Nfa * nfa;
-  GFNT_Re c, cn, first_cn, joiner, xgroup, ygroup, matra_group, tail, coeng_cn, any;
+  GFNT_Re c, cn, first_cn, coeng_c, joiner, xgroup, ygroup, matra_group, tail, coeng_cn, any;
   GFNT_Re roots[KS_COUNT];
 
   gfnt_re_init(&b);
@@ -142,6 +142,7 @@ static GFNT_Nfa * khmer_grammar(void) {
           OPT(SYM(KC_VPST))));
   tail = SEQ(SEQ(xgroup, matra_group), SEQ(xgroup, ygroup));
   coeng_cn = SEQ(SEQ(OPT(joiner), SYM(KC_COENG)), cn);
+  coeng_c = SEQ(SEQ(OPT(joiner), SYM(KC_COENG)), c);
   any = SET(~(uint64_t)0);
   // A coeng with no consonant after it is accepted straight after a consonant, and ends the syllable;
   // anywhere else it is a broken cluster of its own, as in HarfBuzz.
@@ -151,13 +152,13 @@ static GFNT_Nfa * khmer_grammar(void) {
       // Subscripts may also follow the vowels, and then take no more of them
       // (found by where HarfBuzz puts a dotted circle).
       SEQ(SEQ(ALT(first_cn, SET(BIT(KC_PLACEHOLDER) | BIT(KC_DOTTEDCIRCLE))),
-          tail), coeng_cn));
+          tail), coeng_c));
   {
     GFNT_Re robatic = SEQ(OPT(joiner), SYM(KC_ROBATIC));
     GFNT_Re coeng = SEQ(OPT(joiner), SYM(KC_COENG));
 
     roots[KS_BROKEN] = ALT(
-        SEQ(SEQ(SEQ(OPT(robatic), STAR(coeng_cn)), tail), STAR(coeng_cn)),
+        SEQ(SEQ(SEQ(OPT(robatic), STAR(coeng_cn)), tail), OPT(coeng_c)),
         ALT(SEQ(ALT(SEQ(robatic, STAR(coeng_cn)), PLUS(coeng_cn)), OPT(coeng)),
             coeng));
   }

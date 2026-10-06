@@ -3627,6 +3627,22 @@ TEST(ShapeKhmer, ASubscriptMayFollowTheVowelsOfTheBaseButOnlyOne) {
   EXPECT_EQ(ids(g), (V{9, 12, 20, 11}));
 }
 
+TEST(ShapeKhmer, ASubscriptAfterTheVowelsTakesNoRegisterShifterOfItsOwn) {
+  // In a broken syllable that starts at a vowel, the consonant under a coeng is just
+  // that: the MUUSIKATOAN after it starts a syllable of its own and gets a dotted
+  // circle. HarfBuzz 10.2.0 gives the glyphs below.
+  const std::vector<std::pair<uint32_t, uint16_t>> cmap = {
+      {0x1781, 10}, {0x17D2, 11}, {0x17C1, 13}, {0x17C9, 14}, {0x25CC, 20}};
+  Font font(small_font({}, 40, cmap));
+  Glyphs g;
+  Request request;
+
+  ASSERT_EQ(font.result, GFNT_OK);
+  request.script = "khmr";
+  ASSERT_EQ(shape(font, V{0x17C1, 0x17D2, 0x1781, 0x17C9}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{13, 20, 11, 10, 20, 14}));
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

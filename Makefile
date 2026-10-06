@@ -1008,6 +1008,9 @@ check-oracle-metrics: $(EXAMPLES)
 check-oracle-gsub: ## Shape random GSUB lookups here and in HarfBuzz and compare
 check-oracle-gsub: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --seeds 1000
+	@for s in khmr mym2 arab thai hang tibt bali sinh; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script $$s --seeds 300 || exit 1; \
+	done
 
 check-oracle-gpos: ## Shape random GPOS lookups here and in HarfBuzz and compare
 check-oracle-gpos: $(EXAMPLES)

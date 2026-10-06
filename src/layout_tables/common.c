@@ -120,6 +120,7 @@ void gfnt_gdef_open(const GFNT_Face * face, GFNT_Gdef * out) {
   minor = gfnt_lr_u16(&out->table, 2, &bad);
   value = gfnt_lr_u16(&out->table, 4, &bad);
   out->glyph_classes = value;
+  out->lig_carets = gfnt_lr_u16(&out->table, 8, &bad);
   value = gfnt_lr_u16(&out->table, 10, &bad);
   out->attach_classes = value;
   if (minor >= 2) {

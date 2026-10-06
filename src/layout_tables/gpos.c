@@ -113,7 +113,7 @@ static int64_t gfnt_gpos_hinting_delta(GFNT_LApply * c, size_t device,
  * table with the format 0x8000 is a pair of indices into the `GDEF` store, and
  * is what a variable font uses.
  */
-static int64_t gfnt_gpos_device_delta(GFNT_LApply * c, size_t device) {
+int64_t gfnt_gpos_device_delta(GFNT_LApply * c, size_t device) {
   const GFNT_Gdef * gdef = c->gdef;
   GFNT_Reader store;
   int64_t delta = 0;

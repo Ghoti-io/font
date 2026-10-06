@@ -205,6 +205,31 @@ typedef struct GFNT_FaceRuns {
 } GFNT_FaceRuns;
 
 /**
+ * @brief The caret positions `GDEF` gives inside a ligature glyph.
+ *
+ * A text editor puts the cursor between the components of a ligature at these
+ * positions. A caret given by a coordinate, or by a coordinate and a device
+ * table, is read as such; one given by a contour point is the point's coordinate
+ * in the glyph's outline, and is left out when the face has no outline to read.
+ * A hinting device table is applied when @p ppem is not 0, and a variation index
+ * when @p variation is given.
+ *
+ * @param face The face.
+ * @param glyph The ligature glyph.
+ * @param vertical Non-zero for the y coordinates of vertical text, 0 for the x.
+ * @param variation The location in the design space, or NULL.
+ * @param ppem The size in pixels per em, or 0.
+ * @param out Receives the carets in font units, left to right as the font lists
+ *   them, or is NULL to count only.
+ * @param capacity How many entries @p out holds.
+ * @return How many carets the glyph has, which may be more than @p capacity;
+ *   0 for a face with no `GDEF`, no caret list, or no entry for the glyph.
+ */
+GFNT_API size_t gfnt_face_ligature_carets(const GFNT_Face * face, uint32_t glyph,
+    int vertical, const GFNT_Variation * variation, uint32_t ppem, int32_t * out,
+    size_t capacity);
+
+/**
  * @brief Shape a text with the first face of a list that has each character.
  *
  * Font fallback. Each cluster (a character and the marks that follow it) goes to

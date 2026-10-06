@@ -2500,6 +2500,35 @@ TEST(ShapeDevice, APixelDeltaIsScaledToFontUnitsAndTruncatedTowardZero) {
   EXPECT_EQ(advance_at(14), 510);
 }
 
+// --- Ligature carets ----------------------------------------------------------------
+
+TEST(ShapeCarets, AGdefListsWhereTheCursorGoesInsideALigature) {
+  // Glyph 5 has three carets: the coordinate 250; a contour point, which this
+  // face has no outline to read and so leaves out; and 500 with a hinting device
+  // table for sizes 8 and 9 (deltas 1 and -1).
+  std::vector<uint8_t> font_bytes = small_font({{GFNT_TAG('G', 'D', 'E', 'F'),
+      {0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00,
+       0x00, 0x06, 0x00, 0x01, 0x00, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x05,
+       0x00, 0x03, 0x00, 0x08, 0x00, 0x0C, 0x00, 0x10, 0x00, 0x01, 0x00, 0xFA,
+       0x00, 0x02, 0x00, 0x01, 0x00, 0x03, 0x01, 0xF4, 0x00, 0x06, 0x00, 0x08,
+       0x00, 0x09, 0x00, 0x03, 0x01, 0xFF}}});
+  Font font(font_bytes);
+  ASSERT_EQ(font.result, GFNT_OK);
+  int32_t carets[4] = {0, 0, 0, 0};
+
+  EXPECT_EQ(gfnt_face_ligature_carets(font.face, 5, 0, nullptr, 0, nullptr, 0), 2u);
+  EXPECT_EQ(gfnt_face_ligature_carets(font.face, 5, 0, nullptr, 0, carets, 4), 2u);
+  EXPECT_EQ(carets[0], 250);
+  EXPECT_EQ(carets[1], 500);
+  EXPECT_EQ(gfnt_face_ligature_carets(font.face, 5, 0, nullptr, 8, carets, 4), 2u);
+  EXPECT_EQ(carets[1], 625);
+  EXPECT_EQ(gfnt_face_ligature_carets(font.face, 5, 0, nullptr, 9, carets, 4), 2u);
+  EXPECT_EQ(carets[1], 389);
+  EXPECT_EQ(gfnt_face_ligature_carets(font.face, 6, 0, nullptr, 0, carets, 4), 0u);
+  // Counting does not stop at the capacity.
+  EXPECT_EQ(gfnt_face_ligature_carets(font.face, 5, 0, nullptr, 0, carets, 1), 2u);
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

@@ -167,6 +167,7 @@ typedef struct GFNT_LBuffer {
 typedef struct GFNT_Gdef {
   GFNT_Reader table;       ///< Empty when the face has no GDEF.
   uint32_t glyph_classes;  ///< Offset of the glyph ClassDef, or 0.
+  uint32_t lig_carets;     ///< Offset of the LigCaretList, or 0.
   uint32_t attach_classes; ///< Offset of the mark attachment ClassDef, or 0.
   uint32_t mark_sets;      ///< Offset of the MarkGlyphSets, or 0.
   uint32_t var_store;      ///< Offset of the item variation store, or 0.
@@ -265,6 +266,9 @@ int32_t gfnt_l_coverage(GFNT_LApply * c, size_t coverage, uint32_t glyph);
 uint32_t gfnt_l_class(GFNT_LApply * c, size_t classdef, uint32_t glyph);
 bool gfnt_l_mark_set_covers(GFNT_LApply * c, uint32_t set, uint32_t glyph);
 uint16_t gfnt_gdef_props(GFNT_LApply * c, uint32_t glyph);
+
+/** A device table's delta as 16.16 for a ppem or a location (gpos.c). */
+int64_t gfnt_gpos_device_delta(GFNT_LApply * c, size_t device);
 
 /** Table-independent reads, for the callers that hold only a reader. */
 uint16_t gfnt_lr_u16(const GFNT_Reader * r, size_t offset, bool * bad);

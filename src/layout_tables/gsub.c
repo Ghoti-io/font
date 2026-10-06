@@ -149,6 +149,8 @@ static bool gfnt_gsub_alternate(GFNT_LApply * c, size_t sub) {
   uint32_t count;
   uint32_t shift = 0;
   uint32_t alt_index;
+  uint32_t lookup_mask;
+  uint32_t glyph_mask;
 
   if (gfnt_lu16(c, sub) != 1) {
     c->fault.bad = true;
@@ -171,11 +173,16 @@ static bool gfnt_gsub_alternate(GFNT_LApply * c, size_t sub) {
   }
   // Which alternate is in the feature's value, in the bits the plan gave it. If
   // two features enabled this lookup together the answer is a mix of the two,
-  // which is HarfBuzz's behaviour and is noted there as a known limit.
-  while (shift < 32 && !((c->lookup_mask >> shift) & 1u)) {
+  // which is HarfBuzz's behaviour and is noted there as a known limit. HarfBuzz
+  // keeps the bit that every global feature shares above the others, so a lookup
+  // a global feature shares with another reads that bit as a very large index
+  // and takes no alternate; the bit here is the lowest, and is moved to the top.
+  lookup_mask = (c->lookup_mask & ~1u) | ((c->lookup_mask & 1u) << 31);
+  glyph_mask = (gfnt_lbuf_cur(b)->mask & ~1u) | ((gfnt_lbuf_cur(b)->mask & 1u) << 31);
+  while (shift < 32 && !((lookup_mask >> shift) & 1u)) {
     shift++;
   }
-  alt_index = (c->lookup_mask & gfnt_lbuf_cur(b)->mask) >> shift;
+  alt_index = (lookup_mask & glyph_mask) >> shift;
   if (alt_index > count || alt_index == 0) {
     return false;
   }

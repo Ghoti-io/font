@@ -122,13 +122,17 @@ static uint8_t khmer_category(uint32_t u) {
 static GFNT_Nfa * khmer_grammar(void) {
   GFNT_ReBuilder b;
   GFNT_Nfa * nfa;
-  GFNT_Re c, cn, joiner, xgroup, ygroup, matra_group, tail, coeng_cn, any;
+  GFNT_Re c, cn, first_cn, joiner, xgroup, ygroup, matra_group, tail, coeng_cn, any;
   GFNT_Re roots[KS_COUNT];
 
   gfnt_re_init(&b);
   c = SET(BIT(KC_C) | BIT(KC_RA) | BIT(KC_V));
   joiner = SET(BIT(KC_ZWJ) | BIT(KC_ZWNJ));
   cn = SEQ(c, OPT(SEQ(OPT(joiner), SYM(KC_ROBATIC))));
+  // Straight after the base a second register shifter is allowed, where after a
+  // subscript's consonant it is not (found by comparing where HarfBuzz puts a
+  // dotted circle).
+  first_cn = SEQ(c, OPT(SEQ(SEQ(OPT(joiner), SYM(KC_ROBATIC)), OPT(SYM(KC_ROBATIC)))));
   xgroup = STAR(SEQ(STAR(joiner), SYM(KC_XGROUP)));
   ygroup = STAR(SYM(KC_YGROUP));
   // This grammar was experimentally extracted from what Uniscribe allows.
@@ -141,7 +145,7 @@ static GFNT_Nfa * khmer_grammar(void) {
   any = SET(~(uint64_t)0);
   // A coeng with no consonant after it is accepted straight after a consonant, and ends the syllable;
   // anywhere else it is a broken cluster of its own, as in HarfBuzz.
-  roots[KS_CONSONANT] = SEQ(SEQ(ALT(cn, SET(BIT(KC_PLACEHOLDER)
+  roots[KS_CONSONANT] = SEQ(SEQ(ALT(first_cn, SET(BIT(KC_PLACEHOLDER)
       | BIT(KC_DOTTEDCIRCLE))), STAR(coeng_cn)),
       ALT(tail, SEQ(OPT(joiner), SYM(KC_COENG))));
   {

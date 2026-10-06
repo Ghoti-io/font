@@ -786,11 +786,109 @@ static size_t collect_wanted(const GFNT_Face * face,
   return n;
 }
 
+/**
+ * Which requests are in force at cluster @p at. HarfBuzz sweeps the starts and ends
+ * of the requests in order, adding a request at its start; at an end it takes out
+ * the first request of the same type and setting, which need not be the one that is
+ * ending, so a global request can be lost when a ranged one for the same setting
+ * stops. At one cluster ends come before starts, each in order of request.
+ */
+static void wanted_active(const Wanted * wanted, size_t count, size_t at,
+    bool * active) {
+  size_t w;
+  size_t order[MAX_WANTED];
+  size_t n = 0;
+  size_t i;
+
+  for (w = 0; w < count; w++) {
+    active[w] = false;
+  }
+  // The pushes, in the order the sweep meets them.
+  for (w = 0; w < count; w++) {
+    if (wanted[w].start < wanted[w].end && wanted[w].start <= at) {
+      order[n++] = w;
+    }
+  }
+  // Starts come in order of cluster, then of request; the stops of those that have
+  // stopped by now come in the same order, each taking out the first of its kind.
+  for (i = 1; i < n; i++) {
+    size_t v = order[i];
+    size_t k = i;
+
+    while (k && (wanted[order[k - 1]].start > wanted[v].start
+        || (wanted[order[k - 1]].start == wanted[v].start && order[k - 1] > v))) {
+      order[k] = order[k - 1];
+      k--;
+    }
+    order[k] = v;
+  }
+  {
+    size_t stops[MAX_WANTED];
+    size_t nstops = 0;
+    bool present[MAX_WANTED];
+    size_t j;
+
+    for (i = 0; i < n; i++) {
+      present[i] = true;
+      if (wanted[order[i]].end <= at) {
+        stops[nstops++] = order[i];
+      }
+    }
+    for (i = 1; i < nstops; i++) {
+      size_t v = stops[i];
+      size_t k = i;
+
+      while (k && (wanted[stops[k - 1]].end > wanted[v].end
+          || (wanted[stops[k - 1]].end == wanted[v].end && stops[k - 1] > v))) {
+        stops[k] = stops[k - 1];
+        k--;
+      }
+      stops[k] = v;
+    }
+    // The events interleave by cluster; a stop happens before the starts that
+    // follow it, so the removals are done as the pushes pass its cluster.
+    {
+      size_t next_stop = 0;
+
+      for (i = 0; i < n; i++) {
+        while (next_stop < nstops
+            && wanted[stops[next_stop]].end <= wanted[order[i]].start) {
+          size_t f = stops[next_stop++];
+
+          for (j = 0; j < i; j++) {
+            if (present[j] && wanted[order[j]].type == wanted[f].type
+                && wanted[order[j]].setting == wanted[f].setting) {
+              present[j] = false;
+              break;
+            }
+          }
+        }
+      }
+      while (next_stop < nstops) {
+        size_t f = stops[next_stop++];
+
+        for (j = 0; j < n; j++) {
+          if (present[j] && wanted[order[j]].type == wanted[f].type
+              && wanted[order[j]].setting == wanted[f].setting) {
+            present[j] = false;
+            break;
+          }
+        }
+      }
+    }
+    for (i = 0; i < n; i++) {
+      active[order[i]] = present[i];
+    }
+  }
+}
+
 /** The flags of a chain for the clusters from @p at on: defaults, then the active requests. */
 static uint32_t chain_flags(Ctx * c, size_t chain, uint32_t flags,
     uint32_t nfeat, const Wanted * wanted, size_t count, size_t at) {
   uint32_t f;
+  bool active[MAX_WANTED];
 
+  wanted_active(wanted, count, at, active);
   // The chain's own entries are taken in their order, and each that a request names
   // is applied once, as HarfBuzz does.
   for (f = 0; f < nfeat && !c->bad; f++) {
@@ -804,13 +902,12 @@ static uint32_t chain_flags(Ctx * c, size_t chain, uint32_t flags,
     for (w = 0; w < count && !named; w++) {
       bool shadowed = false;
 
-      if (at < wanted[w].start || at >= wanted[w].end
-          || wanted[w].type != type || wanted[w].setting != setting) {
+      if (!active[w] || wanted[w].type != type || wanted[w].setting != setting) {
         continue;
       }
       // Of requests for the same setting, the first one made is the one that holds.
       for (v = 0; v < w && !shadowed; v++) {
-        shadowed = at >= wanted[v].start && at < wanted[v].end
+        shadowed = active[v]
             && wanted[v].type == wanted[w].type
             && (wanted[w].exclusive
                 || (wanted[v].setting & ~1u) == (wanted[w].setting & ~1u));

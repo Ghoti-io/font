@@ -2274,7 +2274,8 @@ Bytes morx_table(uint32_t defaults, const std::vector<MorxFeature> & features,
 }
 
 /** The `feat` table naming the feature types a test uses, sorted, non-exclusive. */
-Bytes feat_table(const std::vector<std::pair<uint16_t, std::vector<uint16_t>>> & types) {
+Bytes feat_table(const std::vector<std::pair<uint16_t, std::vector<uint16_t>>> & types,
+    const std::vector<uint16_t> & exclusive = {}) {
   Bytes out;
   gfnttest::put_u32(out, 0x00010000);
   gfnttest::put_u16(out, static_cast<uint16_t>(types.size()));
@@ -2286,7 +2287,7 @@ Bytes feat_table(const std::vector<std::pair<uint16_t, std::vector<uint16_t>>> &
     gfnttest::put_u16(out, t.first);
     gfnttest::put_u16(out, static_cast<uint16_t>(t.second.size()));
     gfnttest::put_u32(out, static_cast<uint32_t>(base + settings.size()));
-    gfnttest::put_u16(out, 0);
+    gfnttest::put_u16(out, std::count(exclusive.begin(), exclusive.end(), t.first) ? 0x8000 : 0);
     gfnttest::put_u16(out, 0);
     for (uint16_t s : t.second) {
       gfnttest::put_u16(settings, s);
@@ -2484,6 +2485,23 @@ TEST(ShapeMorx, FeaturesSelectSubtablesFirstRequestWinsAndRangesAreHonoured) {
   EXPECT_EQ(morx_run(font, "AB", "-liga,liga"), (P{{30, 0}, {2, 1}}));
   // A range reaches the glyphs whose clusters it holds.
   EXPECT_EQ(morx_run(font, "BB", "liga[1:2]"), (P{{2, 0}, {31, 1}}));
+}
+
+TEST(ShapeMorx, AnEndedRangeTakesOutTheFirstRequestOfItsSettingAndNotItself) {
+  // hwid and fwid are settings 2 and 1 of the exclusive type 22, and only fwid has
+  // an entry in the chain (flag 2, which maps A to 30). Asked for as hwid, fwid and
+  // hwid[1:4], the first request of a type holds, so fwid is held off while hwid is
+  // in force. When the range ends HarfBuzz takes out the first hwid it finds, which
+  // is the global one, so what is left is fwid and the stale ranged hwid, and fwid
+  // is first: it applies from cluster 4 on. Values from HarfBuzz 10.2.0.
+  std::vector<MorxFeature> features = {{22, 1, 0x2, 0xFFFFFFFF}};
+  Bytes font = morx_font(morx_table(1, features,
+      {morx_subtable(4, 0, 2, lookup6({{1, 30}}))}),
+      feat_table({{22, {0, 1, 2}}}, {22}));
+  EXPECT_EQ(morx_run(font, "AAAAAAAA", "hwid,fwid,hwid[1:4]"),
+      (P{{1, 0}, {1, 1}, {1, 2}, {1, 3}, {30, 4}, {30, 5}, {30, 6}, {30, 7}}));
+  // Without the range, the first request holds everywhere.
+  EXPECT_EQ(morx_run(font, "AAAA", "hwid,fwid"), (P{{1, 0}, {1, 1}, {1, 2}, {1, 3}}));
 }
 
 TEST(ShapeMorx, FeaturesWithNoOpenTypeTwinMapToTheirSettingsAndSmcpToTwo) {

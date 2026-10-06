@@ -683,7 +683,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos
+.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
 .PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
@@ -964,7 +964,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-gsub check-oracle-gpos
+check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -1012,6 +1012,11 @@ check-oracle-gsub: $(EXAMPLES)
 check-oracle-gpos: ## Shape random GPOS lookups here and in HarfBuzz and compare
 check-oracle-gpos: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --seeds 1000
+
+check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz
+check-oracle-would: $(EXAMPLES)
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/would_random_diff.py 300 5
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/would_random_diff.py 300 6
 
 check-oracle-hb: ## Diff what every corpus string shapes to against HarfBuzz
 check-oracle-hb: $(EXAMPLES)

@@ -139,7 +139,8 @@ static bool gfnt_would_context(GFNT_LApply * c, size_t sub,
     uint32_t index = gfnt_l_class(c, classdef, glyphs[0]);
     GFNT_Matcher m = {GFNT_MATCH_CLASS, (uint32_t)classdef};
 
-    if (index >= gfnt_lu16(c, sub + 6)) {
+    // The subtable's coverage is HarfBuzz's digest of the first glyph.
+    if (!gfnt_would_covers(c, sub, glyphs[0]) || index >= gfnt_lu16(c, sub + 6)) {
       return false;
     }
     return gfnt_would_context_set(c,
@@ -149,8 +150,11 @@ static bool gfnt_would_context(GFNT_LApply * c, size_t sub,
   if (format == 3) {
     GFNT_Matcher m = {GFNT_MATCH_COVERAGE, (uint32_t)sub};
 
-    // The first glyph's coverage is not looked at.
+    // The first glyph's coverage is the one test the rest of the match leaves out,
+    // and is made here as HarfBuzz's digest of the lookup does.
     return gfnt_lu16(c, sub + 2) == n
+        && gfnt_l_coverage(c, gfnt_l_rel(sub, gfnt_lu16(c, sub + 6)), glyphs[0])
+            != GFNT_LAYOUT_NOT_COVERED
         && gfnt_would_input(c, m, sub + 8, glyphs, n);
   }
   return false;
@@ -212,7 +216,7 @@ static bool gfnt_would_chain(GFNT_LApply * c, size_t sub,
     uint32_t index = gfnt_l_class(c, classdef, glyphs[0]);
     GFNT_Matcher m = {GFNT_MATCH_CLASS, (uint32_t)classdef};
 
-    if (index >= gfnt_lu16(c, sub + 10)) {
+    if (!gfnt_would_covers(c, sub, glyphs[0]) || index >= gfnt_lu16(c, sub + 10)) {
       return false;
     }
     return gfnt_would_chain_set(c,
@@ -230,8 +234,11 @@ static bool gfnt_would_chain(GFNT_LApply * c, size_t sub,
     if (zero_context && (backtrack || lookahead)) {
       return false;
     }
-    // As for a plain context, the first glyph's coverage is not looked at.
-    return input == n && gfnt_would_input(c, m, input_at + 2, glyphs, n);
+    // The first glyph's coverage is tested here, as HarfBuzz's digest does.
+    return input == n && input > 0
+        && gfnt_l_coverage(c, gfnt_l_rel(sub, gfnt_lu16(c, input_at + 2)),
+               glyphs[0]) != GFNT_LAYOUT_NOT_COVERED
+        && gfnt_would_input(c, m, input_at + 4, glyphs, n);
   }
   return false;
 }

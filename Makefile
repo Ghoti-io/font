@@ -1032,7 +1032,7 @@ check-oracle-gpos: $(EXAMPLES)
 
 check-oracle-norm: ## Shape random cmaps over composing characters here and in HarfBuzz and compare
 check-oracle-norm: $(EXAMPLES)
-	@for s in latn hang arab; do \
+	@for s in latn hang arab thai hebr deva beng tibt khmr mymr; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/norm_random_diff.py --script $$s --seeds 300 || exit 1; \
 	done
 

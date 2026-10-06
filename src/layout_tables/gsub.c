@@ -226,6 +226,12 @@ static void gfnt_gsub_ligate(GFNT_LApply * c, uint32_t count,
         | (total_component_count & 0x0Fu));
   }
   gfnt_gsub_set_class(c, gfnt_lbuf_cur(b), lig_glyph, klass, true, false);
+  // A ligature of a mark with something that is not one is no longer a nonspacing
+  // mark to what asks the character's category afterwards (the fallback that places
+  // marks), as HarfBuzz has it: the advance is kept.
+  if (!is_mark_ligature && gfnt_lbuf_cur(b)->gc == 17 /* GUNI_GC_NONSPACING_MARK */) {
+    gfnt_lbuf_cur(b)->gc = 19;  // GUNI_GC_OTHER_LETTER
+  }
   (void)gfnt_lbuf_replace_glyph(b, lig_glyph);
   for (i = 1; i < count; i++) {
     while (b->idx < match_positions[i] && !b->oom) {

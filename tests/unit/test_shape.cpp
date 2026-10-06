@@ -2761,22 +2761,20 @@ static const std::vector<uint8_t> k_blwf = {
        0x00, 0x04, 0x00, 0x15, 0x00, 0x14, 0x00, 0x16, 0x00, 0x19, 0x00, 0x01,
        0x00, 0x04, 0x00, 0x09, 0x00, 0x0A, 0x00, 0x0B, 0x00, 0x0E};
 
-TEST(ShapeIndic, BlwfReachesARaAndItsHalantBeforeTheBaseAndNoOtherGlyphThereNorAMatra) {
+TEST(ShapeIndic, BlwfReachesEveryGlyphBeforeTheBaseAndALeftHandMatraToo) {
   // KA 11, RA 9, the halant 10 and the I matra 14, which the lookup sends to 22, 21,
-  // 20 and 25.
+  // 20 and 25. Every expected value is what HarfBuzz 10.2.0 gives for the same bytes.
   const std::vector<std::pair<uint32_t, uint16_t>> cmap = {
       {0x915, 11}, {0x930, 9}, {0x94D, 10}, {0x93F, 14}};
 
-  // A Ra and its halant in front of the base are formed; a Ka and its halant are not.
   EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x930, 0x94D, 0x915}), (V{21, 20, 11}));
-  EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x915, 0x94D, 0x915}), (V{11, 10, 11}));
+  EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x915, 0x94D, 0x915}), (V{22, 20, 11}));
   EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x915, 0x94D, 0x930, 0x94D, 0x915}),
-      (V{11, 10, 21, 20, 11}));
-  // A left-hand matra is not, whether the syllable has a consonant or not.
-  EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x915, 0x93F}), (V{14, 11}));
-  EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x93F}), (V{14}));
-  // (After a halant the matra is post-base, and the halant before it is formed.)
-  EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x915, 0x94D, 0x93F}), (V{11, 20, 14}));
+      (V{22, 20, 21, 20, 11}));
+  // The matra, with a consonant or without, and the halant before one.
+  EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x915, 0x93F}), (V{25, 11}));
+  EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x93F}), (V{25}));
+  EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x915, 0x94D, 0x93F}), (V{11, 20, 25}));
 }
 
 // --- Apple's mort ------------------------------------------------------------------

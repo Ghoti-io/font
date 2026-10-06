@@ -280,7 +280,7 @@ def build_gsub(seed,gl,tags,override=None):
     flist=u16(len(feats))+frec+b''.join(fbodies)
     langsys=u16(0,0xffff,len(feats),*range(len(feats)))
     script=u16(4,0)+langsys
-    scripts=['DFLT','deva','dev2','latn']
+    scripts=['DFLT','dev2','deva','latn']   # sorted: a reader bisects them
     slhdr=2+6*len(scripts); sl=u16(len(scripts)); body=b''
     for sc in scripts: sl+=sc.encode()+u16(slhdr+len(body)); body+=script
     sl+=body

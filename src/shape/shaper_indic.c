@@ -538,10 +538,6 @@ static void indic_update_consonant_positions(GFNT_ShapeCtx * ctx,
   }
 }
 
-static bool indic_below_bit(uint64_t below, size_t start, size_t i) {
-  return i - start < 64 && ((below >> (i - start)) & 1u) != 0;
-}
-
 static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     const IndicData * data, size_t start, size_t end) {
   GFNT_LBuffer * buf = ctx->buf;
@@ -550,7 +546,6 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   size_t base = end;
   bool has_reph = false;
   size_t limit = start;
-  uint64_t below = 0;
   size_t i;
 
   // 1. Find the base consonant. If the syllable starts with Ra and a halant that
@@ -652,13 +647,7 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     limit = start;   // and the font is not asked to form one
   }
 
-  // Everything before the base is before it in the syllable. (The consonants the
-  // font forms below the base are noted first: `blwf` still reaches them.)
-  for (i = start; i < base && i - start < 64; i++) {
-    if (info[i].position == IP_BELOW_C && indic_is_consonant(&info[i])) {
-      below |= (uint64_t)1 << (i - start);
-    }
-  }
+  // Everything before the base is before it in the syllable.
   for (i = start; i < base; i++) {
     if (info[i].position > IP_PRE_C) {
       info[i].position = IP_PRE_C;
@@ -763,19 +752,11 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     }
     // Pre-base.
     mask = data->mask[IF_HALF] | data->mask[IF_AKHN] | data->mask[IF_CJCT];
+    if (config->blwf_mode == BLWF_PRE_AND_POST) {
+      mask |= data->mask[IF_BLWF];
+    }
     for (i = start; i < base; i++) {
       info[i].mask |= mask;
-      // `blwf` reaches a glyph in front of the base only when it is a Ra or one the
-      // font forms below the base, or a halant next to one (found with one lookup
-      // per glyph: HarfBuzz leaves a Ka and its halant alone).
-      if (config->blwf_mode == BLWF_PRE_AND_POST
-          && (info[i].category == IC_RA || indic_below_bit(below, start, i)
-              || (info[i].category == IC_H
-                  && ((i > start && (info[i - 1].category == IC_RA
-                          || indic_below_bit(below, start, i - 1)))
-                      || (i + 1 < base && indic_below_bit(below, start, i + 1)))))) {
-        info[i].mask |= data->mask[IF_BLWF];
-      }
     }
     // The base.
     mask = data->mask[IF_AKHN] | data->mask[IF_CJCT];
@@ -784,14 +765,16 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     }
     // Post-base. A left-hand matra is after the base in the text but goes in
     // front of it, and takes the pre-base features for it (found with one lookup
-    // under each feature: HarfBuzz gives such a matra `half`, `akhn` and `cjct`, and
-    // neither `abvf`, `pstf` nor `blwf`).
+    // under each feature: HarfBuzz gives such a matra `half` and not `abvf`).
     mask = data->mask[IF_BLWF] | data->mask[IF_ABVF] | data->mask[IF_PSTF]
         | data->mask[IF_CJCT];
     {
       uint32_t before = data->mask[IF_HALF] | data->mask[IF_AKHN]
           | data->mask[IF_CJCT];
 
+      if (config->blwf_mode == BLWF_PRE_AND_POST) {
+        before |= data->mask[IF_BLWF];
+      }
       for (i = base + 1; i < end; i++) {
         info[i].mask |= info[i].position < IP_BASE_C ? before : mask;
       }

@@ -75,7 +75,7 @@ static int32_t kerx_format0(const GFNT_Reader * r, size_t subtable,
   while (low < high && !*bad) {
     uint32_t mid = low + (high - low) / 2;
     size_t at = first + 6 * (size_t)mid;
-    uint32_t value = (gfnt_lr_u16(r, at, bad) << 16)
+    uint32_t value = ((uint32_t)gfnt_lr_u16(r, at, bad) << 16)
         | gfnt_lr_u16(r, at + 2, bad);
 
     if (key < value) {

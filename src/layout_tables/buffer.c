@@ -131,14 +131,12 @@ bool gfnt_lbuf_enlarge(GFNT_LBuffer * b, size_t size) {
 }
 
 bool gfnt_lbuf_insert(GFNT_LBuffer * b, size_t at, const GFNT_LInfo * info) {
-  size_t i;
-
   if (!gfnt_lbuf_enlarge(b, b->len + 1)) {
     return false;
   }
-  for (i = b->len; i > at; i--) {
-    b->info[i] = b->info[i - 1];
-    b->pos[i] = b->pos[i - 1];
+  if (at < b->len) {
+    memmove(&b->info[at + 1], &b->info[at], (b->len - at) * sizeof b->info[0]);
+    memmove(&b->pos[at + 1], &b->pos[at], (b->len - at) * sizeof b->pos[0]);
   }
   b->info[at] = *info;
   memset(&b->pos[at], 0, sizeof b->pos[at]);

@@ -775,9 +775,11 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     for (i = start; i < base; i++) {
       info[i].mask |= mask;
       if (config->blwf_mode == BLWF_PRE_AND_POST && data->is_old_spec
-          && (info[i].category == IC_RA || indic_below_bit(below, start, i)
+          && ((info[i].category == IC_RA && config->virama == 0x094D)
+              || indic_below_bit(below, start, i)
               || (info[i].category == IC_H
-                  && ((i > start && (info[i - 1].category == IC_RA
+                  && ((i > start && ((info[i - 1].category == IC_RA
+                          && config->virama == 0x094D)
                           || indic_below_bit(below, start, i - 1)))
                       || (i + 1 < base && indic_below_bit(below, start, i + 1)))))) {
         info[i].mask |= data->mask[IF_BLWF];

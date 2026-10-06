@@ -851,6 +851,14 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
         indic_move(buf, i, j);
       }
     }
+    // Find the base again: the sort has moved it.
+    base = end;
+    for (i = start; i < end; i++) {
+      if (info[i].position == IP_BASE_C) {
+        base = i;
+        break;
+      }
+    }
     // The positions after the base may shuffle about: in old-style mode halants
     // are moved too, so everything after the base is merged. Otherwise each
     // cycle of the permutation is merged. A left-hand matra, which went to the

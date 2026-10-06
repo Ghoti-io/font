@@ -2836,6 +2836,27 @@ TEST(ShapeIndic, AWouldSubstituteTestOfAContextLookupNeedsTheFirstGlyphInItsCove
       (V{11, 10, 9, 11}));
 }
 
+TEST(ShapeIndic, AnOldSpecSyllableMergesTheClustersAfterTheBaseWhereTheSortLeftIt) {
+  // KA, halant, KHA, I matra under 'deva': the matra moves in front of KHA, and the
+  // clusters merged are those of the base the sort left, not of where it began.
+  // (HarfBuzz 10.2.0: KA 0, halant 0, I matra 2, KHA 2.)
+  const std::vector<std::pair<uint32_t, uint16_t>> cmap = {
+      {0x915, 11}, {0x94D, 10}, {0x916, 12}, {0x93F, 14}};
+  Font font(small_font({{GFNT_TAG('G', 'S', 'U', 'B'), k_wouldctx2}}, 40, cmap));
+  Glyphs g;
+  Request request;
+
+  ASSERT_EQ(font.result, GFNT_OK);
+  request.script = "deva";
+  ASSERT_EQ(shape(font, V{0x915, 0x94D, 0x916, 0x93F}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 4u);
+  EXPECT_EQ(ids(g), (V{11, 10, 14, 12}));
+  EXPECT_EQ(g[0].cluster, 0u);
+  EXPECT_EQ(g[1].cluster, 0u);
+  EXPECT_EQ(g[2].cluster, 2u);
+  EXPECT_EQ(g[3].cluster, 2u);
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

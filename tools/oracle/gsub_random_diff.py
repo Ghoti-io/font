@@ -252,7 +252,7 @@ def lookup_table(typ,flag,subs):
     hdr=6+2*len(subs); offs=[];body=b''
     for x in subs: offs.append(hdr+len(body)); body+=x
     return u16(typ,flag,len(subs),*offs)+body
-def build_gsub(seed,gl,tags,override=None,old_spec=False,script_tag=None,langs=False):
+def build_gsub(seed,gl,tags,override=None,old_spec=False,script_tag=None,langs=False,scriptset=False):
     gen=Gen(seed,gl); r=gen.r
     lookups=[]
     for _ in range(3):
@@ -300,9 +300,22 @@ def build_gsub(seed,gl,tags,override=None,old_spec=False,script_tag=None,langs=F
     # Sorted, because a reader bisects them. An old-spec font has no 'dev2'.
     scripts=['DFLT','deva','latn'] if old_spec else ['DFLT','dev2','deva','latn']
     if script_tag: scripts=sorted(["DFLT",script_tag,"latn"])
-    slhdr=2+6*len(scripts); sl=u16(len(scripts)); body=b''
-    for sc in scripts: sl+=sc.encode()+u16(slhdr+len(body)); body+=script
-    sl+=body
+    if scriptset:
+        # A random set of script records, each with a feature list of its own.
+        sr=random.Random(seed*53+1)
+        scripts=sorted(sr.sample(['DFLT','dflt','latn','cyrl','grek','hebr'],sr.randint(1,5)))
+        build_gsub.scripts=scripts
+        recs=[]
+        for _ in scripts:
+            idx=sorted(set(sr.randrange(len(feats)) for _ in range(sr.randint(0,len(feats)))))
+            recs.append(u16(4,0)+u16(0,0xffff,len(idx),*idx))
+        slhdr=2+6*len(scripts); sl=u16(len(scripts)); body=b''
+        for sc,rec in zip(scripts,recs): sl+=sc.encode()+u16(slhdr+len(body)); body+=rec
+        sl+=body
+    else:
+      slhdr=2+6*len(scripts); sl=u16(len(scripts)); body=b''
+      for sc in scripts: sl+=sc.encode()+u16(slhdr+len(body)); body+=script
+      sl+=body
     ll=u16(n); off=2+2*n; offs=[]
     for l in lookups: offs.append(off); off+=len(l)
     ll+=u16(*offs)+b''.join(lookups)
@@ -440,6 +453,12 @@ def texts_for(script, seed):
 BCP47 = {'TRK ': 'tr', 'DEU ': 'de', 'ENG ': 'en', 'FRA ': 'fr', 'ROM ': 'ro', 'ZZZ ': 'xx'}
 
 
+def script_for(seed):
+    r = random.Random(seed * 5 + 9)
+    return r.choice((('Latn', 'latn'), ('Cyrl', 'cyrl'), ('Grek', 'grek'), ('Hebr', 'hebr'),
+                     ('Thai', 'thai'), ('Latn', 'latn')))
+
+
 def language_for(seed):
     r = random.Random(seed * 3 + 11)
     return r.choice(('TRK ', 'DEU ', 'ENG ', 'FRA ', 'ROM ', 'ZZZ ', '', ''))
@@ -481,6 +500,7 @@ def main(argv):
             SCRATCH = argv[i + 1]
     userfeat = "--userfeatures" in argv
     langs = "--languages" in argv
+    scriptset = "--scriptsets" in argv
     direction = argv[argv.index("--direction") + 1] if "--direction" in argv else ""
     cmap = LATIN if script == "latn" else DEVA
     tags = TAGS_LATIN + TAGS_DEVA
@@ -503,7 +523,7 @@ def main(argv):
         text = os.path.join(SCRATCH, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra={
-                'GSUB': build_gsub(seed, GLYPHS, tags, old_spec=old, langs=langs,
+                'GSUB': build_gsub(seed, GLYPHS, tags, old_spec=old, langs=langs, scriptset=scriptset,
                                    script_tag=OTHER[script][1] if script in OTHER else None)}))
         with open(text, "w", encoding="utf-8") as h:
             h.write(''.join(t + "\n" for t in texts_for(script, seed)))
@@ -517,9 +537,10 @@ def main(argv):
             lang = language_for(seed)
             if lang:
                 fopt += " --language=%s" % BCP47[lang]
+        iso_s = script_for(seed)[0] if scriptset else iso
         lines.append("hb-shape --font-file='%s' --output-format=json "
                      "--no-glyph-names --script=%s%s --text-file='%s' > '%s.hb'"
-                     % (font, iso, fopt, text, font))
+                     % (font, iso_s, fopt, text, font))
     runner = os.path.join(SCRATCH, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
@@ -548,7 +569,8 @@ def main(argv):
                 extra += ["--language", language_for(seed)]
             if direction:
                 extra += {"rtl": ["--rtl"], "ltr": [], "ttb": ["--ttb"], "btt": ["--btt"]}[direction]
-            ours = subprocess.run([DRIVER, "--batch", "--script", ot] + extra + [font],
+            ours = subprocess.run([DRIVER, "--batch", "--script",
+                                   script_for(seed)[1] if scriptset else ot] + extra + [font],
                                   stdin=h, capture_output=True, text=True)
         mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
         keys = ("g", "cl", "ax", "ay", "dx", "dy")

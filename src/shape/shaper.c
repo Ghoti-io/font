@@ -118,8 +118,12 @@ const GFNT_Shaper * gfnt_shaper_select(GFNT_Tag script, GFNT_Tag chosen,
     return horizontal ? &gfnt_shaper_hangul : &gfnt_shaper_default;
   }
   if (script == GFNT_TAG('m', 'y', 'm', 'r')) {
-    return horizontal && font_has_script ? &gfnt_shaper_myanmar
-                                         : &gfnt_shaper_default;
+    // Only a font made for the new script tag is shaped as Myanmar; one with the
+    // old 'mymr' alone has the default shaper's features (found by one lookup
+    // under each feature tag).
+    return horizontal && font_has_script
+            && (chosen == GFNT_TAG('m', 'y', 'm', '2') || chosen == 0)
+        ? &gfnt_shaper_myanmar : &gfnt_shaper_default;
   }
   if (script == GFNT_TAG('k', 'h', 'm', 'r')) {
     return horizontal && font_has_script ? &gfnt_shaper_khmer

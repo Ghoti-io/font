@@ -806,19 +806,6 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     }
   }
 
-  if (data->mask[IF_PREF] && base + 2 < end) {
-    // Find a halant, Ra pair and mark it for pre-base-reordering.
-    for (i = base + 1; i + 1 < end; i++) {
-      uint32_t glyphs[2] = {info[i].glyph, info[i + 1].glyph};
-
-      if (indic_would(ctx, data, IF_PREF, glyphs, 2)) {
-        info[i++].mask |= data->mask[IF_PREF];
-        info[i++].mask |= data->mask[IF_PREF];
-        break;
-      }
-    }
-  }
-
   // The effects of ZWJ and ZWNJ.
   for (i = start + 1; i < end; i++) {
     if (indic_is_joiner(&info[i])) {
@@ -861,6 +848,18 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
       if (info[i].position == IP_BASE_C) {
         base = i;
         break;
+      }
+    }
+    if (data->mask[IF_PREF] && base + 2 < end) {
+      // Find a halant, Ra pair and mark it for pre-base-reordering.
+      for (i = base + 1; i + 1 < end; i++) {
+        uint32_t glyphs[2] = {info[i].glyph, info[i + 1].glyph};
+
+        if (indic_would(ctx, data, IF_PREF, glyphs, 2)) {
+          info[i++].mask |= data->mask[IF_PREF];
+          info[i++].mask |= data->mask[IF_PREF];
+          break;
+        }
       }
     }
     // The positions after the base may shuffle about: in old-style mode halants

@@ -697,7 +697,7 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
   gfnt_plan_collect_default(plan);
   for (i = 0; i < options->feature_count; i++) {
     const GFNT_ShapeFeature * f = &options->features[i];
-    bool whole = f->start == 0 && (f->end == GFNT_SHAPE_END || f->end >= count);
+    bool whole = f->start == 0 && f->end == GFNT_SHAPE_END;
 
     if (f->end != GFNT_SHAPE_END && f->end < f->start) {
       gfnt_plan_free(plan);

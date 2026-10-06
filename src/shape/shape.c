@@ -548,7 +548,10 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     const GFNT_PlanFeature * pf = gfnt_plan_find(&plan, f->tag);
     size_t k;
 
-    if (!pf || !pf->mask || (pf->flags & GFNT_PF_GLOBAL)) {
+    // A range of the whole text is a global request, in the plan. Any other range
+    // sets the feature's bits, which for a feature every global request shares
+    // are the shared bit: a value 0 over a range turns all of those off there.
+    if (!pf || !pf->mask || (f->start == 0 && f->end == GFNT_SHAPE_END)) {
       continue;
     }
     for (k = 0; k < count; k++) {

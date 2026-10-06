@@ -3728,6 +3728,54 @@ TEST(ShapeKhmer, ASubscriptAfterTheVowelsFollowsTheOnesBeforeThem) {
   EXPECT_EQ(ids(g), (V{10, 11, 9, 12, 11, 10, 13, 20}));
 }
 
+static const std::vector<uint8_t> k_cligkhmr = {
+       0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x42, 0x00, 0x50, 0x00, 0x03,
+       0x44, 0x46, 0x4C, 0x54, 0x00, 0x14, 0x6B, 0x68, 0x6D, 0x72, 0x00, 0x20,
+       0x6C, 0x61, 0x74, 0x6E, 0x00, 0x2C, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
+       0xFF, 0xFF, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
+       0xFF, 0xFF, 0x00, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
+       0xFF, 0xFF, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x63, 0x6C, 0x69, 0x67,
+       0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x04,
+       0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x02, 0x00, 0x0A,
+       0x00, 0x02, 0x00, 0x14, 0x00, 0x15, 0x00, 0x01, 0x00, 0x02, 0x00, 0x09,
+       0x00, 0x0A};
+
+TEST(ShapeKhmer, ARangeOfAFeatureEveryRequestSharesTurnsTheSharedBitOffThere) {
+  // A substitution under `clig`, which the Khmer plan asks for again after the
+  // caller's list, over `clig[1:3]=0`. The merged feature is still the one that
+  // shares the global bit, and the range sets that bit to 0 in the two glyphs it
+  // covers, so every global feature is off there, not only `clig`. Every expected
+  // value is what HarfBuzz 10.2.0 gives for these bytes.
+  const std::vector<std::pair<uint32_t, uint16_t>> cmap = {{0x1780, 9}, {0x1781, 10}};
+  Font font(small_font({{GFNT_TAG('G', 'S', 'U', 'B'), k_cligkhmr}}, 40, cmap));
+  Glyphs g;
+  Request request;
+
+  ASSERT_EQ(font.result, GFNT_OK);
+  request.script = "khmr";
+  ASSERT_EQ(shape(font, V{0x1780, 0x1781, 0x1780, 0x1781}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{20, 21, 20, 21}));
+  request.features = "clig[1:3]=0";
+  ASSERT_EQ(shape(font, V{0x1780, 0x1781, 0x1780, 0x1781}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{20, 10, 9, 21}));
+}
+
+TEST(Shape, ARangeCoveringTheWholeTextIsStillARange) {
+  // One alternate lookup under `liga`, on for the whole text, and under `smcp` over
+  // [0:4], which is the whole of this text but not the whole-text request: the two
+  // do not share a bit then, and the alternate is read as in the test above.
+  // (HarfBuzz 10.2.0: nothing is substituted.)
+  Font font(small_font({{GFNT_TAG('G', 'S', 'U', 'B'), k_altglobal}}, 300,
+      {{'A', 1}, {'B', 2}, {'C', 3}, {'D', 4}}));
+  Glyphs g;
+  Request request;
+
+  ASSERT_EQ(font.result, GFNT_OK);
+  request.features = "smcp[0:4]";
+  ASSERT_EQ(shape(font, V{'A', 'B', 'C', 'D'}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{1, 2, 3, 4}));
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

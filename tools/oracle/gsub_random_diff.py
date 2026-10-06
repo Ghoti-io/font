@@ -416,6 +416,24 @@ def texts_for(script, seed):
             for _ in range(12)]
 
 
+def features_for(seed, tags):
+    """A random list of user features, as hb-shape and the driver both read it."""
+    r = random.Random(seed * 13 + 5)
+    out = []
+    for _ in range(r.randint(1, 3)):
+        t = r.choice(tags)
+        k = r.randrange(6)
+        a = r.randrange(0, 4)
+        b = a + r.randint(1, 4)
+        if k == 0: out.append("+" + t)
+        elif k == 1: out.append("-" + t)
+        elif k == 2: out.append("%s=%d" % (t, r.randint(1, 3)))
+        elif k == 3: out.append("%s[%d:%d]" % (t, a, b))
+        elif k == 4: out.append("%s[%d:%d]=%d" % (t, a, b, r.randint(0, 3)))
+        else: out.append("%s[%d:]" % (t, a))
+    return ",".join(out)
+
+
 def main(argv):
     global DRIVER, SCRATCH
     seeds, first, script, reuse = 200, 0, "latn", False
@@ -432,6 +450,7 @@ def main(argv):
             DRIVER = argv[i + 1]
         elif a == "--scratch":
             SCRATCH = argv[i + 1]
+    userfeat = "--userfeatures" in argv
     cmap = LATIN if script == "latn" else DEVA
     tags = TAGS_LATIN + TAGS_DEVA
     if script in OTHER:
@@ -455,9 +474,13 @@ def main(argv):
                                    script_tag=OTHER[script][1] if script in OTHER else None)}))
         with open(text, "w", encoding="utf-8") as h:
             h.write(''.join(t + "\n" for t in texts_for(script, seed)))
+        fopt = ""
+        if userfeat:
+            fs = features_for(seed, tags)
+            fopt = " --features='%s'" % fs
         lines.append("hb-shape --font-file='%s' --output-format=json "
-                     "--no-glyph-names --script=%s --text-file='%s' > '%s.hb'"
-                     % (font, iso, text, font))
+                     "--no-glyph-names --script=%s%s --text-file='%s' > '%s.hb'"
+                     % (font, iso, fopt, text, font))
     runner = os.path.join(SCRATCH, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
@@ -481,7 +504,8 @@ def main(argv):
             hb = [json.loads(l) if l.startswith("[") else []
                   for l in h.read().split("\n")[:-1]]
         with open(text, "rb") as h:
-            ours = subprocess.run([DRIVER, "--batch", "--script", ot, font],
+            extra = ["--features", features_for(seed, tags)] if userfeat else []
+            ours = subprocess.run([DRIVER, "--batch", "--script", ot] + extra + [font],
                                   stdin=h, capture_output=True, text=True)
         mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
         keys = ("g", "cl", "ax", "ay", "dx", "dy")
@@ -491,7 +515,8 @@ def main(argv):
             if norm(a) != norm(b):
                 bad += 1
                 if "-v" in argv:
-                    print("seed", seed, ' '.join('%X' % ord(ch) for ch in
+                    print("seed", seed, features_for(seed, tags) if userfeat else "",
+                          ' '.join('%X' % ord(ch) for ch in
                           open(text, encoding="utf-8").read().split("\n")[i]),
                           "\n  hb ", [t[0] for t in norm(a)],
                           "\n  our", [t[0] for t in norm(b)])

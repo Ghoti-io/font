@@ -27,6 +27,11 @@ string in ten); `--script deva` shows them and is not part of the gate. See
 notes/font/SHAPING.md, "Random lookups".
 
 Usage: gsub_random_diff.py [--seeds N] [--first K] [--script latn|deva]
+                           [--reuse] [--driver PATH] [--scratch DIR]
+
+`--reuse` takes HarfBuzz's answers from the `.hb` files a previous run left in the
+scratch directory, which is how a mutation pass runs it on a machine with no
+container; `--driver` and `--scratch` name the shaper and the directory.
 """
 
 import os
@@ -305,7 +310,8 @@ def texts_for(script, seed):
 
 
 def main(argv):
-    seeds, first, script = 200, 0, "latn"
+    global DRIVER, SCRATCH
+    seeds, first, script, reuse = 200, 0, "latn", False
     for i, a in enumerate(argv):
         if a == "--seeds":
             seeds = int(argv[i + 1])
@@ -313,6 +319,12 @@ def main(argv):
             first = int(argv[i + 1])
         elif a == "--script":
             script = argv[i + 1]
+        elif a == "--reuse":
+            reuse = True
+        elif a == "--driver":
+            DRIVER = argv[i + 1]
+        elif a == "--scratch":
+            SCRATCH = argv[i + 1]
     cmap = LATIN if script == "latn" else DEVA
     iso, ot = ("Latn", "latn") if script == "latn" else ("Deva", "dev2")
     os.makedirs(SCRATCH, exist_ok=True)
@@ -331,9 +343,12 @@ def main(argv):
     runner = os.path.join(SCRATCH, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
-    ref = subprocess.run(oracle_env.command("harfbuzz", ["sh", runner],
-                                            scratch=SCRATCH),
-                         capture_output=True, text=True)
+    if reuse:
+        ref = subprocess.CompletedProcess([], 0, "", "")
+    else:
+        ref = subprocess.run(oracle_env.command("harfbuzz", ["sh", runner],
+                                                scratch=SCRATCH),
+                             capture_output=True, text=True)
     if ref.returncode not in (0, 1):
         sys.stderr.write("hb-shape failed: %s\n" % ref.stderr[-300:])
         return 2

@@ -9,7 +9,8 @@
  * nested lookup index past the end of the lookup list. A fuzzer given `GSUB`
  * alone cannot write the `GDEF` that changes which of its glyphs are skipped.
  *
- * With bit 0x80 of the options the first two thirds are Apple's `morx` and `feat`
+ * With bit 0x80 of the options the first two thirds are Apple's `morx` (`mort` with
+ * 0x40 too) and `feat`
  * instead of `GSUB` and `GPOS`; with bit 0x40 they are `kerx` and `kern`, the second
  * is read as `ankr` too and the third as `trak`, at a point size the options give.
  *
@@ -206,7 +207,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   if (options & 0x80u) {
     // Apple's tables instead: the first third is `morx`, the second `feat`.
     if (!gsub.empty()) {
-      tables.push_back({GFNT_TAG('m', 'o', 'r', 'x'), gsub});
+      // Both bits: the older `mort` in its place.
+      tables.push_back({(options & 0x40u) ? GFNT_TAG('m', 'o', 'r', 't')
+                                          : GFNT_TAG('m', 'o', 'r', 'x'),
+          gsub});
     }
     if (!gpos.empty()) {
       tables.push_back({GFNT_TAG('f', 'e', 'a', 't'), gpos});

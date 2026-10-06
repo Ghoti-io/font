@@ -655,55 +655,6 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     }
   }
 
-  // Default-ignorables: drawn as nothing. The space glyph stands in for them if
-  // the font has one, so that the run keeps its length and its clusters; a font
-  // with no space glyph has them taken out instead.
-  {
-    size_t kept = 0;
-
-    for (i = 0; i < buf.len; i++) {
-      GFNT_LInfo * info = &buf.info[i];
-
-      if ((info->flags & GFNT_GF_DEFAULT_IGNORABLE)
-          && !(info->props & GFNT_PROP_SUBSTITUTED)) {
-        if (space) {
-          info->glyph = space;
-        }
-        else {
-          // Its cluster survives in a neighbour, or is merged into one.
-          uint32_t cluster = info->cluster;
-
-          if (i + 1 < buf.len && cluster == buf.info[i + 1].cluster) {
-            continue;
-          }
-          if (kept) {
-            if (cluster < buf.info[kept - 1].cluster) {
-              uint32_t old = buf.info[kept - 1].cluster;
-              size_t k;
-
-              for (k = kept; k && buf.info[k - 1].cluster == old; k--) {
-                buf.info[k - 1].cluster = cluster;
-              }
-            }
-            continue;
-          }
-          if (i + 1 < buf.len) {
-            buf.info[i + 1].cluster = cluster < buf.info[i + 1].cluster
-                ? cluster : buf.info[i + 1].cluster;
-            cluster = buf.info[i + 1].cluster;
-            (void)cluster;
-          }
-          continue;
-        }
-      }
-      if (kept != i) {
-        buf.info[kept] = buf.info[i];
-      }
-      kept++;
-    }
-    buf.len = kept;
-  }
-
   // Default advances.
   for (i = 0; i < buf.len; i++) {
     int32_t advance = 0;
@@ -836,6 +787,57 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
         !native_rtl, !native_rtl);
   }
+  // Default-ignorables: drawn as nothing, once the positions are made (the lookups
+  // have seen the glyphs the font gave them, not the space that replaces them). The space glyph stands in for them if
+  // the font has one, so that the run keeps its length and its clusters; a font
+  // with no space glyph has them taken out instead.
+  {
+    size_t kept = 0;
+
+    for (i = 0; i < buf.len; i++) {
+      GFNT_LInfo * info = &buf.info[i];
+
+      if ((info->flags & GFNT_GF_DEFAULT_IGNORABLE)
+          && !(info->props & GFNT_PROP_SUBSTITUTED)) {
+        if (space) {
+          info->glyph = space;
+        }
+        else {
+          // Its cluster survives in a neighbour, or is merged into one.
+          uint32_t cluster = info->cluster;
+
+          if (i + 1 < buf.len && cluster == buf.info[i + 1].cluster) {
+            continue;
+          }
+          if (kept) {
+            if (cluster < buf.info[kept - 1].cluster) {
+              uint32_t old = buf.info[kept - 1].cluster;
+              size_t k;
+
+              for (k = kept; k && buf.info[k - 1].cluster == old; k--) {
+                buf.info[k - 1].cluster = cluster;
+              }
+            }
+            continue;
+          }
+          if (i + 1 < buf.len) {
+            buf.info[i + 1].cluster = cluster < buf.info[i + 1].cluster
+                ? cluster : buf.info[i + 1].cluster;
+            cluster = buf.info[i + 1].cluster;
+            (void)cluster;
+          }
+          continue;
+        }
+      }
+      if (kept != i) {
+        buf.info[kept] = buf.info[i];
+        buf.pos[kept] = buf.pos[i];
+      }
+      kept++;
+    }
+    buf.len = kept;
+  }
+
   if (native_rtl) {
     gfnt_lbuf_reverse(&buf);
   }

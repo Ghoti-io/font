@@ -27,7 +27,7 @@ string in ten); `--script deva` shows them and is not part of the gate. See
 notes/font/SHAPING.md, "Random lookups".
 
 Usage: gsub_random_diff.py [--seeds N] [--first K] [--script latn|deva]
-                           [--reuse] [--driver PATH] [--scratch DIR]
+                           [--reuse] [-v] [--driver PATH] [--scratch DIR]
 
 `--reuse` takes HarfBuzz's answers from the `.hb` files a previous run left in the
 scratch directory, which is how a mutation pass runs it on a machine with no
@@ -368,10 +368,15 @@ def main(argv):
         mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
         keys = ("g", "cl", "ax", "ay", "dx", "dy")
         norm = lambda g: [tuple(x.get(k) for k in keys) for x in g]
-        for a, b in zip(hb, mine):
+        for i, (a, b) in enumerate(zip(hb, mine)):
             compared += 1
             if norm(a) != norm(b):
                 bad += 1
+                if "-v" in argv:
+                    print("seed", seed, ' '.join('%X' % ord(ch) for ch in
+                          open(text, encoding="utf-8").read().split("\n")[i]),
+                          "\n  hb ", [t[0] for t in norm(a)],
+                          "\n  our", [t[0] for t in norm(b)])
         if len(hb) != len(mine):
             bad += 1
     print("gsub_random_diff: %s, %d seeds from %d, %d strings, %d differ"

@@ -964,7 +964,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback
+check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -1049,6 +1049,10 @@ check-oracle-fallback: $(EXAMPLES)
 	@for s in latn deva khmr thai; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/fallback_random_diff.py --set $$s --direction ttb --seeds 200 || exit 1; \
 	done
+
+check-oracle-uvs: ## Shape random variation-sequence cmaps here and in HarfBuzz and compare
+check-oracle-uvs: $(EXAMPLES)
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/uvs_random_diff.py --seeds 300
 
 check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz
 check-oracle-would: $(EXAMPLES)

@@ -313,6 +313,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
                                               : GFNT_DIRECTION_LTR;
   shape_options.features = features;
   shape_options.point_size = (options & 0x40u) ? 6.0f + 5.0f * (float)(options & 0x07u) : 0.0f;
+  shape_options.ppem = (options & 0x04u) ? 8u + 3u * (options & 0x03u) : 0u;
   shape_options.feature_count = feature_count;
 
   GFNT_ShapedRun first{};

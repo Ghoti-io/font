@@ -26,7 +26,7 @@ orders glyphs after `blwf`, `pstf`, `vatu` and `rphf`, which are not (about one
 string in ten); `--script deva` shows them and is not part of the gate. See
 notes/font/SHAPING.md, "Random lookups".
 
-Usage: gsub_random_diff.py [--seeds N] [--first K] [--script latn|deva]
+Usage: gsub_random_diff.py [--seeds N] [--first K] [--script latn|deva|deva-old]
                            [--reuse] [-v] [--driver PATH] [--scratch DIR]
 
 `--reuse` takes HarfBuzz's answers from the `.hb` files a previous run left in the
@@ -252,7 +252,7 @@ def lookup_table(typ,flag,subs):
     hdr=6+2*len(subs); offs=[];body=b''
     for x in subs: offs.append(hdr+len(body)); body+=x
     return u16(typ,flag,len(subs),*offs)+body
-def build_gsub(seed,gl,tags,override=None):
+def build_gsub(seed,gl,tags,override=None,old_spec=False):
     gen=Gen(seed,gl); r=gen.r
     lookups=[]
     for _ in range(3):
@@ -280,7 +280,8 @@ def build_gsub(seed,gl,tags,override=None):
     flist=u16(len(feats))+frec+b''.join(fbodies)
     langsys=u16(0,0xffff,len(feats),*range(len(feats)))
     script=u16(4,0)+langsys
-    scripts=['DFLT','dev2','deva','latn']   # sorted: a reader bisects them
+    # Sorted, because a reader bisects them. An old-spec font has no 'dev2'.
+    scripts=['DFLT','deva','latn'] if old_spec else ['DFLT','dev2','deva','latn']
     slhdr=2+6*len(scripts); sl=u16(len(scripts)); body=b''
     for sc in scripts: sl+=sc.encode()+u16(slhdr+len(body)); body+=script
     sl+=body
@@ -326,7 +327,11 @@ def main(argv):
         elif a == "--scratch":
             SCRATCH = argv[i + 1]
     cmap = LATIN if script == "latn" else DEVA
-    iso, ot = ("Latn", "latn") if script == "latn" else ("Deva", "dev2")
+    old = script == "deva-old"
+    if old:
+        script = "deva"
+    iso, ot = (("Latn", "latn") if script == "latn"
+               else ("Deva", "deva" if old else "dev2"))
     os.makedirs(SCRATCH, exist_ok=True)
     lines = []
     for seed in range(first, first + seeds):
@@ -334,7 +339,8 @@ def main(argv):
         text = os.path.join(SCRATCH, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra={
-                'GSUB': build_gsub(seed, GLYPHS, TAGS_LATIN + TAGS_DEVA)}))
+                'GSUB': build_gsub(seed, GLYPHS, TAGS_LATIN + TAGS_DEVA,
+                                       old_spec=old)}))
         with open(text, "w", encoding="utf-8") as h:
             h.write(''.join(t + "\n" for t in texts_for(script, seed)))
         lines.append("hb-shape --font-file='%s' --output-format=json "

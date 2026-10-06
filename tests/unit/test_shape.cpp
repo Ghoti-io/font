@@ -2777,6 +2777,26 @@ TEST(ShapeIndic, BlwfReachesEveryGlyphBeforeTheBaseAndALeftHandMatraToo) {
   EXPECT_EQ(run_in(k_blwf, cmap, "dev2", {0x915, 0x94D, 0x93F}), (V{11, 20, 25}));
 }
 
+TEST(ShapeIndic, AnOldSpecFontGetsBlwfOnlyOnARaAndTheHalantsBesideOneBeforeTheBase) {
+  // The same lookup under the script tag 'deva' alone, which makes the font old-spec.
+  std::vector<uint8_t> old_font = k_blwf;
+  const uint8_t dev2[] = {0x64, 0x65, 0x76, 0x32};
+  auto at = std::search(old_font.begin(), old_font.end(), dev2, dev2 + 4);
+  ASSERT_NE(at, old_font.end());
+  *(at + 3) = 0x61;
+  const std::vector<std::pair<uint32_t, uint16_t>> cmap = {
+      {0x915, 11}, {0x930, 9}, {0x94D, 10}, {0x93F, 14}};
+
+  EXPECT_EQ(run_in(old_font, cmap, "deva", {0x930, 0x94D, 0x915}), (V{21, 20, 11}));
+  EXPECT_EQ(run_in(old_font, cmap, "deva", {0x915, 0x94D, 0x915}), (V{11, 10, 11}));
+  EXPECT_EQ(run_in(old_font, cmap, "deva", {0x915, 0x94D, 0x930, 0x94D, 0x915}),
+      (V{11, 10, 21, 20, 11}));
+  // A left-hand matra does not get it, with a consonant or without.
+  EXPECT_EQ(run_in(old_font, cmap, "deva", {0x915, 0x93F}), (V{14, 11}));
+  EXPECT_EQ(run_in(old_font, cmap, "deva", {0x93F}), (V{14}));
+  EXPECT_EQ(run_in(old_font, cmap, "deva", {0x915, 0x94D, 0x93F}), (V{11, 20, 14}));
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

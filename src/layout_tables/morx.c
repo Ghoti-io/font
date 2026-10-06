@@ -256,9 +256,9 @@ static void contextual(Driver * d, size_t entry) {
   if (b->idx >= b->len && !d->mark_set) {
     return;
   }
-  // A `mort` machine substitutes at the mark whether or not it was set, which
-  // leaves the mark at the first glyph.
-  if ((d->mark_set || c->old) && mark_index != 0xFFFF && d->mark < b->len) {
+  // A machine substitutes at the mark whether or not it was set, which leaves the
+  // mark at the first glyph.
+  if (mark_index != 0xFFFF && d->mark < b->len) {
     if (c->old) {
       // The offset counts 16-bit words from the start of the state table, and
       // the glyph is an index from there.
@@ -345,7 +345,9 @@ static void ligature(Driver * d, size_t entry) {
       }
       action = u32(c, action_at);
       if (c->bad) {
-        return;
+        // An action past the table ends the actions, not the chain.
+        c->bad = false;
+        break;
       }
       offset = action & 0x3FFFFFFFu;
       if (offset & 0x20000000u) {
@@ -355,6 +357,10 @@ static void ligature(Driver * d, size_t entry) {
       comp = b->info[d->match[cursor]].glyph + offset;
       ligature_idx += c->old ? u16(c, d->m.start + 2 * (size_t)comp)
           : u16(c, d->lig_component + 2 * (size_t)comp);
+      if (c->bad) {
+        c->bad = false;
+        break;
+      }
       if (action & 0xC0000000u) {
         size_t rel = d->lig_ligature - d->m.start;
         uint16_t lig;
@@ -371,7 +377,8 @@ static void ligature(Driver * d, size_t entry) {
         size_t k;
 
         if (c->bad) {
-          return;
+          c->bad = false;
+          break;
         }
         b->info[d->match[cursor]].glyph = lig;
         // The components after it are gone, though they stay until the end.

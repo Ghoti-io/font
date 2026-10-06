@@ -566,9 +566,10 @@ static void gfnt_plan_collect_default(GFNT_Plan * plan) {
   gfnt_plan_pause(plan, NULL);
   if (plan->options->direction == GFNT_DIRECTION_RTL) {
     gfnt_plan_enable(plan, GFNT_TAG('r', 't', 'l', 'a'), 0, 1);
-    gfnt_plan_enable(plan, GFNT_TAG('r', 't', 'l', 'm'), 0, 1);
+    gfnt_plan_add(plan, GFNT_TAG('r', 't', 'l', 'm'), 0);
   }
-  else {
+  else if (plan->options->direction == GFNT_DIRECTION_LTR) {
+    // Vertical text has neither pair.
     gfnt_plan_enable(plan, GFNT_TAG('l', 't', 'r', 'a'), 0, 1);
     gfnt_plan_enable(plan, GFNT_TAG('l', 't', 'r', 'm'), 0, 1);
   }

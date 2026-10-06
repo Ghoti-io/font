@@ -488,6 +488,10 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
               == GFNT_OK && glyph) {
         chars[i].unicode = mirrored;
       }
+      else {
+        // What is not replaced by its mirror image is left to the font's `rtlm`.
+        chars[i].flags |= GFNT_GF_RTLM;
+      }
     }
   }
 
@@ -525,6 +529,9 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   for (i = 0; i < chars_len; i++) {
     buf.info[i] = chars[i];
     buf.info[i].mask = plan.global_mask;
+    if (chars[i].flags & GFNT_GF_RTLM) {
+      buf.info[i].mask |= gfnt_plan_mask(&plan, GFNT_TAG('r', 't', 'l', 'm'));
+    }
     buf.info[i].props = 0;
     buf.info[i].lig_props = 0;
   }

@@ -103,6 +103,7 @@ extern "C" {
 #define GFNT_GF_HIDDEN 0x08u
 #define GFNT_GF_MARK 0x10u          ///< General category Mn, Mc or Me.
 #define GFNT_GF_CONTINUATION 0x20u  ///< Belongs to the grapheme before it.
+#define GFNT_GF_RTLM 0x40u          ///< Right-to-left text left this character as it was: `rtlm` applies.
 
 /** One glyph of the run, in the order HarfBuzz keeps: parallel to ::GFNT_LPos. */
 typedef struct GFNT_LInfo {

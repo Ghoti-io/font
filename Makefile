@@ -1011,6 +1011,9 @@ check-oracle-gsub: $(EXAMPLES)
 	@for s in khmr mym2 arab thai hang tibt bali sinh; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script $$s --seeds 300 || exit 1; \
 	done
+	@for d in rtl ttb btt; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --direction $$d --seeds 200 || exit 1; \
+	done
 	@for s in latn khmr arab; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script $$s --seeds 300 --userfeatures || exit 1; \
 	done

@@ -451,11 +451,14 @@ def main(argv):
         elif a == "--scratch":
             SCRATCH = argv[i + 1]
     userfeat = "--userfeatures" in argv
+    direction = argv[argv.index("--direction") + 1] if "--direction" in argv else ""
     cmap = LATIN if script == "latn" else DEVA
     tags = TAGS_LATIN + TAGS_DEVA
     if script in OTHER:
         cmap = {c: 9 + i for i, c in enumerate(OTHER[script][2])}
         tags = OTHER[script][3]
+    if direction:
+        tags = tags + ['vert', 'vrt2', 'rtlm', 'rtla', 'ltra', 'ltrm']
     old = script == "deva-old"
     if old:
         script = "deva"
@@ -478,6 +481,8 @@ def main(argv):
         if userfeat:
             fs = features_for(seed, tags)
             fopt = " --features='%s'" % fs
+        if direction:
+            fopt += " --direction=%s" % direction
         lines.append("hb-shape --font-file='%s' --output-format=json "
                      "--no-glyph-names --script=%s%s --text-file='%s' > '%s.hb'"
                      % (font, iso, fopt, text, font))
@@ -505,6 +510,8 @@ def main(argv):
                   for l in h.read().split("\n")[:-1]]
         with open(text, "rb") as h:
             extra = ["--features", features_for(seed, tags)] if userfeat else []
+            if direction:
+                extra += {"rtl": ["--rtl"], "ltr": [], "ttb": ["--ttb"], "btt": ["--btt"]}[direction]
             ours = subprocess.run([DRIVER, "--batch", "--script", ot] + extra + [font],
                                   stdin=h, capture_output=True, text=True)
         mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]

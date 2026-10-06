@@ -273,8 +273,9 @@ static bool gfnt_plan_add_lookups(GFNT_LApply * c, const GFNT_Face * face,
           return false;
         }
         pt->lookups = grown;
-        pt->lookups[pt->count++] = (GFNT_PlanLookup){lookup, mask, stage,
-            auto_zwnj, auto_zwj, per_syllable};
+        pt->lookups[pt->count] = (GFNT_PlanLookup){lookup, mask, stage,
+            auto_zwnj, auto_zwj, per_syllable, (uint32_t)pt->count};
+        pt->count++;
       }
       return true;
     }
@@ -294,8 +295,9 @@ static bool gfnt_plan_add_lookups(GFNT_LApply * c, const GFNT_Face * face,
       return false;
     }
     pt->lookups = grown;
-    pt->lookups[pt->count++] = (GFNT_PlanLookup){lookup, mask, stage,
-        auto_zwnj, auto_zwj, per_syllable};
+    pt->lookups[pt->count] = (GFNT_PlanLookup){lookup, mask, stage,
+        auto_zwnj, auto_zwj, per_syllable, (uint32_t)pt->count};
+    pt->count++;
   }
   return true;
 }
@@ -309,6 +311,9 @@ static int gfnt_plan_lookup_compare(const void * left, const void * right) {
   }
   if (a->index != b->index) {
     return a->index < b->index ? -1 : 1;
+  }
+  if (a->order != b->order) {
+    return a->order < b->order ? -1 : 1;
   }
   return 0;
 }
@@ -330,8 +335,7 @@ static void gfnt_plan_finish_table(GFNT_PlanTable * pt) {
           && pt->lookups[i].auto_zwnj;
       pt->lookups[j].auto_zwj = pt->lookups[j].auto_zwj
           && pt->lookups[i].auto_zwj;
-      pt->lookups[j].per_syllable = pt->lookups[j].per_syllable
-          || pt->lookups[i].per_syllable;
+      // Whether the lookup runs per syllable is the first feature's to say.
     }
     else {
       pt->lookups[++j] = pt->lookups[i];

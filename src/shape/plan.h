@@ -101,6 +101,7 @@ typedef struct GFNT_PlanLookup {
   bool auto_zwnj;
   bool auto_zwj;
   bool per_syllable;
+  uint32_t order;   ///< Where the plan added it, so a merge can keep the first's flags.
 } GFNT_PlanLookup;
 
 typedef struct GFNT_PlanTable {

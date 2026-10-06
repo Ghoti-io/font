@@ -453,20 +453,25 @@ static void kerx_sum_offsets(GFNT_LBuffer * b) {
 
 /**
  * Every glyph rides on the one before it, so a shift of one carries on to all the
- * glyphs after it, except that a glyph set apart starts again from nothing.
+ * glyphs after it, except that a glyph set apart starts again from nothing. The
+ * shifts of all the subtables are in the glyphs by now, each its own; hanging the
+ * glyphs from one another is left to the end, where the offsets of a chain are
+ * added up once whatever the number of subtables.
  */
-static void kerx_sum_shifts(GFNT_LBuffer * b) {
-  int32_t run = 0;
+static void kerx_hang_shifts(GFNT_LBuffer * b) {
   size_t i;
 
   for (i = 0; i < b->len; i++) {
     if (b->pos[i].y_offset == KERX_DETACHED) {
-      run = 0;
+      b->pos[i].y_offset = 0;
+      b->pos[i].attach_type = 0;
+      b->pos[i].attach_chain = 0;
     }
-    else {
-      run += b->pos[i].y_offset;
+    else if (!b->pos[i].attach_type && i) {
+      b->pos[i].attach_type = GFNT_ATTACH_CURSIVE;
+      b->pos[i].attach_chain = -1;
+      b->has_attachment = true;
     }
-    b->pos[i].y_offset = run;
   }
 }
 
@@ -530,6 +535,7 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
   uint32_t t;
   size_t glyphs = 0;
   bool bad = false;
+  bool shifts = false;
 
   result = gfnt_face_table_reader(face, GFNT_TAG_kerx, &table, error);
   if (result != GFNT_OK) {
@@ -573,7 +579,7 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
           gfnt_lbuf_reverse(b);
         }
         if (coverage & KERX_CROSS) {
-          kerx_sum_shifts(b);
+          shifts = true;
         }
       }
       else if (format == 4) {
@@ -591,6 +597,9 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
       }
     }
     cursor += length;
+  }
+  if (shifts) {
+    kerx_hang_shifts(b);
   }
   if (bad) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_kerx, 0,

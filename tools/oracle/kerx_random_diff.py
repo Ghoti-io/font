@@ -32,7 +32,8 @@ from gsub_random_diff import u16, u32, base_font
 
 SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "kerx-random")
 GL = list(range(1, 9))
-KINDS = (0, 0, 2)
+KINDS = (0, 0, 1, 2)
+DONT = 0.0
 SUBS = 3
 CROSS = 0.15
 
@@ -78,12 +79,41 @@ class Gen:
         base = 12 + 16
         return (u32(row, base, base + len(lt), base + len(lt) + len(rt)) + lt + rt + arr)
 
+    def kerx1(self):
+        r = self.r
+        nclasses = r.randint(5, 8)
+        nstates = r.randint(2, 5)
+        nentries = r.randint(2, 6)
+        classes = {g: r.choice(tuple(range(4, nclasses))) if r.random() < .9 else 1
+                   for g in range(1, 15)}
+        states = [[r.randrange(nentries) for _ in range(nclasses)] for _ in range(nstates)]
+        nvals = 16
+        vals = []
+        for i in range(nvals):
+            v = r.randint(-60, 60) * 2
+            if r.random() < .3:
+                v |= 1        # the last of this entry's list
+            vals.append(v)
+        entries = b''
+        for _ in range(nentries):
+            flags = (0x8000 if r.random() < .6 else 0) | (0x4000 if r.random() < DONT else 0)
+            entries += u16(r.randrange(nstates), flags, r.randrange(nvals - 4))
+        cls = pad(lookup8(classes))
+        stt = pad(b''.join(u16(*row) for row in states))
+        ent = pad(entries)
+        hl = 12 + 20     # the subtable header and this one's
+        o_cls = 20
+        o_stt = o_cls + len(cls)
+        o_ent = o_stt + len(stt)
+        o_val = o_ent + len(ent)
+        return u32(nclasses, o_cls, o_stt, o_ent, o_val) + cls + stt + ent + pad(u16(*[v & 0xFFFF for v in vals]))
+
     def kerx(self):
         n = self.r.randint(1, SUBS)
         subs = b''
         for _ in range(n):
             kind = self.r.choice(KINDS)
-            body = self.kerx0() if kind == 0 else self.kerx2()
+            body = {0: self.kerx0, 1: self.kerx1, 2: self.kerx2}[kind]()
             cov = kind | (0x40000000 if self.r.random() < CROSS else 0)
             body = pad(body)
             subs += u32(12 + len(body), cov, 0) + body
@@ -101,7 +131,7 @@ class Gen:
 
 
 def main(argv):
-    global KINDS, CROSS, SUBS
+    global KINDS, CROSS, SUBS, DONT
     seeds, first, driver, scratch, table = 200, 0, G.DRIVER, SCRATCH, "kerx"
     direction = ""
     for i, a in enumerate(argv):
@@ -112,6 +142,7 @@ def main(argv):
         elif a == "--table": table = argv[i + 1]
         elif a == "--direction": direction = argv[i + 1]
         elif a == "--kinds": KINDS = tuple(int(x) for x in argv[i + 1].split(","))
+        elif a == "--dont": DONT = float(argv[i + 1])
         elif a == "--subs": SUBS = int(argv[i + 1])
         elif a == "--cross": CROSS = float(argv[i + 1])
     os.makedirs(scratch, exist_ok=True)

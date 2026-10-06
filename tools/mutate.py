@@ -52,6 +52,8 @@ CORPORA = [
     ("kerx-dont", "kerx_random_diff.py", ["--kinds", "1", "--dont", "0.4", "--seeds", "100"], []),
     ("kerx-rtl", "kerx_random_diff.py", ["--seeds", "80", "--direction", "rtl"], ["--rtl"]),
     ("kerx-ttb", "kerx_random_diff.py", ["--seeds", "80", "--direction", "ttb"], ["--ttb"]),
+    ("kerx-attach", "kerx_random_diff.py", ["--kinds", "0,1,2,4,5,6", "--cross", "0.3", "--seeds", "150"], []),
+    ("kerx-attach-dont", "kerx_random_diff.py", ["--kinds", "4,5", "--dont", "0.4", "--seeds", "100"], []),
     ("kern", "kerx_random_diff.py", ["--table", "kern", "--seeds", "100"], []),
 ]
 

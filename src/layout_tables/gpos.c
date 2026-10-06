@@ -25,12 +25,14 @@
  * three mark attachments, the two contextual forms (apply.c) and the extension
  * wrapper; and the pass at the end that turns attachments into offsets.
  *
- * Positions are in font units and no `Device` table is read for a pixel size,
- * because this engine shapes at the font's own scale. A `VariationIndex` device
+ * Positions are in font units. A hinting `Device` table is read only when the
+ * caller gives a pixel size (`ppem`), and its pixels are scaled back to font
+ * units. A `VariationIndex` device
  * *is* read, against the `GDEF` item variation store, when the caller gave a
  * location: that is how a variable font moves a kern.
  */
 
+#include <ghoti.io/font/metrics.h>
 #include "layout.h"
 #include "../core/fixed.h"
 #include "../var/ivs.h"
@@ -70,9 +72,44 @@ static uint32_t gfnt_vf_length(uint32_t format) {
 }
 
 /**
+ * A hinting device table's delta for the pixel size, as 16.16, or 0.
+ *
+ * The table gives a whole number of pixels for each size from `startSize` to
+ * `endSize`, packed in 2, 4 or 8 bits. HarfBuzz scales the pixels to font units
+ * as `delta * unitsPerEm / ppem` and truncates toward zero.
+ */
+static int64_t gfnt_gpos_hinting_delta(GFNT_LApply * c, size_t device,
+    uint32_t format) {
+  uint32_t start = gfnt_lu16(c, device);
+  uint32_t end = gfnt_lu16(c, device + 2);
+  uint32_t bits = 1u << format;
+  uint32_t per_word = 16 / bits;
+  uint32_t index;
+  uint32_t word;
+  uint32_t shift;
+  int32_t delta;
+  uint16_t upem = 0;
+
+  if (!c->ppem || c->ppem < start || c->ppem > end) {
+    return 0;
+  }
+  index = c->ppem - start;
+  word = gfnt_lu16(c, device + 6 + 2 * (size_t)(index / per_word));
+  shift = 16 - bits * (index % per_word + 1);
+  delta = (int32_t)((word >> shift) & ((1u << bits) - 1));
+  if (delta >= (int32_t)(1u << (bits - 1))) {
+    delta -= (int32_t)(1u << bits);
+  }
+  if (gfnt_face_units_per_em(c->face, &upem, NULL) != GFNT_OK || !upem) {
+    return 0;
+  }
+  return (int64_t)((int64_t)delta * upem / (int64_t)c->ppem) * 65536;
+}
+
+/**
  * A device table's delta, as 16.16, when it is a variation index and there is a location.
  *
- * A device table for a pixel size is not read: this engine has no ppem. The same
+ * A device table for a pixel size is read when the caller gives a ppem. The same
  * table with the format 0x8000 is a pair of indices into the `GDEF` store, and
  * is what a variable font uses.
  */
@@ -83,10 +120,17 @@ static int64_t gfnt_gpos_device_delta(GFNT_LApply * c, size_t device) {
   uint32_t outer;
   uint32_t inner;
 
-  if (!device || !c->variation || !c->variation->count || !gdef->var_store) {
+  uint32_t format;
+
+  if (!device) {
     return 0;
   }
-  if (gfnt_lu16(c, device + 4) != 0x8000u) {
+  format = gfnt_lu16(c, device + 4);
+  if (format >= 1 && format <= 3) {
+    return gfnt_gpos_hinting_delta(c, device, format);
+  }
+  if (!c->variation || !c->variation->count || !gdef->var_store
+      || format != 0x8000u) {
     return 0;
   }
   outer = gfnt_lu16(c, device);

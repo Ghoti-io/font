@@ -157,6 +157,7 @@ struct Request {
   bool rtl = false;
   GFNT_Direction vertical = GFNT_DIRECTION_LTR;  ///< TTB or BTT, to override rtl.
   float point_size = 0;  ///< For `trak`, or 0.
+  uint32_t ppem = 0;     ///< For a hinting device table, or 0.
 };
 
 /** The normalised coordinates of a location: every axis at its default but the named. */
@@ -207,6 +208,7 @@ GFNT_Result shape(const Font & font, const std::vector<uint32_t> & text,
   options.features = features.empty() ? nullptr : features.data();
   options.feature_count = features.size();
   options.point_size = request.point_size;
+  options.ppem = request.ppem;
   std::vector<GFNT_F2Dot14> coordinates =
       normalised_location(font.face, request.location);
   GFNT_Variation located{coordinates.data(), coordinates.size(), GFNT_DELTA_ROUND_HALF_UP };
@@ -2464,6 +2466,38 @@ TEST(ShapeMorx, ALigatureSumIsNotClearedBetweenStores) {
     0x00, 0x17, 0x00, 0x18});
   EXPECT_EQ(morx_run(font, "BBA"), (P{{24, 0}, {1, 2}}));
   EXPECT_EQ(morx_run(font, "BA"), (P{{22, 0}, {1, 1}}));
+}
+
+// --- Hinting device tables ----------------------------------------------------------
+
+TEST(ShapeDevice, APixelDeltaIsScaledToFontUnitsAndTruncatedTowardZero) {
+  // A's advance of 500 plus 10, and a device table for sizes 8 to 13 (8-bit
+  // deltas 1 -1 2 -2 3 -3). Every expected advance is what HarfBuzz 10.2.0 gives
+  // for the same bytes at that --font-ppem: delta * 1000 / ppem, cut toward zero.
+  std::vector<uint8_t> font_bytes = small_font({{GFNT_TAG('G', 'P', 'O', 'S'),
+      {0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x1E, 0x00, 0x2C, 0x00, 0x01,
+       0x44, 0x46, 0x4C, 0x54, 0x00, 0x08, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
+       0xFF, 0xFF, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x6B, 0x65, 0x72, 0x6E,
+       0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x04,
+       0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x01, 0x00, 0x0A,
+       0x00, 0x44, 0x00, 0x0A, 0x00, 0x10, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
+       0x00, 0x08, 0x00, 0x0D, 0x00, 0x03, 0x01, 0xFF, 0x02, 0xFE, 0x03, 0xFD}}});
+  Font font(font_bytes);
+  ASSERT_EQ(font.result, GFNT_OK);
+  auto advance_at = [&](uint32_t ppem) {
+    Request request;
+    request.ppem = ppem;
+    Glyphs g;
+    EXPECT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+    return g.size() == 1 ? g[0].x_advance : -1;
+  };
+  EXPECT_EQ(advance_at(0), 510);
+  EXPECT_EQ(advance_at(7), 510);
+  EXPECT_EQ(advance_at(8), 635);
+  EXPECT_EQ(advance_at(9), 399);
+  EXPECT_EQ(advance_at(11), 329);
+  EXPECT_EQ(advance_at(13), 280);
+  EXPECT_EQ(advance_at(14), 510);
 }
 
 // --- Apple's mort ------------------------------------------------------------------

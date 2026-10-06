@@ -732,6 +732,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     gpos.buf = &buf;
     gpos.face = face;
     gpos.variation = options->variation;
+    gpos.ppem = options->ppem;
     gpos.gdef = &gdef;
     gpos.is_gpos = true;
     gpos.rtl = native_rtl;

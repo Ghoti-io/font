@@ -198,6 +198,7 @@ typedef struct GFNT_LApply {
   GFNT_LBuffer * buf;
   const GFNT_Face * face;
   const GFNT_Variation * variation;
+  uint32_t ppem;       ///< The pixel size a hinting device table is read for, or 0.
   const GFNT_LayoutTable * lt;
   const GFNT_Gdef * gdef;
   GFNT_LFault fault;

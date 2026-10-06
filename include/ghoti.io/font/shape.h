@@ -51,8 +51,10 @@
  *     `kerx` kerns and attaches by its subtables (formats 0, 1, 2, 4 and 6) in
  *     place of `GPOS` and `kern`; `trak` tracks by the point size when one is
  *     given. The rest of AAT is not read.
- *   * **No device table for a pixel size.** Positions are in font units; a
- *     `VariationIndex` device table is read when a location is given.
+ *   * **A device table is read for a pixel size only when `ppem` is given.**
+ *     Positions are in font units; a hinting `Device` table's pixels are scaled
+ *     back to font units, and a `VariationIndex` one is read when a location is
+ *     given.
  *
  * Reference: OpenType Specification 1.9, "GSUB", "GPOS", "GDEF" and "OpenType
  * Layout Common Table Formats".
@@ -115,6 +117,7 @@ typedef struct GFNT_ShapeOptions {
   size_t feature_count;               ///< How many entries @p features has.
   const GFNT_Variation * variation;   ///< The location in the design space, or NULL.
   float point_size;                   ///< The size in points, or 0 for none: Apple's `trak` tracks by it.
+  uint32_t ppem;                      ///< The size in pixels per em, or 0 for none: a hinting `Device` table is read for it.
 } GFNT_ShapeOptions;
 
 /**

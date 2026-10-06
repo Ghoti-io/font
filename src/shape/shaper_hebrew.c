@@ -136,8 +136,39 @@ static bool gfnt_hebrew_compose(uint32_t a, uint32_t b, uint32_t * ab,
   return found;
 }
 
+/**
+ * A patah or qamats, a sheva or hiriq, then a meteg or a point varika: the last two
+ * trade places, so that the meteg is drawn after the points that belong to the
+ * letter (HarfBuzz's `reorder_marks_hebrew`, which tests the modified classes the
+ * sort has just put them in).
+ */
+static void gfnt_hebrew_reorder_marks(GFNT_LInfo * info, size_t start, size_t end,
+    void * ctx) {
+  size_t i;
+
+  (void)ctx;
+  for (i = start + 2; i < end; i++) {
+    uint8_t c0 = info[i - 2].mcc;
+    uint8_t c1 = info[i - 1].mcc;
+    uint8_t c2 = info[i].mcc;
+
+    if ((c0 == 20 || c0 == 21) && (c1 == 22 || c1 == 23) && (c2 == 25 || c2 == 26)) {
+      GFNT_LInfo t = info[i - 1];
+      uint32_t cluster = info[i - 1].cluster < info[i].cluster
+          ? info[i - 1].cluster : info[i].cluster;
+
+      info[i - 1] = info[i];
+      info[i] = t;
+      info[i - 1].cluster = cluster;
+      info[i].cluster = cluster;
+      break;
+    }
+  }
+}
+
 static const GFNT_NormHooks gfnt_hebrew_hooks = {
   .compose = gfnt_hebrew_compose,
+  .reorder_marks = gfnt_hebrew_reorder_marks,
 };
 
 const GFNT_Shaper gfnt_shaper_hebrew = {

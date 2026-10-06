@@ -683,7 +683,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx
+.PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
 .PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
@@ -964,7 +964,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-norm
+check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
@@ -1036,6 +1036,12 @@ check-oracle-norm: ## Shape random cmaps over composing characters here and in H
 check-oracle-norm: $(EXAMPLES)
 	@for s in latn hang arab thai hebr deva beng tibt khmr mymr; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/norm_random_diff.py --script $$s --seeds 300 || exit 1; \
+	done
+
+check-oracle-fallback: ## Place marks over random glyph boxes, with no GPOS, here and in HarfBuzz
+check-oracle-fallback: $(EXAMPLES)
+	@for s in latn hebr arab thai deva; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/fallback_random_diff.py --set $$s --seeds 200 || exit 1; \
 	done
 
 check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz

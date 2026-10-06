@@ -4333,6 +4333,21 @@ TEST(Shape, ARequiredFeatureRunsInTheStageOfTheRequestedFeatureOfItsTag) {
   EXPECT_EQ(ids(g), (V{3}));
 }
 
+TEST(ShapeHebrew, AMetegAfterAPatahAndAShevaTradesPlacesWithTheSheva) {
+  // DALET, SHEVA, PATAH, METEG: sorted by class the marks come out patah, sheva,
+  // meteg, and then the last two are swapped, so the logical order is patah, meteg,
+  // sheva; drawn right to left that is sheva, meteg, patah, dalet.
+  // (HarfBuzz 10.2.0.)
+  Font font(small_font({}, 30, {{0x5D3, 1}, {0x5B0, 2}, {0x5B7, 3}, {0x5BD, 4}}));
+  Glyphs g;
+  Request request;
+
+  request.script = "hebr";
+  request.rtl = true;
+  ASSERT_EQ(shape(font, V{0x5D3, 0x5B0, 0x5B7, 0x5BD}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 4, 3, 1}));
+}
+
 // --- Apple's mort ------------------------------------------------------------------
 //
 // The older 16-bit form of morx. The tables are built byte for byte, and every

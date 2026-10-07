@@ -273,8 +273,15 @@ def features_for(seed):
     out = []
     for _ in range(r.randint(0, 6)):
         t = r.choice(AAT_TAGS)
-        k = r.randrange(6)
-        if k == 5:
+        k = r.randrange(7)
+        if k == 6:
+            # two ranges of one tag, different settings, sharing a start or an end
+            a = r.randrange(0, 5)
+            b = a + r.randint(1, 4)
+            c = r.choice((a, a + r.randint(1, 4)))
+            out.append("%s[%d:%d]=%d" % (t, a, b, r.randrange(0, 5)))
+            out.append("%s[%d:%d]=%d" % (t, c, b if c == a else c + r.randint(1, 3), r.randrange(0, 5)))
+        elif k == 5:
             out.append("%s=%d" % (t, r.randrange(0, 5)))
         elif k == 4:
             a = r.randrange(0, 6)

@@ -173,7 +173,8 @@ def rebuild(tree, prefix):
             fp = os.path.join(p, f)
             if os.path.isfile(fp) and (g.endswith("examples") or f.endswith(".a")):
                 os.remove(fp)
-    r = subprocess.run(["make", "PREFIX=" + prefix, "examples"], cwd=tree, capture_output=True, text=True)
+    cc = ["CC=" + os.environ["MUTATE_CC"]] if os.environ.get("MUTATE_CC") else []
+    r = subprocess.run(["make", "PREFIX=" + prefix, "examples"] + cc, cwd=tree, capture_output=True, text=True)
     return r.returncode == 0 and os.path.exists(os.path.join(tree, SHAPE))
 
 

@@ -2412,6 +2412,40 @@ TEST(ShapeMorx, AnInsertionPutsGlyphsAfterTheCurrentGlyphInItsCluster) {
       (P{{24, 0}, {1, 1}, {30, 1}, {31, 1}, {25, 2}}));
 }
 
+TEST(ShapeMorx, AnInsertionThatDoesNotAdvanceStandsWhereItWasNotPastWhatItInserted) {
+  // An A in state 0 inserts glyph 30 (list index 0) and does not advance. State 1
+  // inserts 31 behind a 30 (a glyph outside the class table is class 1) and 29
+  // behind an A. Put in front of the A, the 30 is the glyph the machine runs on
+  // again; put behind it, the A is. Values from HarfBuzz 10.2.0.
+  auto font = [](uint16_t flags) {
+    Bytes body = state_table(6, {4, 5},
+        {{0, 0, 0, 0, 1, 0}, {0, 2, 0, 0, 3, 0}, {0, 0, 0, 0, 0, 0}},
+        {words({2, 0, 0xFFFF, 0xFFFF}), words({1, flags, 0, 0xFFFF}),
+            words({2, 0x0020, 1, 0xFFFF}), words({2, 0x0020, 2, 0xFFFF})}, 1);
+    patch32(body, 16, static_cast<uint32_t>(body.size()));
+    body = cat({body, words({30, 31, 29})});
+    return morx_font(morx_table(1, {}, {morx_subtable(5, 0, 1, body)}));
+  };
+  EXPECT_EQ(morx_run(font(0x4820), "A"), (P{{30, 0}, {31, 0}, {1, 0}}));
+  EXPECT_EQ(morx_run(font(0x4020), "A"), (P{{1, 0}, {29, 0}, {30, 0}}));
+}
+
+TEST(ShapeMorx, AMarkSetAfterAnInsertionThatDidNotAdvanceIsWhereTheMachineStands) {
+  // A sets the mark on a 30 that the machine runs again after a non-advancing
+  // insertion before the A; a later B inserts 31 after the mark, which is right
+  // behind the 30 and not further on. Values from HarfBuzz 10.2.0.
+  Bytes body = state_table(6, {4, 5},
+      {{0, 0, 0, 0, 1, 0}, {0, 2, 0, 0, 0, 0}, {0, 0, 0, 0, 4, 3},
+          {0, 0, 0, 0, 0, 0}},
+      {words({3, 0, 0xFFFF, 0xFFFF}), words({1, 0x4820, 0, 0xFFFF}),
+          words({2, 0x8000, 0xFFFF, 0xFFFF}), words({3, 0x0001, 0xFFFF, 1}),
+          words({2, 0, 0xFFFF, 0xFFFF})}, 1);
+  patch32(body, 16, static_cast<uint32_t>(body.size()));
+  body = cat({body, words({30, 31})});
+  Bytes font = morx_font(morx_table(1, {}, {morx_subtable(5, 0, 1, body)}));
+  EXPECT_EQ(morx_run(font, "AB"), (P{{30, 0}, {31, 0}, {1, 0}, {2, 1}}));
+}
+
 TEST(ShapeMorx, AContextualSubtableSubstitutesTheMarkedAndTheCurrentGlyph) {
   // An A sets the mark; a B or C after it substitutes the A through lookup 0 and
   // itself through lookup 1.

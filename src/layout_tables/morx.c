@@ -185,7 +185,6 @@ typedef struct Driver {
   size_t subst_table;       ///< Contextual: the array of lookup offsets.
   size_t lig_action, lig_component, lig_ligature;
   size_t insert_actions;
-  size_t shift;             ///< Insertion: what inserting has added to the position since it last advanced.
 } Driver;
 
 static void merge(GFNT_LBuffer * b, size_t start, size_t end) {
@@ -432,10 +431,10 @@ static bool insert_glyphs(Driver * d, size_t at, size_t src_glyph_index,
       : d->insert_actions + 2 * src_glyph_index;
 
   // A run that has spent its step budget takes no more glyphs, as in HarfBuzz.
-  if (b->max_ops < (int64_t)count) {
+  b->max_ops -= (int64_t)count;
+  if (b->max_ops <= 0) {
     return false;
   }
-  b->max_ops -= (int64_t)count;
   (void)u16(d->c, base + 2 * (count - 1));
   if (d->c->bad) {
     return false;
@@ -468,9 +467,8 @@ static void insertion(Driver * d, size_t entry) {
   uint16_t flags = u16(c, entry + 2);
   uint16_t current_index = u16(c, entry + 4);
   uint16_t marked_index = u16(c, entry + 6);
-  // Where HarfBuzz's output stands: the position less what this glyph's own
-  // insertions have moved it by, which a step that does not advance leaves in.
-  size_t mark_loc = b->idx >= d->shift ? b->idx - d->shift : 0;
+  // Where HarfBuzz's output stands when the step starts.
+  size_t mark_loc = b->idx;
 
   if (marked_index != 0xFFFF && d->mark < b->len) {
     size_t count = flags & 0x1F;
@@ -481,7 +479,6 @@ static void insertion(Driver * d, size_t entry) {
       // HarfBuzz moves to the old position plus the count whichever side of
       // the current glyph they went in on.
       b->idx += count;
-      d->shift += count;
     }
   }
   if (flags & 0x8000) {
@@ -497,8 +494,9 @@ static void insertion(Driver * d, size_t entry) {
       size_t end = b->idx;
 
       if (insert_glyphs(d, at, current_index, count, b->idx)) {
-        b->idx = end + count;
-        d->shift += count;
+        // A step that advances goes past the new glyphs; one that does not
+        // stands where it was, on the first of them if they went in before.
+        b->idx = (flags & 0x4000) ? end : end + count;
       }
     }
     else if (count) {
@@ -614,7 +612,6 @@ static void drive(Driver * d, int type, size_t body) {
     }
     if (!(flags & 0x4000) || b->max_ops-- <= 0) {
       b->idx++;
-      d->shift = 0;
     }
   }
 }

@@ -2383,6 +2383,32 @@ TEST(ShapeMorx, ARearrangementMovesGlyphsAndMergesTheirClusters) {
   EXPECT_EQ(morx_run(font, "AEFD"), (P{{4, 0}, {6, 0}, {5, 0}, {1, 0}}));
 }
 
+TEST(ShapeMorx, ARearrangementReachesAtMostSixtyFourGlyphs) {
+  // From a B, mark first; at a C, mark last and rearrange Ax -> xA over what lies
+  // between. HarfBuzz 10.2.0 does it over 64 glyphs and not over 65.
+  Bytes body = state_table(7, {4, 5, 6}, {{0, 0, 0, 0, 0, 1, 0},
+                                         {0, 0, 0, 0, 2, 0, 3}},
+      {words({0, 0}), words({1, 0x8000}), words({1, 0}),
+          words({0, 0x2000 | 1})}, 0);
+  Bytes font = morx_font(morx_table(1, {}, {morx_subtable(0, 0, 1, body)}));
+  auto glyphs = [&](size_t between) {
+    std::vector<uint32_t> out;
+    for (const Placed & p : morx_run(font, "B" + std::string(between, 'A') + "C")) {
+      out.push_back(p.glyph);
+    }
+    return out;
+  };
+  std::vector<uint32_t> moved = glyphs(62);
+  ASSERT_EQ(moved.size(), 64u);
+  EXPECT_EQ(moved.front(), 1u);
+  EXPECT_EQ(moved[62], 3u);
+  EXPECT_EQ(moved.back(), 2u);
+  std::vector<uint32_t> still = glyphs(63);
+  ASSERT_EQ(still.size(), 65u);
+  EXPECT_EQ(still.front(), 2u);
+  EXPECT_EQ(still.back(), 3u);
+}
+
 TEST(ShapeMorx, AMergeIsNotExtendedBackPastTheMachinesOwnPosition) {
   // The first subtable swaps B and C, which joins their clusters. The second runs
   // from the end of the text backwards over C B A, marks the C and swaps it with

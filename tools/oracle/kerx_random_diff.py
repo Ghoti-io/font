@@ -231,6 +231,8 @@ def main(argv):
     runner = os.path.join(scratch, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
+    if "--generate-only" in argv:
+        return 0     # the fonts and texts, for a caller that needs no HarfBuzz answer
     ref = subprocess.run(oracle_env.command("harfbuzz", ["sh", runner], scratch=scratch),
                          capture_output=True, text=True)
     if ref.returncode not in (0, 1):

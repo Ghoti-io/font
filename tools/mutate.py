@@ -17,9 +17,9 @@ differently, or the shaper hangs or crashes. What survives either is equivalent 
 is a gap in the corpora. The unmutated build agrees with HarfBuzz on every one of
 these strings, so a difference from the baseline is a difference from HarfBuzz.
 
-    mutate.py corpus DIR          write the corpora under DIR (needs the HarfBuzz container)
+    mutate.py corpus DIR [--offline]   write the corpora under DIR (the HarfBuzz container, unless --offline)
     mutate.py baseline DIR        shape them with the current build
-    mutate.py run DIR FILE... [-j N] [--tree T]   mutate each file; each worker builds in a copy
+    mutate.py run DIR FILE... [-j N] [--tree T] [--prefix P]   mutate each file; each worker builds in a copy
                                   of the library tree
 
 Every worker has its own tree (mutants build in place) and restores the file after
@@ -64,13 +64,18 @@ CORPORA = [
 ]
 
 
-def corpus(d):
+def corpus(d, offline=False):
+    """Write the corpora; `offline` writes only the fonts and texts, which is all the
+    mutants need (the baseline is this build's own output), so no container is wanted."""
     for name, gen, args, _ in CORPORA:
         out = os.path.join(d, name)
         os.makedirs(out, exist_ok=True)
-        subprocess.run([sys.executable, os.path.join(HERE, "oracle", "oracle_run.py"), "harfbuzz", "--",
-                        sys.executable, os.path.join(HERE, "oracle", gen)] + args + ["--scratch", out],
-                       cwd=ROOT, check=False)
+        cmd = [sys.executable, os.path.join(HERE, "oracle", gen)] + args + ["--scratch", out]
+        if offline:
+            subprocess.run(cmd + ["--generate-only"], cwd=ROOT, check=False)
+        else:
+            subprocess.run([sys.executable, os.path.join(HERE, "oracle", "oracle_run.py"),
+                            "harfbuzz", "--"] + cmd, cwd=ROOT, check=False)
 
 
 def extra_for(name, seed):
@@ -88,7 +93,7 @@ def jobs(d):
             continue
         for f in sorted(os.listdir(out)):
             m = re.fullmatch(r"s(\d+)\.ttf", f)
-            if m and os.path.exists(os.path.join(out, f + ".hb")):
+            if m and os.path.exists(os.path.join(out, f[:-4] + ".txt")):
                 yield name, int(m.group(1)), os.path.join(out, f), os.path.join(out, f[:-4] + ".txt")
 
 
@@ -208,14 +213,15 @@ def main(argv):
         return 2
     cmd, d = argv[0], os.path.abspath(argv[1])
     if cmd == "corpus":
-        corpus(d)
+        corpus(d, "--offline" in argv)
         return 0
     if cmd == "baseline":
         baseline(d)
         return 0
     jn = int(argv[argv.index("-j") + 1]) if "-j" in argv else 4
     tmp = argv[argv.index("--tree") + 1] if "--tree" in argv else os.path.join(d, "trees")
-    prefix = os.path.join(ROOT, "..", "..", ".local")
+    prefix = (argv[argv.index("--prefix") + 1] if "--prefix" in argv
+              else os.environ.get("PREFIX") or os.path.join(ROOT, "..", "..", ".local"))
     files = [a for a in argv[2:] if a.endswith(".c")]
     base = json.load(open(os.path.join(d, "baseline.json")))
     trees = [worker_tree(tmp, k) for k in range(jn)]

@@ -168,7 +168,7 @@ class Gen:
         nclasses, nstates, nentries, classes, states = self.stx(kind)
         clstab = pad(u16(1, 14) + bytes(classes[g] for g in range(1, 15)), 2)
         statetab = pad(bytes(e for row in states for e in row), 2)
-        esize = {0: 4, 1: 8, 2: 4}[kind]
+        esize = {0: 4, 1: 8, 2: 4, 5: 8}[kind]
         head = 10 if kind == 1 else 8
         off_cls = head
         off_state = off_cls + len(clstab)
@@ -223,6 +223,18 @@ class Gen:
                 flags |= off_act + 4 * r.randrange(nact) if r.random() < .8 else 0
                 entries.append(u16(row(r.randrange(nstates)), flags))
             extra = u32(*actions) + u16(*comps) + u16(*ligs)
+        elif kind == 5:
+            # HarfBuzz reads the list at twice the entry's index plus one byte.
+            nins = 16
+            first = off_extra // 2
+            extra = b'\0' + u16(*[r.choice(GLYPHS) for _ in range(nins)])
+            for _ in range(nentries):
+                flags = r.choice((0, 0x8000)) | (0x4000 if r.random() < DONT_INS else 0)
+                flags |= (r.randint(0, 3) << 5) | r.randint(0, 3)
+                flags |= r.choice((0, 0x800)) | r.choice((0, 0x400))
+                entries.append(u16(row(r.randrange(nstates)), flags,
+                                   r.choice((0xFFFF, first + r.randrange(nins - 3))),
+                                   r.choice((0xFFFF, first + r.randrange(nins - 3)))))
         enttab = b''.join(entries)
         header = u16(nclasses, off_cls, off_state, off_ent)
         if kind == 1:

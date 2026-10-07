@@ -1066,6 +1066,7 @@ check-oracle-morx: ## Shape random AAT morx, kerx and kern tables here and in Ha
 check-oracle-morx: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 500 --dont 0
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --types 5 --dontins 0.3 --seeds 500
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --mort --types 5 --dontins 0.3 --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 500 --dont 0 --aatfeatures
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 1000 --dont 0.2 --coverage --delete 0.1 --aatfeatures
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 500 --types 2 --dont 0.3

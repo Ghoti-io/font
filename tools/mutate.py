@@ -53,6 +53,7 @@ CORPORA = [
     ("morx-ins", "morx_random_diff.py", ["--seeds", "150", "--types", "5", "--dontins", "0.3"], []),
     ("morx-ins-rtl", "morx_random_diff.py", ["--seeds", "100", "--types", "5", "--dontins", "0.3", "--direction", "rtl"], ["--rtl"]),
     ("mort", "morx_random_diff.py", ["--mort", "--types", "0,1,2,4", "--dont", "0.2", "--coverage", "--seeds", "150"], []),
+    ("mort-ins", "morx_random_diff.py", ["--mort", "--types", "5", "--dontins", "0.3", "--seeds", "100"], []),
     ("kerx", "kerx_random_diff.py", ["--seeds", "100"], []),
     ("kerx-dont", "kerx_random_diff.py", ["--kinds", "1", "--dont", "0.4", "--seeds", "100"], []),
     ("kerx-rtl", "kerx_random_diff.py", ["--seeds", "80", "--direction", "rtl"], ["--rtl"]),

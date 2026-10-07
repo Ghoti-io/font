@@ -163,13 +163,13 @@ class Gen:
         """A `mort` subtable body: state offsets in bytes, one-byte classes and states."""
         r = self.r
         if kind == 4:
-            m = {g: r.choice(GLYPHS) for g in GLYPHS if r.random() < .6}
+            m = {g: self.out() for g in GLYPHS if r.random() < .6}
             return pad(lookup8(m, missing=None))
         nclasses, nstates, nentries, classes, states = self.stx(kind)
         clstab = pad(u16(1, 14) + bytes(classes[g] for g in range(1, 15)), 2)
         statetab = pad(bytes(e for row in states for e in row), 2)
         esize = {0: 4, 1: 8, 2: 4, 5: 8}[kind]
-        head = 10 if kind == 1 else 8
+        head = {1: 10, 2: 14}.get(kind, 8)   # ligature: three more offsets
         off_cls = head
         off_state = off_cls + len(clstab)
         off_ent = off_state + len(statetab)
@@ -217,7 +217,9 @@ class Gen:
                 store = 0x40000000 if r.random() < .5 else 0
                 actions.append(last | store | (off_comp // 2 + v))
             for _ in range(nentries):
-                flags = r.choice((0, 0x8000, 0x2000, 0xA000, 0x2000))
+                # The low fourteen bits are the action's byte offset, and a
+                # non-zero one is what performs it (there is no flag for it).
+                flags = r.choice((0, 0x8000))
                 if r.random() < DONT:
                     flags |= 0x4000
                 flags |= off_act + 4 * r.randrange(nact) if r.random() < .8 else 0
@@ -239,6 +241,8 @@ class Gen:
         header = u16(nclasses, off_cls, off_state, off_ent)
         if kind == 1:
             header += u16(off_extra)
+        elif kind == 2:
+            header += u16(off_act, off_comp, off_lig)
         return header + clstab + statetab + enttab + extra
 
     def mort(self, types, features=False):

@@ -296,6 +296,9 @@ static void contextual(Driver * d, size_t entry) {
         b->info[d->mark].glyph = glyph;
       }
     }
+    // A substitution outside the table (a deleted glyph is index 0xFFFF) makes
+    // no substitution; the machine goes on.
+    c->bad = false;
   }
   if (current_index != 0xFFFF && b->len) {
     size_t at = b->idx < b->len ? b->idx : b->len - 1;
@@ -315,6 +318,7 @@ static void contextual(Driver * d, size_t entry) {
         b->info[at].glyph = glyph;
       }
     }
+    c->bad = false;
   }
   if (flags & 0x8000) {
     d->mark_set = true;
@@ -348,7 +352,7 @@ static void ligature(Driver * d, size_t entry) {
       size_t rel = d->lig_action - d->m.start;
 
       if ((flags & 0x3FFFu) < rel) {
-        c->bad = true;
+        // An action before the table is no action; the chain goes on.
         return;
       }
       action_at = d->lig_action + 4 * (((flags & 0x3FFFu) - rel) / 4);
@@ -389,8 +393,8 @@ static void ligature(Driver * d, size_t entry) {
 
         if (c->old) {
           if (ligature_idx < rel) {
-            c->bad = true;
-            return;
+            // A ligature before the table ends the actions, not the chain.
+            break;
           }
           ligature_idx = (uint32_t)((ligature_idx - rel) / 2);
         }

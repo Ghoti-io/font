@@ -1083,6 +1083,9 @@ check-oracle-morx: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --kinds 1 --dont 0.4 --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --kinds 0,1,2,4,5,6 --cross 0.3 --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --kinds 4,5 --dont 0.4 --seeds 200
+	@for d in "" rtl ttb; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --trak $${d:+--direction $$d} --seeds 200 || exit 1; \
+	done
 	@for t in kerx kern; do for d in "" rtl ttb; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table $$t $${d:+--direction $$d} --seeds 200 || exit 1; \
 	done; done

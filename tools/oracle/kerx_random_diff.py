@@ -180,6 +180,39 @@ class Gen:
             subs += u32(12 + len(body), cov, 0) + body
         return u16(2, 0) + u32(n) + subs
 
+    def trak(self):
+        """A `trak` table: horizontal tracks, and vertical ones in some fonts."""
+        r = self.r
+
+        def fixed(v):
+            return u32(int(round(v * 65536)) & 0xFFFFFFFF)
+
+        def data(base):
+            tracks = sorted(r.sample([-1.0, -0.5, 0.0, 0.0, 1.0, 2.0], r.randint(1, 3)))
+            tracks = sorted(set(tracks))
+            sizes = sorted(set(r.randint(4, 60) for _ in range(r.randint(1, 4))))
+            nt, ns = len(tracks), len(sizes)
+            hdr = 8
+            ents = hdr + 8 * nt
+            size_off = ents
+            vals_off = size_off + 4 * ns
+            out = u16(nt, ns) + u32(base + size_off)
+            for k, t in enumerate(tracks):
+                out += fixed(t) + u16(300 + k, base + vals_off + 2 * ns * k)
+            out += b''.join(fixed(v) for v in sizes)
+            for _ in tracks:
+                out += b''.join(s16(r.randint(-100, 100)) for _ in sizes)
+            return out
+
+        horiz = data(12)
+        has_v = r.random() < .3
+        vert = b''
+        voff = 0
+        if has_v:
+            voff = 12 + len(horiz)
+            vert = data(voff)
+        return u32(0x10000) + u16(0, 12, voff, 0) + horiz + vert
+
     def kern(self):
         n = self.r.randint(1, min(2, SUBS))
         subs = b''
@@ -189,6 +222,10 @@ class Gen:
             body = u16(len(ps), 0, 0, 0) + b''.join(u16(a, b) + s16(v) for (a, b), v in ps)
             subs += u16(0, 6 + len(body), cov) + body
         return u16(0, n) + subs
+
+
+def ptem_for(seed):
+    return random.Random(seed * 17 + 3).randint(3, 70)
 
 
 def main(argv):
@@ -219,12 +256,16 @@ def main(argv):
             extra = {table: tab}
             if g.has_ankr:
                 extra["ankr"] = g.ankr()
+            if "--trak" in argv:
+                extra["trak"] = g.trak()
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra=extra))
         rr = random.Random(seed * 7)
         with open(text, "w") as h:
             h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 8)))
                             + "\n" for _ in range(12)))
         opt = " --direction=%s" % direction if direction else ""
+        if "--trak" in argv:
+            opt += " --font-ptem=%d" % ptem_for(seed)
         lines.append("hb-shape --font-file='%s' --output-format=json%s "
                      "--no-glyph-names --text-file='%s' > '%s.hb' 2>/dev/null"
                      % (font, opt, text, font))
@@ -250,7 +291,8 @@ def main(argv):
             with open(font + ".hb", encoding="utf-8") as h:
                 hb = [json.loads(l) if l.startswith("[") else [] for l in h.read().split("\n")[:-1]]
             with open(text, "rb") as h:
-                ours = subprocess.run([driver, "--batch", "--script", "latn"] + extra + [font],
+                ours = subprocess.run([driver, "--batch", "--script", "latn"] + extra
+                                      + (["--ptem", str(ptem_for(seed))] if "--trak" in argv else []) + [font],
                                       stdin=h, capture_output=True, text=True, timeout=20)
             mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
         except (OSError, ValueError, subprocess.TimeoutExpired):

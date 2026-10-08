@@ -352,7 +352,7 @@ def main(argv):
         text = os.path.join(scratch, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap,
-                              extra=dict({'mort': Gen(seed).mort(types)} if MORT else {'morx': Gen(seed).morx(types, aatfeat)}, **({'feat': feat_table()} if aatfeat else {}))))
+                              extra=dict({'mort': Gen(seed).mort(types)} if MORT else {'morx': Gen(seed).morx(types, aatfeat)}, **({'feat': feat_table()} if aatfeat else {}), **({'GPOS': __import__('gpos_random_diff').build_gpos(seed), 'GDEF': __import__('gpos_random_diff').gdef(), 'GSUB': __import__('gsub_random_diff').build_gsub(seed, __import__('gsub_random_diff').GLYPHS, __import__('gsub_random_diff').TAGS_LATIN)} if '--with-gpos' in argv else {}))))
         rr = random.Random(seed * 7)
         with open(text, "w") as h:
             h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 8)))

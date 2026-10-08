@@ -684,7 +684,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   gfnt_fallback_spaces(face, &buf, options->variation, vertical);
 
   // A shaper that wants marks taken out of the width before positioning says so.
-  if (plan.shaper->zero_width_marks == 1) {
+  if (plan.shaper->zero_width_marks == 1 && !plan.apply_kerx) {
     gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl);
   }
 
@@ -763,7 +763,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // A mark takes no room of its own: its advance is folded into where it sits.
   // With a GPOS the font has already said where; without one, the mark is pulled
   // back over the base it follows.
-  if (plan.shaper->zero_width_marks == 2) {
+  if (plan.shaper->zero_width_marks == 2 && !plan.apply_kerx) {
     gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl);
   }
   for (i = 0; i < buf.len; i++) {
@@ -779,7 +779,9 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     gfnt_gpos_position_finish_offsets(&buf, native_rtl, vertical);
   }
   // A font with no `GPOS` does not say where a mark goes, so the shaper does.
-  if (!plan.tables[1].present && plan.shaper->fallback_position) {
+  // (Nor does Apple's `kerx`, which replaced the `GPOS` and zeroes no marks.)
+  if (!plan.tables[1].present && !plan.apply_kerx
+      && plan.shaper->fallback_position) {
     gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
         !native_rtl, !native_rtl, vertical);
   }

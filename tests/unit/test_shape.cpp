@@ -5369,6 +5369,33 @@ TEST(ShapeKerx, ACrossStreamShiftCarriesOnToEveryGlyphAfterIt) {
   EXPECT_EQ(g[1].x_advance, 500);
 }
 
+TEST(ShapeKerx, AMarkTheKerxSkippedStillHangsOnTheGlyphBeforeAndKeepsItsAdvance) {
+  // GDEF classes glyph 3 a mark. The pair (A, B) is cross-stream, B drops by 100,
+  // the mark after it is skipped by the kerning but carries on with the glyph it
+  // follows, and keeps its width: the kerx table, which replaced the GPOS, zeroes
+  // no marks. (HarfBuzz 10.2.0.)
+  Bytes gdef;
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 12);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 1);          // class definition, format 1
+  gfnttest::put_u16(gdef, 3);          // from glyph 3
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 3);          // a mark
+  Glyphs g = shape_bytes(small_font({{GFNT_TAG('k', 'e', 'r', 'x'),
+      kerx_table({kerx_pairs({{1, 2, -100}}, 0x40000000u)})},
+      {GFNT_TAG('G', 'D', 'E', 'F'), gdef}}), cps("ABCA"));
+  ASSERT_EQ(g.size(), 4u);
+  EXPECT_EQ(g[0].y_offset, 0);
+  EXPECT_EQ(g[1].y_offset, -100);
+  EXPECT_EQ(g[2].y_offset, -100);
+  EXPECT_EQ(g[2].x_advance, 500);
+  EXPECT_EQ(g[3].y_offset, -100);
+}
+
 TEST(ShapeKerx, ClassSubtablesAddTheTwoClassesToAnIndexIntoTheValues) {
   // Format 2: left A = 0, B = 2; right B = 0, C = 1: the value at index l + r.
   Bytes left = lookup6({{1, 0}, {2, 2}});

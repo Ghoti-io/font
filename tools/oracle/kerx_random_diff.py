@@ -258,6 +258,15 @@ def main(argv):
                 extra["ankr"] = g.ankr()
             if "--trak" in argv:
                 extra["trak"] = g.trak()
+            for part in ("gpos", "gdef", "gsub"):
+                if "--with-" + part in argv or "--with-gpos" in argv:
+                    import gpos_random_diff as P
+                    if part == "gpos":
+                        extra["GPOS"] = P.build_gpos(seed)
+                    elif part == "gdef":
+                        extra["GDEF"] = P.gdef()
+                    else:
+                        extra["GSUB"] = G.build_gsub(seed, G.GLYPHS, G.TAGS_LATIN)
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra=extra))
         rr = random.Random(seed * 7)
         with open(text, "w") as h:

@@ -556,7 +556,8 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
         // over whatever an earlier subtable attached them to.
         seen_cross = true;
         for (i = 1; i < b->len; i++) {
-          if (b->pos[i].attach_type) {
+          if (b->pos[i].attach_type
+              || (format != 1 && gfnt_l_is_mark(&b->info[i]))) {
             b->pos[i].attach_type = GFNT_ATTACH_CURSIVE;
             b->pos[i].attach_chain = -1;
           }

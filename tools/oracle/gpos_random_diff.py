@@ -204,7 +204,7 @@ def random_set():
     return random_set.r.randrange(2)
 
 
-def build_gpos(seed, script_tag='latn'):
+def build_gpos(seed, script_tag='latn', langs=False, scriptset=False):
     gen = PGen(seed)
     r = gen.r
     lookups = []
@@ -231,13 +231,40 @@ def build_gpos(seed, script_tag='latn'):
         frec += t.encode() + u16(pos)
         pos += len(b)
     flist = u16(len(feats)) + frec + b''.join(bodies)
-    script = u16(4, 0) + u16(0, 0xffff, len(feats), *range(len(feats)))
+    langsys = u16(0, 0xffff, len(feats), *range(len(feats)))
     scripts = sorted(set(['DFLT', 'latn', script_tag]))
+    if langs:
+        # Language systems with feature lists of their own, a required feature in
+        # some; their random choices come from a generator of their own so the
+        # lookups are the same with and without them.
+        lr = random.Random(seed * 31 + 7)
+        lt = sorted(lr.sample(['TRK ', 'DEU ', 'ENG ', 'FRA ', 'ROM '], lr.randint(1, 4)))
+        ls = []
+        for _ in lt:
+            idx = sorted(set(lr.randrange(len(feats)) for _ in range(lr.randint(0, len(feats)))))
+            req = lr.choice((0xffff, 0xffff, lr.randrange(len(feats))))
+            ls.append(u16(0, req, len(idx), *idx))
+        offs, pos = [], 4 + 6 * len(lt)
+        for b in ls:
+            offs.append(pos)
+            pos += len(b)
+        script = (u16(pos, len(lt)) + b''.join(t.encode() + u16(o) for t, o in zip(lt, offs))
+                  + b''.join(ls) + langsys)
+    else:
+        script = u16(4, 0) + langsys
+    recs = None
+    if scriptset:
+        sr = random.Random(seed * 53 + 1)
+        scripts = sorted(sr.sample(['DFLT', 'dflt', 'latn', 'cyrl', 'grek', 'hebr'], sr.randint(1, 5)))
+        recs = []
+        for _ in scripts:
+            idx = sorted(set(sr.randrange(len(feats)) for _ in range(sr.randint(0, len(feats)))))
+            recs.append(u16(4, 0) + u16(0, 0xffff, len(idx), *idx))
     slhdr = 2 + 6 * len(scripts)
     sl, body = u16(len(scripts)), b''
-    for sc in scripts:
+    for k, sc in enumerate(scripts):
         sl += sc.encode() + u16(slhdr + len(body))
-        body += script
+        body += recs[k] if recs else script
     sl += body
     random_set.r = r
     lbs = [lookup(t, f, s, r.random() < .2) for t, f, s in lookups]
@@ -261,6 +288,8 @@ def main(argv):
         elif a == "--scratch": scratch = argv[i + 1]
         elif a == "--script": script = argv[i + 1]
     userfeat = "--userfeatures" in argv
+    langs = "--languages" in argv
+    scriptset = "--scriptsets" in argv
     direction = argv[argv.index("--direction") + 1] if "--direction" in argv else ""
     ftags = ['kern', 'mark', 'mkmk', 'curs', 'dist', 'abvm', 'liga', 'calt', 'ccmp']
     os.makedirs(scratch, exist_ok=True)
@@ -277,7 +306,7 @@ def main(argv):
         text = os.path.join(scratch, "s%d.txt" % seed)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=30, cmap_map=cmap, extra={
-                'GPOS': build_gpos(seed, ot), 'GDEF': gdef(),
+                'GPOS': build_gpos(seed, ot, langs, scriptset), 'GDEF': gdef(),
                 'GSUB': G.build_gsub(seed + 5000, GL, ['ccmp', 'liga', 'calt'],
                                      script_tag=None if script == 'latn' else ot)}))
         rr = random.Random(seed * 7)
@@ -290,9 +319,12 @@ def main(argv):
             opt += " --features='%s'" % G.features_for(seed, ftags)
         if direction:
             opt += " --direction=%s" % direction
+        if langs and G.language_for(seed):
+            opt += " --language=%s" % G.BCP47[G.language_for(seed)]
+        iso_s = G.script_for(seed)[0] if scriptset else iso
         lines.append("hb-shape --font-file='%s' --output-format=json "
                      "--no-glyph-names --script=%s%s --text-file='%s' > '%s.hb'"
-                     % (font, iso, opt, text, font))
+                     % (font, iso_s, opt, text, font))
     runner = os.path.join(scratch, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
@@ -314,7 +346,10 @@ def main(argv):
         with open(text, "rb") as h:
             extra = (["--features", G.features_for(seed, ftags)] if userfeat else []) + \
                     ({"rtl": ["--rtl"], "ltr": [], "ttb": ["--ttb"], "btt": ["--btt"]}[direction] if direction else [])
-            ours = subprocess.run([driver, "--batch", "--script", ot] + extra + [font],
+            if langs and G.language_for(seed):
+                extra += ["--language", G.language_for(seed)]
+            ours = subprocess.run([driver, "--batch", "--script",
+                                   G.script_for(seed)[1] if scriptset else ot] + extra + [font],
                                   stdin=h, capture_output=True, text=True)
         mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
         txt = open(text, encoding="utf-8").read().split("\n")

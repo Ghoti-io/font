@@ -1031,6 +1031,8 @@ check-oracle-gpos: $(EXAMPLES)
 	@for d in rtl ttb btt; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --direction $$d --seeds 200 || exit 1; \
 	done
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --languages --seeds 300
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --scriptsets --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --userfeatures --seeds 200
 	@for s in mixed arab hebr thai khmr mym2 tibt hang sinh bali beng taml; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gpos_random_diff.py --script $$s --seeds 200 || exit 1; \

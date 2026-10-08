@@ -1270,6 +1270,44 @@ TEST(ShapePlan, TheFeatureALanguageSystemRequiresRunsWithoutBeingAsked) {
   EXPECT_EQ(g[0].glyph, 2u);
 }
 
+TEST(ShapePlan, ARequiredFeatureIsNotMovedByARequestToTurnItsTagOff) {
+  // calt (lookup 0, A -> B) is required and is also on by default, so it runs in the
+  // stage after rvrn (lookup 1, B -> C) and the B stays. `-calt` is not a request
+  // for a stage: the required feature goes back to the first stage with rvrn and, in
+  // lookup order, A -> B -> C. (HarfBuzz 10.2.0.)
+  std::vector<uint8_t> font = small_font({{kGSUB,
+      layout_table("latn", 0, {{"calt", {0}}, {"rvrn", {1}}},
+          {{1, 0, single_delta({1}, 1)}, {1, 0, single_delta({2}, 1)}})}});
+
+  EXPECT_EQ(shape_bytes(font, cps("A"), "")[0].glyph, 2u);
+  EXPECT_EQ(shape_bytes(font, cps("A"), "-calt")[0].glyph, 3u);
+}
+
+TEST(ShapePlan, ARequiredFeatureReadsOnlyTheGlobalBitOfAnAlternateLookup) {
+  // The required feature names an alternate lookup for A (alternates 5 to 8). A
+  // value of 3 for ss01 gives the glyphs bits beyond the global one, which the
+  // required feature's mask does not include, so the first alternate is still the
+  // one taken. (HarfBuzz 10.2.0.)
+  std::vector<uint8_t> alternates;
+  gfnttest::put_u16(alternates, 1);
+  gfnttest::put_u16(alternates, 8);
+  gfnttest::put_u16(alternates, 1);
+  gfnttest::put_u16(alternates, 14);
+  gfnttest::put_u16(alternates, 1);   // coverage: glyph 1
+  gfnttest::put_u16(alternates, 1);
+  gfnttest::put_u16(alternates, 1);
+  gfnttest::put_u16(alternates, 4);   // the alternate set
+  for (uint16_t g : {5, 6, 7, 8}) {
+    gfnttest::put_u16(alternates, g);
+  }
+  std::vector<uint8_t> font = small_font({{kGSUB,
+      layout_table("latn", 0, {{"xxxx", {0}}, {"ss01", {1}}},
+          {{3, 0, alternates}, {1, 0, single_delta({2}, 1)}})}});
+
+  EXPECT_EQ(shape_bytes(font, cps("A"), "")[0].glyph, 5u);
+  EXPECT_EQ(shape_bytes(font, cps("A"), "ss01=3")[0].glyph, 5u);
+}
+
 TEST(ShapePlan, AScriptTheFontLacksFallsBackToLatinWhenThatIsAllItHas) {
   std::vector<uint8_t> font = small_font({{kGSUB,
       layout_table("latn", -1, {{"liga", {0}}}, {{1, 0, single_delta({1}, 1)}})}});

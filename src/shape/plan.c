@@ -782,7 +782,8 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
       uint8_t required_stage = 0;
 
       // It runs in the stage of the requested feature that has its tag, if there is
-      // one, and in the first stage if not.
+      // one that is on (`-liga` is not a request for the stage), and in the first
+      // stage if not.
       if (required != GFNT_NO_FEATURE && t == 0 && required < s->lt.feature_count) {
         GFNT_Tag required_tag = (GFNT_Tag)gfnt_lu32(&s->c,
             s->lt.feature_list + 2 + 6 * (size_t)required);
@@ -790,14 +791,14 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
         for (i = 0; i < plan->feature_count; i++) {
           const GFNT_PlanFeature * f = &plan->features[i];
 
-          if (f->tag == required_tag) {
+          if (f->tag == required_tag && f->max_value) {
             required_stage = f->stage;
           }
         }
       }
       if (required != GFNT_NO_FEATURE
           && !gfnt_plan_add_lookups(&s->c, face, pt, a, required, s->record,
-                 s->have_record, plan->global_mask,
+                 s->have_record, 1u,
                  t == 0 ? required_stage : table_stage, true, true, false)) {
         gfnt_plan_free(plan);
         return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,

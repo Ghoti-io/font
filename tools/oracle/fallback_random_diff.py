@@ -21,6 +21,7 @@ Usage: fallback_random_diff.py [--seeds N] [--first K] [--set latn|hebr|arab|tha
 """
 
 import json
+import struct
 import os
 import random
 import subprocess
@@ -88,9 +89,22 @@ def box_font(chars, r):
                      extra={'glyf': glyphs, 'loca': loca, 'maxp': maxp, 'head': head})
 
 
+def add_fvar(data):
+    """The same font with an `fvar` of one axis and nothing that varies: no `gvar`."""
+    n = struct.unpack(">H", data[4:6])[0]
+    t = {}
+    for i in range(n):
+        tag, _, off, ln = struct.unpack(">4sIII", data[12 + 16 * i:28 + 16 * i])
+        t[tag.decode()] = data[off:off + ln]
+    fixed = lambda v: u32(v << 16)
+    t['fvar'] = u16(1, 0, 16, 2, 1, 20, 0, 8) + b'wght' + fixed(100) + fixed(400) + fixed(900) + u16(0, 256)
+    return G.sfnt(t)
+
+
 def main(argv):
     seeds, first, driver, scratch, which = 200, 0, G.DRIVER, SCRATCH, "latn"
     direction = ""
+    variable = "--variable" in argv
     for i, a in enumerate(argv):
         if a == "--seeds": seeds = int(argv[i + 1])
         elif a == "--first": first = int(argv[i + 1])
@@ -108,7 +122,10 @@ def main(argv):
         keep_marks = [m for m in marks if r.random() < .8] or marks[:2]
         chars = bases + keep_marks
         with open(font, "wb") as h:
-            h.write(box_font(chars, r))
+            data = box_font(chars, r)
+            if variable:
+                data = add_fvar(data)
+            h.write(data)
         rr = random.Random(seed * 7 + 1)
         with open(text, "w", encoding="utf-8") as h:
             for _ in range(12):
@@ -118,6 +135,8 @@ def main(argv):
                     s += ''.join(chr(rr.choice(marks)) for _ in range(rr.randint(0, 3)))
                 h.write(s + "\n")
         opt = " --direction=%s" % direction if direction else ""
+        if variable:
+            opt += " --variations=wght=%d" % (100 + (seed * 37) % 800)
         lines.append("hb-shape --font-file='%s' --output-format=json%s "
                      "--no-glyph-names --script=%s --text-file='%s' > '%s.hb' 2>/dev/null"
                      % (font, opt, iso, text, font))
@@ -130,6 +149,7 @@ def main(argv):
         sys.stderr.write("hb-shape failed: %s\n" % ref.stderr[-300:])
         return 2
     extra = {"rtl": ["--rtl"], "ttb": ["--ttb"], "btt": ["--btt"], "": []}[direction]
+    loc_of = lambda seed: ["--location", "wght=%d" % (100 + (seed * 37) % 800)] if variable else []
     bad = compared = skipped = 0
     keys = ("g", "cl", "ax", "ay", "dx", "dy")
     norm = lambda g: [tuple(x.get(k) for k in keys) for x in g]
@@ -141,7 +161,7 @@ def main(argv):
             with open(font + ".hb", encoding="utf-8") as h:
                 hb = [json.loads(l) if l.startswith("[") else [] for l in h.read().split("\n")[:-1]]
             with open(text, "rb") as h:
-                ours = subprocess.run([driver, "--batch", "--script", ot] + extra + [font],
+                ours = subprocess.run([driver, "--batch", "--script", ot] + extra + loc_of(seed) + [font],
                                       stdin=h, capture_output=True, text=True, timeout=20)
             mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
         except (OSError, ValueError, subprocess.TimeoutExpired):

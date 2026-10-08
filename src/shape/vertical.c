@@ -196,17 +196,17 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
   // as the glyph states it (not as the location moves it) and what `gvar` adds.
   if (variation && variation->count
       && !gfnt_face_has_table(face, GFNT_TAG_VVAR)
-      && gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
-      && gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))) {
+      && gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))) {
     GFNT_Box box;
     int64_t left = 0;
     int64_t right = 0;
     int64_t top = 0;
 
     if (gfnt_glyf_stated_box(face, glyph, &box, NULL) == GFNT_OK
-        && !gfnt_box_is_empty(&box)
-        && gfnt_glyf_phantom_deltas_all(face, glyph, variation, &left, &right,
-               &top, NULL, NULL) == GFNT_OK) {
+        // With no `gvar` nothing moves the top point.
+        && (!gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))
+            || gfnt_glyf_phantom_deltas_all(face, glyph, variation, &left, &right,
+                   &top, NULL, NULL) == GFNT_OK)) {
       GFNT_Reader vmtx;
       size_t advances;
       int16_t tsb = 0;
@@ -219,7 +219,7 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
           tsb = 0;
         }
       }
-      *out_y = (int32_t)(box.y_max / GFNT_F26DOT6_ONE + tsb
+      *out_y = (int32_t)((gfnt_box_is_empty(&box) ? 0 : box.y_max / GFNT_F26DOT6_ONE) + tsb
           + ((top + (1 << (GFNT_GVAR_FRACTION_BITS - 1)))
               >> GFNT_GVAR_FRACTION_BITS));
       return true;

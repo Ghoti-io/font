@@ -59,13 +59,18 @@ bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
   GFNT_Result result;
   bool varied = variation && variation->count;
   int32_t lsb = 0;
-  bool header = !varied && gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'));
+  // Outlines that nothing moves (`glyf` with no `gvar`) are measured by their header
+  // at a location as anywhere else.
+  bool header = gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
+      && (!varied || !gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r')));
 
   memset(out, 0, sizeof *out);
   if (header) {
     if (gfnt_face_glyph_stated_box(face, glyph, &box, NULL) != GFNT_OK
-        || gfnt_face_glyph_side_bearing(face, glyph, variation, &lsb, NULL)
-            != GFNT_OK) {
+        || (gfnt_face_glyph_side_bearing(face, glyph, variation, &lsb, NULL)
+                != GFNT_OK
+            && gfnt_face_glyph_side_bearing(face, glyph, NULL, &lsb, NULL)
+                != GFNT_OK)) {
       return false;
     }
   }

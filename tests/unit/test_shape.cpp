@@ -2274,6 +2274,27 @@ TEST(ShapeVertical, AFontWithFvarAndOutlinesButNoGvarKeepsItsOriginAtALocation) 
   EXPECT_EQ(g, (Glyphs{{1, 0, 0, -700, -250, -650}}));
 }
 
+TEST(ShapeVertical, AtALocationAFontWithNoVmtxHangsAGlyphFromItsBoxAndAnEmptyOneFromZero) {
+  // No vmtx, so the top side bearing is 0: the origin is the box's top (600), and
+  // .notdef, which has no outline, is at 0. At the default the glyph is centred in
+  // the line instead. (HarfBuzz 10.2.0.)
+  std::vector<gfnttest::Table> tables = {{GFNT_TAG('f', 'v', 'a', 'r'), one_axis_fvar()}};
+  for (const gfnttest::Table & t : box_outlines()) {
+    tables.push_back(t);
+  }
+  Font font(small_font(tables, 8, {{'0', 0}}));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  Glyphs g;
+
+  request.vertical = GFNT_DIRECTION_TTB;
+  request.location = "wght=900";
+  ASSERT_EQ(shape(font, V{'A', '0'}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].y_offset, -600);
+  EXPECT_EQ(g[1].y_offset, 0);
+}
+
 TEST(ShapeVertical, AVvarMovesTheTopSideBearingThatTheOriginIsBuiltFrom) {
   // Glyph 1's box tops out at 600 and vmtx's top side bearing is 50. The VVAR's
   // top-bearing mapping sends glyph 1 to the row that adds 100 at wght=900 and
@@ -2336,6 +2357,37 @@ TEST(ShapeVertical, AVvarMovesTheTopSideBearingThatTheOriginIsBuiltFrom) {
   ASSERT_EQ(shape(plain, cps("AB"), request, &g), GFNT_OK);
   EXPECT_EQ(g[0].y_offset, -650);
   EXPECT_EQ(g[1].y_offset, -650);
+}
+
+TEST(ShapeMarks, AFontWithFvarAndOutlinesButNoGvarPlacesItsMarksAsAtTheDefault) {
+  // Nothing moves the outlines, so a mark is put over its base by the same boxes at
+  // a location as without one: the base's box starts at x=50 and the mark's at 150
+  // while hmtx gives both a side bearing of 0. (HarfBuzz 10.2.0.)
+  std::vector<std::vector<uint8_t>> glyphs(1);
+  for (int i = 1; i < 8; ++i) {
+    int16_t x0 = i == 6 ? 150 : 50;
+    int16_t x1 = i == 6 ? 250 : 350;
+    glyphs.push_back(gfnttest::build_glyf_glyph(
+        {{{x0, 0, true}, {x1, 0, true}, {x1, 600, true}, {x0, 600, true}}}));
+  }
+  std::vector<uint8_t> glyf, loca;
+  bool long_form = false;
+  gfnttest::build_glyf_and_loca(glyphs, &glyf, &loca, &long_form);
+  std::vector<gfnttest::Table> tables = {
+      {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(8)},
+      {GFNT_TAG('g', 'l', 'y', 'f'), glyf}, {GFNT_TAG('l', 'o', 'c', 'a'), loca},
+      {GFNT_TAG('f', 'v', 'a', 'r'), one_axis_fvar()}};
+  Font font(small_font(tables, 8, {{0x301, 6}}));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  Glyphs plain, moved;
+
+  ASSERT_EQ(shape(font, V{'A', 0x301}, request, &plain), GFNT_OK);
+  request.location = "wght=900";
+  ASSERT_EQ(shape(font, V{'A', 0x301}, request, &moved), GFNT_OK);
+  ASSERT_EQ(plain.size(), 2u);
+  EXPECT_EQ(moved, plain);
+  EXPECT_NE(plain[1].x_offset, 0);
 }
 
 TEST(ShapeVertical, WithoutVorgTheOriginIsTheAscender) {

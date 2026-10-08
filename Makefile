@@ -1053,6 +1053,10 @@ check-oracle-fallback: $(EXAMPLES)
 	@for s in latn deva khmr thai; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/fallback_random_diff.py --set $$s --direction ttb --seeds 200 || exit 1; \
 	done
+	@for s in latn deva; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/fallback_random_diff.py --set $$s --variable --seeds 200 || exit 1; \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/fallback_random_diff.py --set $$s --variable --direction ttb --seeds 200 || exit 1; \
+	done
 
 check-oracle-uvs: ## Shape random variation-sequence cmaps and metrics tables here and in HarfBuzz and compare
 check-oracle-uvs: $(EXAMPLES)

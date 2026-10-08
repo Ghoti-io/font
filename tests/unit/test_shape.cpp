@@ -3985,6 +3985,25 @@ TEST(Shape, TheDirectionPairsOfFeaturesAreAskedForOnlyInTheirOwnDirection) {
   EXPECT_EQ(ids(g), (V{2}));
 }
 
+TEST(Shape, AnRtlmSubstitutionStillAppliesToACharacterThatNormalisationComposed) {
+  // `e` and a combining acute are put together as the font's U+00E9, which is
+  // glyph 2, the glyph the `rtlm` substitution above replaces. The composite
+  // is still a character the right-to-left run left as it was.
+  // (HarfBuzz 10.2.0.)
+  const std::vector<std::pair<uint32_t, uint16_t>> cmap = {
+      {'A', 1}, {0xE9, 2}, {'e', 3}, {0x301, 4}};
+  Font rtlm(small_font({{GFNT_TAG('G', 'S', 'U', 'B'), k_rtlm}}, 300, cmap));
+  Glyphs g;
+  Request request;
+
+  ASSERT_EQ(rtlm.result, GFNT_OK);
+  request.rtl = true;
+  ASSERT_EQ(shape(rtlm, V{0xE9}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{11}));
+  ASSERT_EQ(shape(rtlm, V{'e', 0x301}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{11}));
+}
+
 static const std::vector<uint8_t> k_fractions = {
        0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x4E, 0x00, 0x74, 0x00, 0x03,
        0x44, 0x46, 0x4C, 0x54, 0x00, 0x14, 0x6C, 0x61, 0x74, 0x6E, 0x00, 0x24,

@@ -108,7 +108,9 @@ uint8_t gfnt_u_space_type(uint32_t u) {
 
 void gfnt_u_set_props(GFNT_LInfo * info) {
   uint32_t u = info->unicode;
+  // The `rtlm` flag is not a property of the character but of the run: it stays.
   uint8_t flags = 0;
+  uint8_t rtlm = info->flags & GFNT_GF_RTLM;
   uint32_t gc;
 
   info->mcc = 0;
@@ -116,7 +118,7 @@ void gfnt_u_set_props(GFNT_LInfo * info) {
   if (u < 0x80) {
     // ASCII has no marks, no ignorables and only the one space.
     info->gc = (uint8_t)guni_general_category(u);
-    info->flags = 0;
+    info->flags = rtlm;
     return;
   }
   gc = guni_general_category(u);
@@ -141,5 +143,5 @@ void gfnt_u_set_props(GFNT_LInfo * info) {
     flags |= GFNT_GF_MARK | GFNT_GF_CONTINUATION;
     info->mcc = gfnt_u_modified_ccc(u);
   }
-  info->flags = flags;
+  info->flags = flags | rtlm;
 }

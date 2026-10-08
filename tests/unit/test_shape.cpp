@@ -1688,6 +1688,37 @@ TEST(ShapeArabic, AZeroWidthNonJoinerStopsTheJoin) {
   EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 2);
 }
 
+static const std::vector<uint8_t> k_medi_alternates = {
+       0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x24, 0x00, 0x32, 0x00, 0x02,
+       0x44, 0x46, 0x4C, 0x54, 0x00, 0x0E, 0x61, 0x72, 0x61, 0x62, 0x00, 0x0E,
+       0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x01, 0x00, 0x00,
+       0x00, 0x01, 0x6D, 0x65, 0x64, 0x69, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01,
+       0x00, 0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01,
+       0x00, 0x08, 0x00, 0x01, 0x00, 0x12, 0x00, 0x01, 0x00, 0x08, 0x00, 0x04,
+       0x00, 0x14, 0x00, 0x15, 0x00, 0x16, 0x00, 0x17, 0x00, 0x01, 0x00, 0x01,
+       0x00, 0x04};
+
+TEST(ShapeArabic, ARangeOfAnotherValueDoesNotChangeTheFormTheJoiningGave) {
+  // `medi` holds an alternate lookup for glyph 4 (alternates 20 to 23). A letter
+  // joined on both sides is set to `medi` once, which picks the first alternate;
+  // asking for `medi=2` over the first letter gives the field two bits, and the
+  // middle letter must still be set to one, not to every bit of the field.
+  // (HarfBuzz 10.2.0.)
+  Font font(small_font({{GFNT_TAG('G', 'S', 'U', 'B'), k_medi_alternates}}, 40,
+      {{0x628, 4}}));
+  Glyphs g;
+  Request request;
+
+  ASSERT_EQ(font.result, GFNT_OK);
+  request.script = "arab";
+  request.rtl = true;
+  ASSERT_EQ(shape(font, V{0x628, 0x628, 0x628}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 20, 4}));
+  request.features = "medi[0:1]=2";
+  ASSERT_EQ(shape(font, V{0x628, 0x628, 0x628}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 20, 21}));
+}
+
 TEST(ShapeArabic, ADualJoiningLetterBeforeAJoinerTakesItsInitialForm) {
   Font font(beh_font());
   Glyphs g;
@@ -3991,8 +4022,8 @@ TEST(Shape, AnRtlmSubstitutionStillAppliesToACharacterThatNormalisationComposed)
   // is still a character the right-to-left run left as it was.
   // (HarfBuzz 10.2.0.)
   const std::vector<std::pair<uint32_t, uint16_t>> cmap = {
-      {'A', 1}, {0xE9, 2}, {'e', 3}, {0x301, 4}};
-  Font rtlm(small_font({{GFNT_TAG('G', 'S', 'U', 'B'), k_rtlm}}, 300, cmap));
+      {0xE9, 2}, {0x301, 4}};
+  Font rtlm(small_font({{GFNT_TAG('G', 'S', 'U', 'B'), k_rtlm}}, 40, cmap));
   Glyphs g;
   Request request;
 

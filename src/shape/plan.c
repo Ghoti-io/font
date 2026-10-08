@@ -511,16 +511,25 @@ const GFNT_PlanFeature * gfnt_plan_find(const GFNT_Plan * plan,
   return NULL;
 }
 
+/**
+ * The feature's lowest bit: what a shaper sets on a glyph to switch the feature on
+ * once (HarfBuzz's get_1_mask). A feature the caller gave a larger value to has
+ * more bits, and setting them all would ask for an alternate that was not meant.
+ */
+static uint32_t gfnt_plan_first_bit(const GFNT_PlanFeature * f) {
+  return (1u << f->shift) & f->mask;
+}
+
 uint32_t gfnt_plan_mask(const GFNT_Plan * plan, GFNT_Tag tag) {
   const GFNT_PlanFeature * f = gfnt_plan_find(plan, tag);
 
-  return f ? f->mask : 0;
+  return f ? gfnt_plan_first_bit(f) : 0;
 }
 
 uint32_t gfnt_plan_found_mask(const GFNT_Plan * plan, GFNT_Tag tag) {
   const GFNT_PlanFeature * f = gfnt_plan_find(plan, tag);
 
-  return f && f->found ? f->mask : 0;
+  return f && f->found ? gfnt_plan_first_bit(f) : 0;
 }
 
 bool gfnt_plan_would_substitute(const GFNT_ShapeCtx * ctx, GFNT_Tag tag,
@@ -747,8 +756,12 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
     }
   }
   gfnt_plan_compile_features(plan);
-  plan->kern_mask = gfnt_plan_mask(plan, plan->vertical
-      ? GFNT_TAG('v', 'k', 'r', 'n') : GFNT_TAG('k', 'e', 'r', 'n'));
+  {
+    const GFNT_PlanFeature * kern = gfnt_plan_find(plan, plan->vertical
+        ? GFNT_TAG('v', 'k', 'r', 'n') : GFNT_TAG('k', 'e', 'r', 'n'));
+
+    plan->kern_mask = kern ? kern->mask : 0;
+  }
   plan->frac_mask = gfnt_plan_mask(plan, GFNT_TAG('f', 'r', 'a', 'c'));
   plan->numr_mask = gfnt_plan_mask(plan, GFNT_TAG('n', 'u', 'm', 'r'));
   plan->dnom_mask = gfnt_plan_mask(plan, GFNT_TAG('d', 'n', 'o', 'm'));

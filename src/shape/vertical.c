@@ -30,6 +30,8 @@
 #include <ghoti.io/font/metrics.h>
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
+#include "../glyf/glyf.h"
+#include "../var/gvar.h"
 #include "fallback.h"
 #include "vertical.h"
 
@@ -152,6 +154,26 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
   *out_x = advance / 2;
   if (vertical_vorg(face, glyph, out_y)) {
     return true;
+  }
+  // At a location a `glyf` font's origin is its top phantom point: the box's top
+  // as the glyph states it (not as the location moves it) and what `gvar` adds.
+  if (variation && variation->count
+      && gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
+      && gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))) {
+    GFNT_Box box;
+    int64_t left = 0;
+    int64_t right = 0;
+    int64_t top = 0;
+
+    if (gfnt_glyf_stated_box(face, glyph, &box, NULL) == GFNT_OK
+        && !gfnt_box_is_empty(&box)
+        && gfnt_glyf_phantom_deltas_all(face, glyph, variation, &left, &right,
+               &top, NULL) == GFNT_OK) {
+      *out_y = (int32_t)(box.y_max / GFNT_F26DOT6_ONE
+          + ((top + (1 << (GFNT_GVAR_FRACTION_BITS - 1)))
+              >> GFNT_GVAR_FRACTION_BITS));
+      return true;
+    }
   }
   line = vertical_line(face, variation, &ascent);
   if (gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))

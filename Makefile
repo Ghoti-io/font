@@ -1060,6 +1060,7 @@ check-oracle-uvs: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/var_random_diff.py --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/var_random_diff.py --seeds 300 --avar
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/featvar_random_diff.py --seeds 300
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/variable_vertical_diff.py
 
 check-oracle-would: ## Compare whether random context lookups would substitute a pair, with HarfBuzz
 check-oracle-would: $(EXAMPLES)

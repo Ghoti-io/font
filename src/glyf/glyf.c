@@ -1012,9 +1012,9 @@ GFNT_Result gfnt_glyf_stated_box(const GFNT_Face * face, uint32_t glyph,
   return GFNT_OK;
 }
 
-GFNT_Result gfnt_glyf_phantom_deltas(const GFNT_Face * face, uint32_t glyph,
+GFNT_Result gfnt_glyf_phantom_deltas_all(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, int64_t * out_left, int64_t * out_right,
-    GFNT_Error * error) {
+    int64_t * out_top_y, GFNT_Error * error) {
   const GFNT_Allocator * allocator = face->allocator;
   GFNT_Reader reader;
   GFNT_GvarPoints points;
@@ -1078,7 +1078,17 @@ GFNT_Result gfnt_glyf_phantom_deltas(const GFNT_Face * face, uint32_t glyph,
   if (result == GFNT_OK) {
     *out_left = deltas[count];
     *out_right = deltas[count + 1u];
+    if (out_top_y) {
+      *out_top_y = deltas[total + count + 2u];
+    }
   }
   allocator->free_fn(allocator->ctx, deltas);
   return result;
+}
+
+GFNT_Result gfnt_glyf_phantom_deltas(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, int64_t * out_left, int64_t * out_right,
+    GFNT_Error * error) {
+  return gfnt_glyf_phantom_deltas_all(face, glyph, variation, out_left,
+      out_right, NULL, error);
 }

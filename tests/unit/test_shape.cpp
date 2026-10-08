@@ -712,6 +712,28 @@ TEST(ShapeVariation, TheFirstRecordWhoseConditionsHoldSubstitutesItsFeature) {
   EXPECT_EQ(at("wght=575"), (V{2, 5}));          // avar: 0.525
 }
 
+TEST(ShapeVariation, VerticalTextAtALocationPutsTheOriginAtTheTopPhantomPoint) {
+  // variable-gvar.ttf has no vmtx, so the location may move vertical text; the
+  // origin is then the glyph's stated top plus what gvar adds to the top phantom
+  // point, which for this glyph is nothing, so it does not change with the weight
+  // (and is not the 700 the default location puts it at). (HarfBuzz 10.2.0, for
+  // the weights below.)
+  Font font("variable-gvar.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  for (const char * location : {"wght=400", "wght=900", "wght=100"}) {
+    Request request;
+    Glyphs g;
+
+    request.vertical = GFNT_DIRECTION_TTB;
+    request.location = location;
+    ASSERT_EQ(shape(font, cps("A"), request, &g), GFNT_OK) << location;
+    ASSERT_EQ(g.size(), 1u);
+    EXPECT_EQ(g[0].y_offset, -400) << location;
+    EXPECT_EQ(g[0].x_offset, -200) << location;
+    EXPECT_EQ(g[0].y_advance, -1000) << location;
+  }
+}
+
 // --- the kern table, default ignorables, and marks without a GPOS ----------------
 
 namespace {
@@ -744,6 +766,19 @@ std::vector<uint8_t> small_font(const std::vector<gfnttest::Table> & extra,
   };
   tables.insert(tables.end(), extra.begin(), extra.end());
   return gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+}
+
+/** An `fvar` of one axis, `wght` from 100 through 400 to 900. */
+std::vector<uint8_t> one_axis_fvar() {
+  std::vector<uint8_t> fvar;
+  auto u16 = [&](unsigned v) { fvar.push_back(v >> 8); fvar.push_back(v & 0xFF); };
+  auto fixed = [&](unsigned v) { u16(v); u16(0); };
+  u16(1); u16(0); u16(16); u16(2); u16(1); u16(20); u16(0); u16(8);
+  for (char c : std::string("wght")) {
+    fvar.push_back(static_cast<uint8_t>(c));
+  }
+  fixed(100); fixed(400); fixed(900); u16(0); u16(256);
+  return fvar;
 }
 
 /** A `kern` table, Microsoft header, one horizontal format 0 subtable. */
@@ -2138,13 +2173,17 @@ TEST(ShapeVertical, TheVertFeatureReplacesTheHorizontalOnes) {
   EXPECT_EQ(vertical[0].x_advance, 0);
 }
 
-TEST(ShapeVertical, ALocationInTheDesignSpaceIsRefused) {
-  Font font("variable-featurevars.ttf");
+TEST(ShapeVertical, ALocationInTheDesignSpaceIsRefusedWhereTheFontHasVerticalMetrics) {
+  // The font states its own vertical metrics, which a `VVAR` would have to move
+  // and this library does not read.
+  std::vector<gfnttest::Table> tables = vertical_tables(1, false);
+  tables.push_back({GFNT_TAG('f', 'v', 'a', 'r'), one_axis_fvar()});
+  Font font(small_font(tables, 8, {}));
   Request request;
   request.vertical = GFNT_DIRECTION_TTB;
   request.location = "wght=900";
-  request.script = "";
   Glyphs g;
+  ASSERT_EQ(font.result, GFNT_OK);
   EXPECT_EQ(shape(font, cps("AB"), request, &g), GFNT_ERR_UNSUPPORTED);
 }
 
@@ -4046,14 +4085,7 @@ TEST(ShapeVariation, AVariableFontWithNoMetricVariationKeepsItsDefaultAdvances) 
   // A font with an fvar and no HVAR and no gvar: nothing says how an advance
   // moves, so the metrics call refuses, and the run keeps the hmtx advance
   // instead of the zero a refusal used to leave. (HarfBuzz 10.2.0.)
-  std::vector<uint8_t> fvar;
-  auto u16 = [&](unsigned v) { fvar.push_back(v >> 8); fvar.push_back(v & 0xFF); };
-  auto fixed = [&](unsigned v) { u16(v); u16(0); };
-  u16(1); u16(0); u16(16); u16(2); u16(1); u16(20); u16(0); u16(8);
-  for (char c : std::string("wght")) {
-    fvar.push_back(static_cast<uint8_t>(c));
-  }
-  fixed(100); fixed(400); fixed(900); u16(0); u16(256);
+  std::vector<uint8_t> fvar = one_axis_fvar();
   Font font(small_font({{GFNT_TAG('f', 'v', 'a', 'r'), fvar}}, 40, {}));
   ASSERT_EQ(font.result, GFNT_OK);
   Request request;

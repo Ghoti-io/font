@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import oracle_env
 import gsub_random_diff as G
 import gpos_random_diff as P
+import var_random_diff as V
 from gsub_random_diff import u16, u32, base_font
 
 SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "featvar-random")
@@ -123,8 +124,15 @@ def main(argv):
         fv_off = len(gsub) + 4
         gsub = (u32(0x10001) + u16(sl + 4, fl + 4, ll + 4) + u32(fv_off) + gsub[10:]
                 + feature_variations(r, nlookups, nfeats, naxes))
+        extra_tables = {}
+        if "--mvar" in argv:
+            vg = V.VarGen(seed * 5 + 1, naxes)
+            store, counts = vg.store(6)
+            names = [b'hasc', b'hdsc', b'hlgp', b'vasc', b'vdsc', b'vlgp']
+            recs = b''.join(n + u16(0, k % counts[0]) for k, n in enumerate(names))
+            extra_tables['MVAR'] = u16(1, 0, 0, 8, len(names), 12 + len(recs)) + recs + store
         with open(font, "wb") as h:
-            h.write(base_font(nglyphs=30, cmap_map=G.LATIN, extra={'fvar': fvar, ('GPOS' if table == "gpos" else 'GSUB'): gsub,
+            h.write(base_font(nglyphs=30, cmap_map=G.LATIN, extra={**extra_tables, 'fvar': fvar, ('GPOS' if table == "gpos" else 'GSUB'): gsub,
                                                        **({'GDEF': P.gdef()} if table == "gpos" else {})}))
         rr = random.Random(seed * 7 + 1)
         loc = ','.join('%s=%d' % (t, rr.randint(lo - 20, hi + 20))

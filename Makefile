@@ -1061,6 +1061,7 @@ check-oracle-uvs: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/var_random_diff.py --seeds 300 --avar
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/featvar_random_diff.py --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/featvar_random_diff.py --table gpos --seeds 300
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/featvar_random_diff.py --mvar --direction ttb --seeds 200
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/variable_vertical_diff.py
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/varvert_random_diff.py --seeds 300
 

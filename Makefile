@@ -1014,6 +1014,7 @@ check-oracle-gsub: $(EXAMPLES)
 	@for d in rtl ttb btt; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --direction $$d --seeds 200 || exit 1; \
 	done
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script mixed --direction rtl --seeds 270
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --languages --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --scriptsets --seeds 300
 	@for s in hang khmr sinh arab; do \

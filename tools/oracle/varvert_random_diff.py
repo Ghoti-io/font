@@ -90,6 +90,12 @@ def main(argv):
             inner_bits = max(1, (counts[0] - 1).bit_length())
             maps[3] = head + len(store) + len(body)
             body += u16(inner_bits - 1) + u16(n) + entries
+        if r.random() < .5:
+            # A top side bearing map, the same shape, over a different spread of inner indices.
+            entries = bytes(min((g * 5 + 1) % n, counts[0] - 1) for g in range(n))
+            inner_bits = max(1, (counts[0] - 1).bit_length())
+            maps[1] = head + len(store) + len(body)
+            body += u16(inner_bits - 1) + u16(n) + entries
         vvar = u16(1, 0) + u32(head) + u32(maps[0], maps[1], maps[2], maps[3]) + store + body
         if r.random() < .8:
             tables['VVAR'] = vvar
@@ -98,6 +104,31 @@ def main(argv):
             ms = sorted(r.sample(range(1, n), min(k, n - 1)))
             tables['VORG'] = u16(1, 0) + s16(r.randint(300, 1200)) + u16(len(ms)) + b''.join(
                 u16(g) + s16(r.randint(-100, 1300)) for g in ms)
+        if r.random() < .7:
+            # Outlines: a rectangle per glyph, so a glyph has a box for the origin to hang from.
+            glyf = b''
+            offs = [0]
+            for g in range(n):
+                if g == 0 or g > 8:
+                    offs.append(len(glyf))
+                    continue
+                x0, y0 = r.randint(0, 100), r.randint(-100, 100)
+                x1, y1 = x0 + r.randint(100, 600), y0 + r.randint(100, 800)
+                pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+                out = s16(1) + s16(x0) + s16(y0) + s16(x1) + s16(y1) + u16(3, 0) + bytes([1, 1, 1, 1])
+                px = py = 0
+                for (x, y) in pts:
+                    out += s16(x - px)
+                    px = x
+                for (x, y) in pts:
+                    out += s16(y - py)
+                    py = y
+                out += b'\0' * ((-len(out)) % 4)
+                glyf += out
+                offs.append(len(glyf))
+            tables['glyf'] = glyf
+            tables['maxp'] = u32(0x10000) + u16(n, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0)
+            tables['loca'] = b''.join(u16(o // 2) for o in offs)
         with open(font, "wb") as h:
             h.write(base_font(nglyphs=n, cmap_map=cmap, extra=tables))
         rr = random.Random(seed * 7 + 1)

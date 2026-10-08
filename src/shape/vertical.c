@@ -195,6 +195,7 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
   // At a location a `glyf` font's origin is its top phantom point: the box's top
   // as the glyph states it (not as the location moves it) and what `gvar` adds.
   if (variation && variation->count
+      && !gfnt_face_has_table(face, GFNT_TAG_VVAR)
       && gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
       && gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))) {
     GFNT_Box box;
@@ -237,7 +238,19 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
       int16_t tsb = 0;
 
       if (gfnt_reader_s16_at(&vmtx, offset, &tsb) == GFNT_OK) {
-        *out_y = extents.y_bearing + tsb;
+        int64_t delta = 0;
+        int32_t bearing = tsb;
+
+        // At a location `VVAR` moves the top side bearing, rounded to whole units.
+        if (variation && variation->count
+            && gfnt_face_has_table(face, GFNT_TAG_VVAR)
+            && gfnt_vvar_delta(face, glyph, GFNT_VVAR_TSB, variation->coords,
+                   variation->count, &delta, NULL) == GFNT_OK) {
+          bearing = gfnt_saturate32((int64_t)tsb
+              + gfnt_round_shift_mode(gfnt_clamp64(delta),
+                  GFNT_GVAR_FRACTION_BITS, variation->delta_rounding));
+        }
+        *out_y = extents.y_bearing + bearing;
         return true;
       }
     }

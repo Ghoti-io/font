@@ -25,11 +25,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import oracle_env
+import var_random_diff as V
 
 ROOT = oracle_env.ROOT
 SCRATCH = os.path.join(ROOT, "build", "oracle", "variable-vertical")
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples", "font-shape")
-FONTS = ["with-vmtx/vvariable-gvar.ttf", "with-vmtx/vvariable-hvar.ttf", "with-vmtx/vvariable-avar2.ttf",
+FONTS = ["with-vvar/wvariable-gvar.ttf", "with-vvar/wvariable-hvar.ttf", "with-vvar/wvariable-avar2.ttf",
+         "with-vmtx/vvariable-gvar.ttf", "with-vmtx/vvariable-hvar.ttf", "with-vmtx/vvariable-avar2.ttf",
          "with-vmtx/vvariable-featurevars.ttf", "with-vmtx/vvariable-stat.ttf", "variable-gvar.ttf", "variable-hvar.ttf", "variable-avar2.ttf", "variable-cvar.ttf",
          "variable-featurevars.ttf", "variable-stat.ttf", "variable-cff2.otf"]
 LOCATIONS = ["wght=400", "wght=900", "wght=100,wdth=125", "wdth=75", "wght=575"]
@@ -76,6 +78,29 @@ def with_vmtx(src, dst, seed):
         h.write(sfnt_build(ver, t))
 
 
+def with_vvar(src, dst, seed):
+    """A copy of a glyf fixture with a vhea, vmtx and a random VVAR (all four mappings)."""
+    with_vmtx(src, dst, seed)
+    ver, t = sfnt_tables(dst)
+    n = struct.unpack(">H", t[b"maxp"][4:6])[0]
+    axes = struct.unpack(">H", t[b"fvar"][8:10])[0]
+    u16 = lambda *v: b"".join(struct.pack(">H", x) for x in v)
+    u32 = lambda *v: b"".join(struct.pack(">I", x) for x in v)
+    vg = V.VarGen(seed * 5 + 1, axes)
+    store, counts = vg.store(n)
+    inner_bits = max(1, (counts[0] - 1).bit_length())
+    head = 24
+    body = b""
+    maps = []
+    for mul in (1, 3, 5, 7):
+        entries = bytes(min((g * mul) % n, counts[0] - 1) for g in range(n))
+        maps.append(head + len(store) + len(body))
+        body += u16(inner_bits - 1) + u16(n) + entries
+    t[b"VVAR"] = u16(1, 0) + u32(head) + u32(*maps) + store + body
+    with open(dst, "wb") as h:
+        h.write(sfnt_build(ver, t))
+
+
 def main(argv):
     os.makedirs(SCRATCH, exist_ok=True)
     txt = os.path.join(SCRATCH, "text.txt")
@@ -85,12 +110,15 @@ def main(argv):
     # Fixtures given a vmtx, in a directory of their own, so that the same names below
     # reach them: the glyf ones, whose origin is the top phantom point plus the top
     # bearing.
-    fontpath = lambda f: os.path.join(SCRATCH if f.startswith("with-vmtx/") else fixtures, f)
+    fontpath = lambda f: os.path.join(SCRATCH if f.startswith("with-v") else fixtures, f)
     with_dir = os.path.join(SCRATCH, "with-vmtx")
     os.makedirs(with_dir, exist_ok=True)
     for k, f in enumerate(["variable-gvar.ttf", "variable-hvar.ttf", "variable-avar2.ttf",
                            "variable-featurevars.ttf", "variable-stat.ttf"]):
         with_vmtx(os.path.join(fixtures, f), os.path.join(with_dir, "v" + f), k)
+    os.makedirs(os.path.join(SCRATCH, "with-vvar"), exist_ok=True)
+    for k, f in enumerate(["variable-gvar.ttf", "variable-hvar.ttf", "variable-avar2.ttf"]):
+        with_vvar(os.path.join(fixtures, f), os.path.join(SCRATCH, "with-vvar", "w" + f), 40 + k)
     lines = []
     for f in FONTS:
         for i, loc in enumerate(LOCATIONS):

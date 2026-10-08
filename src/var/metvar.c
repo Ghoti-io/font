@@ -132,8 +132,8 @@ GFNT_Result gfnt_vvar_delta(const GFNT_Face * face, uint32_t glyph,
   if (table.length < 24u
       || gfnt_reader_u16_at(&table, 0, &major) != GFNT_OK
       || gfnt_reader_u32_at(&table, 4, &store_offset) != GFNT_OK
-      || gfnt_reader_u32_at(&table, field == GFNT_VVAR_ADVANCE ? 8u : 20u,
-          &map_offset) != GFNT_OK) {
+      || gfnt_reader_u32_at(&table, field == GFNT_VVAR_ADVANCE ? 8u
+              : field == GFNT_VVAR_TSB ? 12u : 20u, &map_offset) != GFNT_OK) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_VVAR, 0, glyph,
         "a VVAR shorter than its own header");
   }
@@ -141,7 +141,7 @@ GFNT_Result gfnt_vvar_delta(const GFNT_Face * face, uint32_t glyph,
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_VVAR, 0, glyph,
         "a VVAR version other than 1.x");
   }
-  if (field == GFNT_VVAR_ORIGIN && map_offset == 0) {
+  if (field != GFNT_VVAR_ADVANCE && map_offset == 0) {
     *out_delta = 0;
     return GFNT_OK;
   }

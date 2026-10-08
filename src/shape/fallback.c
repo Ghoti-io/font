@@ -70,8 +70,13 @@ bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
     }
   }
   else {
+    // A font with `fvar` and glyf outlines but no `gvar` has nothing that moves its
+    // outlines, and HarfBuzz measures them as they are.
     if (gfnt_face_glyph_outline(face, glyph, variation, NULL, &outline, NULL)
-        != GFNT_OK) {
+            != GFNT_OK
+        && (!varied
+            || gfnt_face_glyph_outline(face, glyph, NULL, NULL, &outline, NULL)
+                != GFNT_OK)) {
       return false;
     }
     result = gfnt_outline_control_box(outline, &box);
@@ -83,10 +88,14 @@ bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
   if (!gfnt_box_is_empty(&box)) {
     // The box is font units times 64. Whole font units, the minimum rounded
     // down and the maximum up.
-    int32_t x_min = (int32_t)(box.x_min >> 6);
-    int32_t y_min = (int32_t)(box.y_min >> 6);
-    int32_t x_max = (int32_t)((box.x_max + 63) >> 6);
-    int32_t y_max = (int32_t)((box.y_max + 63) >> 6);
+    // A box that a location has moved is rounded to the nearest unit, a tie going
+    // down (HarfBuzz measures it in floats, where a tie is rarely one).
+    int32_t up = varied ? 31 : 63;
+    int32_t down = varied ? 31 : 0;
+    int32_t x_min = (int32_t)((box.x_min + down) >> 6);
+    int32_t y_min = (int32_t)((box.y_min + down) >> 6);
+    int32_t x_max = (int32_t)((box.x_max + up) >> 6);
+    int32_t y_max = (int32_t)((box.y_max + up) >> 6);
 
     out->x_bearing = header ? lsb : x_min;
     out->y_bearing = y_max;

@@ -88,6 +88,7 @@ GFNT_Result gfnt_hvar_delta(const GFNT_Face * face, uint32_t glyph,
 typedef enum GFNT_VvarField {
   GFNT_VVAR_ADVANCE,   ///< The advance height.
   GFNT_VVAR_ORIGIN,    ///< The vertical origin (`VORG`'s y).
+  GFNT_VVAR_TSB,       ///< The top side bearing; no mapping means no delta.
 } GFNT_VvarField;
 
 /**

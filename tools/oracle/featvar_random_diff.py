@@ -29,6 +29,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import oracle_env
 import gsub_random_diff as G
+import gpos_random_diff as P
 from gsub_random_diff import u16, u32, base_font
 
 SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "featvar-random")
@@ -83,12 +84,14 @@ def feature_variations(r, nlookups, nfeats, naxes):
 def main(argv):
     seeds, first, driver, scratch = 200, 0, G.DRIVER, SCRATCH
     direction = ""
+    table = "gsub"
     for i, a in enumerate(argv):
         if a == "--seeds": seeds = int(argv[i + 1])
         elif a == "--first": first = int(argv[i + 1])
         elif a == "--driver": driver = argv[i + 1]
         elif a == "--scratch": scratch = argv[i + 1]
         elif a == "--direction": direction = argv[i + 1]
+        elif a == "--table": table = argv[i + 1]
     os.makedirs(scratch, exist_ok=True)
     tags = G.TAGS_LATIN
     lines = []
@@ -107,15 +110,22 @@ def main(argv):
         fvar = (u16(1, 0, 16, 2, naxes, 20, 0, 4 + 4 * naxes)
                 + b''.join(t.encode() + fixed(lo) + fixed(d) + fixed(hi) + u16(0, 256 + k)
                            for k, (t, (lo, d, hi)) in enumerate(zip(axtags, ranges))))
-        gsub = G.build_gsub(seed, G.GLYPHS, tags)
-        lookups, feats = G.build_gsub.last
-        old = gsub[:10]
-        sl, fl, ll = (int.from_bytes(old[4 + 2 * k:6 + 2 * k], "big") for k in range(3))
+        if table == "gpos":
+            gsub = P.build_gpos(seed)
+            ll = int.from_bytes(gsub[8:10], "big")
+            nlookups = int.from_bytes(gsub[ll:ll + 2], "big")
+            nfeats = int.from_bytes(gsub[int.from_bytes(gsub[6:8], "big"):][:2], "big")
+        else:
+            gsub = G.build_gsub(seed, G.GLYPHS, tags)
+            lookups, feats = G.build_gsub.last
+            nlookups, nfeats = len(lookups), len(feats)
+        sl, fl, ll = (int.from_bytes(gsub[4 + 2 * k:6 + 2 * k], "big") for k in range(3))
         fv_off = len(gsub) + 4
         gsub = (u32(0x10001) + u16(sl + 4, fl + 4, ll + 4) + u32(fv_off) + gsub[10:]
-                + feature_variations(r, len(lookups), len(feats), naxes))
+                + feature_variations(r, nlookups, nfeats, naxes))
         with open(font, "wb") as h:
-            h.write(base_font(nglyphs=30, cmap_map=G.LATIN, extra={'fvar': fvar, 'GSUB': gsub}))
+            h.write(base_font(nglyphs=30, cmap_map=G.LATIN, extra={'fvar': fvar, ('GPOS' if table == "gpos" else 'GSUB'): gsub,
+                                                       **({'GDEF': P.gdef()} if table == "gpos" else {})}))
         rr = random.Random(seed * 7 + 1)
         loc = ','.join('%s=%d' % (t, rr.randint(lo - 20, hi + 20))
                        for t, (lo, d, hi) in zip(axtags, ranges))

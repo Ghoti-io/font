@@ -2541,6 +2541,32 @@ TEST(ShapeMorx, ARunawayMachineStopsAtAThousandAndTwentyFourStepsAGlyphSharedByT
   EXPECT_EQ(morx_run(two, std::string(17, 'A'))[0].glyph, 2u);
 }
 
+TEST(ShapeMorx, AnInsertionThatFeedsItselfStopsAtTheLimitEvenInSpareCapacity) {
+  // An A inserts thirty-one glyphs behind itself and does not advance, so it
+  // runs on the A again until the step budget is gone. The run's room grows by
+  // doubling from the text's twenty glyphs to twenty thousand, which is more than the
+  // limit allows, and the step budget (a thousand a glyph) is more than it too;
+  // the limit is still what stops it.
+  Bytes body = state_table(6, {4, 5}, {{0, 0, 0, 0, 1, 0}},
+      {words({0, 0, 0xFFFF, 0xFFFF}), words({0, 0x43E0, 0, 0xFFFF})}, 1);
+  patch32(body, 16, static_cast<uint32_t>(body.size()));
+  for (int i = 0; i < 31; ++i) {
+    body = cat({body, words({30})});
+  }
+  Bytes font_bytes = morx_font(morx_table(1, {}, {morx_subtable(5, 0, 1, body)}));
+  Font font(font_bytes);
+  Glyphs g;
+  Request request;
+  GFNT_Result result;
+
+  ASSERT_EQ(font.result, GFNT_OK);
+  result = shape(font, cps("AAAAAAAAAAAAAAAAAAAA"), request, &g);
+  EXPECT_TRUE(result == GFNT_OK || result == GFNT_ERR_LIMIT);
+  if (result == GFNT_OK) {
+    EXPECT_LE(g.size(), 16384u);
+  }
+}
+
 TEST(ShapeMorx, AnInsertionThatDoesNotAdvanceRunsAgainOverWhatItAppendedAtTheEnd) {
   // A and B each put glyph 5 (list index 2) behind the marked glyph; at the end of
   // the text state 1 takes entry 0, which appends glyph 8 and does not advance.

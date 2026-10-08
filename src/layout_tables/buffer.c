@@ -85,13 +85,15 @@ bool gfnt_lbuf_enlarge(GFNT_LBuffer * b, size_t size) {
   if (b->oom) {
     return false;
   }
-  if (size <= b->capacity) {
-    return true;
-  }
+  // The limit first: the capacity doubles past it, and room that is already
+  // there is no licence to grow into it.
   if (size > b->max_len) {
     b->limit = true;
     b->oom = true;
     return false;
+  }
+  if (size <= b->capacity) {
+    return true;
   }
   capacity = b->capacity;
   while (capacity < size) {

@@ -5396,6 +5396,33 @@ TEST(ShapeKerx, AMarkTheKerxSkippedStillHangsOnTheGlyphBeforeAndKeepsItsAdvance)
   EXPECT_EQ(g[3].y_offset, -100);
 }
 
+TEST(ShapeKern, ACrossStreamKernTableHangsAMarkOnTheGlyphBeforeAndZeroesItWithoutMovingIt) {
+  // A kern table with a cross-stream subtable: the mark (glyph 3, by GDEF) is
+  // skipped by the kerning and goes on with B's drop of 100, its width is zeroed,
+  // and, because the table has cross-stream kerning, it is not pulled back over its
+  // base by the advance it had. (HarfBuzz 10.2.0.)
+  Bytes gdef;
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 12);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 3);
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 3);
+  Glyphs g = shape_bytes(small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_format0({{1, 2, -100}}, 0x0005)},
+      {GFNT_TAG('G', 'D', 'E', 'F'), gdef}}), cps("ABCA"));
+  ASSERT_EQ(g.size(), 4u);
+  EXPECT_EQ(g[1].y_offset, -100);
+  EXPECT_EQ(g[2].y_offset, -100);
+  EXPECT_EQ(g[2].x_advance, 0);
+  EXPECT_EQ(g[2].x_offset, 0);
+  EXPECT_EQ(g[3].y_offset, -100);
+}
+
 TEST(ShapeKerx, ClassSubtablesAddTheTwoClassesToAnIndexIntoTheValues) {
   // Format 2: left A = 0, B = 2; right B = 0, C = 1: the value at index l + r.
   Bytes left = lookup6({{1, 0}, {2, 2}});

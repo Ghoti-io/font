@@ -121,6 +121,7 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
   uint32_t tables;
   uint32_t t;
   bool apple = false;
+  bool seen_cross = false;
 
   if (version == 0) {
     tables = gfnt_lr_u16(r, 2, bad);
@@ -164,6 +165,20 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
     }
     if (horizontal && (format == 0 || format == 2)) {
       GFNT_LIter it;
+
+      if (cross && !seen_cross) {
+        size_t m;
+
+        // The kerning skips marks, which then go on with the glyph before them.
+        seen_cross = true;
+        for (m = 1; m < b->len; m++) {
+          if (gfnt_l_is_mark(&b->info[m])) {
+            b->pos[m].attach_type = GFNT_ATTACH_CURSIVE;
+            b->pos[m].attach_chain = -1;
+            b->has_attachment = true;
+          }
+        }
+      }
 
       while (idx < b->len && !*bad) {
         size_t i = idx;
@@ -238,4 +253,47 @@ GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
         GFNT_GLYPH_NONE, "the kern table reads past itself");
   }
   return GFNT_OK;
+}
+
+bool gfnt_kern_has_cross_stream(const GFNT_Face * face) {
+  GFNT_Reader table;
+  bool bad = false;
+  bool apple = false;
+  uint32_t version;
+  uint32_t tables;
+  size_t cursor;
+  uint32_t t;
+
+  if (!gfnt_face_has_table(face, GFNT_TAG_kern)
+      || gfnt_face_table_reader(face, GFNT_TAG_kern, &table, NULL) != GFNT_OK) {
+    return false;
+  }
+  table.error = NULL;
+  version = gfnt_lr_u16(&table, 0, &bad);
+  if (version == 0) {
+    tables = gfnt_lr_u16(&table, 2, &bad);
+    cursor = 4;
+  }
+  else if (version == 1 && gfnt_lr_u16(&table, 2, &bad) == 0) {
+    apple = true;
+    tables = gfnt_lr_u32(&table, 4, &bad);
+    cursor = 8;
+  }
+  else {
+    return false;
+  }
+  for (t = 0; t < tables && !bad; t++) {
+    size_t length = apple ? gfnt_lr_u32(&table, cursor, &bad)
+        : gfnt_lr_u16(&table, cursor + 2, &bad);
+    uint32_t coverage = gfnt_lr_u16(&table, cursor + 4, &bad);
+
+    if (bad || length < (apple ? 8u : 6u)) {
+      break;
+    }
+    if (apple ? (coverage & 0x4000u) != 0 : (coverage & 4u) != 0) {
+      return true;
+    }
+    cursor += length;
+  }
+  return false;
 }

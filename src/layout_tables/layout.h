@@ -402,6 +402,9 @@ bool gfnt_gsub_is_reverse(uint16_t type);
 GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error);
 
+/** Whether any of the `kern` table's subtables is cross-stream (kern.c). */
+bool gfnt_kern_has_cross_stream(const GFNT_Face * face);
+
 /**
  * The `kerx` table (kerx.c). A font that has one is kerned by it alone: the
  * shaper runs no `GPOS` and reads no `kern`.

@@ -685,7 +685,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
 
   // A shaper that wants marks taken out of the width before positioning says so.
   if (plan.shaper->zero_width_marks == 1 && !plan.apply_kerx) {
-    gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl);
+    gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl
+        && !(plan.kern_fallback && gfnt_kern_has_cross_stream(face)));
   }
 
   // GPOS.
@@ -764,7 +765,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // With a GPOS the font has already said where; without one, the mark is pulled
   // back over the base it follows.
   if (plan.shaper->zero_width_marks == 2 && !plan.apply_kerx) {
-    gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl);
+    gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl
+        && !(plan.kern_fallback && gfnt_kern_has_cross_stream(face)));
   }
   for (i = 0; i < buf.len; i++) {
     if ((buf.info[i].flags & GFNT_GF_DEFAULT_IGNORABLE)
@@ -781,6 +783,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // A font with no `GPOS` does not say where a mark goes, so the shaper does.
   // (Nor does Apple's `kerx`, which replaced the `GPOS` and zeroes no marks.)
   if (!plan.tables[1].present && !plan.apply_kerx
+      && !(plan.kern_fallback && gfnt_kern_has_cross_stream(face))
       && plan.shaper->fallback_position) {
     gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
         !native_rtl, !native_rtl, vertical);

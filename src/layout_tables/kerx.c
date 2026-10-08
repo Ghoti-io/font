@@ -518,6 +518,7 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
   bool bad = false;
   bool shifts = false;
   bool seen_cross = false;
+  bool seen_cross_marks = false;
 
   result = gfnt_face_table_reader(face, GFNT_TAG_kerx, &table, error);
   if (result != GFNT_OK) {
@@ -556,8 +557,19 @@ GFNT_Result gfnt_kerx_apply(const GFNT_Face * face, GFNT_LBuffer * b,
         // over whatever an earlier subtable attached them to.
         seen_cross = true;
         for (i = 1; i < b->len; i++) {
-          if (b->pos[i].attach_type
-              || (format != 1 && gfnt_l_is_mark(&b->info[i]))) {
+          if (b->pos[i].attach_type) {
+            b->pos[i].attach_type = GFNT_ATTACH_CURSIVE;
+            b->pos[i].attach_chain = -1;
+          }
+        }
+      }
+      if ((coverage & KERX_CROSS) && !seen_cross_marks && format != 1) {
+        size_t i;
+
+        // Marks the kerning skips go on with the glyph before them.
+        seen_cross_marks = true;
+        for (i = 1; i < b->len; i++) {
+          if (gfnt_l_is_mark(&b->info[i])) {
             b->pos[i].attach_type = GFNT_ATTACH_CURSIVE;
             b->pos[i].attach_chain = -1;
           }

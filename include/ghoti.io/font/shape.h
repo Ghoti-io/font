@@ -44,8 +44,9 @@
  *   * **One direction per run.** ::gfnt_face_shape() and ::gfnt_faces_shape()
  *     take a run that is left to right, right to left, top to bottom or bottom
  *     to top; ::gfnt_faces_shape_bidi() splits a mixed paragraph into such runs.
- *     Vertical text is shaped as HarfBuzz shapes it for a font that is not
- *     variable; at a location in the design space a vertical run is refused.
+ *     Vertical text is shaped as HarfBuzz shapes it, including at a location in
+ *     the design space: the origin follows `gvar`'s top phantom point or `VVAR`'s
+ *     origin delta, and the advance `VVAR` or `gvar`.
  *   * **Apple's tables in part.** A font with `morx` (or the older `mort`) is
  *     substituted by it and not by `GSUB`, as HarfBuzz does, and a version 2
  *     `kerx` kerns and attaches by its subtables (formats 0, 1, 2, 4 and 6) in

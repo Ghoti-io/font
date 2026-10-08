@@ -407,16 +407,6 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   }
   vertical = options->direction == GFNT_DIRECTION_TTB
       || options->direction == GFNT_DIRECTION_BTT;
-  // A font that states vertical metrics of its own (`vmtx`, `VORG`) has them move
-  // with the location, through a `VVAR` this library does not read. One that does
-  // not has the line stand in for them, and that is what the location moves.
-  if (vertical && options->variation && options->variation->count
-      && (gfnt_face_has_table(face, GFNT_TAG('v', 'm', 't', 'x'))
-          || gfnt_face_has_table(face, GFNT_TAG('V', 'O', 'R', 'G')))) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
-        "vertical text at a location in the design space is not shaped when the "
-        "font has its own vertical metrics: they would have to move with it");
-  }
   // No script named: the text's own, as HarfBuzz guesses it.
   resolved = *options;
   if (!resolved.script) {

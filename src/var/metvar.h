@@ -55,6 +55,8 @@ extern "C" {
 #define GFNT_TAG_HVAR GFNT_TAG('H', 'V', 'A', 'R')
 /** @brief `MVAR`. */
 #define GFNT_TAG_MVAR GFNT_TAG('M', 'V', 'A', 'R')
+/** @brief `VVAR`. */
+#define GFNT_TAG_VVAR GFNT_TAG('V', 'V', 'A', 'R')
 
 /** @brief Which of `HVAR`'s three mappings a lookup is for. */
 typedef enum GFNT_HvarField {
@@ -80,6 +82,26 @@ typedef enum GFNT_HvarField {
  */
 GFNT_Result gfnt_hvar_delta(const GFNT_Face * face, uint32_t glyph,
     GFNT_HvarField field, const GFNT_F2Dot14 * coordinates,
+    size_t coordinate_count, int64_t * out_delta, GFNT_Error * error);
+
+/** @brief Which of `VVAR`'s mappings a lookup is for. */
+typedef enum GFNT_VvarField {
+  GFNT_VVAR_ADVANCE,   ///< The advance height.
+  GFNT_VVAR_ORIGIN,    ///< The vertical origin (`VORG`'s y).
+} GFNT_VvarField;
+
+/**
+ * One glyph's delta from `VVAR`.
+ *
+ * The advance falls back to the glyph number as its row when the table has no
+ * mapping for it; the origin with no mapping has **no delta** and succeeds with
+ * zero, as HarfBuzz reads it.
+ *
+ * @return ::GFNT_OK; ::GFNT_ERR_UNSUPPORTED if the face has no `VVAR`;
+ *   ::GFNT_ERR_CORRUPT; ::GFNT_ERR_OOM.
+ */
+GFNT_Result gfnt_vvar_delta(const GFNT_Face * face, uint32_t glyph,
+    GFNT_VvarField field, const GFNT_F2Dot14 * coordinates,
     size_t coordinate_count, int64_t * out_delta, GFNT_Error * error);
 
 /**

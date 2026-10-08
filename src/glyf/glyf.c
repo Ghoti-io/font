@@ -1014,7 +1014,7 @@ GFNT_Result gfnt_glyf_stated_box(const GFNT_Face * face, uint32_t glyph,
 
 GFNT_Result gfnt_glyf_phantom_deltas_all(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, int64_t * out_left, int64_t * out_right,
-    int64_t * out_top_y, GFNT_Error * error) {
+    int64_t * out_top_y, int64_t * out_bottom_y, GFNT_Error * error) {
   const GFNT_Allocator * allocator = face->allocator;
   GFNT_Reader reader;
   GFNT_GvarPoints points;
@@ -1081,6 +1081,9 @@ GFNT_Result gfnt_glyf_phantom_deltas_all(const GFNT_Face * face, uint32_t glyph,
     if (out_top_y) {
       *out_top_y = deltas[total + count + 2u];
     }
+    if (out_bottom_y) {
+      *out_bottom_y = deltas[total + count + 3u];
+    }
   }
   allocator->free_fn(allocator->ctx, deltas);
   return result;
@@ -1090,5 +1093,5 @@ GFNT_Result gfnt_glyf_phantom_deltas(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, int64_t * out_left, int64_t * out_right,
     GFNT_Error * error) {
   return gfnt_glyf_phantom_deltas_all(face, glyph, variation, out_left,
-      out_right, NULL, error);
+      out_right, NULL, NULL, error);
 }

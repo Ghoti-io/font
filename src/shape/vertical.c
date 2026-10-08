@@ -30,7 +30,9 @@
 #include <ghoti.io/font/metrics.h>
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
+#include "../core/fixed.h"
 #include "../glyf/glyf.h"
+#include "../var/metvar.h"
 #include "../var/gvar.h"
 #include "fallback.h"
 #include "vertical.h"
@@ -99,6 +101,32 @@ bool gfnt_vertical_advance(const GFNT_Face * face, uint32_t glyph,
     return false;
   }
   *out_advance = -(int32_t)advance;
+  if (variation && variation->count) {
+    int64_t delta = 0;
+    bool have = false;
+
+    if (gfnt_face_has_table(face, GFNT_TAG_VVAR)) {
+      have = gfnt_vvar_delta(face, glyph, GFNT_VVAR_ADVANCE, variation->coords,
+          variation->count, &delta, NULL) == GFNT_OK;
+    }
+    else if (gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
+        && gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))) {
+      int64_t left = 0;
+      int64_t right = 0;
+      int64_t top = 0;
+      int64_t bottom = 0;
+
+      have = gfnt_glyf_phantom_deltas_all(face, glyph, variation, &left, &right,
+          &top, &bottom, NULL) == GFNT_OK;
+      // The advance is the drop from the top phantom point to the bottom one.
+      delta = top - bottom;
+    }
+    if (have) {
+      *out_advance = gfnt_saturate32(-(int64_t)advance
+          - gfnt_round_shift_mode(gfnt_clamp64(delta), GFNT_GVAR_FRACTION_BITS,
+              variation->delta_rounding));
+    }
+  }
   return true;
 }
 
@@ -153,6 +181,15 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
   }
   *out_x = advance / 2;
   if (vertical_vorg(face, glyph, out_y)) {
+    int64_t delta = 0;
+
+    if (variation && variation->count && gfnt_face_has_table(face, GFNT_TAG_VVAR)
+        && gfnt_vvar_delta(face, glyph, GFNT_VVAR_ORIGIN, variation->coords,
+               variation->count, &delta, NULL) == GFNT_OK) {
+      *out_y = gfnt_saturate32((int64_t)*out_y
+          + gfnt_round_shift_mode(gfnt_clamp64(delta), GFNT_GVAR_FRACTION_BITS,
+              variation->delta_rounding));
+    }
     return true;
   }
   // At a location a `glyf` font's origin is its top phantom point: the box's top
@@ -168,8 +205,20 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
     if (gfnt_glyf_stated_box(face, glyph, &box, NULL) == GFNT_OK
         && !gfnt_box_is_empty(&box)
         && gfnt_glyf_phantom_deltas_all(face, glyph, variation, &left, &right,
-               &top, NULL) == GFNT_OK) {
-      *out_y = (int32_t)(box.y_max / GFNT_F26DOT6_ONE
+               &top, NULL, NULL) == GFNT_OK) {
+      GFNT_Reader vmtx;
+      size_t advances;
+      int16_t tsb = 0;
+
+      if (vertical_vmtx(face, &vmtx, &advances)) {
+        size_t offset = glyph < advances ? glyph * 4 + 2
+            : advances * 4 + (glyph - advances) * 2;
+
+        if (gfnt_reader_s16_at(&vmtx, offset, &tsb) != GFNT_OK) {
+          tsb = 0;
+        }
+      }
+      *out_y = (int32_t)(box.y_max / GFNT_F26DOT6_ONE + tsb
           + ((top + (1 << (GFNT_GVAR_FRACTION_BITS - 1)))
               >> GFNT_GVAR_FRACTION_BITS));
       return true;

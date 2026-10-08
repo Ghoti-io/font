@@ -139,11 +139,12 @@ GFNT_Result gfnt_glyf_phantom_deltas(const GFNT_Face * face, uint32_t glyph,
 
 /**
  * ::gfnt_glyf_phantom_deltas() and, in @p out_top_y (or NULL), how far `gvar`
- * moves the third phantom point, the top, in y.
+ * moves the third phantom point, the top, in y, and (in @p out_bottom_y, or NULL) the
+ * fourth, the bottom.
  */
 GFNT_Result gfnt_glyf_phantom_deltas_all(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, int64_t * out_left, int64_t * out_right,
-    int64_t * out_top_y, GFNT_Error * error);
+    int64_t * out_top_y, int64_t * out_bottom_y, GFNT_Error * error);
 
 #ifdef __cplusplus
 }

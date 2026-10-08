@@ -2143,6 +2143,52 @@ TEST(ShapeVertical, AdvancesComeFromVmtxAndTheOriginFromVorg) {
   EXPECT_EQ(g, (Glyphs{{1, 0, 0, -700, -250, -880}, {2, 1, 0, -700, -250, -760}}));
 }
 
+TEST(ShapeVertical, AVvarMovesTheAdvanceHeightAtALocation) {
+  // vmtx gives every glyph 700; the VVAR's one region, full at wght=900, adds
+  // 100 to glyph 1 and takes 50 from glyph 2 (no advance mapping, so the glyph
+  // number is the row). The origin has no mapping and does not move. The
+  // horizontal pen position, half the hmtx advance, does not either.
+  // (HarfBuzz 10.2.0.)
+  std::vector<uint8_t> vvar;
+  gfnttest::put_u16(vvar, 1);
+  gfnttest::put_u16(vvar, 0);
+  gfnttest::put_u32(vvar, 24);                     // the store
+  for (int i = 0; i < 4; ++i) {
+    gfnttest::put_u32(vvar, 0);                    // no mappings
+  }
+  gfnttest::put_u16(vvar, 1);                      // store format
+  gfnttest::put_u32(vvar, 12);                     // region list
+  gfnttest::put_u16(vvar, 1);                      // one data set
+  gfnttest::put_u32(vvar, 22);
+  gfnttest::put_u16(vvar, 1);                      // one axis
+  gfnttest::put_u16(vvar, 1);                      // one region
+  gfnttest::put_u16(vvar, 0);                      // start
+  gfnttest::put_u16(vvar, 0x4000);                 // peak
+  gfnttest::put_u16(vvar, 0x4000);                 // end
+  gfnttest::put_u16(vvar, 4);                      // items
+  gfnttest::put_u16(vvar, 1);                      // short deltas
+  gfnttest::put_u16(vvar, 1);                      // regions used
+  gfnttest::put_u16(vvar, 0);
+  gfnttest::put_s16(vvar, 0);
+  gfnttest::put_s16(vvar, 100);
+  gfnttest::put_s16(vvar, -50);
+  gfnttest::put_s16(vvar, 0);
+  std::vector<gfnttest::Table> tables = vertical_tables(1, true);
+  tables.push_back({GFNT_TAG('f', 'v', 'a', 'r'), one_axis_fvar()});
+  tables.push_back({GFNT_TAG('V', 'V', 'A', 'R'), vvar});
+  Font font(small_font(tables, 8, {}));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  Glyphs g;
+
+  request.vertical = GFNT_DIRECTION_TTB;
+  ASSERT_EQ(shape(font, cps("AB"), request, &g), GFNT_OK);
+  EXPECT_EQ(g, (Glyphs{{1, 0, 0, -700, -250, -880}, {2, 1, 0, -700, -250, -760}}));
+  request.location = "wght=900";
+  ASSERT_EQ(shape(font, cps("AB"), request, &g), GFNT_OK);
+  EXPECT_EQ(g, (Glyphs{{1, 0, 0, -800, -250, -880}, {2, 1, 0, -650, -250, -760}}));
+}
+
 TEST(ShapeVertical, WithoutVorgTheOriginIsTheAscender) {
   Glyphs g = shape_vertical(small_font(vertical_tables(1, false)), cps("A"),
       GFNT_DIRECTION_TTB);
@@ -2171,20 +2217,6 @@ TEST(ShapeVertical, TheVertFeatureReplacesTheHorizontalOnes) {
   // The font kerns A V; vertical text does not ask for `kern`.
   EXPECT_NE(horizontal[0].x_advance, vertical[0].x_advance);
   EXPECT_EQ(vertical[0].x_advance, 0);
-}
-
-TEST(ShapeVertical, ALocationInTheDesignSpaceIsRefusedWhereTheFontHasVerticalMetrics) {
-  // The font states its own vertical metrics, which a `VVAR` would have to move
-  // and this library does not read.
-  std::vector<gfnttest::Table> tables = vertical_tables(1, false);
-  tables.push_back({GFNT_TAG('f', 'v', 'a', 'r'), one_axis_fvar()});
-  Font font(small_font(tables, 8, {}));
-  Request request;
-  request.vertical = GFNT_DIRECTION_TTB;
-  request.location = "wght=900";
-  Glyphs g;
-  ASSERT_EQ(font.result, GFNT_OK);
-  EXPECT_EQ(shape(font, cps("AB"), request, &g), GFNT_ERR_UNSUPPORTED);
 }
 
 TEST(ShapeVertical, AVerticalFormStandsInWhereTheFontHasNoVertFeature) {

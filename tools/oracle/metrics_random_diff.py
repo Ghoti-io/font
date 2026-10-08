@@ -68,11 +68,10 @@ def font_for(seed):
         t['OS/2'] = os2 + b'\0' * 12
     if r.random() < .5:
         nv = r.randint(1, n)
-        vhea = u32(0x10000) + s16(r.randint(300, 900)) + s16(-r.randint(200, 800)) + u16(0) \
-            + u16(1500) + u16(0) * 0 + b'\0' * 22 + u16(nv)
-        vhea = u32(0x10000) + s16(r.randint(300, 900)) + s16(-r.randint(200, 800)) + s16(0) \
-            + u16(1500) + s16(0) + s16(0) + s16(0) + s16(1) + s16(0) + s16(0) + s16(0) + s16(0) \
-            + s16(0) + u16(nv)
+        # 36 bytes: version, ascent, descent, line gap, max advance, three extents,
+        # three caret fields, four reserved, the data format and the metric count.
+        vhea = (u32(0x10000) + s16(r.randint(300, 900)) + s16(-r.randint(200, 800)) + s16(0)
+                + u16(1500) + s16(0) * 3 + s16(1) + s16(0) * 2 + s16(0) * 4 + s16(0) + u16(nv))
         vmtx = b''.join(u16(r.randint(300, 1500)) + s16(r.randint(-100, 300)) for _ in range(nv)) \
             + b''.join(s16(r.randint(-100, 300)) for _ in range(n - nv))
         t['vhea'] = vhea

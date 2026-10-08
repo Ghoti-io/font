@@ -18,6 +18,8 @@ Usage: variable_vertical_diff.py [-v]
 """
 import json
 import os
+import random
+import struct
 import subprocess
 import sys
 
@@ -27,9 +29,51 @@ import oracle_env
 ROOT = oracle_env.ROOT
 SCRATCH = os.path.join(ROOT, "build", "oracle", "variable-vertical")
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples", "font-shape")
-FONTS = ["variable-gvar.ttf", "variable-hvar.ttf", "variable-avar2.ttf", "variable-cvar.ttf",
+FONTS = ["with-vmtx/vvariable-gvar.ttf", "with-vmtx/vvariable-hvar.ttf", "with-vmtx/vvariable-avar2.ttf",
+         "with-vmtx/vvariable-featurevars.ttf", "with-vmtx/vvariable-stat.ttf", "variable-gvar.ttf", "variable-hvar.ttf", "variable-avar2.ttf", "variable-cvar.ttf",
          "variable-featurevars.ttf", "variable-stat.ttf", "variable-cff2.otf"]
 LOCATIONS = ["wght=400", "wght=900", "wght=100,wdth=125", "wdth=75", "wght=575"]
+
+
+def sfnt_tables(path):
+    with open(path, "rb") as h:
+        d = h.read()
+    n = struct.unpack(">H", d[4:6])[0]
+    t = {}
+    for i in range(n):
+        tag, _, off, ln = struct.unpack(">4sIII", d[12 + 16 * i:28 + 16 * i])
+        t[tag] = d[off:off + ln]
+    return d[:4], t
+
+
+def sfnt_build(ver, t):
+    n = len(t)
+    sr = 1 << (n.bit_length() - 1)
+    out = ver + struct.pack(">HHHH", n, sr * 16, n.bit_length() - 1, n * 16 - sr * 16)
+    off = 12 + 16 * n
+    body = b""
+    ents = b""
+    for tag in sorted(t):
+        data = t[tag]
+        ents += struct.pack(">4sIII", tag, 0, off + len(body), len(data))
+        body += data + b"\0" * ((-len(data)) % 4)
+    return out + ents + body
+
+
+def with_vmtx(src, dst, seed):
+    """A copy of a glyf fixture with a random vhea and vmtx added."""
+    ver, t = sfnt_tables(src)
+    n = struct.unpack(">H", t[b"maxp"][4:6])[0]
+    r = random.Random(seed)
+    nv = max(1, n - 2)
+    s16 = lambda *v: b"".join(struct.pack(">h", x) for x in v)
+    u16 = lambda *v: b"".join(struct.pack(">H", x) for x in v)
+    t[b"vhea"] = (struct.pack(">I", 0x10000) + s16(900, -300, 0) + u16(1500) + s16(0, 0, 0, 1, 0, 0)
+                  + s16(0, 0, 0, 0, 0) + u16(nv))
+    t[b"vmtx"] = (b"".join(u16(r.randint(500, 1500)) + s16(r.randint(-50, 200)) for _ in range(nv))
+                  + b"".join(s16(r.randint(-50, 200)) for _ in range(n - nv)))
+    with open(dst, "wb") as h:
+        h.write(sfnt_build(ver, t))
 
 
 def main(argv):
@@ -38,13 +82,22 @@ def main(argv):
     with open(txt, "w") as h:
         h.write("ABA\nAB\nB\nBA\n")
     fixtures = os.path.join(ROOT, "tests", "data", "fonts")
+    # Fixtures given a vmtx, in a directory of their own, so that the same names below
+    # reach them: the glyf ones, whose origin is the top phantom point plus the top
+    # bearing.
+    fontpath = lambda f: os.path.join(SCRATCH if f.startswith("with-vmtx/") else fixtures, f)
+    with_dir = os.path.join(SCRATCH, "with-vmtx")
+    os.makedirs(with_dir, exist_ok=True)
+    for k, f in enumerate(["variable-gvar.ttf", "variable-hvar.ttf", "variable-avar2.ttf",
+                           "variable-featurevars.ttf", "variable-stat.ttf"]):
+        with_vmtx(os.path.join(fixtures, f), os.path.join(with_dir, "v" + f), k)
     lines = []
     for f in FONTS:
         for i, loc in enumerate(LOCATIONS):
             for d in ("ttb", "btt"):
-                lines.append("hb-shape --font-file='%s/%s' --output-format=json --no-glyph-names "
+                lines.append("hb-shape --font-file='%s' --output-format=json --no-glyph-names "
                              "--direction=%s --variations='%s' --text-file='%s' > '%s/%s_%d_%s.hb' 2>/dev/null"
-                             % (fixtures, f, d, loc, txt, SCRATCH, f, i, d))
+                             % (fontpath(f), d, loc, txt, SCRATCH, f.replace("/", "_"), i, d))
     runner = os.path.join(SCRATCH, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
@@ -59,11 +112,11 @@ def main(argv):
     for f in FONTS:
         for i, loc in enumerate(LOCATIONS):
             for d in ("ttb", "btt"):
-                with open("%s/%s_%d_%s.hb" % (SCRATCH, f, i, d), encoding="utf-8") as h:
+                with open("%s/%s_%d_%s.hb" % (SCRATCH, f.replace("/", "_"), i, d), encoding="utf-8") as h:
                     hb = [json.loads(x) if x.startswith("[") else [] for x in h.read().split("\n")[:-1]]
                 with open(txt, "rb") as h:
                     out = subprocess.run([DRIVER, "--batch", "--script", "latn", "--" + d, "--location", loc,
-                                          os.path.join(fixtures, f)], stdin=h, capture_output=True,
+                                          fontpath(f)], stdin=h, capture_output=True,
                                          text=True).stdout
                 mine = [json.loads(x) for x in out.split("\n")[:-1]]
                 for a, b in zip(hb, mine):

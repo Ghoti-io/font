@@ -248,22 +248,26 @@ class Gen:
         ob=o[:len(bt)]; ol=o[len(bt):]
         return u16(1,ocov,len(bt),*ob,len(la),*ol,len(subs),*subs)+cov+b''.join(bt+la)
 
+GDEF_ON=False   # --gdef: a GDEF with glyph classes, and lookups that filter by them
+FLAGS_PLAIN=(0,0,0,4,8)
+FLAGS_GDEF=(0,0,0,4,8,0x10,0x14,0x18,0x100,0x200,0x110)
+
 def lookup_table(typ,flag,subs):
-    hdr=6+2*len(subs); offs=[];body=b''
+    hdr=6+2*len(subs)+(2 if flag&0x10 else 0); offs=[];body=b''
     for x in subs: offs.append(hdr+len(body)); body+=x
-    return u16(typ,flag,len(subs),*offs)+body
+    return u16(typ,flag,len(subs),*offs)+(u16(len(body)%2) if flag&0x10 else b'')+body
 def build_gsub(seed,gl,tags,override=None,old_spec=False,script_tag=None,langs=False,scriptset=False):
     gen=Gen(seed,gl); r=gen.r
     lookups=[]
     for _ in range(3):
-        t=r.choice((1,1,2,3,4)); lookups.append(lookup_table(t,r.choice((0,0,0,4,8)),[gen.simple(t) for _ in range(r.randint(1,2))]))
+        t=r.choice((1,1,2,3,4)); lookups.append(lookup_table(t,r.choice(FLAGS_GDEF if GDEF_ON else FLAGS_PLAIN),[gen.simple(t) for _ in range(r.randint(1,2))]))
     nested=[0,1,2]
     for _ in range(r.randint(2,4)):
         k=r.choice((5,6,6,8,4,1))
         if k in (1,2,3,4): subs=[gen.simple(k)]
         elif k==8: subs=[gen.reverse()]
         else: subs=[gen.context(k,nested,3) for _ in range(r.randint(1,2))]
-        lookups.append(lookup_table(k,r.choice((0,0,0,4,8)),subs))
+        lookups.append(lookup_table(k,r.choice(FLAGS_GDEF if GDEF_ON else FLAGS_PLAIN),subs))
     n=len(lookups)
     feats=[]
     for t in tags:
@@ -483,7 +487,8 @@ def features_for(seed, tags):
 
 
 def main(argv):
-    global DRIVER, SCRATCH
+    global DRIVER, SCRATCH, GDEF_ON
+    GDEF_ON = "--gdef" in argv
     seeds, first, script, reuse = 200, 0, "latn", False
     for i, a in enumerate(argv):
         if a == "--seeds":
@@ -522,7 +527,7 @@ def main(argv):
         font = os.path.join(SCRATCH, "s%d.ttf" % seed)
         text = os.path.join(SCRATCH, "s%d.txt" % seed)
         with open(font, "wb") as h:
-            h.write(base_font(nglyphs=30, cmap_map=cmap, extra={
+            h.write(base_font(nglyphs=30, cmap_map=cmap, extra={**({'GDEF': __import__('gpos_random_diff').gdef()} if GDEF_ON else {}),
                 'GSUB': build_gsub(seed, GLYPHS, tags, old_spec=old, langs=langs, scriptset=scriptset,
                                    script_tag=OTHER[script][1] if script in OTHER else None)}))
         with open(text, "w", encoding="utf-8") as h:

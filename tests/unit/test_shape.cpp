@@ -1314,6 +1314,55 @@ TEST(ShapePlan, ARequiredFeatureReadsOnlyTheGlobalBitOfAnAlternateLookup) {
   EXPECT_EQ(shape_bytes(font, cps("A"), "ss01=3")[0].glyph, 5u);
 }
 
+TEST(ShapeMarks, AMarkLeftAloneByALigatureOfItsNeighbourIsStillZeroedByTheFallback) {
+  // FATHA, BEH, SHADDA with a `ccmp` ligature of the first two (glyphs 6 and 2 to
+  // 5): the ligature has a base in it and is no longer a mark to the fallback that
+  // places marks, so the shadda is one over it and loses its advance, though a
+  // `GDEF` that classes it a base would not zero it. (HarfBuzz 10.2.0.)
+  std::vector<uint8_t> ligature;
+  gfnttest::put_u16(ligature, 1);
+  gfnttest::put_u16(ligature, 8);          // coverage
+  gfnttest::put_u16(ligature, 1);          // one set
+  gfnttest::put_u16(ligature, 14);         // the set
+  gfnttest::put_u16(ligature, 1);          // coverage: glyph 6
+  gfnttest::put_u16(ligature, 1);
+  gfnttest::put_u16(ligature, 6);
+  gfnttest::put_u16(ligature, 1);          // the set: one ligature
+  gfnttest::put_u16(ligature, 4);
+  gfnttest::put_u16(ligature, 5);          // the glyph
+  gfnttest::put_u16(ligature, 2);          // two components
+  gfnttest::put_u16(ligature, 2);          // ... the second is glyph 2
+  std::vector<uint8_t> gdef;               // classes: glyphs 1 to 7 are all bases
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 12);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 7);
+  for (int i = 0; i < 7; ++i) {
+    gfnttest::put_u16(gdef, 1);
+  }
+  Font font(small_font({{kGSUB,
+          layout_table("arab", -1, {{"ccmp", {0}}}, {{4, 0, ligature}})},
+          {GFNT_TAG('G', 'D', 'E', 'F'), gdef}},
+          8, {{0x64E, 6}, {0x628, 2}, {0x651, 7}}));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  Glyphs g;
+
+  request.script = "arab";
+  request.rtl = true;
+  ASSERT_EQ(shape(font, V{0x64E, 0x628, 0x651}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].glyph, 7u);
+  EXPECT_EQ(g[0].x_advance, 0);
+  EXPECT_EQ(g[1].glyph, 5u);
+  EXPECT_EQ(g[1].x_advance, 500);
+}
+
 TEST(ShapePlan, AScriptTheFontLacksFallsBackToLatinWhenThatIsAllItHas) {
   std::vector<uint8_t> font = small_font({{kGSUB,
       layout_table("latn", -1, {{"liga", {0}}}, {{1, 0, single_delta({1}, 1)}})}});

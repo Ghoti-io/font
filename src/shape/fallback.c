@@ -299,6 +299,16 @@ static void gfnt_zero_mark_advances(GFNT_LBuffer * buf, size_t start,
   }
 }
 
+/**
+ * Whether the character's category, as the shaping has left it, is a mark: a
+ * ligature of a mark with a base is not one (see the ligature substitution).
+ */
+static bool gfnt_unicode_mark(const GFNT_LInfo * info) {
+  return info->gc == 17 /* GUNI_GC_NONSPACING_MARK */
+      || info->gc == 26 /* GUNI_GC_SPACING_MARK */
+      || info->gc == 7 /* GUNI_GC_ENCLOSING_MARK */;
+}
+
 static void gfnt_position_around_base(const GFNT_Face * face,
     GFNT_LBuffer * buf, const GFNT_Variation * variation, uint32_t upem,
     size_t base, size_t end, bool adjust, bool forward, bool horizontal_ltr,
@@ -396,11 +406,11 @@ static void gfnt_position_cluster(const GFNT_Face * face, GFNT_LBuffer * buf,
     return;
   }
   for (i = start; i < end; i++) {
-    if (!(buf->info[i].flags & GFNT_GF_MARK)) {
+    if (!gfnt_unicode_mark(&buf->info[i])) {
       size_t j;
 
       for (j = i + 1; j < end; j++) {
-        if (!(buf->info[j].flags & GFNT_GF_MARK)) {
+        if (!gfnt_unicode_mark(&buf->info[j])) {
           break;
         }
       }
@@ -421,7 +431,7 @@ void gfnt_fallback_mark_position(const GFNT_Face * face, GFNT_LBuffer * buf,
   (void)gfnt_face_units_per_em(face, &upem, NULL);
   gfnt_fallback_recategorize_marks(buf);
   for (i = 1; i < buf->len; i++) {
-    if (!(buf->info[i].flags & GFNT_GF_MARK)) {
+    if (!gfnt_unicode_mark(&buf->info[i])) {
       gfnt_position_cluster(face, buf, variation, upem, start, i,
           adjust_offsets_when_zeroing, forward, horizontal_ltr, vertical);
       start = i;

@@ -1020,6 +1020,9 @@ check-oracle-gsub: $(EXAMPLES)
 	@for s in latn arab khmr thai; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --gdef --script $$s --seeds 300 || exit 1; \
 	done
+	@for s in latn mixed; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --gdef --with-gpos --script $$s --seeds 300 || exit 1; \
+	done
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --scriptsets --seeds 300
 	@for s in hang khmr sinh arab; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script $$s --direction ttb --seeds 200 || exit 1; \

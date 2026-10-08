@@ -1314,6 +1314,22 @@ TEST(ShapePlan, ARequiredFeatureReadsOnlyTheGlobalBitOfAnAlternateLookup) {
   EXPECT_EQ(shape_bytes(font, cps("A"), "ss01=3")[0].glyph, 5u);
 }
 
+TEST(ShapeKern, AGraphemeJoinerAtTheEndOfTheTextStopsNothingAndIsSkipped) {
+  // The joiner stands in the way of reordering only where a mark follows it. At
+  // the end of the text it is skipped like any default ignorable, so the pair
+  // A + joiner is not a pair and A keeps its advance; before another letter it is
+  // skipped too. (HarfBuzz 10.2.0, which reads the kern table.)
+  Font font(small_font({{GFNT_TAG('k', 'e', 'r', 'n'), kern_format0({{1, 6, -50}})}},
+      8, {{0x34F, 6}}));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  Glyphs g;
+
+  ASSERT_EQ(shape(font, V{'A', 0x34F}, request, &g), GFNT_OK);
+  ASSERT_GE(g.size(), 1u);
+  EXPECT_EQ(g[0].x_advance, 500);
+}
+
 TEST(ShapeMarks, AMarkLeftAloneByALigatureOfItsNeighbourIsStillZeroedByTheFallback) {
   // FATHA, BEH, SHADDA with a `ccmp` ligature of the first two (glyphs 6 and 2 to
   // 5): the ligature has a base in it and is no longer a mark to the fallback that

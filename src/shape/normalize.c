@@ -477,10 +477,12 @@ bool gfnt_normalize(const GFNT_Face * face, GFNT_LInfo ** info, size_t * len,
       }
       i = end;
     }
-    // A CGJ that stopped nothing from reordering need not stop a lookup either.
-    for (i = 1; i + 1 < n; i++) {
+    // A CGJ that stopped nothing from reordering need not stop a lookup either, and
+    // one at the end of the text has nothing to stop.
+    for (i = 1; i < n; i++) {
       if (out[i].unicode == 0x034F
-          && (out[i + 1].mcc == 0 || out[i - 1].mcc <= out[i + 1].mcc)) {
+          && (i + 1 == n || out[i + 1].mcc == 0
+              || out[i - 1].mcc <= out[i + 1].mcc)) {
         out[i].flags &= (uint8_t)~GFNT_GF_HIDDEN;
       }
     }

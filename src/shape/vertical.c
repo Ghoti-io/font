@@ -146,8 +146,7 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
   int32_t ascent = 0;
   int32_t line;
 
-  if (gfnt_face_glyph_advance(face, glyph, variation, &advance, NULL)
-      != GFNT_OK) {
+  if (gfnt_shape_advance(face, glyph, variation, &advance) != GFNT_OK) {
     advance = 0;
   }
   *out_x = advance / 2;

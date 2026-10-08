@@ -103,22 +103,6 @@ static GFNT_Result gfnt_shape_apply(GFNT_LApply * c, const GFNT_PlanTable * pt,
   return GFNT_OK;
 }
 
-/**
- * A glyph's advance at the location. A variable font that says nothing about how
- * its advances move (no `HVAR`, no `gvar`) has none that do, so it keeps its
- * `hmtx` ones, as HarfBuzz does; the metrics call refuses to guess and this one
- * is the shaper's, which has to put the glyph somewhere.
- */
-static GFNT_Result gfnt_shape_advance(const GFNT_Face * face, uint32_t glyph,
-    const GFNT_Variation * variation, int32_t * advance) {
-  GFNT_Result result = gfnt_face_glyph_advance(face, glyph, variation, advance,
-      NULL);
-
-  if (result == GFNT_ERR_UNSUPPORTED && variation) {
-    result = gfnt_face_glyph_advance(face, glyph, NULL, advance, NULL);
-  }
-  return result;
-}
 
 /**
  * Size the spaces the font has no glyph for, which were mapped to its space.

@@ -38,6 +38,7 @@
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/metrics.h>
 #include <string.h>
+#include "fallback.h"
 #include "plan.h"
 #include "uprops.h"
 
@@ -105,8 +106,8 @@ static bool hangul_is_zero_width(const GFNT_ShapeCtx * ctx, uint32_t u) {
       || !glyph) {
     return false;
   }
-  return gfnt_face_glyph_advance(ctx->face, glyph, ctx->options->variation,
-             &advance, NULL) == GFNT_OK && advance == 0;
+  return gfnt_shape_advance(ctx->face, glyph, ctx->options->variation,
+             &advance) == GFNT_OK && advance == 0;
 }
 
 /** A record for a code point made out of @p from: its cluster and what follows. */

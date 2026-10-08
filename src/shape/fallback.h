@@ -49,6 +49,15 @@ typedef struct GFNT_Extents {
 } GFNT_Extents;
 
 /**
+ * A glyph's advance at the location. A variable font that says nothing about how
+ * its advances move (no `HVAR`, no `gvar`) has none that do, so it keeps its
+ * `hmtx` ones, as HarfBuzz does; the metrics call refuses to guess and this one
+ * is the shaper's, which has to put the glyph somewhere.
+ */
+GFNT_Result gfnt_shape_advance(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, int32_t * advance);
+
+/**
  * The box of a glyph, in whole font units: HarfBuzz's `get_glyph_extents()`.
  * @return false if the face cannot say.
  */

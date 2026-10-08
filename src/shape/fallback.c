@@ -310,8 +310,7 @@ static void gfnt_position_around_base(const GFNT_Face * face,
   base_extents.y_bearing += buf->pos[base].y_offset;
   // The advance stands in for the width: better generally, and it works for a
   // glyph with no ink.
-  (void)gfnt_face_glyph_advance(face, info[base].glyph, variation, &advance,
-      NULL);
+  (void)gfnt_shape_advance(face, info[base].glyph, variation, &advance);
   base_extents.x_bearing = 0;
   base_extents.width = advance;
 
@@ -416,4 +415,15 @@ void gfnt_fallback_mark_position(const GFNT_Face * face, GFNT_LBuffer * buf,
   }
   gfnt_position_cluster(face, buf, variation, upem, start, buf->len,
       adjust_offsets_when_zeroing, forward, horizontal_ltr, vertical);
+}
+
+GFNT_Result gfnt_shape_advance(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, int32_t * advance) {
+  GFNT_Result result = gfnt_face_glyph_advance(face, glyph, variation, advance,
+      NULL);
+
+  if (result == GFNT_ERR_UNSUPPORTED && variation) {
+    result = gfnt_face_glyph_advance(face, glyph, NULL, advance, NULL);
+  }
+  return result;
 }

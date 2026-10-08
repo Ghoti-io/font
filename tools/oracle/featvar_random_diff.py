@@ -82,11 +82,13 @@ def feature_variations(r, nlookups, nfeats, naxes):
 
 def main(argv):
     seeds, first, driver, scratch = 200, 0, G.DRIVER, SCRATCH
+    direction = ""
     for i, a in enumerate(argv):
         if a == "--seeds": seeds = int(argv[i + 1])
         elif a == "--first": first = int(argv[i + 1])
         elif a == "--driver": driver = argv[i + 1]
         elif a == "--scratch": scratch = argv[i + 1]
+        elif a == "--direction": direction = argv[i + 1]
     os.makedirs(scratch, exist_ok=True)
     tags = G.TAGS_LATIN
     lines = []
@@ -121,9 +123,9 @@ def main(argv):
         with open(text, "w") as h:
             h.write(''.join(''.join(chr(65 + rr.randrange(8)) for _ in range(rr.randint(1, 7))) + "\n"
                             for _ in range(12)))
-        lines.append("hb-shape --font-file='%s' --output-format=json --variations='%s' "
+        lines.append("hb-shape --font-file='%s' --output-format=json --variations='%s' %s"
                      "--no-glyph-names --text-file='%s' > '%s.hb' 2>/dev/null"
-                     % (font, loc, text, font))
+                     % (font, loc, ("--direction=%s " % direction) if direction else "", text, font))
     runner = os.path.join(scratch, "run.sh")
     with open(runner, "w") as h:
         h.write("\n".join(lines) + "\n")
@@ -144,7 +146,7 @@ def main(argv):
                 hb = [json.loads(l) if l.startswith("[") else [] for l in h.read().split("\n")[:-1]]
             with open(text, "rb") as h:
                 ours = subprocess.run([driver, "--batch", "--script", "latn", "--location",
-                                       locs[seed], font], stdin=h, capture_output=True,
+                                       locs[seed]] + ({"rtl": ["--rtl"], "ttb": ["--ttb"], "btt": ["--btt"], "": []}[direction]) + [font], stdin=h, capture_output=True,
                                       text=True, timeout=20)
             mine = [json.loads(l) for l in ours.stdout.split("\n")[:-1]]
         except (OSError, ValueError, subprocess.TimeoutExpired):

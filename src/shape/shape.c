@@ -104,6 +104,23 @@ static GFNT_Result gfnt_shape_apply(GFNT_LApply * c, const GFNT_PlanTable * pt,
 }
 
 /**
+ * A glyph's advance at the location. A variable font that says nothing about how
+ * its advances move (no `HVAR`, no `gvar`) has none that do, so it keeps its
+ * `hmtx` ones, as HarfBuzz does; the metrics call refuses to guess and this one
+ * is the shaper's, which has to put the glyph somewhere.
+ */
+static GFNT_Result gfnt_shape_advance(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, int32_t * advance) {
+  GFNT_Result result = gfnt_face_glyph_advance(face, glyph, variation, advance,
+      NULL);
+
+  if (result == GFNT_ERR_UNSUPPORTED && variation) {
+    result = gfnt_face_glyph_advance(face, glyph, NULL, advance, NULL);
+  }
+  return result;
+}
+
+/**
  * Size the spaces the font has no glyph for, which were mapped to its space.
  *
  * HarfBuzz's `_hb_ot_shape_fallback_spaces()`: an em fraction of the font's own
@@ -170,8 +187,8 @@ static void gfnt_fallback_spaces(const GFNT_Face * face, GFNT_LBuffer * buf,
                   == GFNT_OK && glyph
               && (vertical
                   ? gfnt_vertical_advance(face, glyph, variation, &advance)
-                  : gfnt_face_glyph_advance(face, glyph, variation, &advance,
-                      NULL)) == GFNT_OK) {
+                  : gfnt_shape_advance(face, glyph, variation, &advance))
+              == GFNT_OK) {
             if (vertical) {
               pos->y_advance = advance;
             }
@@ -659,8 +676,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   for (i = 0; i < buf.len; i++) {
     int32_t advance = 0;
 
-    if (gfnt_face_glyph_advance(face, buf.info[i].glyph, options->variation,
-            &advance, NULL) != GFNT_OK) {
+    if (gfnt_shape_advance(face, buf.info[i].glyph, options->variation,
+            &advance) != GFNT_OK) {
       advance = 0;
     }
     // Every field, not only the advance: the array grew with the run and holds

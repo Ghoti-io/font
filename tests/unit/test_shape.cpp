@@ -4042,6 +4042,29 @@ TEST(Shape, TheDirectionPairsOfFeaturesAreAskedForOnlyInTheirOwnDirection) {
   EXPECT_EQ(ids(g), (V{2}));
 }
 
+TEST(ShapeVariation, AVariableFontWithNoMetricVariationKeepsItsDefaultAdvances) {
+  // A font with an fvar and no HVAR and no gvar: nothing says how an advance
+  // moves, so the metrics call refuses, and the run keeps the hmtx advance
+  // instead of the zero a refusal used to leave. (HarfBuzz 10.2.0.)
+  std::vector<uint8_t> fvar;
+  auto u16 = [&](unsigned v) { fvar.push_back(v >> 8); fvar.push_back(v & 0xFF); };
+  auto fixed = [&](unsigned v) { u16(v); u16(0); };
+  u16(1); u16(0); u16(16); u16(2); u16(1); u16(20); u16(0); u16(8);
+  for (char c : std::string("wght")) {
+    fvar.push_back(static_cast<uint8_t>(c));
+  }
+  fixed(100); fixed(400); fixed(900); u16(0); u16(256);
+  Font font(small_font({{GFNT_TAG('f', 'v', 'a', 'r'), fvar}}, 40, {}));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  Glyphs g;
+
+  request.location = "wght=900";
+  ASSERT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 1u);
+  EXPECT_EQ(g[0].x_advance, 500);
+}
+
 TEST(Shape, AnRtlmSubstitutionStillAppliesToACharacterThatNormalisationComposed) {
   // `e` and a combining acute are put together as the font's U+00E9, which is
   // glyph 2, the glyph the `rtlm` substitution above replaces. The composite

@@ -18,6 +18,7 @@ This is what the library implements.
 - That outline rasterised to 8-bit coverage, at any pixel size and any sub-pixel offset.
 - A **bare `CFF `** font program and a **Type 1** one — `.pfb`, `.pfa` or raw — each a face with no sfnt directory at all, stating its em, its glyph count, its names and its advances out of the program itself.
 - The four **standalone bitmap** containers: PCF, BDF, PSF 1 and 2, and GNU Unifont's `.hex`. Each is a face with one strike and no outlines, and a glyph comes back as pixels with its own box and advance.
+- **Writing** (`<ghoti.io/font/write.h>`): an sfnt serialiser, a WOFF 1 writer, and `gfnt_subset()`, which keeps some of a static TrueType font's glyphs (closing over composites and `GSUB`, renumbering or retaining ids, with the layout tables carried over when ids are retained). The `font-subset` example drives it.
 - A **WOFF 1** font, whose tables are inflated one by one and put back into the sfnt they wrap (`woff-basic.woff`, written by fontTools, and a stored-tables one are the fixtures).
 - A font that arrives **gzipped**, which is how a PCF almost always does: the wrapper is undone before the format is looked at, under the same size ceiling a file read from disk is held to.
 
@@ -25,7 +26,7 @@ This is what the library implements.
 
 **What shaping does not do**, stated rather than approximated: Apple's AAT beyond `morx`/`mort`, `kerx` (formats 0, 1, 2, 4 and 6) and `trak`, `GSUB`/`GPOS` `BASE` and `JSTF`, and a hinting device table unless the caller gives a pixel size. A mixed-direction paragraph is shaped by `gfnt_faces_shape_bidi()` (UAX #9 from the `unicode` library, one line, visual order); breaking it into lines is the caller's. A few characters in nine scripts are sorted into a different category than HarfBuzz sorts them into, and `tools/oracle/hb_diff.py` names them as a known gap.
 
-**Not built yet**, each refused with `GFNT_ERR_UNSUPPORTED` where a file or request names it: WOFF 2 (needs its Brotli decoder, which also exists), the colour and PNG strikes (`CBDT`/`CBLC`, `sbix`; they need a PNG decoder from `image`), `COLR`/`CPAL` as a paint graph, the `SVG ` table, paragraph layout (itemisation, line breaking, alignment, hit testing), font discovery and matching, and writing and subsetting. The design document (`documentation/design.md`) §10 to §12 says what each is to be. Embedded bitmap strikes in `EBDT`/`EBLC` are read.
+**Not built yet**, each refused with `GFNT_ERR_UNSUPPORTED` where a file or request names it: WOFF 2 (needs its Brotli decoder, which also exists), the colour and PNG strikes (`CBDT`/`CBLC`, `sbix`; they need a PNG decoder from `image`), `COLR`/`CPAL` as a paint graph, the `SVG ` table, paragraph layout (itemisation, line breaking, alignment, hit testing), font discovery and matching, the `CFF` writer and layout-table subsetting under renumbering. The design document (`documentation/design.md`) §10 to §12 says what each is to be. Embedded bitmap strikes in `EBDT`/`EBLC` are read.
 ## Before you call it
 
 - A table this library does not parse yet comes back as `GFNT_ERR_UNSUPPORTED` and names what it could not read. An empty result is reserved for a font that states the thing is absent.
@@ -185,8 +186,8 @@ The tables named above are parsed, glyphs from `glyf` and from `CFF `
 charstrings are turned into outlines, and those outlines are rasterised. Six
 containers are read: an sfnt, a collection, a bare `CFF `, a Type 1 program, and
 the four standalone bitmap formats, any of them gzipped. The sfnt bitmap
-strikes, colour, paragraph layout, font discovery and writing are not
-implemented. Text shaped through `GSUB` and `GPOS` is compared against HarfBuzz
+strikes, colour, paragraph layout and font discovery are not
+implemented; writing is (the sfnt, WOFF 1 and a TrueType subsetter). Text shaped through `GSUB` and `GPOS` is compared against HarfBuzz
 (see `tools/oracle/hb_diff.py`), and `tools/oracle/typeset_compare.py` draws the
 same lines with HarfBuzz and FreeType and with this library, one above the
 other, for a person to read.

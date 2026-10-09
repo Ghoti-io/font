@@ -112,6 +112,104 @@ GFNT_API GFNT_Result gfnt_write_woff(GFNT_Tag flavour,
     const GFNT_WriteTable * tables, size_t count, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
 
+/**
+ * What to keep, and how.
+ *
+ * Initialise with ::gfnt_subset_options_init() and then set what is wanted:
+ * a zeroed struct is a valid request for "glyph 0 only", but it is the defaults
+ * that say the subsetter closes over `GSUB`, so a caller who builds the struct
+ * by hand gets the opposite of what the design asks for.
+ */
+typedef struct GFNT_SubsetOptions {
+  const uint32_t * codepoints; ///< Characters to keep, in any order; repeats are fine.
+  size_t codepoint_count;      ///< How many.
+  const uint32_t * glyphs;     ///< Glyph ids to keep as well, for glyphs no character reaches.
+  size_t glyph_count;          ///< How many.
+  /**
+   * Keep every surviving glyph at its own id, and empty the ones that were dropped.
+   *
+   * What a PDF `CIDFontType2` with an identity `CIDToGIDMap` needs, and the only
+   * mode that keeps the layout tables (see ::keep_layout).
+   */
+  bool retain_gids;
+  /** Do not add the glyphs `GSUB` can turn the kept ones into. Off by default. */
+  bool no_gsub_closure;
+  /** Drop `fpgm`, `prep`, `cvt ` and every glyph's instructions. */
+  bool drop_hinting;
+  /**
+   * With ::retain_gids, drop `GSUB`, `GPOS` and `GDEF` as a renumbering would.
+   *
+   * Without ::retain_gids the layout tables are always dropped: they name glyphs
+   * by id in dozens of structures, and rewriting them is not built.
+   */
+  bool drop_layout;
+  /**
+   * Restrict the `GSUB` closure to lookups reached from these features.
+   *
+   * NULL (or a count of zero) means every feature the table lists.
+   */
+  const GFNT_Tag * features;
+  size_t feature_count;        ///< How many.
+} GFNT_SubsetOptions;
+
+/**
+ * @brief Set an options struct to the defaults: nothing requested, `GSUB` closed over.
+ *
+ * @param options The struct. NULL is ignored.
+ */
+GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
+
+/**
+ * @brief Write a font holding only some of a face's glyphs.
+ *
+ * The glyphs kept are glyph 0, the glyphs the requested codepoints map to
+ * through the face's preferred `cmap` subtable, and the requested glyph ids,
+ * closed over composite components always and over `GSUB` unless
+ * ::GFNT_SubsetOptions::no_gsub_closure. The closure over contextual lookups is
+ * an over-approximation (it may keep a glyph no text can reach, and never drops
+ * one it can).
+ *
+ * **Request what the shaper borrows.** Some characters are shaped with another's
+ * glyph: U+0020 stands in for an invisible joiner or a fixed-width space, `0` and
+ * `.` size the figure and punctuation spaces, U+2010 replaces a non-breaking
+ * hyphen, and U+25CC is the dotted circle of a broken Indic cluster. The closure
+ * has no way to know the text will reach them. The same holds for composition:
+ * the shaper composes a base with any later mark, so the precomposed characters
+ * of the text's pairs have to be asked for too.
+ *
+ * The output is a TrueType-outline sfnt of `head`, `hhea`, `maxp`, `hmtx`,
+ * `cmap` (formats 4 and 12 for the requested codepoints, in the Unicode and
+ * Windows records), `loca`, `glyf`, `post` (format 3, no glyph names), and, when
+ * the source has them, `OS/2` (first and last character updated), `name`,
+ * `gasp`, and the hinting tables. With ::GFNT_SubsetOptions::retain_gids the
+ * layout tables (`GSUB`, `GPOS`, `GDEF`), the legacy `kern` table and the
+ * vertical metrics (`vhea`, `vmtx`, `VORG`) are carried over untouched: glyph ids
+ * have not moved, so every reference in them is still valid, and a glyph that was
+ * dropped is an empty outline. Anything else in the source is not written.
+ *
+ * **Not built**: `CFF`, `CFF2` and Type 1 outlines, variable fonts (`fvar`,
+ * `gvar`), bitmap and colour tables, the Apple tables (`morx`, `mort`, `kerx`,
+ * `trak`, `ankr`), `kern` and the vertical metrics under renumbering, `cmap`
+ * format 14, layout tables under renumbering, and the family rename the licence reading in
+ * documentation/design.md section 14.5 wants. Each is refused or dropped as
+ * stated here, not approximated.
+ *
+ * @param face The source face.
+ * @param options What to keep. NULL means the defaults with nothing requested.
+ * @param limits Caps, or NULL for the defaults.
+ * @param allocator Where the output comes from, or NULL for the default.
+ * @param out_blob Receives the font. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID for a glyph id the face does not have;
+ *   ::GFNT_ERR_UNSUPPORTED for a face this cannot subset (see above);
+ *   ::GFNT_ERR_CORRUPT for source tables that contradict themselves, including
+ *   a `GSUB` that cannot be walked (set ::GFNT_SubsetOptions::no_gsub_closure to
+ *   subset such a font anyway); ::GFNT_ERR_LIMIT; ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_subset(const GFNT_Face * face,
+    const GFNT_SubsetOptions * options, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
+
 #ifdef __cplusplus
 }
 #endif

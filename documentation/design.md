@@ -5,8 +5,8 @@ What is implemented reads the sfnt container, the metric tables, `cmap` and
 and the standalone bitmap formats, rasterises an outline, and shapes text through
 `GSUB`, `GPOS`, `kern` and Apple's `morx`/`kerx`/`trak`, with a shaper for each
 script that needs one and a bidi-aware shaping call (§9; §18 is the list and says
-what is not built). Paragraph layout, font discovery and writing are not
-implemented, nor are WOFF 2, colour and the PNG strikes. Layout and the script shapers
+what is not built). Paragraph layout and font discovery are not
+implemented, nor are WOFF 2, colour and the PNG strikes; writing is built for the sfnt and WOFF 1 and for subsetting static TrueType fonts (§12). Layout and the script shapers
 need the `unicode` library. Reading a file, drawing an outline and applying a
 font's lookups do not.
 
@@ -179,7 +179,7 @@ to keep open.
 | `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()`. The default shaper only: no language registry, no script shapers (§9.2) |
 | `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
 | `discover.h` | `GFNT_FontSet`, directory scanning, matching, the default fallback provider. Not implemented |
-| `write.h` | the sfnt serialiser and WOFF 1 writer (built), the subsetter, the PDF helpers (not built) |
+| `write.h` | the sfnt serialiser, WOFF 1 writer and TrueType subsetter (built); the PDF helpers (not built) |
 | `font.h` | umbrella for what is implemented |
 
 ---
@@ -1425,11 +1425,13 @@ Synthetic bold and oblique are §16.
 
 The library writes fonts because two consumers need it: a PDF writer must
 embed a *subset* of each font it uses (§13.3), and every fixture in §14.5 is
-produced by subsetting. It needs the reader and nothing else. **Built so far**
-(`write.h`, `src/write/`): the sfnt serialiser (§12.1's table ordering, padding,
-directory search fields, checksums and `head.checkSumAdjustment`; the table
-set is supplied as bytes, and nothing parses a face back into a builder yet) and
-the WOFF 1 writer (§12.4). Everything else in this section is still to build.
+produced by subsetting. It needs the reader and nothing else. **Built**
+(`write.h`, `src/write/`): the sfnt serialiser (§12.1: table ordering, padding,
+directory search fields, checksums and `head.checkSumAdjustment`; the table set
+is supplied as bytes), the WOFF 1 writer (§12.4), and a subsetter for static
+TrueType-outline fonts (§12.3). The `CFF` writer, subsetting of `CFF`, variable
+fonts and layout tables under renumbering, the BDF writer and the PDF helpers
+are **not** built.
 
 ### 12.1 The sfnt serialiser
 
@@ -1451,17 +1453,48 @@ for a subset; re-subroutinisation is an optimisation for a later release).
 
 ### 12.3 The subsetter
 
-Input: a face, a set of glyph ids or codepoints, and options. Output: a new
-face. The glyph set is **closed** over composite components always, and over
-`GSUB` reachability by option (default on: a subset that drops the `fi`
-ligature glyph is M21). Glyph ids are either **renumbered** compactly or
-**retained** (`retain_gids`), the latter being what a PDF `CIDFontType2` with
-an identity `CIDToGIDMap` needs. `cmap` is rebuilt for the retained
-codepoints or dropped; `name` is rewritten with a new family name and the
-licence-required rename (§14.5); `hmtx`, `loca`, `glyf`, `CFF `, `post` and the
-layout tables are pruned to the closure. Layout-table subsetting (pruning
-lookups to the surviving glyphs while keeping them valid) is the hard part
-and is not implemented.
+`gfnt_subset()`: a face, characters and glyph ids to keep, and options; a new
+sfnt out. **Built** for a static font with `glyf` outlines. The glyph set is
+glyph 0, the glyphs the requested characters map to through the preferred
+`cmap` subtable, the requested ids, closed over composite components always and
+over `GSUB` unless `no_gsub_closure` (default on: a subset that drops the `fi`
+ligature glyph is M21). The `GSUB` closure is a fixed point over the glyph set
+and the set of active lookups (those a chosen feature names, and those a
+contextual rule that can match calls): single, multiple, alternate, ligature,
+reverse chaining and extension lookups are exact; context and chaining rules are
+tested against the set, except class-based ones, which are taken to match when
+their first glyph is covered. It over-approximates, never under (§12.5 measures
+how far).
+
+Glyph ids are **renumbered** compactly (glyph 0 stays 0) or **retained**
+(`retain_gids`: every kept glyph keeps its id and the rest are empty outlines,
+which is what a PDF `CIDFontType2` with an identity `CIDToGIDMap` needs).
+`head`, `hhea`, `maxp`, `hmtx` (with the trailing-advance run folded into
+`numberOfHMetrics`), `loca` (short or long as the size needs), `glyf` (component
+ids renumbered; instructions removed on `drop_hinting`), `cmap` (formats 4 and
+12 in the Unicode and Windows records, for the requested characters only),
+`post` (format 3), `OS/2` (character range updated), `name`, `gasp` and the
+hinting tables are written. With `retain_gids` the ids have not moved, so
+`GSUB`, `GPOS`, `GDEF`, `kern` and the vertical metrics are carried over
+verbatim (`drop_layout` turns that off). **Without it the layout tables are
+dropped**: pruning and renumbering every glyph reference in them is the hard
+part and is not built.
+
+Refused with `GFNT_ERR_UNSUPPORTED`: `CFF`, `CFF2` and Type 1 outlines, and
+variable fonts. Silently not written, and stated in `write.h`: bitmap and colour
+tables, the Apple tables (`morx`, `mort`, `kerx`, `trak`, `ankr`), `cmap`
+format 14, and the family rename the licence reading in §14.5 wants.
+
+**What a caller must request.** The closure sees tables, not text. The shaper
+sets the glyph of one character where it hides or sizes another: U+0020 for an
+invisible joiner or a fixed-width space, `0` and `.` for the figure and
+punctuation spaces, U+2010 for a non-breaking hyphen, U+25CC for the dotted
+circle of a broken Indic cluster. And it composes a base with any later mark, so
+the precomposed characters of the text's pairs are looked up too. A caller
+subsetting by text asks for the NFC and NFD forms of the text and of each pair of
+its characters, and for those few; `tools/oracle/subset_diff.py` does, and without
+it 229 of 1,598 subsets shaped differently. fontTools asks the same of its
+callers.
 
 ### 12.4 Other writers
 
@@ -1472,13 +1505,29 @@ WOFF 2 waits on Brotli.
 
 ### 12.5 The gate
 
-Every writer is proven by reading its output back three ways: by this
-library (the round trip must reproduce every table's parsed form), by
-fontTools (`ttx` round-trip byte-comparison of the tables that have a
-canonical form), and by FreeType (every glyph loads and renders to the same
-coverage as from the original face). The parse-write-parse gate over the
-whole corpus is what scores the writer for free, and a subsetter differential
-against `pyftsubset` scores the closure.
+Every writer is proven by reading its output back. **Built:** `tests/unit/test_write.cpp`
+(each table found where the directory says, with its bytes, its checksum and the
+whole-file constant; the refusals; the limits; an allocation sweep) and
+`tests/unit/test_subset.cpp` (each kept glyph is the original's by outline and
+advance; composites renumbered; side bearings; hinting removal in simple and
+composite glyphs; the closure seen to matter, with and without; retained ids
+shaping every `GSUB` and `GPOS` fixture case as the original does). Five
+mutations of the code, each breaking one thing, are each caught by a named test.
+`make check-oracle-subset` (`tools/oracle/subset_diff.py`) subsets the sfnt fonts
+of the image that it can (443 of 507: 58 are declined as CFF or variable, 6 are
+skipped for AAT shaping tables) for 17 script groups, 1,560 of which the font has
+glyphs for, and holds the result to two references: HarfBuzz
+shapes the text with the original and with the subset (retained ids), and the
+two runs must agree in every glyph, cluster, advance and offset; fontTools must
+open the subset, read every shaped glyph as the original's, and its own
+`Subsetter` (retained ids, every feature) must not keep a glyph with an outline
+that this one lacks. Result: 0 of 1,560 differ, 0 closure misses, and this
+library keeps 50 glyphs fontTools does not, of 227,614 (0.02%). `fuzz_subset`
+checks that every subset that is made loads again.
+
+**Not built:** the FreeType read-back and the `ttx` round trip of §12.5's first
+draft, and the parse-write-parse gate over the corpus (there is no face-to-builder
+path to score).
 
 ---
 
@@ -3036,7 +3085,7 @@ What that cost in findings:
 
 **Not built:** `CBDT` and `sbix` (§7.5); colour
 (§7.6);
-a `FeatureVariations` condition of format 2 (§7.7); paragraph layout, discovery and the writer; the multi-byte
+a `FeatureVariations` condition of format 2 (§7.7); paragraph layout and discovery; the `CFF` writer and layout subsetting under renumbering (§12); the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `gasp`
 and WOFF 2. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is

@@ -1148,7 +1148,7 @@ static void indic_final_reordering_syllable(GFNT_ShapeCtx * ctx,
       // If there is no halant, nothing moves. If there is, only if it is not
       // the matra's own.
       if (indic_is_halant(&info[new_pos]) && info[new_pos].position != IP_PRE_M) {
-        if (new_pos + 1 < end && indic_is_joiner(&info[new_pos + 1])) {
+        if (new_pos + 1 < end && info[new_pos + 1].category == IC_ZWJ) {
           new_pos++;
         }
       }

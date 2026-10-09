@@ -6268,6 +6268,21 @@ TEST(ShapeIndic, ALeftMatraMergesTheClustersItMovedAcrossIncludingTheBase) {
   EXPECT_EQ(g[1].cluster, 0u);
 }
 
+TEST(ShapeIndic, ALeftMatraGoesBeforeAZnjAfterTheHalantButAfterAZwj) {
+  // Devanagari U H ZWNJ I with abvs ligatures of U H (30) and I ZWNJ (31): the
+  // matra I is put after the halant and ahead of the ZWNJ. (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{5, {2}, 30}, {6, {7}, 31}});
+  Font font(small_font({{kGSUB, layout_table("dev2", -1, {{"abvs", {0}}},
+      {{4, 0, sub}})}}, 40,
+      {{0x915, 1}, {0x94D, 2}, {0x941, 5}, {0x93F, 6}, {0x200C, 7}}));
+  EXPECT_EQ(font.result, GFNT_OK);
+  Glyphs g;
+  Request request;
+  request.script = "deva";
+  EXPECT_EQ(shape(font, {0x941, 0x94D, 0x200C, 0x93F}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{30, 31}));
+}
+
 TEST(ShapeIndic, AnOldSpecRaIsGivenBlwfOnlyWhenItsHalantIsNotFollowedByAZwj) {
   // RA H ZWJ KA with a blwf substitution of RA (to 30): the ZWJ asks for an
   // explicit half form and the Ra is left alone. (HarfBuzz 10.2.0.)

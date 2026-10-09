@@ -162,6 +162,7 @@ struct GFNT_Plan {
   bool apply_kerx;            ///< The font has `kerx`: it kerns, and `GPOS` and `kern` do not run (unless below).
   bool gpos_over_kerx;        ///< ... but a font with `GSUB` and `GPOS` is positioned by the `GPOS`, not the `kerx`.
   bool kern_fallback;         ///< `GPOS` does not kern, so the `kern` table does.
+  bool kern_cross_stream;     ///< The `kern` table kerns across the line and `GPOS` does not.
   GFNT_PlanTable tables[2];   ///< GSUB, GPOS.
   uint8_t gsub_stage;         ///< The stage features are being asked for in.
   size_t gsub_stages;         ///< How many stages substitution has.

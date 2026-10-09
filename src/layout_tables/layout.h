@@ -304,7 +304,7 @@ bool gfnt_morx_present(const GFNT_Face * face, bool vertical);
  */
 GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
     bool backward, bool vertical, const struct GFNT_ShapeFeature * features,
-    size_t feature_count, GFNT_Error * error);
+    size_t feature_count, GFNT_LApply * classes, GFNT_Error * error);
 void gfnt_morx_remove_deleted(GFNT_LBuffer * buf);
 
 /* --- aat.c ------------------------------------------------------------- */

@@ -54,6 +54,7 @@ typedef struct Ctx {
   const GFNT_Reader * r;   ///< The `morx` (or `mort`) table.
   bool old;                ///< `mort`: 16-bit counts and offsets, byte-indexed states.
   GFNT_LBuffer * buf;
+  GFNT_LApply * classes;   ///< GDEF glyph classes for a swapped-in glyph, or NULL.
   size_t num_glyphs;
   bool bad;
   // The chain's flags over the clusters: [bounds[i], bounds[i + 1]) has rflags[i].
@@ -264,6 +265,15 @@ static void rearrange(Driver * d, uint16_t flags) {
   }
 }
 
+// A glyph the state machine swaps in is classed by what it is now, as GDEF
+// would class it; one it moves, copies or ligates keeps what it had.
+static void set_glyph(Ctx * c, size_t at, uint16_t glyph) {
+  c->buf->info[at].glyph = glyph;
+  if (c->classes) {
+    c->buf->info[at].props = gfnt_gdef_props(c->classes, glyph);
+  }
+}
+
 static void contextual(Driver * d, size_t entry) {
   Ctx * c = d->c;
   GFNT_LBuffer * b = c->buf;
@@ -285,7 +295,7 @@ static void contextual(Driver * d, size_t entry) {
       glyph = u16(c, d->m.start + 2 * ((size_t)mark_index
           + b->info[d->mark].glyph));
       if (!c->bad && glyph) {
-        b->info[d->mark].glyph = glyph;
+        set_glyph(c, d->mark, glyph);
       }
     }
     else {
@@ -293,7 +303,7 @@ static void contextual(Driver * d, size_t entry) {
 
       if (!c->bad && lookup_value(c, d->subst_table + off,
               b->info[d->mark].glyph, &glyph)) {
-        b->info[d->mark].glyph = glyph;
+        set_glyph(c, d->mark, glyph);
       }
     }
     // A substitution outside the table (a deleted glyph is index 0xFFFF) makes
@@ -307,7 +317,7 @@ static void contextual(Driver * d, size_t entry) {
       glyph = u16(c, d->m.start + 2 * ((size_t)current_index
           + b->info[at].glyph));
       if (!c->bad && glyph) {
-        b->info[at].glyph = glyph;
+        set_glyph(c, at, glyph);
       }
     }
     else {
@@ -315,7 +325,7 @@ static void contextual(Driver * d, size_t entry) {
 
       if (!c->bad && lookup_value(c, d->subst_table + off, b->info[at].glyph,
               &glyph)) {
-        b->info[at].glyph = glyph;
+        set_glyph(c, at, glyph);
       }
     }
     c->bad = false;
@@ -452,7 +462,6 @@ static bool insert_glyphs(Driver * d, size_t at, size_t src_glyph_index,
     }
     info = b->info[cluster_from];
     info.glyph = glyph;
-    info.props = 0;
     info.lig_props = 0;
     if (!gfnt_lbuf_insert(b, at + i, &info)) {
       b->oom = true;
@@ -628,7 +637,7 @@ static void noncontextual(Ctx * c, size_t body) {
     uint16_t glyph;
 
     if (actionable(c, i) && lookup_value(c, body, b->info[i].glyph, &glyph)) {
-      b->info[i].glyph = glyph;
+      set_glyph(c, i, glyph);
     }
     if (c->bad) {
       return;
@@ -934,7 +943,7 @@ bool gfnt_morx_present(const GFNT_Face * face, bool vertical) {
 
 GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
     bool backward, bool vertical, const GFNT_ShapeFeature * features,
-    size_t feature_count, GFNT_Error * error) {
+    size_t feature_count, GFNT_LApply * classes, GFNT_Error * error) {
   GFNT_Reader table;
   Ctx c;
   Wanted wanted[MAX_WANTED];
@@ -959,6 +968,7 @@ GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,
   c.old = old;
   c.r = &table;
   c.buf = buf;
+  c.classes = classes;
   c.num_glyphs = glyphs;
   wanted_count = collect_wanted(face, features, feature_count, wanted);
   // The clusters where a request starts or stops cut the run into ranges.

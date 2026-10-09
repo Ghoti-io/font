@@ -611,8 +611,12 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   }
   if (gfnt_morx_present(face, vertical)) {
     // Apple's state machines stand in for `GSUB`.
+    GFNT_LApply classes;
+
+    memset(&classes, 0, sizeof classes);
+    classes.gdef = &gdef;
     result = gfnt_morx_apply(face, &buf, native_rtl, vertical, options->features,
-        options->feature_count, error);
+        options->feature_count, gdef.has_glyph_classes ? &classes : NULL, error);
     if (result != GFNT_OK) {
       goto done;
     }
@@ -686,7 +690,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // A shaper that wants marks taken out of the width before positioning says so.
   if (plan.shaper->zero_width_marks == 1 && !plan.apply_kerx) {
     gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl
-        && !(plan.kern_fallback && gfnt_kern_has_cross_stream(face)));
+        && !plan.kern_cross_stream);
   }
 
   // GPOS.
@@ -766,7 +770,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // back over the base it follows.
   if (plan.shaper->zero_width_marks == 2 && !plan.apply_kerx) {
     gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl
-        && !(plan.kern_fallback && gfnt_kern_has_cross_stream(face)));
+        && !gfnt_morx_present(face, vertical)
+        && !plan.kern_cross_stream);
   }
   for (i = 0; i < buf.len; i++) {
     if ((buf.info[i].flags & GFNT_GF_DEFAULT_IGNORABLE)
@@ -783,7 +788,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // A font with no `GPOS` does not say where a mark goes, so the shaper does.
   // (Nor does Apple's `kerx`, which replaced the `GPOS` and zeroes no marks.)
   if (!plan.tables[1].present && !plan.apply_kerx
-      && !(plan.kern_fallback && gfnt_kern_has_cross_stream(face))
+      && !plan.kern_cross_stream
       && plan.shaper->fallback_position) {
     gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
         !native_rtl, !native_rtl, vertical);

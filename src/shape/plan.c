@@ -863,7 +863,8 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
   // the `kerx` kerns nothing here anyway, marks still keep their widths for it.
   plan->gpos_over_kerx = gfnt_kerx_present(face)
       && gfnt_face_has_table(face, GFNT_TAG('G', 'S', 'U', 'B'))
-      && gfnt_face_has_table(face, GFNT_TAG('G', 'P', 'O', 'S'));
+      && gfnt_face_has_table(face, GFNT_TAG('G', 'P', 'O', 'S'))
+      && !gfnt_morx_present(face, plan->vertical);
   plan->apply_kerx = gfnt_kerx_present(face)
       && !(plan->gpos_over_kerx && !plan->vertical);
   if (plan->apply_kerx && !plan->gpos_over_kerx) {
@@ -874,6 +875,11 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
   // OpenType layout, or one whose GPOS carries only marks.
   plan->kern_fallback = !plan->vertical && plan->kern_mask != 0
       && !plan->tables[1].kern_found && !plan->apply_kerx;
+  // A `kern` table that moves glyphs across the line keeps marks where they were
+  // put, whichever way the text runs.
+  plan->kern_cross_stream = (plan->vertical || plan->kern_mask != 0)
+      && !plan->tables[1].kern_found && !plan->apply_kerx
+      && gfnt_kern_has_cross_stream(face);
   if (plan->shaper->data_create) {
     plan->shaper_data = plan->shaper->data_create(plan, a);
     if (!plan->shaper_data) {

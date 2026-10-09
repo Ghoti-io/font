@@ -5929,3 +5929,79 @@ TEST(ShapeKhmer, ACoengWithNoConsonantAfterItIsABrokenClusterUnlessItFollowsOne)
   ASSERT_EQ(shape(font, V{0x1780, 0x17D2, 0x17B6}, request, &g), GFNT_OK);
   EXPECT_EQ(ids(g), (V{2, 3, 5, 4}));
 }
+
+namespace {
+
+// A GDEF whose only class is `cls` for the single glyph `glyph`.
+Bytes gdef_one_class(uint16_t glyph, uint16_t cls) {
+  Bytes gdef;
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 12);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 0);
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, glyph);
+  gfnttest::put_u16(gdef, 1);
+  gfnttest::put_u16(gdef, cls);
+  return gdef;
+}
+
+}  // namespace
+
+TEST(ShapeMorx, AGlyphTheMachineSwapsInIsClassedByGdefAndAMarkKeepsItsPlace) {
+  // A (glyph 1) becomes glyph 30, which GDEF calls a mark: the mark loses its
+  // advance, and, the font being Apple's, is not pulled back by the advance it
+  // had. (HarfBuzz 10.2.0.)
+  Bytes sub = morx_subtable(4, 0, 1, lookup6({{1, 30}}));
+  Glyphs g = shape_bytes(small_font({{GFNT_TAG('m', 'o', 'r', 'x'),
+      morx_table(1, {}, {sub})}, {GFNT_TAG('G', 'D', 'E', 'F'),
+      gdef_one_class(30, 3)}}, 40), cps("AB"));
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].glyph, 30u);
+  EXPECT_EQ(g[0].x_advance, 0);
+  EXPECT_EQ(g[0].x_offset, 0);
+  EXPECT_EQ(g[1].x_advance, 500);
+}
+
+TEST(ShapeKern, ACrossStreamKernTableKeepsAMarkWhereItIsInVerticalTextToo) {
+  // The mark (glyph 3) of a font whose kern table is cross-stream is not pulled
+  // back by its advance in vertical text, as in horizontal. (HarfBuzz 10.2.0.)
+  Font font(small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_format0({{1, 2, -100}}, 0x0005)},
+      {GFNT_TAG('G', 'D', 'E', 'F'), gdef_one_class(3, 3)}}));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  request.vertical = GFNT_DIRECTION_TTB;
+  Glyphs g;
+  ASSERT_EQ(shape(font, cps("AC"), request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[1].y_advance, 0);
+  EXPECT_EQ(g[1].y_offset, g[0].y_offset);
+}
+
+TEST(ShapeKerx, AMorxThatRunsLeavesTheKerxToPositionEvenBesideAGsubAndGpos) {
+  // The font of the test above, with a morx that applies: horizontally the morx
+  // stands for the GSUB and the kerx for the GPOS. In vertical text the GSUB runs
+  // instead of the morx, and the GPOS wins as before. (HarfBuzz 10.2.0.)
+  std::vector<uint8_t> single;
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 8);
+  gfnttest::put_u16(single, 0x0004);
+  gfnttest::put_u16(single, 40);
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 1);
+  Bytes gpos = layout_table("latn", -1, {{"kern", {0}}}, {{1, 0, single}});
+  Bytes gsub = layout_table("latn", -1, {{"liga", {0}}},
+      {{1, 0, single_delta({8}, 1)}});
+  Bytes kerx = kerx_table({kerx_pairs({{1, 2, -100}})});
+  Bytes morx = morx_table(1, {}, {morx_subtable(4, 0, 1, lookup6({{9, 31}}))});
+  Glyphs g = shape_bytes(small_font({{kGPOS, gpos}, {kGSUB, gsub},
+      {GFNT_TAG('k', 'e', 'r', 'x'), kerx}, {GFNT_TAG('m', 'o', 'r', 'x'), morx}}),
+      cps("AB"));
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].x_advance, 450);
+  EXPECT_EQ(g[1].x_advance, 450);
+}

@@ -45,19 +45,20 @@ from fontTools.varLib.varStore import VarStoreInstancer
 from fonttools_variation import axes_of, normalised, parse_location
 
 
-def half_away(value):
-    """A delta rounded the way this library rounds it: half away from zero.
+def half_up(value):
+    """A delta rounded the way this library rounds it by default: half up.
 
-    `otRound` is half *up*, so they differ on exactly the negative halves - a delta
-    of -2.5 is -3 here and -2 in fontTools - and Inter's `opsz` axis puts a scalar of
-    exactly one half at the middle of its range, where an odd delta lands on one.
-    Both rules are defensible and FreeType's and HarfBuzz's is this one, so what is
-    compared is **fontTools' unrounded delta, rounded this library's way**: the
-    arithmetic is fontTools' and only the last step is not. The value is cleaned to
-    six places first, so that a half carried as 2.4999999999 is still a half.
+    That is fontTools' `otRound` and HarfBuzz's rule; FreeType rounds half away from
+    zero, so they differ on exactly the negative halves - a delta of -2.5 is -2 here
+    and -3 in FreeType - and Inter's `opsz` axis puts a scalar of exactly one half at
+    the middle of its range, where an odd delta lands on one. What is compared is
+    **fontTools' unrounded delta, rounded this library's way**: the arithmetic is
+    fontTools' and only the last step is not. The value is cleaned to six places
+    first, so that a half carried as 2.4999999999 is still a half. (This was half
+    away from zero until the library's default became half up, 2026-10-05.)
     """
     value = round(value, 6)
-    return int(math.floor(abs(value) + 0.5)) * (1 if value >= 0 else -1)
+    return int(math.floor(value + 0.5))
 
 
 def delta_of(instancer, index):
@@ -69,7 +70,7 @@ def line_value(font, instancer, records, table, field, tag, sign=1):
     """`field` of `table`, moved by the MVAR record for `tag` if there is one."""
     base = getattr(font[table], field)
     if tag in records:
-        return base + half_away(delta_of(instancer, records[tag]))
+        return base + half_up(delta_of(instancer, records[tag]))
     return base
 
 
@@ -125,7 +126,7 @@ def main(argv):
                     print("glyph %d advance %d" % (index, glyph.width))
                 else:
                     print("glyph %d advance %d" % (
-                        index, base + half_away(glyph.width - base)))
+                        index, base + half_up(glyph.width - base)))
             except Exception as why:  # noqa: BLE001 - the reason is the output
                 print("glyph %d advance refused %s" % (index, type(why).__name__))
             source = font["glyf"][name] if "glyf" in font else None
@@ -143,7 +144,7 @@ def main(argv):
                 instancer = VarStoreInstancer(hvar.VarStore, axes, used)
                 lsb = font["hmtx"][name][1]
                 varidx = hvar.LsbMap.mapping[name]
-                print("glyph %d bearing %d" % (index, lsb + half_away(
+                print("glyph %d bearing %d" % (index, lsb + half_up(
                     delta_of(instancer, varidx))))
             else:
                 print("glyph %d bearing none" % index)
@@ -160,8 +161,10 @@ def main(argv):
             os2 = font["OS/2"]
             print("line win %d %d" % (
                 line_value(font, instancer, records, "OS/2", "usWinAscent", "hcla"),
-                -(os2.usWinDescent + (half_away(delta_of(instancer,
-                    records["hcld"])) if "hcld" in records else 0))))
+                # The descent is reported negated, so the delta is negated before
+                # it is rounded, and a half then goes the other way.
+                -os2.usWinDescent + (half_up(-delta_of(instancer,
+                    records["hcld"])) if "hcld" in records else 0)))
             print("line typo %d %d %d" % (
                 line_value(font, instancer, records, "OS/2", "sTypoAscender",
                            "tasc"),
@@ -185,7 +188,7 @@ def main(argv):
                         if delta is not None:
                             deltas[i] += delta * scalar
             print("cvt %d %s" % (len(values), " ".join(
-                str(v + half_away(d)) for v, d in zip(values, deltas))))
+                str(v + half_up(d)) for v, d in zip(values, deltas))))
     return 0
 
 

@@ -82,7 +82,7 @@ TOTAL = 60
 ALLOWANCE = {"fontTools": 0, "FreeType": 1}
 
 # **fontTools' side is its unrounded value, rounded this library's way** - see
-# fonttools_metrics.half_away() - because the two differ on exactly the negative
+# fonttools_metrics.half_up() - because the two differ on exactly the negative
 # halves and nowhere else. A glyph a composite of which has a component flagged
 # USE_MY_METRICS is a **known difference of FreeType's** that is counted under its
 # own name: FreeType takes that glyph's advance from the component, and `HVAR`

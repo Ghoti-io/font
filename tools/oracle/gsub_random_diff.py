@@ -527,7 +527,7 @@ def main(argv):
         font = os.path.join(SCRATCH, "s%d.ttf" % seed)
         text = os.path.join(SCRATCH, "s%d.txt" % seed)
         with open(font, "wb") as h:
-            h.write(base_font(nglyphs=30, cmap_map=cmap, extra={**({'GDEF': __import__('gpos_random_diff').gdef()} if GDEF_ON else {}), **({'GPOS': __import__('gpos_random_diff').build_gpos(seed)} if '--with-gpos' in argv else {}),
+            h.write(base_font(nglyphs=30, cmap_map=cmap, extra={**({'GDEF': __import__('gpos_random_diff').gdef()} if GDEF_ON else {}), **({'GPOS': __import__('gpos_random_diff').build_gpos(seed)} if '--with-gpos' in argv else {}), **(__import__('varvert_random_diff').vertical_tables(seed) if '--with-vmtx' in argv else {}),
                 'GSUB': build_gsub(seed, GLYPHS, tags, old_spec=old, langs=langs, scriptset=scriptset,
                                    script_tag=OTHER[script][1] if script in OTHER else None)}))
         with open(text, "w", encoding="utf-8") as h:

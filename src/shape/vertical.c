@@ -81,7 +81,6 @@ bool gfnt_vertical_advance(const GFNT_Face * face, uint32_t glyph,
   GFNT_Reader vmtx;
   size_t advances;
   uint16_t advance = 0;
-  size_t glyphs = 0;
 
   if (!vertical_vmtx(face, &vmtx, &advances)) {
     int32_t ascent;
@@ -89,11 +88,11 @@ bool gfnt_vertical_advance(const GFNT_Face * face, uint32_t glyph,
     *out_advance = -vertical_line(face, variation, &ascent);
     return true;
   }
-  if (gfnt_face_num_glyphs(face, &glyphs, NULL) == GFNT_OK && glyph >= glyphs) {
-    uint16_t upem = 1000;
-
-    (void)gfnt_face_units_per_em(face, &upem, NULL);
-    *out_advance = -(int32_t)upem;
+  // A glyph past the metrics the table has - its long metrics and the bearings
+  // after them - has no advance at all.
+  if (vmtx.length >= advances * 4
+      && glyph >= advances + (vmtx.length - advances * 4) / 2) {
+    *out_advance = 0;
     return true;
   }
   if (gfnt_reader_u16_at(&vmtx, (glyph < advances ? glyph : advances - 1) * 4,

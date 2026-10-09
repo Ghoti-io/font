@@ -37,6 +37,22 @@ def s16(v):
     return u16(v & 0xFFFF)
 
 
+def vertical_tables(seed, n=30):
+    """A `vhea`, `vmtx` (and in some fonts a `VORG`) of random values, for other generators."""
+    r = random.Random(seed * 3 + 11)
+    nv = r.randint(1, n)
+    vhea = (u32(0x10000) + s16(r.randint(300, 900)) + s16(-r.randint(200, 800)) + s16(0)
+            + u16(1500) + s16(0) * 3 + s16(1) + s16(0) * 2 + s16(0) * 4 + s16(0) + u16(nv))
+    vmtx = (b''.join(u16(r.randint(300, 1500)) + s16(r.randint(-100, 300)) for _ in range(nv))
+            + b''.join(s16(r.randint(-100, 300)) for _ in range(n - nv)))
+    tables = {'vhea': vhea, 'vmtx': vmtx}
+    if r.random() < .4:
+        ms = sorted(r.sample(range(1, n), r.randint(0, 3)))
+        tables['VORG'] = u16(1, 0) + s16(r.randint(300, 1200)) + u16(len(ms)) + b''.join(
+            u16(g) + s16(r.randint(-100, 1300)) for g in ms)
+    return tables
+
+
 def main(argv):
     seeds, first, driver, scratch = 200, 0, G.DRIVER, SCRATCH
     for i, a in enumerate(argv):

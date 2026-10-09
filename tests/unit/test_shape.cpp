@@ -2245,7 +2245,7 @@ TEST(ShapeVertical, AnXAdvanceAdjustmentIsLeftOutOfVerticalText) {
 }
 
 TEST(ShapeVertical, AdvancesComeFromVmtxAndTheOriginFromVorg) {
-  Glyphs g = shape_vertical(small_font(vertical_tables(1, true)), cps("AB"),
+  Glyphs g = shape_vertical(small_font(vertical_tables(8, true)), cps("AB"),
       GFNT_DIRECTION_TTB);
   // Down is negative. The pen sits half the glyph's width across and at VORG's
   // height, so the glyph moves left by 250 and down by that height.
@@ -2282,7 +2282,7 @@ TEST(ShapeVertical, AVvarMovesTheAdvanceHeightAtALocation) {
   gfnttest::put_s16(vvar, 100);
   gfnttest::put_s16(vvar, -50);
   gfnttest::put_s16(vvar, 0);
-  std::vector<gfnttest::Table> tables = vertical_tables(1, true);
+  std::vector<gfnttest::Table> tables = vertical_tables(8, true);
   tables.push_back({GFNT_TAG('f', 'v', 'a', 'r'), one_axis_fvar()});
   tables.push_back({GFNT_TAG('V', 'V', 'A', 'R'), vvar});
   Font font(small_font(tables, 8, {}));
@@ -2455,8 +2455,19 @@ TEST(ShapeMarks, AFontWithFvarAndOutlinesButNoGvarPlacesItsMarksAsAtTheDefault) 
   EXPECT_NE(plain[1].x_offset, 0);
 }
 
+TEST(ShapeVertical, AGlyphThatVmtxHasNoMetricForHasNoAdvance) {
+  // vmtx here holds one long metric and nothing after it: glyph 0 has the advance,
+  // glyphs 1 and 2 are past what the table says and have none, and a glyph the font
+  // does not have has none either. (HarfBuzz 10.2.0.)
+  Glyphs g = shape_vertical(small_font(vertical_tables(1, false), 8,
+      {{'0', 100}}), V{'A', '0'}, GFNT_DIRECTION_TTB);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].y_advance, 0);
+  EXPECT_EQ(g[1].y_advance, 0);
+}
+
 TEST(ShapeVertical, WithoutVorgTheOriginIsTheAscender) {
-  Glyphs g = shape_vertical(small_font(vertical_tables(1, false)), cps("A"),
+  Glyphs g = shape_vertical(small_font(vertical_tables(8, false)), cps("A"),
       GFNT_DIRECTION_TTB);
   EXPECT_EQ(g, (Glyphs{{1, 0, 0, -700, -250, -800}}));
 }
@@ -2468,7 +2479,7 @@ TEST(ShapeVertical, WithoutVmtxAnAdvanceIsTheHeightOfTheLine) {
 }
 
 TEST(ShapeVertical, BottomToTopComesBackInVisualOrder) {
-  Glyphs g = shape_vertical(small_font(vertical_tables(1, true)), cps("AB"),
+  Glyphs g = shape_vertical(small_font(vertical_tables(8, true)), cps("AB"),
       GFNT_DIRECTION_BTT);
   EXPECT_EQ(g, (Glyphs{{2, 1, 0, -700, -250, -760}, {1, 0, 0, -700, -250, -880}}));
 }
@@ -2486,7 +2497,7 @@ TEST(ShapeVertical, TheVertFeatureReplacesTheHorizontalOnes) {
 }
 
 TEST(ShapeVertical, AVerticalFormStandsInWhereTheFontHasNoVertFeature) {
-  Glyphs g = shape_vertical(small_font(vertical_tables(1, false), 8,
+  Glyphs g = shape_vertical(small_font(vertical_tables(8, false), 8,
                                 {{0xFF08, 6}, {0xFE35, 7}}),
       {0xFF08}, GFNT_DIRECTION_TTB);
   EXPECT_EQ(g[0].glyph, 7u);

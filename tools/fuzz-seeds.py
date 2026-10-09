@@ -197,6 +197,37 @@ def post(version=0x00030000):
                        0)
 
 
+def woff(sfnt, compress):
+    """The sfnt in @p sfnt wrapped as a WOFF 1, tables stored or zlib-compressed.
+
+    A seed, not an expectation: the tests and the fixtures are the authority on the
+    format, and this only has to be a valid input for the harness to start from.
+    """
+    import zlib
+
+    flavour, count = struct.unpack(">IH", sfnt[:6])
+    entries = []
+    for i in range(count):
+        t, csum, offset, length = struct.unpack(">4sIII", sfnt[12 + 16 * i:28 + 16 * i])
+        entries.append((t, csum, sfnt[offset:offset + length]))
+    entries.sort()
+    cursor = 44 + 20 * count
+    directory = b""
+    body = b""
+    for t, csum, table in entries:
+        stored = zlib.compress(table, 9) if compress else table
+        if len(stored) >= len(table):
+            stored = table
+        directory += struct.pack(">4sIIII", t, cursor + len(body), len(stored),
+                                 len(table), csum)
+        body += stored + b"\0" * (-len(stored) % 4)
+    total = 12 + 16 * count + sum(len(t) + (-len(t) % 4) for _, _, t in entries)
+    head = struct.pack(">4sIIHHIHHIIIII", b"wOFF", flavour,
+                       44 + len(directory) + len(body), count, 0, total,
+                       1, 0, 0, 0, 0, 0, 0)
+    return head + directory + body
+
+
 def write(path, options, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(bytes([options]) + payload)
@@ -588,6 +619,8 @@ def main():
     write(corpus / "sfnt/latin.seed", 0x00, font(latin))
     write(corpus / "sfnt/astral-dumped.seed", 0x40, font(astral))
     write(corpus / "sfnt/capped.seed", 0x0F, font(latin))
+    write(corpus / "sfnt/woff-stored.seed", 0x00, woff(font(latin), False))
+    write(corpus / "sfnt/woff-compressed.seed", 0x00, woff(font(latin), True))
     write(corpus / "sfnt/collection.seed", 0x10,
           collection([latin, {"head": head(2048), "maxp": maxp(2)}]))
     write(corpus / "sfnt/cff-flavoured.seed", 0x00,

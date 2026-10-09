@@ -109,8 +109,8 @@ struct GFNT_Face {
    * The blob the directory's offsets are in, which is usually `blob` itself.
    *
    * A container whose font program has to be *derived* before it can be read -
-   * Type 1, whose private portion is `eexec`-encrypted, and WOFF when it arrives
-   * - builds those bytes into a blob of its own, and then the directory
+   * Type 1, whose private portion is `eexec`-encrypted, and a WOFF, whose sfnt
+   * has to be put back together - builds those bytes into a blob of its own, and then the directory
    * describes that one. Every parser reads through here, so nothing above this
    * struct has to know which kind of face it has.
    */

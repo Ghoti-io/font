@@ -3364,6 +3364,63 @@ def gzip_bytes(data):
     return gzip.compress(data, compresslevel=9, mtime=0)
 
 
+def build_woff_basic(out):
+    """`basic.ttf` as fontTools writes a WOFF 1: tables zlib-compressed one by one.
+
+    The reader must rebuild the sfnt it wraps, so every question asked of
+    `basic.ttf` has the same answer here; the unit test asserts exactly that, glyph
+    by glyph. fontTools stores a table uncompressed when compressing it does not
+    make it smaller, so this file has both kinds of table in it for free.
+    `recalcTimestamp` is off because the default stamps `head` with the clock, and
+    a fixture that differs on every run fails `check-fixtures` on the second one.
+    """
+    from fontTools.ttLib import TTFont
+
+    build_basic(out + ".plain")
+    font = TTFont(out + ".plain", recalcTimestamp=False)
+    font.flavor = "woff"
+    font.save(out)
+    os.remove(out + ".plain")
+
+
+def build_woff_stored(out):
+    """`basic.ttf` in a WOFF whose every table is stored as it is.
+
+    Written here and not by fontTools, so that the stored arm (compressed length
+    equal to the original) is exercised for every table and by a writer that is not
+    the one the other fixture came from. Tables are padded to four bytes in the
+    file, as the specification asks, and the header's `totalSfntSize` is the size of
+    the sfnt put back.
+    """
+    import struct
+
+    build_basic(out + ".plain")
+    with open(out + ".plain", "rb") as handle:
+        data = handle.read()
+    os.remove(out + ".plain")
+    flavor, count = struct.unpack(">IH", data[:6])
+    entries = []
+    for i in range(count):
+        tag, checksum, offset, length = struct.unpack(
+            ">4sIII", data[12 + 16 * i:28 + 16 * i])
+        entries.append((tag, checksum, data[offset:offset + length]))
+    entries.sort()
+    header = 44
+    cursor = header + 20 * count
+    directory = b""
+    body = b""
+    for tag, checksum, table in entries:
+        directory += struct.pack(">4sIIII", tag, cursor + len(body),
+                                 len(table), len(table), checksum)
+        body += table + b"\0" * (-len(table) % 4)
+    total_sfnt = 12 + 16 * count + sum(len(t) + (-len(t) % 4) for _, _, t in entries)
+    length = header + len(directory) + len(body)
+    head = struct.pack(">4sIIHHIHHIIIII", b"wOFF", flavor, length, count, 0,
+                       total_sfnt, 1, 0, 0, 0, 0, 0, 0)
+    with open(out, "wb") as handle:
+        handle.write(head + directory + body)
+
+
 def build_bitmap_gz_pcf(out):
     """The PCF that `bitmap.pcf` is, in the wrapper PCFs actually ship in.
 
@@ -3934,6 +3991,15 @@ FIXTURES = {
         "first fixture in this library with more than one strike, so the first "
         "input where GFNT_STRIKE_NEAREST has to choose; 11 ppem is a tie between "
         "two of them, and glyph 0 is in none of them"),
+    "woff-basic.woff": (build_woff_basic,
+        "basic.ttf as a WOFF 1 written by fontTools, tables zlib-compressed one "
+        "at a time (some stored, because compressing did not help): the reader "
+        "rebuilds the sfnt, so every answer is basic.ttf's"),
+    "woff-stored.woff": (build_woff_stored,
+        "basic.ttf in a WOFF 1 whose every table is stored uncompressed, written "
+        "by this generator rather than by fontTools: the compressed length equals "
+        "the original length for every table, which is the arm a compressing "
+        "writer rarely takes"),
     "bitmap-gz.pcf.gz": (build_bitmap_gz_pcf,
         "The same PCF as bitmap.pcf inside gzip, which is how every PCF in the "
         "world ships: it must read to identical glyphs, because the wrapper "

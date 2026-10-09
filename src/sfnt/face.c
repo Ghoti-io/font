@@ -36,6 +36,7 @@
 #include <ghoti.io/font/macros.h>
 #include "../bitmap/bitmap.h"
 #include "../blob/gzip.h"
+#include "../blob/woff.h"
 #include "../type1/type1.h"
 #include "sfnt.h"
 
@@ -166,6 +167,12 @@ static GFNT_Result gfnt_face_count_bytes(const GFNT_Blob * blob,
       return result;
     }
     *out_count = count;
+    return GFNT_OK;
+  }
+  // A WOFF 1 file holds one font, like an ordinary sfnt; whether its tables
+  // inflate is for the load to say.
+  if (tag == GFNT_WOFF_SIGNATURE) {
+    *out_count = 1;
     return GFNT_OK;
   }
 
@@ -342,6 +349,26 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
     if (result != GFNT_OK) {
       return result;
     }
+    source = inflated;
+    result = gfnt_reader_init_blob(&reader, source, 0, error);
+    if (result != GFNT_OK) {
+      gfnt_blob_destroy(inflated);
+      return result;
+    }
+  }
+  // WOFF 1 is the same kind of thing: a wrapper whose undoing produces an
+  // ordinary sfnt, so it happens here, after any gzip layer and before the
+  // flavour is read, and the face owns the rebuilt bytes in place of the file's.
+  if (gfnt_woff_looks_like(&reader)) {
+    GFNT_Blob * rebuilt = NULL;
+
+    result = gfnt_woff_to_sfnt(source, &effective, allocator, &rebuilt, error);
+    if (result != GFNT_OK) {
+      gfnt_blob_destroy(inflated);
+      return result;
+    }
+    gfnt_blob_destroy(inflated);
+    inflated = rebuilt;
     source = inflated;
     result = gfnt_reader_init_blob(&reader, source, 0, error);
     if (result != GFNT_OK) {

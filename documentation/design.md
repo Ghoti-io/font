@@ -6,7 +6,7 @@ and the standalone bitmap formats, rasterises an outline, and shapes text throug
 `GSUB`, `GPOS`, `kern` and Apple's `morx`/`kerx`/`trak`, with a shaper for each
 script that needs one and a bidi-aware shaping call (§9; §18 is the list and says
 what is not built). Paragraph layout, font discovery and writing are not
-implemented, nor are WOFF, colour and the PNG strikes. Layout and the script shapers
+implemented, nor are WOFF 2, colour and the PNG strikes. Layout and the script shapers
 need the `unicode` library. Reading a file, drawing an outline and applying a
 font's lookups do not.
 
@@ -118,7 +118,7 @@ which of them this library takes, and which of those it reads today.
 | Family | Formats | Verdict |
 | --- | --- | --- |
 | **sfnt-wrapped** | `.ttf`, `.otf`, `.ttc`/`.otc` | **required.** The container, the metric tables, `cmap`, `name`, `glyf` and `CFF ` are implemented |
-| | WOFF 1 | **required**, not implemented |
+| | WOFF 1 | **implemented** (§7.1): the tables are inflated and the sfnt put back before the directory is read; the metadata and private blocks are not read |
 | | `EBDT`/`EBLC`/`EBSC` strikes | **implemented** (grey depths are listed and their data declined) |
 | | `COLR` v0 + `CPAL` | **wanted**, not implemented |
 | | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | wanted, not implemented; colour bitmaps need `image` |
@@ -372,10 +372,13 @@ directory cache; the `DSIG` in a 2.0 header is skipped. A face is
 
 **WOFF 1.** The header, the table directory with `compLength`/`origLength`,
 per-table zlib inflation through `compress`, into a reconstructed sfnt blob
-that the ordinary path then reads. The metadata and private blocks are exposed
-as bytes. **WOFF 2** is not here: it needs Brotli, which belongs in `compress`
-as an eighth method, and it transforms `glyf`/`loca` and `hmtx` in ways that
-are a second reader. It is not implemented.
+that the ordinary path then reads. **Implemented** (`src/blob/woff.c`), as a
+wrapper undone beside gzip's in `gfnt_face_load()`: the reserved field, the length,
+the tag order, every table's extent and each inflated length are checked, the
+rebuilt sfnt is held to the file-size limit, and the directory's checksums are
+carried over and not enforced. The metadata and private blocks are not read.
+**WOFF 2** is not here: it needs Brotli (which `compress` has since gained), and
+it transforms `glyf`/`loca` and `hmtx` in ways that are a second reader.
 
 **PCF, BDF, PSF, `.hex`** are their own containers and their own glyph sources,
 read through the same reader (PCF, PSF) or the line reader (BDF, `.hex`). Each
@@ -604,8 +607,8 @@ program is `eexec`-encrypted and a PFA's is ASCII-hex on top of that, so there i
 nothing for a reader to point at. A face therefore has two blob fields - `bytes`
 is where the directory's offsets are and `owned` is what it must free - and the
 loader decrypts the whole program into a blob of its own before the directory is
-synthesised. WOFF will want exactly that when it arrives, for the same reason at
-one remove: its tables are compressed.
+synthesised. WOFF 1 uses exactly that, for the same reason at one remove: its
+tables are compressed.
 
 - **Not a PostScript interpreter.** The scanner knows what a font program
   contains - names, numbers, arrays, procedures it skips, strings, and the
@@ -3031,7 +3034,7 @@ What that cost in findings:
 (§7.6);
 a `FeatureVariations` condition of format 2 (§7.7); paragraph layout, discovery and the writer; the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `gasp`
-and WOFF 1 and 2. `maxp` has no `_dump` because nothing
+and WOFF 2. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is
 **still only its enum, and now deliberately rather than for want of a second
 arm**: there are two kinds of glyph data, and each has an accessor of its own -

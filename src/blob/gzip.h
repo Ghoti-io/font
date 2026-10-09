@@ -41,9 +41,9 @@
  * it consumed once it has read it. ::gfnt_face_adopt_bytes() is what makes that
  * safe.
  *
- * WOFF wants `compress` too and will not come through here: its tables are
- * compressed one at a time, with zlib rather than gzip, and reconstructing the
- * sfnt is a container's work rather than a wrapper's.
+ * WOFF 1 wants `compress` too and does not come through here: its tables are
+ * compressed one at a time, with zlib rather than gzip. It is the same kind of
+ * wrapper, undone next to this one in ::gfnt_face_load() (woff.h).
  */
 
 #ifndef GHOTI_IO_GFNT_GZIP_H

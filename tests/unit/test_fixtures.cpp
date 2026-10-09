@@ -143,6 +143,8 @@ const std::vector<Entry> & every_fixture() {
       // The two gzipped fixtures. Each must answer exactly as the uncompressed one
       // does, which is asserted glyph by glyph in test_bitmap.cpp and test_type1.cpp;
       // here they are simply two more fixtures that have to load and count.
+      {"woff-basic.woff", kNumGlyphs},
+      {"woff-stored.woff", kNumGlyphs},
       {"bitmap-gz.pcf.gz", 8, false},
       {"type1-gz.pfb.gz", 8},
       {"bitmap-ink.bdf", 5, false},

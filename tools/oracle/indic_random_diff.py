@@ -500,7 +500,7 @@ def main(argv):
                 if (shown < 6 or ROLES_TEXT) and "-v" in argv:
                     shown += 1
                     print("seed", seed, script, tag, feat, ' '.join('%X' % ord(c) for c in txt[i]),
-                          "\n  hb ", [t[0] for t in norm(a)], "\n  our", [t[0] for t in norm(b)])
+                          "\n  hb ", [(t[0], t[1]) + tuple(t[2:]) for t in norm(a)], "\n  our", [(t[0], t[1]) + tuple(t[2:]) for t in norm(b)])
         if seed_bad:
             badseeds.append(seed)
     print("indic_random_diff: %d seeds from %d, %d strings, %d differ, %d skipped"

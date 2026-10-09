@@ -6184,6 +6184,13 @@ TEST(ShapeIndic, AVatuFormPutsAConsonantBelowTheBaseInTeluguButNotInDevanagari) 
                 {0x915, 0x94D, 0x915, 0x941}), (V{1, 30, 5}));
 }
 
+TEST(ShapeIndic, AKannadaSyllableStartingRaHalantZwjIsShapedAsRaZwjHalant) {
+  // A cjct ligature of RA ZWJ H (30) matches RA H ZWJ in Kannada. (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{3, {4, 2}, 30}});
+  EXPECT_EQ(shape_indic_run("knda", "cjct", sub, 0xC80, "knda",
+                {0xCB0, 0xCCD, 0x200D}), (V{30}));
+}
+
 TEST(ShapeIndic, AnOldSpecRaIsGivenBlwfOnlyWhenItsHalantIsNotFollowedByAZwj) {
   // RA H ZWJ KA with a blwf substitution of RA (to 30): the ZWJ asks for an
   // explicit half form and the Ra is left alone. (HarfBuzz 10.2.0.)

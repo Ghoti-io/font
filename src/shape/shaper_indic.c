@@ -562,6 +562,22 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   uint64_t below = 0;
   size_t i;
 
+  // Kannada: a syllable that starts with Ra, halant, ZWJ is shaped as Ra, ZWJ,
+  // halant (found with a mask and a pair comparison: the first shows what the
+  // second does). The clusters stay where they were.
+  if (config->virama == 0x0CCD && start + 3 <= end
+      && info[start].category == IC_RA && info[start + 1].category == IC_H
+      && info[start + 2].category == IC_ZWJ) {
+    GFNT_LInfo swap = info[start + 1];
+    uint32_t cluster = info[start + 1].cluster;
+
+    info[start + 1] = info[start + 2];
+    info[start + 1].cluster = cluster;
+    cluster = info[start + 2].cluster;
+    info[start + 2] = swap;
+    info[start + 2].cluster = cluster;
+  }
+
   // 1. Find the base consonant. If the syllable starts with Ra and a halant that
   // the font forms a reph from, the Ra is out of the running.
   if (data->mask[IF_RPHF] && start + 3 <= end
@@ -619,9 +635,6 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
           // form. One before a halant asks for a subjoined form, so it goes on.
           if (start < i && info[i].category == IC_ZWJ
               && info[i - 1].category == IC_H) {
-            if (seen_below) {
-              base = end;
-            }
             break;
           }
         }
@@ -780,8 +793,16 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
       mask |= data->mask[IF_BLWF];
     }
     for (i = start; i < base; i++) {
+      // A ZWJ after the halant asks for a half form: neither the consonant nor
+      // the halant goes below the base (found with a ligature for every pair).
+      bool asks_half = info[i].category == IC_H
+          ? i + 1 < end && info[i + 1].category == IC_ZWJ
+          : i + 2 < end && info[i + 1].category == IC_H
+              && info[i + 2].category == IC_ZWJ;
+
       info[i].mask |= mask;
       if (config->blwf_mode == BLWF_PRE_AND_POST && data->is_old_spec
+          && !asks_half
           && ((info[i].category == IC_RA && config->virama == 0x094D
                   && i + 1 < end && info[i + 1].category == IC_H
                   && !(i + 2 < end && info[i + 2].category == IC_ZWJ))

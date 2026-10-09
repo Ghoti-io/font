@@ -6063,3 +6063,144 @@ TEST(ShapeMorx, AThaiMarkKeepsItsWidthAndAKernSkipsItBecauseItIsClassed) {
   EXPECT_EQ(g[1].x_offset, 0);
   EXPECT_EQ(g[0].x_advance, 475);
 }
+
+namespace {
+
+// A ligature subtable: first glyph, the rest of its components, the glyph made.
+struct HandLig {
+  uint16_t first;
+  std::vector<uint16_t> rest;
+  uint16_t out;
+};
+
+Bytes lig_subtable(std::vector<HandLig> ligs) {
+  std::vector<uint16_t> firsts;
+  for (const HandLig & l : ligs) {
+    if (std::find(firsts.begin(), firsts.end(), l.first) == firsts.end()) {
+      firsts.push_back(l.first);
+    }
+  }
+  std::sort(firsts.begin(), firsts.end());
+  std::vector<Bytes> sets;
+  for (uint16_t f : firsts) {
+    std::vector<Bytes> items;
+    for (const HandLig & l : ligs) {
+      if (l.first == f) {
+        Bytes item;
+        gfnttest::put_u16(item, l.out);
+        gfnttest::put_u16(item, static_cast<uint16_t>(l.rest.size() + 1));
+        for (uint16_t c : l.rest) {
+          gfnttest::put_u16(item, c);
+        }
+        items.push_back(item);
+      }
+    }
+    Bytes set;
+    gfnttest::put_u16(set, static_cast<uint16_t>(items.size()));
+    size_t at = 2 + 2 * items.size();
+    for (const Bytes & i : items) {
+      gfnttest::put_u16(set, static_cast<uint16_t>(at));
+      at += i.size();
+    }
+    for (const Bytes & i : items) {
+      set.insert(set.end(), i.begin(), i.end());
+    }
+    sets.push_back(set);
+  }
+  Bytes coverage;
+  gfnttest::put_u16(coverage, 1);
+  gfnttest::put_u16(coverage, static_cast<uint16_t>(firsts.size()));
+  for (uint16_t f : firsts) {
+    gfnttest::put_u16(coverage, f);
+  }
+  Bytes out;
+  gfnttest::put_u16(out, 1);
+  size_t header = 6 + 2 * firsts.size();
+  gfnttest::put_u16(out, static_cast<uint16_t>(header));
+  gfnttest::put_u16(out, static_cast<uint16_t>(firsts.size()));
+  size_t at = header + coverage.size();
+  for (const Bytes & s : sets) {
+    gfnttest::put_u16(out, static_cast<uint16_t>(at));
+    at += s.size();
+  }
+  out.insert(out.end(), coverage.begin(), coverage.end());
+  for (const Bytes & s : sets) {
+    out.insert(out.end(), s.begin(), s.end());
+  }
+  return out;
+}
+
+// KA 1, the halant 2, RA 3, ZWJ 4, the U matra 5; the script block begins at `base`.
+V shape_indic_run(const char * layout_script, const char * feature,
+    const Bytes & lookup_sub, uint32_t base, const char * script,
+    const std::vector<uint32_t> & text, uint16_t lookup_type = 4) {
+  Font font(small_font({{kGSUB, layout_table(layout_script, -1,
+      {{feature, {0}}}, {{lookup_type, 0, lookup_sub}})}}, 40,
+      {{base + 0x15, 1}, {base + 0x4D, 2}, {base + 0x30, 3}, {0x200D, 4},
+          {base + 0x41, 5}}));
+  EXPECT_EQ(font.result, GFNT_OK);
+  Glyphs g;
+  Request request;
+  request.script = script;
+  EXPECT_EQ(shape(font, text, request, &g), GFNT_OK);
+  return ids(g);
+}
+
+}  // namespace
+
+TEST(ShapeIndic, CjctReachesAJoinerStandingAlone) {
+  // The feature is global, so even a lone ZWJ is substituted (and so not hidden).
+  Bytes single;
+  gfnttest::put_u16(single, 2);
+  gfnttest::put_u16(single, 8);
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 30);
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 4);
+  EXPECT_EQ(shape_indic_run("dev2", "cjct", single, 0x900, "deva", {0x200D}, 1),
+      (V{30}));
+}
+
+TEST(ShapeIndic, AnOldSpecHalantMovesAfterTheLastConsonantEvenBeforeAFinalHalantButNotInKannada) {
+  // KA H KA H with a pstf ligature of KA H (30) and one of H KA (31): the first
+  // halant goes after the second consonant in every old-spec script but Kannada,
+  // where a halant at the end keeps it where it is. (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{1, {2}, 30}, {2, {1}, 31}});
+  EXPECT_EQ(shape_indic_run("deva", "pstf", sub, 0x900, "deva",
+                {0x915, 0x94D, 0x915, 0x94D}), (V{1, 30, 2}));
+  EXPECT_EQ(shape_indic_run("knda", "pstf", sub, 0xC80, "knda",
+                {0xC95, 0xCCD, 0xC95, 0xCCD}), (V{1, 31, 2}));
+}
+
+TEST(ShapeIndic, AVatuFormPutsAConsonantBelowTheBaseInTeluguButNotInDevanagari) {
+  // KA H KA U with a vatu ligature of H KA (30): in Telugu the second KA is below
+  // the base, so the sign U, which belongs after the base, comes before the pair;
+  // in a new-spec Devanagari font it does not count. (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{2, {1}, 30}});
+  EXPECT_EQ(shape_indic_run("tel2", "vatu", sub, 0xC00, "tel2",
+                {0xC15, 0xC4D, 0xC15, 0xC41}), (V{1, 5, 30}));
+  EXPECT_EQ(shape_indic_run("dev2", "vatu", sub, 0x900, "deva",
+                {0x915, 0x94D, 0x915, 0x941}), (V{1, 30, 5}));
+}
+
+TEST(ShapeIndic, AnOldSpecRaIsGivenBlwfOnlyWhenItsHalantIsNotFollowedByAZwj) {
+  // RA H ZWJ KA with a blwf substitution of RA (to 30): the ZWJ asks for an
+  // explicit half form and the Ra is left alone. (HarfBuzz 10.2.0.)
+  Bytes single;
+  gfnttest::put_u16(single, 2);
+  gfnttest::put_u16(single, 8);
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 30);
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 3);
+  V with_zwj = shape_indic_run("deva", "blwf", single, 0x900, "deva",
+      {0x930, 0x94D, 0x200D, 0x915}, 1);
+  V without = shape_indic_run("deva", "blwf", single, 0x900, "deva",
+      {0x930, 0x94D, 0x915}, 1);
+  ASSERT_FALSE(with_zwj.empty());
+  ASSERT_FALSE(without.empty());
+  EXPECT_EQ(with_zwj[0], 3u);
+  EXPECT_EQ(without[0], 30u);
+}

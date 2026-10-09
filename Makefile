@@ -1026,6 +1026,14 @@ check-oracle-gsub: $(EXAMPLES)
 	@for d in ttb btt; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --with-vmtx --direction $$d --seeds 300 || exit 1; \
 	done
+	@for f in nukt akhn rphf rkrf pref blwf abvf half pstf vatu cjct init pres abvs blws psts haln; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/indic_random_diff.py --scripts deva,beng,guru,gujr,orya,taml,telu,mlym \
+	    --feat $$f --reveal --seeds 160 || exit 1; \
+	done
+	@for f in half cjct abvf akhn rkrf nukt pres; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/indic_random_diff.py --scripts deva,beng,guru,gujr,orya,taml,telu,mlym \
+	    --feat $$f --reveal --pairs --seeds 160 || exit 1; \
+	done
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --scriptsets --seeds 300
 	@for s in hang khmr sinh arab; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/gsub_random_diff.py --script $$s --direction ttb --seeds 200 || exit 1; \

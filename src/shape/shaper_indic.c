@@ -86,7 +86,7 @@ typedef struct IndicFeature {
 static const IndicFeature indic_features[IF_COUNT] = {
   {"nukt", true}, {"akhn", true}, {"rphf", false}, {"rkrf", true},
   {"pref", false}, {"blwf", false}, {"abvf", false}, {"half", false},
-  {"pstf", false}, {"vatu", true}, {"cjct", false}, {"init", false},
+  {"pstf", false}, {"vatu", true}, {"cjct", true}, {"init", false},
   {"pres", true}, {"abvs", true}, {"blws", true}, {"psts", true},
   {"haln", true},
 };
@@ -517,9 +517,14 @@ static int indic_consonant_position(const GFNT_ShapeCtx * ctx,
       || indic_would(ctx, data, IF_PREF, glyphs + 1, 2)) {
     return IP_POST_C;
   }
-  if (indic_would(ctx, data, IF_VATU, glyphs, 2)
-      || indic_would(ctx, data, IF_VATU, glyphs + 1, 2)) {
-    return IP_POST_C;
+  // A `vatu` form counts in an old-spec font, and in a new-spec one for Oriya,
+  // Telugu and Kannada only (found with a ligature for every pair of glyphs under
+  // `vatu`, in every script): it puts the consonant below the base.
+  if ((data->is_old_spec || data->config->virama == 0x0B4D
+          || data->config->virama == 0x0C4D || data->config->virama == 0x0CCD)
+      && (indic_would(ctx, data, IF_VATU, glyphs, 2)
+          || indic_would(ctx, data, IF_VATU, glyphs + 1, 2))) {
+    return IP_BELOW_C;
   }
   return IP_BASE_C;
 }
@@ -692,10 +697,12 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   }
 
   // For old-style script tags, the first post-base halant moves to after the last
-  // consonant. Uniscribe does this in Malayalam whatever is there, and in the
-  // rest only when the last consonant has no halant after it.
+  // consonant, whatever is there, except in Kannada, which leaves it where it is
+  // when the syllable ends in a halant.
   if (data->is_old_spec) {
-    bool disallow_double_halants = !data->malayalam;
+    // Only Kannada leaves it where it is when the syllable ends in a halant
+    // (found with a ligature for every pair of glyphs, in every script).
+    bool disallow_double_halants = config->virama == 0x0CCD;
 
     for (i = base + 1; i < end; i++) {
       if (info[i].category == IC_H) {
@@ -775,11 +782,14 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     for (i = start; i < base; i++) {
       info[i].mask |= mask;
       if (config->blwf_mode == BLWF_PRE_AND_POST && data->is_old_spec
-          && ((info[i].category == IC_RA && config->virama == 0x094D)
+          && ((info[i].category == IC_RA && config->virama == 0x094D
+                  && i + 1 < end && info[i + 1].category == IC_H
+                  && !(i + 2 < end && info[i + 2].category == IC_ZWJ))
               || indic_below_bit(below, start, i)
               || (info[i].category == IC_H
                   && ((i > start && ((info[i - 1].category == IC_RA
-                          && config->virama == 0x094D)
+                          && config->virama == 0x094D
+                          && !(i + 1 < end && info[i + 1].category == IC_ZWJ))
                           || indic_below_bit(below, start, i - 1)))
                       || (i + 1 < base && indic_below_bit(below, start, i + 1)))))) {
         info[i].mask |= data->mask[IF_BLWF];

@@ -1429,9 +1429,9 @@ produced by subsetting. It needs the reader and nothing else. **Built**
 (`write.h`, `src/write/`): the sfnt serialiser (§12.1: table ordering, padding,
 directory search fields, checksums and `head.checkSumAdjustment`; the table set
 is supplied as bytes), the WOFF 1 writer (§12.4), and a subsetter for static
-TrueType-outline fonts (§12.3). The `CFF` writer, subsetting of `CFF`, variable
-fonts and layout tables under renumbering, the BDF writer and the PDF helpers
-are **not** built.
+TrueType-outline fonts (§12.3), which carries or rewrites the layout tables. The
+`CFF` writer, subsetting of `CFF` and of variable fonts, the Apple shaping tables,
+the BDF writer and the PDF helpers are **not** built.
 
 ### 12.1 The sfnt serialiser
 
@@ -1474,11 +1474,35 @@ which is what a PDF `CIDFontType2` with an identity `CIDToGIDMap` needs).
 ids renumbered; instructions removed on `drop_hinting`), `cmap` (formats 4 and
 12 in the Unicode and Windows records, for the requested characters only),
 `post` (format 3), `OS/2` (character range updated), `name`, `gasp` and the
-hinting tables are written. With `retain_gids` the ids have not moved, so
-`GSUB`, `GPOS`, `GDEF`, `kern` and the vertical metrics are carried over
-verbatim (`drop_layout` turns that off). **Without it the layout tables are
-dropped**: pruning and renumbering every glyph reference in them is the hard
-part and is not built.
+hinting tables are written. The layout tables - `GSUB`, `GPOS`, `GDEF`, the legacy
+`kern` table and the vertical metrics (`vhea`, `vmtx`, `VORG`) - are carried unless
+`drop_layout` is set. With `retain_gids` the ids have not moved, so they are copied
+verbatim. Without it they are **rewritten** for the new numbering
+(`src/write/subset_layout.c`, `subset_lookups.c`, `subset_gdef.c`,
+`subset_tables.c`):
+
+- Only the lookups the closure found active are written, each subtable rebuilt
+  with the entries and rules that name reachable glyphs. A rule survives exactly
+  when the closure counted it, so a lookup it calls is there; a class-based rule
+  stays whenever its coverage is reached, as in the closure. A restricted
+  `features` list leaves the other features listed with no lookups, so which
+  features exist (which some shapers consult) does not change.
+- Pair-adjustment classes and mark classes that no kept glyph uses are removed,
+  which is where a CJK or Latin kerning table shrinks. Shared children (anchors,
+  coverages, class definitions, device tables) are written once per subtable.
+- 16-bit offsets: a lookup list that does not fit is written with extension
+  subtables, and a subtable that does not fit is split into several, each for part
+  of the first-glyph range, in order. Every glyph is led by exactly one part, so
+  the first subtable that matches is the one that would have. Only a structure the
+  split cannot shrink (a context of format 3, whose size does not depend on its
+  glyphs) is `GFNT_ERR_LIMIT`.
+- `GDEF` keeps its classes, attachment points, ligature carets, mark attachment
+  classes and mark glyph sets for reachable glyphs. `FeatureVariations` (condition
+  formats 1 and 2) is carried, its lookup indices renumbered; another condition
+  format is `GFNT_ERR_UNSUPPORTED`. `kern` is carried in format 0 and the
+  class-based format 2, Microsoft or Apple header; another format is
+  `GFNT_ERR_UNSUPPORTED`. `GFNT_SubsetOptions::map` reports which source glyph each
+  subset glyph is.
 
 Refused with `GFNT_ERR_UNSUPPORTED`: `CFF`, `CFF2` and Type 1 outlines, and
 variable fonts. Silently not written, and stated in `write.h`: bitmap and colour
@@ -1517,12 +1541,21 @@ mutations of the code, each breaking one thing, are each caught by a named test.
 of the image that it can (443 of 507: 58 are declined as CFF or variable, 6 are
 skipped for AAT shaping tables) for 17 script groups, 1,560 of which the font has
 glyphs for, and holds the result to two references: HarfBuzz
-shapes the text with the original and with the subset (retained ids), and the
-two runs must agree in every glyph, cluster, advance and offset; fontTools must
-open the subset, read every shaped glyph as the original's, and its own
-`Subsetter` (retained ids, every feature) must not keep a glyph with an outline
-that this one lacks. Result: 0 of 1,560 differ, 0 closure misses, and this
-library keeps 50 glyphs fontTools does not, of 227,614 (0.02%). `fuzz_subset`
+shapes the text with the original and with the subset, and the two runs must
+agree in every glyph, cluster, advance and offset; fontTools must open the subset,
+read every shaped glyph as the original's, and its own `Subsetter` (retained ids,
+every feature) must not keep a glyph with an outline that this one lacks. It runs
+twice: with the ids retained (HarfBuzz reads the layout tables that were copied),
+and renumbered (`--renumber`: HarfBuzz reads the tables this library rewrote, and
+each glyph of the subset's run must be the original's under the glyph map the
+library reports). Result, both ways: 0 of 1,560 differ, 0 closure misses, and this
+library keeps 50 glyphs fontTools does not, of 227,614 (0.02%). The corpus holds no
+class-based or Apple-header `kern`; `tests/unit/test_subset_layout.cpp` builds those
+(and an oversize pair table, and `FeatureVariations`), and the same fonts, written
+out and shaped by HarfBuzz as source and as subset, agree through the glyph map. Doing
+that showed the shaper read class-based `kern` differently from HarfBuzz (a left class
+value counts from the subtable's start, not the array's; a glyph outside the right
+table is never kerned), and `kern.c` was corrected to match. `fuzz_subset`
 checks that every subset that is made loads again.
 
 **Not built:** the FreeType read-back and the `ttx` round trip of §12.5's first
@@ -3085,7 +3118,7 @@ What that cost in findings:
 
 **Not built:** `CBDT` and `sbix` (§7.5); colour
 (§7.6);
-a `FeatureVariations` condition of format 2 (§7.7); paragraph layout and discovery; the `CFF` writer and layout subsetting under renumbering (§12); the multi-byte
+a `FeatureVariations` condition of format 2 (§7.7); paragraph layout and discovery; the `CFF` writer (§12); the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `gasp`
 and WOFF 2. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is

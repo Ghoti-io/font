@@ -65,7 +65,18 @@ def check(job):
         out["error"] = "the subset has more glyphs than the original"
         return out
     different = []
-    for gid in job["gids"]:
+    if "map" in job:
+        # Renumbered: a pair is (original glyph, subset glyph).
+        for old, new in job["pairs"]:
+            try:
+                a = outline(original, old)
+                b = outline(mine, new) if new < len(mine.getGlyphOrder()) else None
+            except Exception as why:
+                different.append([old, "unreadable: %s" % why])
+                continue
+            if a != b:
+                different.append([old, "differs"])
+    for gid in ([] if "map" in job else job["gids"]):
         if gid >= count:
             continue
         try:
@@ -91,6 +102,10 @@ def check(job):
         subsetter.subset(reference)
         theirs = nonempty(reference)
         ours = nonempty(mine)
+        if "map" in job:
+            # Back to the original's numbering, to be scored against the same set.
+            ours = {job["map"][i] for i in ours
+                    if i < len(job["map"]) and job["map"][i] is not None}
         out["theirs"] = len(theirs)
         out["ours"] = len(ours)
         out["missing"] = sorted(theirs - ours)[:20]

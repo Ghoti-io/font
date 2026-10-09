@@ -50,6 +50,8 @@ typedef struct GFNT_Closure {
   uint32_t lookup_count;
   bool changed;
   bool bad;
+  bool grow;               ///< Add substituted glyphs (the closure); off: only find lookups.
+  bool is_gpos;            ///< `GPOS`: only its contextual lookups call others.
 } GFNT_Closure;
 
 static uint16_t cu16(GFNT_Closure * c, size_t offset) {
@@ -57,7 +59,7 @@ static uint16_t cu16(GFNT_Closure * c, size_t offset) {
 }
 
 static void add_glyph(GFNT_Closure * c, uint32_t g) {
-  if (g < c->count && !c->keep[g]) {
+  if (c->grow && g < c->count && !c->keep[g]) {
     c->keep[g] = 1;
     c->changed = true;
   }
@@ -487,13 +489,14 @@ static void close_lookup(GFNT_Closure * c, uint32_t index) {
   size_t lookup = c->lookup_list + cu16(c, c->lookup_list + 2 + 2 * (size_t)index);
   uint16_t type = cu16(c, lookup);
   uint16_t subtables = cu16(c, lookup + 4);
+  uint16_t extension = c->is_gpos ? 9 : 7;
   uint16_t i;
 
   for (i = 0; i < subtables && !c->bad; ++i) {
     size_t st = lookup + cu16(c, lookup + 6 + 2 * (size_t)i);
     uint16_t effective = type;
 
-    if (type == 7) {
+    if (type == extension) {
       uint32_t offset;
 
       if (cu16(c, st) != 1) {
@@ -504,8 +507,17 @@ static void close_lookup(GFNT_Closure * c, uint32_t index) {
       offset = gfnt_lr_u32(c->r, st + 4, &c->bad);
       st += offset;
     }
-    if (!c->bad) {
+    if (c->bad) {
+      return;
+    }
+    if (!c->is_gpos) {
       close_subtable(c, effective, st);
+    }
+    else if (effective == 7) {
+      context_subtable(c, st, false);
+    }
+    else if (effective == 8) {
+      context_subtable(c, st, true);
     }
   }
 }
@@ -580,20 +592,26 @@ static void activate_features(GFNT_Closure * c, const GFNT_LayoutTable * lt,
   }
 }
 
-GFNT_Result gfnt_subset_gsub_closure(const GFNT_Face * face, uint8_t * keep,
-    size_t count, const GFNT_Tag * features, size_t feature_count,
-    const GFNT_Limits * limits, const GFNT_Allocator * allocator,
-    GFNT_Error * error) {
+GFNT_Result gfnt_subset_layout_scan(const GFNT_Face * face, GFNT_Tag tag,
+    uint8_t * keep, size_t count, bool grow, const GFNT_Tag * features,
+    size_t feature_count, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    uint8_t ** out_active, uint32_t * out_count, GFNT_Error * error) {
   GFNT_LayoutTable lt;
   GFNT_Closure c;
   GFNT_Result result;
   size_t rounds = 0;
   uint32_t i;
 
-  if (!gfnt_face_has_table(face, GFNT_TAG_GSUB)) {
+  if (out_active) {
+    *out_active = NULL;
+  }
+  if (out_count) {
+    *out_count = 0;
+  }
+  if (!gfnt_face_has_table(face, tag)) {
     return GFNT_OK;
   }
-  result = gfnt_layout_open(face, GFNT_TAG_GSUB, &lt, error);
+  result = gfnt_layout_open(face, tag, &lt, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -601,10 +619,12 @@ GFNT_Result gfnt_subset_gsub_closure(const GFNT_Face * face, uint8_t * keep,
   c.r = &lt.table;
   c.keep = keep;
   c.count = count;
+  c.grow = grow;
+  c.is_gpos = tag == GFNT_TAG_GPOS;
   c.lookup_list = lt.lookup_list;
   c.lookup_count = cu16(&c, lt.lookup_list);
   if (c.bad) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_GSUB, 0,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, tag, 0,
         GFNT_GLYPH_NONE, "the lookup list cannot be read");
   }
   if (c.lookup_count == 0) {
@@ -612,7 +632,7 @@ GFNT_Result gfnt_subset_gsub_closure(const GFNT_Face * face, uint8_t * keep,
   }
   c.active = allocator->calloc_fn(allocator->ctx, c.lookup_count, 1);
   if (!c.active) {
-    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_GSUB, 0, GFNT_GLYPH_NONE,
+    return gfnt_error_set(error, GFNT_ERR_OOM, tag, 0, GFNT_GLYPH_NONE,
         "allocating the active lookups");
   }
   activate_features(&c, &lt, features, feature_count);
@@ -627,14 +647,31 @@ GFNT_Result gfnt_subset_gsub_closure(const GFNT_Face * face, uint8_t * keep,
     }
     if (++rounds > limits->max_lookup_depth * 1024u + count) {
       allocator->free_fn(allocator->ctx, c.active);
-      return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_GSUB, 0,
-          GFNT_GLYPH_NONE, "the GSUB closure did not settle");
+      return gfnt_error_set(error, GFNT_ERR_LIMIT, tag, 0,
+          GFNT_GLYPH_NONE, "the layout closure did not settle");
     }
   } while (c.changed && !c.bad);
-  allocator->free_fn(allocator->ctx, c.active);
   if (c.bad) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_GSUB, 0,
-        GFNT_GLYPH_NONE, "a GSUB subtable cannot be read");
+    allocator->free_fn(allocator->ctx, c.active);
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, tag, 0,
+        GFNT_GLYPH_NONE, "a layout subtable cannot be read");
+  }
+  if (out_active) {
+    *out_active = c.active;
+    if (out_count) {
+      *out_count = c.lookup_count;
+    }
+  }
+  else {
+    allocator->free_fn(allocator->ctx, c.active);
   }
   return GFNT_OK;
+}
+
+GFNT_Result gfnt_subset_gsub_closure(const GFNT_Face * face, uint8_t * keep,
+    size_t count, const GFNT_Tag * features, size_t feature_count,
+    const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    GFNT_Error * error) {
+  return gfnt_subset_layout_scan(face, GFNT_TAG_GSUB, keep, count, true, features,
+      feature_count, limits, allocator, NULL, NULL, error);
 }

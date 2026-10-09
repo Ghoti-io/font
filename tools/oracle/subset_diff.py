@@ -30,7 +30,13 @@ and so the only one HarfBuzz can shape both of) and then asks:
 A font this library declines to subset (a CFF outline, a variable font) is counted
 and named, never dropped from the denominator.
 
-Usage: subset_diff.py [--fonts N] [--groups a,b] [--quiet]
+With --renumber the subsets are made the way a web font is, with the glyphs
+renumbered and the layout tables rewritten for the new numbering. The two shapings
+are then compared through the glyph map the library reports: each glyph of the
+subset's run must be the original's glyph under the map, with the same cluster,
+advance and offset, and fontTools must read the same outline for it.
+
+Usage: subset_diff.py [--fonts N] [--groups a,b] [--renumber] [--quiet]
 """
 
 import json
@@ -70,6 +76,7 @@ def parse_hb(path):
 
 def main(argv):
     quiet = "--quiet" in argv
+    renumber = "--renumber" in argv
     limit = None
     only = None
     for i, a in enumerate(argv[1:], start=1):
@@ -119,9 +126,12 @@ def main(argv):
             cps = sorted({ord(c) for c in wanted if ord(c) >= 0x20}
                          | {0x20, 0x30, 0x2E, 0x2010, 0x25CC})
             out = os.path.join(SCRATCH, "s-%d-%d.ttf" % (fi, gi))
-            run = subprocess.run([DRIVER, "--retain-gids", "--unicodes",
-                                  ",".join("%X" % c for c in cps), font, out],
-                                 capture_output=True, text=True)
+            args = [DRIVER, "--unicodes", ",".join("%X" % c for c in cps)]
+            if renumber:
+                args += ["--map", out + ".map"]
+            else:
+                args.append("--retain-gids")
+            run = subprocess.run(args + [font, out], capture_output=True, text=True)
             if run.returncode != 0:
                 why = run.stderr.strip().splitlines()[0] if run.stderr.strip() else "?"
                 if "nsupported" in why:
@@ -167,11 +177,31 @@ def main(argv):
             skipped += 1      # the font lacks most of this group: nothing to compare
             continue
         shaped += 1
-        if [norm(r) for r in a] != [norm(r) for r in b]:
+        pairs = []
+        if renumber:
+            with open(sub + ".map", encoding="utf-8") as h:
+                gmap = [None if l.strip() == "-" else int(l) for l in h]
+            same = len(a) == len(b) and all(len(x) == len(y) for x, y in zip(a, b))
+            if same:
+                for x, y in zip(a, b):
+                    for gx, gy in zip(norm(x), norm(y)):
+                        if gy[0] is None or gy[0] >= len(gmap) or gmap[gy[0]] != gx[0] \
+                                or gx[1:] != gy[1:]:
+                            same = False
+                        else:
+                            pairs.append([gx[0], gy[0]])
+            if not same:
+                disagree += 1
+                bad.append((os.path.basename(font), group[0]))
+        elif [norm(r) for r in a] != [norm(r) for r in b]:
             disagree += 1
             bad.append((os.path.basename(font), group[0]))
-        jobs.append({"original": font, "subset": sub, "unicodes": cps,
-                     "gids": sorted({g["g"] for g in flat})})
+        job = {"original": font, "subset": sub, "unicodes": cps,
+               "gids": sorted({g["g"] for g in flat})}
+        if renumber:
+            job["map"] = gmap
+            job["pairs"] = pairs
+        jobs.append(job)
         meta.append((os.path.basename(font), group[0]))
 
     jobs_path = os.path.join(SCRATCH, "jobs.json")

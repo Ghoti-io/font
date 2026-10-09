@@ -587,23 +587,173 @@ TEST(Subset, ARestrictedFeatureListClosesOnlyOverThoseFeatures) {
   EXPECT_TRUE(drawn.size() <= 1 || drawn[0] == -1);
 }
 
-TEST(Subset, LayoutIsDroppedWhenIdsMove) {
+TEST(Subset, LayoutIsDroppedOnRequestWhetherOrNotIdsMove) {
   auto source = open_fixture("layout-gsub.ttf");
-  auto sub = subset_of(source->face, options_for({0x66, 0x69}));
-  ASSERT_NE(sub, nullptr);
-  EXPECT_FALSE(gfnt_face_has_table(sub->face, GFNT_TAG('G', 'S', 'U', 'B')));
-  EXPECT_FALSE(gfnt_face_has_table(sub->face, GFNT_TAG('G', 'P', 'O', 'S')));
-  EXPECT_FALSE(gfnt_face_has_table(sub->face, GFNT_TAG('G', 'D', 'E', 'F')));
-
   Request o = options_for({0x66, 0x69});
-  o.retain_gids = true;
-  auto kept = subset_of(source->face, o);
-  ASSERT_NE(kept, nullptr);
-  EXPECT_TRUE(gfnt_face_has_table(kept->face, GFNT_TAG('G', 'S', 'U', 'B')));
   o.drop_layout = true;
   auto dropped = subset_of(source->face, o);
   ASSERT_NE(dropped, nullptr);
   EXPECT_FALSE(gfnt_face_has_table(dropped->face, GFNT_TAG('G', 'S', 'U', 'B')));
+  EXPECT_FALSE(gfnt_face_has_table(dropped->face, GFNT_TAG('G', 'D', 'E', 'F')));
+
+  o.drop_layout = false;
+  o.retain_gids = true;
+  o.drop_layout = true;
+  auto retained = subset_of(source->face, o);
+  ASSERT_NE(retained, nullptr);
+  EXPECT_FALSE(gfnt_face_has_table(retained->face, GFNT_TAG('G', 'S', 'U', 'B')));
+}
+
+// --- layout tables under renumbering ----------------------------------------
+
+namespace {
+
+std::vector<uint8_t> table_bytes(const Loaded & f, const char * t) {
+  size_t offset = 0, length = 0;
+  EXPECT_EQ(gfnt_face_table_range(f.face, GFNT_TAG(t[0], t[1], t[2], t[3]), &offset,
+      &length), GFNT_OK) << t;
+  const uint8_t * p = gfnt_blob_data(f.blob);
+  return std::vector<uint8_t>(p + offset, p + offset + length);
+}
+
+/** A renumbered subset with the glyph numbering it used. */
+struct Renumbered {
+  std::unique_ptr<Loaded> font;
+  GFNT_SubsetMap map{};
+  Renumbered() = default;
+  Renumbered(const Renumbered &) = delete;
+  Renumbered & operator=(const Renumbered &) = delete;
+  ~Renumbered() { gfnt_subset_map_free(&map, nullptr); }
+};
+
+void make_renumbered(Renumbered & out, const GFNT_Face * face, Request & o) {
+  o.map = &out.map;
+  out.font = subset_of(face, o);
+}
+
+/**
+ * Shape @p text in the source and in a renumbered subset made for it: each glyph
+ * must be the source's glyph under the map, with the same placement, and draw the
+ * same.
+ */
+void expect_same_through_map(const Loaded & source, const std::vector<uint32_t> & text,
+    const std::string & note, bool borrow_space = true) {
+  std::vector<uint32_t> wanted = text;
+  if (borrow_space) {
+    wanted.push_back(0x20);
+  }
+  Request o = options_for(wanted);
+  Renumbered sub;
+  make_renumbered(sub, source.face, o);
+  ASSERT_NE(sub.font, nullptr) << note;
+  const Shaped want = shape(source.face, text);
+  const Shaped got = shape(sub.font->face, text);
+  ASSERT_EQ(got.size(), want.size()) << note;
+  for (size_t i = 0; i < want.size(); ++i) {
+    ASSERT_LT(got[i][0], static_cast<int64_t>(sub.map.count)) << note;
+    EXPECT_EQ(static_cast<int64_t>(sub.map.old_of_new[got[i][0]]), want[i][0])
+        << note << ": glyph " << i;
+    for (size_t k = 1; k < 6; ++k) {
+      EXPECT_EQ(got[i][k], want[i][k]) << note << ": glyph " << i << " field " << k;
+    }
+    EXPECT_EQ(outline_of(sub.font->face, static_cast<uint32_t>(got[i][0])),
+        outline_of(source.face, static_cast<uint32_t>(want[i][0])))
+        << note << ": glyph " << i;
+  }
+}
+
+}  // namespace
+
+TEST(Subset, ShapingAfterRenumberingMatchesTheOriginalOnEveryGsubCase) {
+  auto source = open_fixture("layout-gsub.ttf");
+  const auto cases = plain_cases("layout-gsub.shape");
+  ASSERT_GT(cases.size(), 10u);
+  for (const ShapeCase & c : cases) {
+    expect_same_through_map(*source, c.text, c.note);
+  }
+}
+
+TEST(Subset, ShapingAfterRenumberingMatchesTheOriginalOnEveryGposCase) {
+  auto source = open_fixture("layout-gpos.ttf");
+  const auto cases = plain_cases("layout-gpos.shape");
+  ASSERT_GT(cases.size(), 10u);
+  for (const ShapeCase & c : cases) {
+    expect_same_through_map(*source, c.text, c.note);
+  }
+}
+
+TEST(Subset, RenumberedLayoutTablesAreWrittenAndSmallerThanTheOriginals) {
+  for (const char * name : {"layout-gsub.ttf", "layout-gpos.ttf"}) {
+    auto source = open_fixture(name);
+    Request o = options_for({0x66, 0x69});
+    Renumbered sub;
+    make_renumbered(sub, source->face, o);
+    ASSERT_NE(sub.font, nullptr) << name;
+    const char * layout = std::string(name) == "layout-gsub.ttf" ? "GSUB" : "GPOS";
+    ASSERT_TRUE(gfnt_face_has_table(sub.font->face,
+        GFNT_TAG(layout[0], layout[1], layout[2], layout[3]))) << name;
+    EXPECT_LT(table_bytes(*sub.font, layout).size(), table_bytes(*source, layout).size())
+        << name;
+  }
+}
+
+TEST(Subset, TheMapNamesTheSourceGlyphOfEveryKeptGlyph) {
+  auto source = open_fixture("layout-gsub.ttf");
+  Request o = options_for({0x66, 0x69});
+  Renumbered sub;
+  make_renumbered(sub, source->face, o);
+  ASSERT_NE(sub.font, nullptr);
+  ASSERT_EQ(sub.map.count, glyph_count(sub.font->face));
+  EXPECT_EQ(sub.map.old_of_new[0], 0u);
+  for (uint32_t cp : {0x66u, 0x69u}) {
+    EXPECT_EQ(sub.map.old_of_new[glyph_of(sub.font->face, cp)], glyph_of(source->face, cp));
+  }
+  for (size_t i = 1; i < sub.map.count; ++i) {
+    EXPECT_LT(sub.map.old_of_new[i - 1], sub.map.old_of_new[i]) << "ids stay in order";
+  }
+}
+
+TEST(Subset, ALookupNoFeatureReachesIsNotWritten) {
+  // Restricting to a feature the ligature is not under leaves the ligature
+  // lookup unreferenced, so it goes; the font still shapes the plain text.
+  auto source = open_fixture("layout-gsub.ttf");
+  Request all = options_for({0x66, 0x69});
+  Request some = options_for({0x66, 0x69});
+  const GFNT_Tag only[] = {GFNT_TAG('s', 'm', 'c', 'p')};
+  some.features = only;
+  some.feature_count = 1;
+  Renumbered a, b;
+  make_renumbered(a, source->face, all);
+  make_renumbered(b, source->face, some);
+  ASSERT_NE(a.font, nullptr);
+  ASSERT_NE(b.font, nullptr);
+  EXPECT_LT(table_bytes(*b.font, "GSUB").size(), table_bytes(*a.font, "GSUB").size());
+  EXPECT_LT(glyph_count(b.font->face), glyph_count(a.font->face))
+      << "the ligature glyph is not kept either";
+}
+
+TEST(Subset, WithoutTheClosureARenumberedGsubDropsWhatItCannotName) {
+  auto source = open_fixture("layout-gsub.ttf");
+  Request o = options_for({0x66, 0x69});
+  o.no_gsub_closure = true;
+  Renumbered sub;
+  make_renumbered(sub, source->face, o);
+  ASSERT_NE(sub.font, nullptr);
+  const Shaped got = shape(sub.font->face, {0x66, 0x69});
+  ASSERT_EQ(got.size(), 2u) << "no ligature: its glyph was not kept, so its rule is gone";
+  EXPECT_EQ(sub.map.old_of_new[got[0][0]], glyph_of(source->face, 0x66));
+  EXPECT_EQ(sub.map.old_of_new[got[1][0]], glyph_of(source->face, 0x69));
+}
+
+TEST(Subset, ARenumberedSubsetCanBeSubsetAgainWithItsLayout) {
+  auto source = open_fixture("layout-gsub.ttf");
+  Request o = options_for({0x66, 0x69, 0x20});
+  auto first = subset_of(source->face, o);
+  ASSERT_NE(first, nullptr);
+  Request again = options_for({0x66, 0x69, 0x20});
+  auto second = subset_of(first->face, again);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(shape(second->face, {0x66, 0x69}).size(), shape(source->face, {0x66, 0x69}).size());
 }
 
 // --- hinting ----------------------------------------------------------------
@@ -687,14 +837,6 @@ std::vector<uint8_t> hinted_font(std::vector<uint8_t> * glyf_out = nullptr) {
       {GFNT_TAG('f', 'p', 'g', 'm'), {0xB0, 0x00}},
       {GFNT_TAG('p', 'r', 'e', 'p'), {0xB0, 0x00}},
       {GFNT_TAG('c', 'v', 't', ' '), {0x00, 0x10}}});
-}
-
-std::vector<uint8_t> table_bytes(const Loaded & f, const char * t) {
-  size_t offset = 0, length = 0;
-  EXPECT_EQ(gfnt_face_table_range(f.face, GFNT_TAG(t[0], t[1], t[2], t[3]), &offset,
-      &length), GFNT_OK) << t;
-  const uint8_t * p = gfnt_blob_data(f.blob);
-  return std::vector<uint8_t>(p + offset, p + offset + length);
 }
 
 }  // namespace

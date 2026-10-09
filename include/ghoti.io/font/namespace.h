@@ -249,6 +249,8 @@
 #define GFNT_SubsetOptions GHOTIIO_FONT(GFNT_SubsetOptions)
 #define gfnt_subset_options_init GHOTIIO_FONT(gfnt_subset_options_init)
 #define gfnt_subset GHOTIIO_FONT(gfnt_subset)
+#define GFNT_SubsetMap GHOTIIO_FONT(GFNT_SubsetMap)
+#define gfnt_subset_map_free GHOTIIO_FONT(gfnt_subset_map_free)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

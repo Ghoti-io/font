@@ -1140,9 +1140,10 @@ check-oracle-hb: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/hb_diff.py --quiet \
 		--check-golden tests/data/golden/shape.txt
 
-check-oracle-subset: ## Subset every corpus font; hold HarfBuzz's shaping and fontTools' closure to it
+check-oracle-subset: ## Subset every corpus font, ids retained and renumbered; hold HarfBuzz's shaping and fontTools' closure to it
 check-oracle-subset: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz,fonttools -- python3 $(ORACLE)/subset_diff.py --quiet
+	@$(ORACLE_RUN) harfbuzz,fonttools -- python3 $(ORACLE)/subset_diff.py --renumber --quiet
 
 check-oracle-cff: ## Diff every CFF glyph's program, path and advance against fontTools
 check-oracle-cff: $(EXAMPLES)

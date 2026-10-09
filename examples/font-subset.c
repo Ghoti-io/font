@@ -23,7 +23,7 @@
  *
  * Write a font holding only some of another's glyphs.
  *
- * Usage: font-subset [--retain-gids] [--no-closure] [--drop-hinting]
+ * Usage: font-subset [--retain-gids] [--no-closure] [--drop-hinting] [--map FILE]
  *                    [--drop-layout] [--features liga,kern] [--woff]
  *                    [--unicodes U+0041,U+0042] [--glyphs 3,4] <in> <out>
  *
@@ -118,6 +118,8 @@ int main(int argc, char ** argv) {
   const char * paths[2] = {NULL, NULL};
   int npaths = 0;
   bool woff = false;
+  const char * map_path = NULL;
+  GFNT_SubsetMap map = {NULL, 0};
   FILE * file;
 
   gfnt_error_clear(&error);
@@ -137,6 +139,10 @@ int main(int argc, char ** argv) {
     else if (!strcmp(a, "--drop-layout")) {
       options.drop_layout = true;
     }
+    else if (!strcmp(a, "--map") && i + 1 < argc) {
+      map_path = argv[++i];
+      options.map = &map;
+    }
     else if (!strcmp(a, "--woff")) {
       woff = true;
     }
@@ -154,7 +160,7 @@ int main(int argc, char ** argv) {
     }
     else {
       fprintf(stderr, "usage: %s [--retain-gids] [--no-closure] [--drop-hinting] "
-          "[--drop-layout] [--features tags] [--woff] [--unicodes list] "
+          "[--drop-layout] [--features tags] [--map file] [--woff] [--unicodes list] "
           "[--glyphs list] <in> <out>\n", argv[0]);
       return 2;
     }
@@ -174,6 +180,28 @@ int main(int argc, char ** argv) {
   result = gfnt_subset(face, &options, NULL, NULL, &out, &error);
   if (result != GFNT_OK) {
     return fail("subset", result, &error);
+  }
+  if (map_path) {
+    // One source glyph id per line, line N being the subset's glyph N; "-" for a
+    // glyph a retained-id subset emptied.
+    file = fopen(map_path, "w");
+    if (!file) {
+      fprintf(stderr, "%s: could not write\n", map_path);
+      return 1;
+    }
+    for (size_t g = 0; g < map.count; ++g) {
+      if (map.old_of_new[g] == 0xFFFFFFFFu) {
+        fputs("-\n", file);
+      }
+      else {
+        fprintf(file, "%u\n", (unsigned)map.old_of_new[g]);
+      }
+    }
+    if (fclose(file) != 0) {
+      fprintf(stderr, "%s: could not write\n", map_path);
+      return 1;
+    }
+    gfnt_subset_map_free(&map, NULL);
   }
   if (woff) {
     // A WOFF is the same tables compressed one by one: re-read the sfnt just made

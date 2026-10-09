@@ -36,6 +36,7 @@
 #include "../glyf/glyf.h"
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
+#include "lrewrite.h"
 #include "write.h"
 
 #define T_HEAD GFNT_TAG('h', 'e', 'a', 'd')
@@ -73,6 +74,18 @@ void gfnt_subset_options_init(GFNT_SubsetOptions * options) {
   if (options) {
     memset(options, 0, sizeof *options);
   }
+}
+
+void gfnt_subset_map_free(GFNT_SubsetMap * map, const GFNT_Allocator * allocator) {
+  if (!map || !map->old_of_new) {
+    return;
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  allocator->free_fn(allocator->ctx, map->old_of_new);
+  map->old_of_new = NULL;
+  map->count = 0;
 }
 
 /** The bytes of a table of the source face, or false when it has none. */
@@ -265,7 +278,7 @@ static GFNT_Result copy_table(const GFNT_Face * face, GFNT_Tag tag,
       "copying a table") : GFNT_OK;
 }
 
-#define MAX_OUT_TABLES 20
+#define MAX_OUT_TABLES 24
 
 typedef struct GFNT_SubsetWork {
   const GFNT_Allocator * a;
@@ -280,6 +293,18 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf bufs[8]; // head hhea maxp hmtx glyf loca cmap post-or-os2 scratch
   GFNT_WBuf os2;
   GFNT_WBuf post;
+  uint8_t * shape;        // glyphs text can reach: the set the GSUB closure ended with
+  uint8_t * gsub_active;  // lookups of GSUB and GPOS the kept glyphs can call
+  uint8_t * gpos_active;
+  uint32_t gsub_count;
+  uint32_t gpos_count;
+  GFNT_WBuf gsub;
+  GFNT_WBuf gpos;
+  GFNT_WBuf gdef;
+  GFNT_WBuf kern;
+  GFNT_WBuf vhea;
+  GFNT_WBuf vmtx;
+  GFNT_WBuf vorg;
 } GFNT_SubsetWork;
 
 enum { B_HEAD, B_HHEA, B_MAXP, B_HMTX, B_GLYF, B_LOCA, B_CMAP };
@@ -292,6 +317,16 @@ static void work_free(GFNT_SubsetWork * w) {
   }
   gfnt_wbuf_free(&w->os2);
   gfnt_wbuf_free(&w->post);
+  gfnt_wbuf_free(&w->gsub);
+  gfnt_wbuf_free(&w->gpos);
+  gfnt_wbuf_free(&w->gdef);
+  gfnt_wbuf_free(&w->kern);
+  gfnt_wbuf_free(&w->vhea);
+  gfnt_wbuf_free(&w->vmtx);
+  gfnt_wbuf_free(&w->vorg);
+  w->a->free_fn(w->a->ctx, w->shape);
+  w->a->free_fn(w->a->ctx, w->gsub_active);
+  w->a->free_fn(w->a->ctx, w->gpos_active);
   w->a->free_fn(w->a->ctx, w->keep);
   w->a->free_fn(w->a->ctx, w->stack);
   w->a->free_fn(w->a->ctx, w->mapped_cp);
@@ -320,6 +355,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   size_t i;
   uint32_t g;
   bool retain;
+  bool rewrite_layout;
   GFNT_Result result;
 
   if (!face || !out_blob) {
@@ -363,6 +399,13 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   gfnt_wbuf_init(&w.os2, allocator);
   gfnt_wbuf_init(&w.post, allocator);
+  gfnt_wbuf_init(&w.gsub, allocator);
+  gfnt_wbuf_init(&w.gpos, allocator);
+  gfnt_wbuf_init(&w.gdef, allocator);
+  gfnt_wbuf_init(&w.kern, allocator);
+  gfnt_wbuf_init(&w.vhea, allocator);
+  gfnt_wbuf_init(&w.vmtx, allocator);
+  gfnt_wbuf_init(&w.vorg, allocator);
 
   result = gfnt_face_num_glyphs(face, &count, error);
   if (result != GFNT_OK) {
@@ -436,12 +479,32 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     }
     w.keep[options->glyphs[i]] = 1;
   }
-  if (!options->no_gsub_closure) {
-    result = gfnt_subset_gsub_closure(face, w.keep, count, options->features,
-        options->feature_count, limits, allocator, error);
+  // The glyphs GSUB can reach. Renumbering also needs to know which lookups the
+  // closure found active, and that holds when the glyph set is not being grown.
+  rewrite_layout = !retain && !options->drop_layout;
+  if (!options->no_gsub_closure || rewrite_layout) {
+    result = gfnt_subset_layout_scan(face, T_GSUB, w.keep, count,
+        !options->no_gsub_closure, options->features, options->feature_count, limits,
+        allocator, rewrite_layout ? &w.gsub_active : NULL, &w.gsub_count, error);
     if (result != GFNT_OK) {
       goto done;
     }
+  }
+  if (rewrite_layout) {
+    result = gfnt_subset_layout_scan(face, T_GPOS, w.keep, count, false, NULL, 0,
+        limits, allocator, &w.gpos_active, &w.gpos_count, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+    // Composites add their components below; text never reaches those on its own,
+    // so the layout rewrite keeps to the set as it stands here.
+    w.shape = allocator->calloc_fn(allocator->ctx, count, 1);
+    if (!w.shape) {
+      result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "allocating the reachable set");
+      goto done;
+    }
+    memcpy(w.shape, w.keep, count);
   }
 
   result = gfnt_face_table_reader(face, T_GLYF, &glyf, error);
@@ -548,10 +611,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     size_t nhm = hhea->number_of_h_metrics;
     const uint8_t * data = NULL;
     size_t span = 0;
-    uint16_t last_advance = 0;
-    size_t metrics = new_count;
-    uint16_t * adv;
-    int16_t * lsb;
+    size_t metrics = 0;
 
     if (nhm == 0 || !source_table(face, T_HMTX, &data, &span)) {
       result = gfnt_error_set(error, GFNT_ERR_CORRUPT, T_HMTX, 0, GFNT_GLYPH_NONE,
@@ -559,44 +619,11 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
       goto done;
     }
     (void)hmtx;
-    adv = allocator->calloc_fn(allocator->ctx, new_count, sizeof *adv);
-    lsb = allocator->calloc_fn(allocator->ctx, new_count, sizeof *lsb);
-    if (!adv || !lsb) {
-      allocator->free_fn(allocator->ctx, adv);
-      allocator->free_fn(allocator->ctx, lsb);
-      result = gfnt_error_set(error, GFNT_ERR_OOM, T_HMTX, 0, GFNT_GLYPH_NONE,
-          "allocating the metrics");
+    result = gfnt_subset_metrics(allocator, data, span, nhm, w.old_of_new, new_count,
+        &w.bufs[B_HMTX], &metrics, T_HMTX, error);
+    if (result != GFNT_OK) {
       goto done;
     }
-    for (i = 0; i < new_count; ++i) {
-      uint32_t old = w.old_of_new[i];
-      size_t a_at;
-      size_t l_at;
-
-      if (old == NO_GLYPH) {
-        continue;
-      }
-      a_at = 4 * (old < nhm ? (size_t)old : nhm - 1);
-      l_at = old < nhm ? 4 * (size_t)old + 2 : 4 * nhm + 2 * ((size_t)old - nhm);
-      if (a_at + 2 <= span) {
-        adv[i] = (uint16_t)((data[a_at] << 8) | data[a_at + 1]);
-      }
-      if (l_at + 2 <= span) {
-        lsb[i] = (int16_t)((data[l_at] << 8) | data[l_at + 1]);
-      }
-    }
-    last_advance = adv[new_count - 1];
-    while (metrics > 1 && adv[metrics - 2] == last_advance) {
-      --metrics;
-    }
-    for (i = 0; i < new_count; ++i) {
-      if (i < metrics) {
-        gfnt_wbuf_u16(&w.bufs[B_HMTX], adv[i]);
-      }
-      gfnt_wbuf_u16(&w.bufs[B_HMTX], (uint16_t)lsb[i]);
-    }
-    allocator->free_fn(allocator->ctx, adv);
-    allocator->free_fn(allocator->ctx, lsb);
     result = copy_table(face, T_HHEA, &w.bufs[B_HHEA], 36, error);
     if (result == GFNT_OK) {
       gfnt_write_put16(w.bufs[B_HHEA].data + 34, (uint32_t)metrics);
@@ -615,6 +642,63 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   result = gfnt_subset_cmap(w.mapped_cp, w.mapped_new, mapped, &w.bufs[B_CMAP], error);
   if (result != GFNT_OK) {
     goto done;
+  }
+
+  // GSUB, GPOS and GDEF, rewritten for the new numbering.
+  if (rewrite_layout) {
+    if (gfnt_face_has_table(face, T_GSUB)) {
+      result = gfnt_subset_layout_rewrite(face, T_GSUB, w.shape, w.new_of_old,
+          w.old_of_new, count, new_count, w.gsub_active, w.gsub_count, options->features,
+          options->feature_count, &w.gsub, allocator, error);
+      if (result != GFNT_OK) {
+        goto done;
+      }
+    }
+    if (gfnt_face_has_table(face, T_GPOS)) {
+      result = gfnt_subset_layout_rewrite(face, T_GPOS, w.shape, w.new_of_old,
+          w.old_of_new, count, new_count, w.gpos_active, w.gpos_count, NULL, 0,
+          &w.gpos, allocator, error);
+      if (result != GFNT_OK) {
+        goto done;
+      }
+    }
+    result = gfnt_subset_gdef(face, w.shape, w.new_of_old, w.old_of_new, count,
+        new_count, &w.gdef, allocator, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+    // The tables that are indexed by glyph and ride with the layout.
+    result = gfnt_subset_kern(face, w.shape, w.new_of_old, count, &w.kern, allocator, error);
+    if (result == GFNT_OK) {
+      result = gfnt_subset_vorg(face, w.new_of_old, count, &w.vorg, error);
+    }
+    if (result != GFNT_OK) {
+      goto done;
+    }
+    {
+      const uint8_t * vh;
+      const uint8_t * vm;
+      size_t vh_len = 0;
+      size_t vm_len = 0;
+
+      if (source_table(face, T_VHEA, &vh, &vh_len) && vh_len >= 36
+          && source_table(face, T_VMTX, &vm, &vm_len)) {
+        size_t nlong = ((size_t)vh[34] << 8) | vh[35];
+        size_t metrics = 0;
+
+        if (nlong > 0) {
+          result = gfnt_subset_metrics(allocator, vm, vm_len, nlong, w.old_of_new,
+              new_count, &w.vmtx, &metrics, T_VMTX, error);
+          if (result != GFNT_OK) {
+            goto done;
+          }
+          gfnt_wbuf_bytes(&w.vhea, vh, vh_len);
+          if (!w.vhea.oom) {
+            gfnt_write_put16(w.vhea.data + 34, (uint32_t)metrics);
+          }
+        }
+      }
+    }
   }
 
   // OS/2 with the character range brought in line, post without glyph names.
@@ -645,7 +729,9 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
       }
     }
   }
-  if (w.os2.oom || w.post.oom || w.bufs[B_HMTX].oom || w.bufs[B_LOCA].oom) {
+  if (w.os2.oom || w.post.oom || w.bufs[B_HMTX].oom || w.bufs[B_LOCA].oom
+      || w.gsub.oom || w.gpos.oom || w.gdef.oom || w.kern.oom || w.vhea.oom
+      || w.vmtx.oom || w.vorg.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "building the tables");
     goto done;
@@ -673,6 +759,25 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   if (w.post.length) {
     ADD_BUF(T_POST, w.post);
   }
+  if (w.gdef.length) {
+    ADD_BUF(T_GDEF, w.gdef);
+  }
+  if (w.gsub.length) {
+    ADD_BUF(T_GSUB, w.gsub);
+  }
+  if (w.gpos.length) {
+    ADD_BUF(T_GPOS, w.gpos);
+  }
+  if (w.kern.length) {
+    ADD_BUF(T_KERN, w.kern);
+  }
+  if (w.vhea.length && w.vmtx.length) {
+    ADD_BUF(T_VHEA, w.vhea);
+    ADD_BUF(T_VMTX, w.vmtx);
+  }
+  if (w.vorg.length) {
+    ADD_BUF(T_VORG, w.vorg);
+  }
   ADD_SRC(T_NAME);
   ADD_SRC(T_GASP);
   if (!options->drop_hinting) {
@@ -696,6 +801,22 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
 #undef ADD_SRC
   result = gfnt_write_sfnt(0x00010000u, tables, ntables, limits, allocator,
       out_blob, error);
+  if (result == GFNT_OK && options->map) {
+    options->map->old_of_new = allocator->calloc_fn(allocator->ctx, new_count,
+        sizeof *options->map->old_of_new);
+    options->map->count = 0;
+    if (!options->map->old_of_new) {
+      gfnt_blob_destroy(*out_blob);
+      *out_blob = NULL;
+      result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "allocating the glyph map");
+    }
+    else {
+      memcpy(options->map->old_of_new, w.old_of_new,
+          new_count * sizeof *options->map->old_of_new);
+      options->map->count = new_count;
+    }
+  }
 
 done:
   work_free(&w);

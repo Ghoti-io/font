@@ -113,6 +113,20 @@ GFNT_API GFNT_Result gfnt_write_woff(GFNT_Tag flavour,
     const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
 
 /**
+ * Which source glyph each glyph of a subset is.
+ *
+ * Filled by ::gfnt_subset() when ::GFNT_SubsetOptions::map points at one; release
+ * it with ::gfnt_subset_map_free(). Entry @c i is the id in the source face of
+ * the subset's glyph @c i, or 0xFFFFFFFF for a glyph of a retained-id subset that
+ * was dropped and is empty. A caller who writes a PDF `ToUnicode` or a `W` array
+ * needs this; so does anyone checking a renumbered subset against its source.
+ */
+typedef struct GFNT_SubsetMap {
+  uint32_t * old_of_new; ///< One entry per glyph of the subset.
+  size_t count;          ///< How many.
+} GFNT_SubsetMap;
+
+/**
  * What to keep, and how.
  *
  * Initialise with ::gfnt_subset_options_init() and then set what is wanted:
@@ -128,8 +142,8 @@ typedef struct GFNT_SubsetOptions {
   /**
    * Keep every surviving glyph at its own id, and empty the ones that were dropped.
    *
-   * What a PDF `CIDFontType2` with an identity `CIDToGIDMap` needs, and the only
-   * mode that keeps the layout tables (see ::keep_layout).
+   * What a PDF `CIDFontType2` with an identity `CIDToGIDMap` needs. The layout
+   * tables are copied as they are in this mode and rewritten otherwise.
    */
   bool retain_gids;
   /** Do not add the glyphs `GSUB` can turn the kept ones into. Off by default. */
@@ -137,20 +151,36 @@ typedef struct GFNT_SubsetOptions {
   /** Drop `fpgm`, `prep`, `cvt ` and every glyph's instructions. */
   bool drop_hinting;
   /**
-   * With ::retain_gids, drop `GSUB`, `GPOS` and `GDEF` as a renumbering would.
+   * Leave out `GSUB`, `GPOS`, `GDEF`, `kern`, `vhea`, `vmtx` and `VORG`.
    *
-   * Without ::retain_gids the layout tables are always dropped: they name glyphs
-   * by id in dozens of structures, and rewriting them is not built.
+   * By default they are carried: copied as they are when ::retain_gids keeps the
+   * ids where they were, rewritten for the new numbering when it does not.
    */
   bool drop_layout;
   /**
-   * Restrict the `GSUB` closure to lookups reached from these features.
+   * Restrict `GSUB` to lookups reached from these features.
    *
-   * NULL (or a count of zero) means every feature the table lists.
+   * The closure follows only those, and a renumbered `GSUB` keeps only those
+   * (the other features stay listed, with no lookups, so which features exist does
+   * not change). NULL, or a count of zero, means every feature the table lists.
+   * `GPOS` is not restricted.
    */
   const GFNT_Tag * features;
   size_t feature_count;        ///< How many.
+  /**
+   * Where to put the glyph numbering, or NULL if the caller does not want it.
+   * Written only on success; the caller releases it with ::gfnt_subset_map_free().
+   */
+  GFNT_SubsetMap * map;
 } GFNT_SubsetOptions;
+
+/**
+ * @brief Release a map ::gfnt_subset() filled in.
+ *
+ * @param map The map. NULL, and a map with nothing in it, are ignored.
+ * @param allocator The allocator that was passed to ::gfnt_subset(), or NULL.
+ */
+GFNT_API void gfnt_subset_map_free(GFNT_SubsetMap * map, const GFNT_Allocator * allocator);
 
 /**
  * @brief Set an options struct to the defaults: nothing requested, `GSUB` closed over.
@@ -181,18 +211,28 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * `cmap` (formats 4 and 12 for the requested codepoints, in the Unicode and
  * Windows records), `loca`, `glyf`, `post` (format 3, no glyph names), and, when
  * the source has them, `OS/2` (first and last character updated), `name`,
- * `gasp`, and the hinting tables. With ::GFNT_SubsetOptions::retain_gids the
- * layout tables (`GSUB`, `GPOS`, `GDEF`), the legacy `kern` table and the
- * vertical metrics (`vhea`, `vmtx`, `VORG`) are carried over untouched: glyph ids
- * have not moved, so every reference in them is still valid, and a glyph that was
- * dropped is an empty outline. Anything else in the source is not written.
+ * `gasp`, and the hinting tables. The layout tables (`GSUB`, `GPOS`, `GDEF`), the
+ * legacy `kern` table and the vertical metrics (`vhea`, `vmtx`, `VORG`) are
+ * carried unless ::GFNT_SubsetOptions::drop_layout is set. With
+ * ::GFNT_SubsetOptions::retain_gids they are copied untouched: glyph ids have not
+ * moved, so every reference in them is still valid, and a glyph that was dropped
+ * is an empty outline. Without it they are **rewritten** for the new numbering:
+ * each lookup the kept glyphs can call is rebuilt with only the entries and rules
+ * that name kept glyphs (a rule survives exactly when the `GSUB` closure counted
+ * it), lookups nothing calls are left out, pair and mark-attachment classes no
+ * kept glyph uses are removed, and `GDEF` keeps its classes, attachment points,
+ * ligature carets and mark sets for the kept glyphs. `kern` is carried as format 0
+ * subtables only and is left out whole if it has any other form. A subtable the
+ * rewrite would have to split to keep 16-bit offsets is ::GFNT_ERR_LIMIT, and a
+ * layout table with `FeatureVariations` is ::GFNT_ERR_UNSUPPORTED (set
+ * ::GFNT_SubsetOptions::drop_layout to subset such a font anyway).
+ * Anything else in the source is not written.
  *
  * **Not built**: `CFF`, `CFF2` and Type 1 outlines, variable fonts (`fvar`,
  * `gvar`), bitmap and colour tables, the Apple tables (`morx`, `mort`, `kerx`,
- * `trak`, `ankr`), `kern` and the vertical metrics under renumbering, `cmap`
- * format 14, layout tables under renumbering, and the family rename the licence reading in
- * documentation/design.md section 14.5 wants. Each is refused or dropped as
- * stated here, not approximated.
+ * `trak`, `ankr`), class-based `kern`, `cmap` format 14, and the family rename
+ * the licence reading in documentation/design.md section 14.5 wants. Each is
+ * refused or dropped as stated here, not approximated.
  *
  * @param face The source face.
  * @param options What to keep. NULL means the defaults with nothing requested.

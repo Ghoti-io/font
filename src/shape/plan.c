@@ -857,8 +857,16 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
     plan->tables[1].kern_found = false;
   }
   // Apple's kerning replaces the font's own `GPOS`, and the `kern` table as well.
-  plan->apply_kerx = gfnt_kerx_present(face);
-  if (plan->apply_kerx) {
+  // A font that has both a `GSUB` and a `GPOS` is positioned by the `GPOS`, which
+  // HarfBuzz takes for an OpenType font (found with random fonts of each). In
+  // horizontal text the `kerx` is then left out altogether; in vertical text, where
+  // the `kerx` kerns nothing here anyway, marks still keep their widths for it.
+  plan->gpos_over_kerx = gfnt_kerx_present(face)
+      && gfnt_face_has_table(face, GFNT_TAG('G', 'S', 'U', 'B'))
+      && gfnt_face_has_table(face, GFNT_TAG('G', 'P', 'O', 'S'));
+  plan->apply_kerx = gfnt_kerx_present(face)
+      && !(plan->gpos_over_kerx && !plan->vertical);
+  if (plan->apply_kerx && !plan->gpos_over_kerx) {
     plan->tables[1].present = false;
     plan->tables[1].kern_found = false;
   }

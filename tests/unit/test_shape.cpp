@@ -5449,6 +5449,36 @@ TEST(ShapeKern, ACrossStreamKernTableHangsAMarkOnTheGlyphBeforeAndZeroesItWithou
   EXPECT_EQ(g[3].y_offset, -100);
 }
 
+TEST(ShapeKerx, AFontWithBothGsubAndGposIsPositionedByTheGposAndNotByTheKerx) {
+  // A GPOS that widens glyph 1 by 40, a kerx pair that takes 100 from A B, and
+  // (second font) a GSUB beside the GPOS. With the GPOS alone the kerx replaces it;
+  // with both tables the font is an OpenType font to HarfBuzz and the GPOS does the
+  // positioning. (HarfBuzz 10.2.0.)
+  std::vector<uint8_t> single;
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 8);
+  gfnttest::put_u16(single, 0x0004);
+  gfnttest::put_u16(single, 40);
+  gfnttest::put_u16(single, 1);        // coverage: glyph 1
+  gfnttest::put_u16(single, 1);
+  gfnttest::put_u16(single, 1);
+  Bytes gpos = layout_table("latn", -1, {{"kern", {0}}}, {{1, 0, single}});
+  Bytes gsub = layout_table("latn", -1, {{"liga", {0}}},
+      {{1, 0, single_delta({8}, 1)}});
+  Bytes kerx = kerx_table({kerx_pairs({{1, 2, -100}})});
+  Glyphs only = shape_bytes(small_font({{kGPOS, gpos},
+      {GFNT_TAG('k', 'e', 'r', 'x'), kerx}}), cps("AB"));
+  Glyphs both = shape_bytes(small_font({{kGPOS, gpos}, {kGSUB, gsub},
+      {GFNT_TAG('k', 'e', 'r', 'x'), kerx}}), cps("AB"));
+
+  ASSERT_EQ(only.size(), 2u);
+  EXPECT_EQ(only[0].x_advance, 450);
+  EXPECT_EQ(only[1].x_advance, 450);
+  ASSERT_EQ(both.size(), 2u);
+  EXPECT_EQ(both[0].x_advance, 540);
+  EXPECT_EQ(both[1].x_advance, 500);
+}
+
 TEST(ShapeKerx, ClassSubtablesAddTheTwoClassesToAnIndexIntoTheValues) {
   // Format 2: left A = 0, B = 2; right B = 0, C = 1: the value at index l + r.
   Bytes left = lookup6({{1, 0}, {2, 2}});

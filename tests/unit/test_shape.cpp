@@ -809,6 +809,41 @@ std::vector<uint8_t> kern_format0(
   return out;
 }
 
+/**
+ * A `kern` table, Microsoft header, one class-based (format 2) subtable: left glyphs
+ * A, B, C (1..3) in rows 0..2 and right glyphs D, E (4, 5) in columns 0, 1. Left class
+ * values count from the subtable's start, so each includes the array's offset.
+ */
+std::vector<uint8_t> kern_format2() {
+  const uint16_t row_width = 4;
+  const uint16_t left_at = 6 + 8;
+  const uint16_t right_at = left_at + 4 + 6;
+  const uint16_t array_at = right_at + 4 + 4;
+  std::vector<uint8_t> out;
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u16(out, 1);
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u16(out, static_cast<uint16_t>(array_at + 12));
+  gfnttest::put_u16(out, 0x0201);   // horizontal, format 2
+  gfnttest::put_u16(out, row_width);
+  gfnttest::put_u16(out, left_at);
+  gfnttest::put_u16(out, right_at);
+  gfnttest::put_u16(out, array_at);
+  gfnttest::put_u16(out, 1);
+  gfnttest::put_u16(out, 3);
+  for (uint16_t row = 0; row < 3; ++row) {
+    gfnttest::put_u16(out, static_cast<uint16_t>(array_at + row * row_width));
+  }
+  gfnttest::put_u16(out, 4);
+  gfnttest::put_u16(out, 2);
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u16(out, 2);
+  for (int16_t v : {-20, -40, -60, -80, -100, -120}) {
+    gfnttest::put_s16(out, v);
+  }
+  return out;
+}
+
 Glyphs shape_bytes(std::vector<uint8_t> bytes, const std::vector<uint32_t> & text,
     const std::string & features = "", const std::string & script = "latn") {
   Font font(std::move(bytes));
@@ -859,6 +894,29 @@ TEST(ShapeKern, ACrossStreamOrVerticalSubtableIsNotAppliedToHorizontalText) {
   EXPECT_EQ(shape_bytes(small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
                 kern_format0({{1, 2, -50}}, 0x0005)}}), cps("AB"))[0].x_advance,
       500);
+}
+
+TEST(ShapeKern, AClassBasedSubtableCountsItsClassValuesFromTheSubtableStart) {
+  // HarfBuzz's reading, found by experiment: a left class value is the offset of its
+  // row from the start of the subtable, so A D is the first cell and C E the last.
+  const auto font = small_font({{GFNT_TAG('k', 'e', 'r', 'n'), kern_format2()}});
+  Glyphs ad = shape_bytes(font, cps("AD"));
+  EXPECT_EQ(ad[0].x_advance, 490);   // -20 shared: -10 each
+  EXPECT_EQ(ad[1].x_advance, 490);
+  Glyphs be = shape_bytes(font, cps("BE"));
+  EXPECT_EQ(be[0].x_advance, 460);   // -80
+  Glyphs ce = shape_bytes(font, cps("CE"));
+  EXPECT_EQ(ce[0].x_advance, 440);   // -120
+}
+
+TEST(ShapeKern, AGlyphOutsideAClassTableIsNotKernedByIt) {
+  const auto font = small_font({{GFNT_TAG('k', 'e', 'r', 'n'), kern_format2()}});
+  // F (6) has no row, so nothing follows it; G (7) is outside the right table, so
+  // nothing precedes it either, whatever the left glyph's row would have given.
+  EXPECT_EQ(shape_bytes(font, cps("FD"))[0].x_advance, 500);
+  EXPECT_EQ(shape_bytes(font, cps("FE"))[0].x_advance, 500);
+  EXPECT_EQ(shape_bytes(font, cps("AG"))[0].x_advance, 500);
+  EXPECT_EQ(shape_bytes(font, cps("CG"))[0].x_advance, 500);
 }
 
 TEST(ShapeKern, AGposWithNoKernFeatureLeavesKerningToTheTable) {

@@ -68,42 +68,55 @@ static int32_t gfnt_kern_format0(const GFNT_Reader * r, size_t subtable,
   return 0;
 }
 
-/** One pair's kerning from a class-based (format 2) subtable, or 0. */
+/**
+ * One pair's kerning from a class-based (format 2) subtable, or 0.
+ *
+ * The class values are byte offsets from the start of the *subtable*, not of the
+ * value array: a left value is the offset of its row (the array's own offset
+ * included) and a right value the offset of its column inside the row. A pair
+ * kerns only if both glyphs are in their class tables and the cell they name lies
+ * in the array. This is how HarfBuzz reads them, found by experiment on tables
+ * built to tell the readings apart: counting left values from the array kerns
+ * nothing there, and a glyph outside the right table is never kerned.
+ */
 static int32_t gfnt_kern_format2(const GFNT_Reader * r, size_t subtable,
-    size_t header, uint32_t left, uint32_t right, bool * bad) {
+    size_t length, size_t header, uint32_t left, uint32_t right, bool * bad) {
   size_t body = subtable + header;
-  uint32_t row_width = gfnt_lr_u16(r, body, bad);
   size_t left_table = subtable + gfnt_lr_u16(r, body + 2, bad);
   size_t right_table = subtable + gfnt_lr_u16(r, body + 4, bad);
-  size_t array = subtable + gfnt_lr_u16(r, body + 6, bad);
-  uint32_t l = 0;
-  uint32_t k = 0;
+  uint32_t array = gfnt_lr_u16(r, body + 6, bad);
+  uint32_t l;
+  uint32_t k;
   uint32_t first;
   uint32_t count;
 
-  (void)row_width;
   first = gfnt_lr_u16(r, left_table, bad);
   count = gfnt_lr_u16(r, left_table + 2, bad);
-  if (left >= first && left - first < count) {
-    l = gfnt_lr_u16(r, left_table + 4 + 2 * (size_t)(left - first), bad);
+  if (*bad || left < first || left - first >= count) {
+    return 0;
   }
+  l = gfnt_lr_u16(r, left_table + 4 + 2 * (size_t)(left - first), bad);
   first = gfnt_lr_u16(r, right_table, bad);
   count = gfnt_lr_u16(r, right_table + 2, bad);
-  if (right >= first && right - first < count) {
-    k = gfnt_lr_u16(r, right_table + 4 + 2 * (size_t)(right - first), bad);
+  if (*bad || right < first || right - first >= count) {
+    return 0;
   }
-  // The class values are byte offsets already: a row offset and a column offset.
-  return (int16_t)gfnt_lr_u16(r, array + l + k, bad);
+  k = gfnt_lr_u16(r, right_table + 4 + 2 * (size_t)(right - first), bad);
+  if (*bad || (size_t)l + k < array || (size_t)l + k + 2 > length) {
+    return 0;
+  }
+  return (int16_t)gfnt_lr_u16(r, subtable + l + k, bad);
 }
 
 /** One subtable's value for a pair, or 0. */
 static int32_t gfnt_kern_subtable_pair(const GFNT_Reader * r, size_t cursor,
-    size_t header, uint32_t format, uint32_t left, uint32_t right, bool * bad) {
+    size_t length, size_t header, uint32_t format, uint32_t left, uint32_t right,
+    bool * bad) {
   if (format == 0) {
     return gfnt_kern_format0(r, cursor, header, left, right, bad);
   }
   if (format == 2) {
-    return gfnt_kern_format2(r, cursor, header, left, right, bad);
+    return gfnt_kern_format2(r, cursor, length, header, left, right, bad);
   }
   return 0;
 }
@@ -196,7 +209,7 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
           continue;
         }
         j = it.idx;
-        kern = gfnt_kern_subtable_pair(r, cursor, header, format, b->info[i].glyph,
+        kern = gfnt_kern_subtable_pair(r, cursor, length, header, format, b->info[i].glyph,
             b->info[j].glyph, bad);
         if (cross) {
           if (kern) {

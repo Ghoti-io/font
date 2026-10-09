@@ -1,12 +1,14 @@
 # Design
 
-What is implemented reads the sfnt container, the metric tables, `cmap`
-and `name`, draws outlines, and shapes text through `GSUB`, `GPOS` and `kern`
-(§9; the default shaper only - §9.2 says which script shapers are not here).
-§18 lists that, and what of it is not built. Paragraph layout, font discovery
-and writing are not implemented. Layout and the script shapers need the
-`unicode` library. Reading a file, drawing an outline and applying a font's
-lookups do not.
+What is implemented reads the sfnt container, the metric tables, `cmap` and
+`name`, `glyf` and `CFF`/`CFF2` outlines (with their variation), bare CFF, Type 1
+and the standalone bitmap formats, rasterises an outline, and shapes text through
+`GSUB`, `GPOS`, `kern` and Apple's `morx`/`kerx`/`trak`, with a shaper for each
+script that needs one and a bidi-aware shaping call (§9; §18 is the list and says
+what is not built). Paragraph layout, font discovery and writing are not
+implemented, nor are WOFF, colour and the PNG strikes. Layout and the script shapers
+need the `unicode` library. Reading a file, drawing an outline and applying a
+font's lookups do not.
 
 `font` is the suite's font library: font files in - every family of them, not
 one - and positioned glyphs, coverage bitmaps and laid-out paragraphs out, with

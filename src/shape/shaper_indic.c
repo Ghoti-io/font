@@ -547,10 +547,6 @@ static void indic_update_consonant_positions(GFNT_ShapeCtx * ctx,
   }
 }
 
-static bool indic_below_bit(uint64_t below, size_t start, size_t i) {
-  return i - start < 64 && ((below >> (i - start)) & 1u) != 0;
-}
-
 static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     const IndicData * data, size_t start, size_t end) {
   GFNT_LBuffer * buf = ctx->buf;
@@ -559,7 +555,6 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   size_t base = end;
   bool has_reph = false;
   size_t limit = start;
-  uint64_t below = 0;
   size_t i;
 
   // Kannada: a syllable that starts with Ra, halant, ZWJ is shaped as Ra, ZWJ,
@@ -674,13 +669,7 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     limit = start;   // and the font is not asked to form one
   }
 
-  // Everything before the base is before it in the syllable. (The consonants the
-  // font forms below the base are noted first: `blwf` still reaches them.)
-  for (i = start; i < base && i - start < 64; i++) {
-    if (info[i].position == IP_BELOW_C && indic_is_consonant(&info[i])) {
-      below |= (uint64_t)1 << (i - start);
-    }
-  }
+  // Everything before the base is before it in the syllable.
   for (i = start; i < base; i++) {
     if (info[i].position > IP_PRE_C) {
       info[i].position = IP_PRE_C;
@@ -785,34 +774,24 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     for (i = start; i < limit; i++) {
       info[i].mask |= data->mask[IF_RPHF];
     }
-    // Pre-base. In an old-spec font `blwf` reaches only a Ra, a consonant the font
-    // forms below the base, and the halants beside them (found with one lookup per
-    // glyph); a new-spec font has it on every glyph there.
+    // Pre-base. In an old-spec font `blwf` reaches only a Devanagari-style Ra
+    // and its halant, and not when a ZWJ asks for a half form (found with a
+    // ligature for every pair of glyphs; a consonant the font forms below the base
+    // gets nothing here); a new-spec font has it on every glyph there.
     mask = data->mask[IF_HALF] | data->mask[IF_AKHN] | data->mask[IF_CJCT];
     if (config->blwf_mode == BLWF_PRE_AND_POST && !data->is_old_spec) {
       mask |= data->mask[IF_BLWF];
     }
     for (i = start; i < base; i++) {
-      // A ZWJ after the halant asks for a half form: neither the consonant nor
-      // the halant goes below the base (found with a ligature for every pair).
-      bool asks_half = info[i].category == IC_H
-          ? i + 1 < end && info[i + 1].category == IC_ZWJ
-          : i + 2 < end && info[i + 1].category == IC_H
-              && info[i + 2].category == IC_ZWJ;
-
       info[i].mask |= mask;
       if (config->blwf_mode == BLWF_PRE_AND_POST && data->is_old_spec
-          && !asks_half
           && ((info[i].category == IC_RA && config->virama == 0x094D
                   && i + 1 < end && info[i + 1].category == IC_H
                   && !(i + 2 < end && info[i + 2].category == IC_ZWJ))
-              || indic_below_bit(below, start, i)
-              || (info[i].category == IC_H
-                  && ((i > start && ((info[i - 1].category == IC_RA
-                          && config->virama == 0x094D
-                          && !(i + 1 < end && info[i + 1].category == IC_ZWJ))
-                          || indic_below_bit(below, start, i - 1)))
-                      || (i + 1 < base && indic_below_bit(below, start, i + 1)))))) {
+              || (info[i].category == IC_H && i > start
+                  && info[i - 1].category == IC_RA
+                  && config->virama == 0x094D
+                  && !(i + 1 < end && info[i + 1].category == IC_ZWJ)))) {
         info[i].mask |= data->mask[IF_BLWF];
       }
     }

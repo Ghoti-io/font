@@ -6209,6 +6209,18 @@ TEST(ShapeIndic, AKannadaSyllableStartingRaHalantZwjIsShapedAsRaZwjHalant) {
                 {0xCB0, 0xCCD, 0x200D}), (V{30}));
 }
 
+TEST(ShapeIndic, AnOldSpecFontGivesBlwfToNoConsonantButRa) {
+  // KA H KA H ZWJ KA with blwf ligatures of KA H (30) and H KA (31), which make
+  // KA a below-base form: nothing is substituted, as HarfBuzz 10.2.0 has it.
+  Bytes sub = lig_subtable({{1, {2}, 30}, {2, {1}, 31}});
+  V out = shape_indic_run("deva", "blwf", sub, 0x900, "deva",
+      {0x915, 0x94D, 0x915, 0x94D, 0x200D, 0x915});
+  for (uint16_t id : out) {
+    EXPECT_NE(id, 30u);
+    EXPECT_NE(id, 31u);
+  }
+}
+
 TEST(ShapeIndic, AnOldSpecRaIsGivenBlwfOnlyWhenItsHalantIsNotFollowedByAZwj) {
   // RA H ZWJ KA with a blwf substitution of RA (to 30): the ZWJ asks for an
   // explicit half form and the Ra is left alone. (HarfBuzz 10.2.0.)

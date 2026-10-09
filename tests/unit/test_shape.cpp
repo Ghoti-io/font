@@ -6221,6 +6221,25 @@ TEST(ShapeIndic, AnOldSpecFontGivesBlwfToNoConsonantButRa) {
   }
 }
 
+TEST(ShapeIndic, ARephIsProbedWithTwoGlyphsAndAConsonantWithoutRaCanFormOne) {
+  // Telugu KA H ZWJ with an rphf ligature of KA H (30): the font is asked about
+  // the first two glyphs only, so the KA is taken for a reph. (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{1, {2}, 30}});
+  EXPECT_EQ(shape_indic_run("tel2", "rphf", sub, 0xC00, "tel2",
+                {0xC15, 0xC4D, 0x200D}), (V{30}));
+}
+
+TEST(ShapeIndic, AHalantThatStartsASyllableIsNotAReph) {
+  // Devanagari H KA H KA with an rphf ligature of H KA (30): nothing is asked of
+  // a syllable that starts with a halant. (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{2, {1}, 30}});
+  V out = shape_indic_run("dev2", "rphf", sub, 0x900, "deva",
+      {0x94D, 0x915, 0x94D, 0x915});
+  for (uint16_t id : out) {
+    EXPECT_NE(id, 30u);
+  }
+}
+
 TEST(ShapeIndic, AnOldSpecRaIsGivenBlwfOnlyWhenItsHalantIsNotFollowedByAZwj) {
   // RA H ZWJ KA with a blwf substitution of RA (to 30): the ZWJ asks for an
   // explicit half form and the Ra is left alone. (HarfBuzz 10.2.0.)

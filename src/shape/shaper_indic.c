@@ -576,6 +576,7 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   // 1. Find the base consonant. If the syllable starts with Ra and a halant that
   // the font forms a reph from, the Ra is out of the running.
   if (data->mask[IF_RPHF] && start + 3 <= end
+      && info[start].category != IC_H
       && ((config->reph_mode == REPH_IMPLICIT
               && !indic_is_joiner(&info[start + 2]))
           || (config->reph_mode == REPH_EXPLICIT
@@ -583,8 +584,10 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     uint32_t glyphs[3] = {info[start].glyph, info[start + 1].glyph,
         config->reph_mode == REPH_EXPLICIT ? info[start + 2].glyph : 0};
 
+    // The font is asked about the three glyphs, and about the first two.
     if (indic_would(ctx, data, IF_RPHF, glyphs,
-            2 + (config->reph_mode == REPH_EXPLICIT ? 1u : 0u))) {
+            2 + (config->reph_mode == REPH_EXPLICIT ? 1u : 0u))
+        || indic_would(ctx, data, IF_RPHF, glyphs, 2)) {
       limit += 2;
       while (limit < end && indic_is_joiner(&info[limit])) {
         limit++;
@@ -666,7 +669,9 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   // there is no reph.
   if (has_reph && base == start && limit - base <= 2) {
     has_reph = false;
-    limit = start;   // and the font is not asked to form one
+    if (config->reph_mode != REPH_EXPLICIT) {
+      limit = start;   // and the font is not asked to form one
+    }
   }
 
   // Everything before the base is before it in the syllable.
@@ -773,6 +778,14 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
 
     for (i = start; i < limit; i++) {
       info[i].mask |= data->mask[IF_RPHF];
+    }
+    // The halants right after the reph are reached too, with their joiners
+    // (found with a ligature for every pair).
+    if (has_reph) {
+      for (i = limit; i < end && (info[i].category == IC_H
+              || (i > limit && indic_is_joiner(&info[i]))); i++) {
+        info[i].mask |= data->mask[IF_RPHF];
+      }
     }
     // Pre-base. In an old-spec font `blwf` reaches only a Devanagari-style Ra
     // and its halant, and not when a ZWJ asks for a half form (found with a

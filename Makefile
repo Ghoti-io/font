@@ -1030,7 +1030,7 @@ check-oracle-gsub: $(EXAMPLES)
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/indic_random_diff.py --scripts deva,beng,guru,gujr,orya,taml,telu,mlym \
 	    --feat $$f --reveal --seeds 160 || exit 1; \
 	done
-	@for f in half cjct abvf akhn rkrf nukt pres; do \
+	@for f in half cjct abvf akhn rkrf nukt pres rphf blwf pstf pref; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/indic_random_diff.py --scripts deva,beng,guru,gujr,orya,taml,telu,mlym \
 	    --feat $$f --reveal --pairs --seeds 160 || exit 1; \
 	done

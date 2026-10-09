@@ -1097,6 +1097,9 @@ check-oracle-morx: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --mort --types 0,1,2,4,5 --dont 0.2 --coverage --dontins 0.3 --delete 0.2 --seeds 1000
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 500 --delete 0.2 --dont 0.2 --coverage
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py --seeds 300 --delete 0.2 --dont 0.2 --coverage --direction rtl
+	@for m in "" --mort; do for d in "" ttb; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/morx_random_diff.py $$m --with-gsub --with-gdef --types 0,1,2,4,5 $${d:+--direction $$d} --seeds 200 || exit 1; \
+	done; done
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --kinds 1 --dont 0.4 --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --kinds 0,1,2,4,5,6 --cross 0.3 --seeds 300
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --kinds 4,5 --dont 0.4 --seeds 200

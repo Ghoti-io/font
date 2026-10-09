@@ -296,8 +296,8 @@ bool gfnt_l_would_apply(GFNT_LApply * c, uint32_t lookup_index,
 
 struct GFNT_ShapeFeature;
 
-/** Whether the face has Apple's glyph substitution table. */
-bool gfnt_morx_present(const GFNT_Face * face);
+/** Whether Apple's glyph substitution table does the substitution for this direction. */
+bool gfnt_morx_present(const GFNT_Face * face, bool vertical);
 /**
  * Run every `morx` chain over the run, as the features select. Glyphs a ligature
  * absorbed are left as 0xFFFF until ::gfnt_morx_remove_deleted().

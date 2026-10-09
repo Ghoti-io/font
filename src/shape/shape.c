@@ -609,7 +609,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
       info->lig_props = 0;
     }
   }
-  if (gfnt_morx_present(face)) {
+  if (gfnt_morx_present(face, vertical)) {
     // Apple's state machines stand in for `GSUB`.
     result = gfnt_morx_apply(face, &buf, native_rtl, vertical, options->features,
         options->feature_count, error);

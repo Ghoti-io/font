@@ -923,12 +923,13 @@ static uint32_t chain_flags(Ctx * c, size_t chain, uint32_t flags,
   return flags;
 }
 
-bool gfnt_morx_present(const GFNT_Face * face) {
-  // HarfBuzz reads `mort` only where the font has no `GSUB`: Konatu.ttf carries
-  // both, and its `mort` is not used.
-  return gfnt_face_has_table(face, GFNT_TAG_morx)
-      || (gfnt_face_has_table(face, GFNT_TAG_mort)
-          && !gfnt_face_has_table(face, GFNT_TAG('G', 'S', 'U', 'B')));
+bool gfnt_morx_present(const GFNT_Face * face, bool vertical) {
+  // Apple's tables do the substitution in horizontal text whatever else the font
+  // has, and in vertical text only where it has no `GSUB` (Konatu.ttf has a `mort`
+  // for vertical forms and a `GSUB` with `vert`, and HarfBuzz leaves the `mort`).
+  return (gfnt_face_has_table(face, GFNT_TAG_morx)
+          || gfnt_face_has_table(face, GFNT_TAG_mort))
+      && !(vertical && gfnt_face_has_table(face, GFNT_TAG('G', 'S', 'U', 'B')));
 }
 
 GFNT_Result gfnt_morx_apply(const GFNT_Face * face, GFNT_LBuffer * buf,

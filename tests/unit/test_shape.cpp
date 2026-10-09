@@ -4951,6 +4951,32 @@ TEST(ShapeMort, ANoncontextualSubtableMapsGlyphToGlyph) {
   EXPECT_EQ(morx_run(font, "ABCDE"), (P{{1, 0}, {2, 1}, {3, 2}, {4, 3}, {9, 4}}));
 }
 
+TEST(ShapeMort, AFontWithAGsubTooHasItsMortDoHorizontalTextAndItsGsubVerticalText) {
+  // The same noncontextual mort as above, and a GSUB with `liga` that would add one
+  // to glyph 5. Horizontally the mort does the substitution and E becomes glyph 9;
+  // vertically the mort is left alone for the GSUB, whose `liga` is not a feature
+  // of vertical text, so E stays. (HarfBuzz 10.2.0.)
+  Bytes mort = Bytes {
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x00, 0x04,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x05, 0x00, 0x03, 0x00, 0x09,
+    0x00, 0x09, 0x00, 0x09};
+  Font font(small_font({{GFNT_TAG('m', 'o', 'r', 't'), mort},
+      {kGSUB, layout_table("latn", -1, {{"liga", {0}}},
+          {{1, 0, single_delta({5}, 1)}})}}, 40));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  Glyphs g;
+
+  ASSERT_EQ(shape(font, cps("ABCDE"), request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 5u);
+  EXPECT_EQ(g[4].glyph, 9u);
+  request.vertical = GFNT_DIRECTION_TTB;
+  ASSERT_EQ(shape(font, cps("ABCDE"), request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 5u);
+  EXPECT_EQ(g[4].glyph, 5u);
+}
+
 TEST(ShapeMort, AContextualSubtableSubstitutesAtAMarkThatWasNeverSet) {
   // Offsets count words from the start of the state table, and the glyph is added
   // to them. An A substitutes the glyph at the mark, the first one, though no

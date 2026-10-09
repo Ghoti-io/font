@@ -6240,6 +6240,34 @@ TEST(ShapeIndic, AHalantThatStartsASyllableIsNotAReph) {
   }
 }
 
+TEST(ShapeIndic, AnyNumberOfJoinersCanPrecedeAMatra) {
+  // Five ZWJ and a sign U with a cjct ligature of ZWJ ZWJ (30): all of them are
+  // one syllable, so the ligature forms twice and then once more for the sixth
+  // glyph... here two pairs and the sign. (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{4, {4}, 30}});
+  EXPECT_EQ(shape_indic_run("dev2", "cjct", sub, 0x900, "deva",
+                {0x200D, 0x200D, 0x200D, 0x200D, 0x941}), (V{30, 30, 5}));
+}
+
+TEST(ShapeIndic, ALeftMatraMergesTheClustersItMovedAcrossIncludingTheBase) {
+  // Bengali KA ZWNJ E H with abvs ligatures of E KA (30) and ZWNJ H (31): the
+  // matra moved over the KA and the ZWNJ, so everything is in cluster 0.
+  // (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{6, {1}, 30}, {7, {2}, 31}});
+  Font font(small_font({{kGSUB, layout_table("bng2", -1, {{"abvs", {0}}},
+      {{4, 0, sub}})}}, 40,
+      {{0x995, 1}, {0x9CD, 2}, {0x9C7, 6}, {0x200C, 7}}));
+  EXPECT_EQ(font.result, GFNT_OK);
+  Glyphs g;
+  Request request;
+  request.script = "beng";
+  EXPECT_EQ(shape(font, {0x995, 0x200C, 0x9C7, 0x9CD}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(ids(g), (V{30, 31}));
+  EXPECT_EQ(g[0].cluster, 0u);
+  EXPECT_EQ(g[1].cluster, 0u);
+}
+
 TEST(ShapeIndic, AnOldSpecRaIsGivenBlwfOnlyWhenItsHalantIsNotFollowedByAZwj) {
   // RA H ZWJ KA with a blwf substitution of RA (to 30): the ZWJ asks for an
   // explicit half form and the Ra is left alone. (HarfBuzz 10.2.0.)

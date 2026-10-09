@@ -360,13 +360,14 @@ static GFNT_Nfa * indic_grammar(void) {
   cn = SEQ(SEQ(c, OPT(SYM(IC_ZWJ))), n);
   forced_rakar = SEQ(SEQ(SYM(IC_ZWJ), SYM(IC_H)), SEQ(SYM(IC_ZWJ), SYM(IC_RA)));
   symbol = SEQ(SYM(IC_SYMBOL), OPT(SYM(IC_N)));
-  matra_group = SEQ(SEQ(REP(z, 0, 3), SET(BIT(IC_M) | BIT(IC_GRAMMAR_MA))), SEQ(OPT(SYM(IC_N)),
-      OPT(ALT(SYM(IC_H), forced_rakar))));
+  matra_group = SEQ(SEQ(STAR(z), SET(BIT(IC_M) | BIT(IC_GRAMMAR_MA))), SEQ(OPT(SYM(IC_N)),
+      OPT(SYM(IC_H))));
   syllable_tail = SEQ(OPT(SEQ(SEQ(SEQ(OPT(z), SYM(IC_SM)),
       SEQ(OPT(SYM(IC_SM)), OPT(SYM(IC_ZWNJ)))), OPT(SYM(IC_GRAMMAR_MA)))),
       STAR(SET(BIT(IC_A) | BIT(IC_VD))));
   place_holder = SET(BIT(IC_PLACEHOLDER) | BIT(IC_DOTTEDCIRCLE));
   halant_group = SEQ(OPT(z), SEQ(SYM(IC_H), OPT(SEQ(SYM(IC_ZWJ), OPT(SYM(IC_N))))));
+  (void)forced_rakar;
   final_halant_group = ALT(halant_group, SEQ(SYM(IC_H), SYM(IC_ZWNJ)));
   medial_group = OPT(SYM(IC_CM));
   halant_or_matra_group = ALT(final_halant_group, STAR(matra_group));
@@ -576,7 +577,8 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
   // 1. Find the base consonant. If the syllable starts with Ra and a halant that
   // the font forms a reph from, the Ra is out of the running.
   if (data->mask[IF_RPHF] && start + 3 <= end
-      && info[start].category != IC_H
+      && info[start].category != IC_H && info[start].category != IC_N
+      && !indic_is_joiner(&info[start])
       && ((config->reph_mode == REPH_IMPLICIT
               && !indic_is_joiner(&info[start + 2]))
           || (config->reph_mode == REPH_EXPLICIT
@@ -895,7 +897,7 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
       gfnt_merge_clusters(info, buf->len, base, end);
     }
     else {
-      for (i = base + 1; i < end; i++) {
+      for (i = base; i < end; i++) {
         if (info[i].syllable != 255) {
           size_t max = i;
           size_t j = start + info[i].syllable;

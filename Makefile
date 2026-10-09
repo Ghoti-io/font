@@ -676,13 +676,14 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
 .PHONY: fuzz-cff2 fuzz-run-cff2 fuzz-metvar fuzz-run-metvar fuzz-vartables fuzz-run-vartables
-.PHONY: fuzz-shape fuzz-run-shape
+.PHONY: fuzz-shape fuzz-run-shape fuzz-subset fuzz-run-subset
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
+.PHONY: check-oracle-subset
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -1138,6 +1139,10 @@ check-oracle-hb: ## Diff what every corpus string shapes to against HarfBuzz
 check-oracle-hb: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/hb_diff.py --quiet \
 		--check-golden tests/data/golden/shape.txt
+
+check-oracle-subset: ## Subset every corpus font; hold HarfBuzz's shaping and fontTools' closure to it
+check-oracle-subset: $(EXAMPLES)
+	@$(ORACLE_RUN) harfbuzz,fonttools -- python3 $(ORACLE)/subset_diff.py --quiet
 
 check-oracle-cff: ## Diff every CFF glyph's program, path and advance against fontTools
 check-oracle-cff: $(EXAMPLES)
@@ -1836,6 +1841,9 @@ $(eval $(call fuzz-rule,fuzz_vartables,vartables))
 # checks that asking twice gives one answer, that every cluster is a position in
 # the text and runs in one direction, and that a run never outgrows the limit.
 $(eval $(call fuzz-rule,fuzz_shape,shape))
+# fuzz_subset takes a whole font and an options byte, and checks that every subset it
+# manages to make loads again.
+$(eval $(call fuzz-rule,fuzz_subset,subset))
 # fuzz_cff takes the whole `CFF ` table, because a CFF is a nest of offsets that
 # point at each other - the Top DICT at the charset and the CharStrings INDEX, the
 # Private DICT at its local subroutines *relative to itself* - and a fuzzer given

@@ -840,6 +840,16 @@ def main():
         [(128, 128, 0), (128, 512, 0), (512, 512, 0), (512, 128, 0)]]))
     write_pair(corpus / "raster/one-point.seed", 0x01, 0x10, raster_points([
         [(64, 64, 0)]]))
+
+    # Subsetter: a fixture with an options byte in front, so the fuzzer starts from
+    # fonts that have composites, ligatures and every layout lookup.
+    for fixture, label in (("outline-composite.ttf", "composite"),
+                        ("layout-gsub.ttf", "gsub"), ("layout-gpos.ttf", "gpos"),
+                        ("basic.ttf", "basic")):
+        data = (root / "tests/data/fonts" / fixture).read_bytes()
+        for options, kind in ((0x00, "renumber"), (0x01, "retain"),
+                              (0x05, "retain-unhinted"), (0x43, "restricted")):
+            write(corpus / ("subset/%s-%s.seed" % (label, kind)), options, data)
     return 0
 
 

@@ -6173,6 +6173,24 @@ TEST(ShapeIndic, AnOldSpecHalantMovesAfterTheLastConsonantEvenBeforeAFinalHalant
                 {0xC95, 0xCCD, 0xC95, 0xCCD}), (V{1, 31, 2}));
 }
 
+TEST(ShapeIndic, AnOldSpecNuktaBeforeAHalantTakesTheNextConsonantsPositionBeforeTheHalantMoves) {
+  // Odia KA NUKTA H KA I with blwf ligatures of H KA (31, which makes the second
+  // KA a below-base form) and I NUKTA (30): the nukta and halant take the KA's
+  // position before the halant moves behind it, so the above-base I sorts ahead
+  // of the nukta. (HarfBuzz 10.2.0.)
+  Bytes sub = lig_subtable({{2, {1}, 31}, {7, {6}, 30}});
+  Font font(small_font({{kGSUB, layout_table("orya", -1, {{"blwf", {0}}},
+      {{4, 0, sub}})}}, 40,
+      {{0xB15, 1}, {0xB4D, 2}, {0xB30, 3}, {0x200D, 4}, {0xB41, 5},
+          {0xB3C, 6}, {0xB3F, 7}}));
+  EXPECT_EQ(font.result, GFNT_OK);
+  Glyphs g;
+  Request request;
+  request.script = "orya";
+  EXPECT_EQ(shape(font, {0xB15, 0xB3C, 0xB4D, 0xB15, 0xB3F}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{1, 30, 1, 2}));
+}
+
 TEST(ShapeIndic, AVatuFormPutsAConsonantBelowTheBaseInTeluguButNotInDevanagari) {
   // KA H KA U with a vatu ligature of H KA (30): in Telugu the second KA is below
   // the base, so the sign U, which belongs after the base, comes before the pair;

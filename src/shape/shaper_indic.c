@@ -709,32 +709,6 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
     info[start].position = IP_RA_TO_BECOME_REPH;
   }
 
-  // For old-style script tags, the first post-base halant moves to after the last
-  // consonant, whatever is there, except in Kannada, which leaves it where it is
-  // when the syllable ends in a halant.
-  if (data->is_old_spec) {
-    // Only Kannada leaves it where it is when the syllable ends in a halant
-    // (found with a ligature for every pair of glyphs, in every script).
-    bool disallow_double_halants = config->virama == 0x0CCD;
-
-    for (i = base + 1; i < end; i++) {
-      if (info[i].category == IC_H) {
-        size_t j;
-
-        for (j = end - 1; j > i; j--) {
-          if (indic_is_consonant(&info[j])
-              || (disallow_double_halants && info[j].category == IC_H)) {
-            break;
-          }
-        }
-        if (info[j].category != IC_H && j > i) {
-          indic_move(buf, i, j);
-        }
-        break;
-      }
-    }
-  }
-
   // Attach joiners, nukta, register shifters, medials and halants to the previous
   // character, to move with it.
   {
@@ -774,6 +748,32 @@ static void indic_reorder_consonant_syllable(GFNT_ShapeCtx * ctx,
               | FLAG(IC_RS) | HALANT_OR_COENG_FLAGS))) {
         info[k - 1].position = info[i].position;
         k--;
+      }
+    }
+  }
+
+  // For old-style script tags, the first post-base halant moves to after the last
+  // consonant, whatever is there, except in Kannada, which leaves it where it is
+  // when the syllable ends in a halant.
+  if (data->is_old_spec) {
+    // Only Kannada leaves it where it is when the syllable ends in a halant
+    // (found with a ligature for every pair of glyphs, in every script).
+    bool disallow_double_halants = config->virama == 0x0CCD;
+
+    for (i = base + 1; i < end; i++) {
+      if (info[i].category == IC_H) {
+        size_t j;
+
+        for (j = end - 1; j > i; j--) {
+          if (indic_is_consonant(&info[j])
+              || (disallow_double_halants && info[j].category == IC_H)) {
+            break;
+          }
+        }
+        if (info[j].category != IC_H && j > i) {
+          indic_move(buf, i, j);
+        }
+        break;
       }
     }
   }

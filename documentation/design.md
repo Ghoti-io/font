@@ -117,19 +117,21 @@ which of them this library takes, and which of those it reads today.
 
 | Family | Formats | Verdict |
 | --- | --- | --- |
-| **sfnt-wrapped** | `.ttf`, `.otf`, `.ttc`/`.otc` | **required.** The container, the metric tables, `cmap` and `name` are implemented. `glyf` and `CFF ` are not |
+| **sfnt-wrapped** | `.ttf`, `.otf`, `.ttc`/`.otc` | **required.** The container, the metric tables, `cmap`, `name`, `glyf` and `CFF ` are implemented |
 | | WOFF 1 | **required**, not implemented |
-| | `EBDT`/`EBLC`/`EBSC` strikes; `COLR` v0 + `CPAL` | **wanted**, not implemented |
+| | `EBDT`/`EBLC`/`EBSC` strikes | **implemented** (grey depths are listed and their data declined) |
+| | `COLR` v0 + `CPAL` | **wanted**, not implemented |
 | | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | wanted, not implemented; colour bitmaps need `image` |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |
-| | WOFF 2 | not here; it waits on Brotli in `compress` |
+| | WOFF 2 | not implemented; `compress` has a full Brotli decoder now, and the glyf/loca transform is the work |
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
-| | AAT (`morx`/`kerx`/...), `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
+| | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
+| | `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
 | **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
-| **standalone outline** | Type 1 (`.pfb`/`.pfa` + `.afm`/`.pfm`), bare `CFF` | **wanted**, not implemented |
+| **standalone outline** | Type 1 (`.pfb`/`.pfa`), bare `CFF` | **implemented**; `.afm`/`.pfm` sidecars are not read |
 | | Type 3, Type 42, Multiple Master, standalone SVG fonts, Metafont | absent; Type 3 is a PDF library's (§13.3) |
 | | Hershey strokes | optional; needs no rasteriser |
 | **sidecars** | AFM/PFM, `fonts.dir`/`fonts.alias`, the AGL, the OpenType language registry | with the formats that need them |
@@ -791,8 +793,8 @@ library does not composite gradients: that is a graphics library's job, and
 function of the others), `gvar` (the
 tuple variation store, shared point numbers, packed deltas, and IUP
 interpolation of unreferenced points), `HVAR` (advance and left-side-bearing
-deltas through the item variation store and delta-set index maps; `VVAR` is not
-read, because no vertical metric is), `MVAR` (the metric tags), `cvar` (the control
+deltas through the item variation store and delta-set index maps; `VVAR` is read for vertical advances and origins,
+which shaping asks for), `MVAR` (the metric tags), `cvar` (the control
 values of `cvt `, which is data for a hinting interpreter this library does not have),
 `STAT` (axis value formats 1-4, and which of them name a location) and `GSUB`/`GPOS`
 `FeatureVariations` (which record applies at a location and what it substitutes; the
@@ -1264,13 +1266,17 @@ supplies features and *pauses* between stages, a normalisation mode and hooks, t
 masks that say which glyphs a feature reaches, and what to do with marks
 (`plan.h`).
 
-Departures from 9.2, each stated rather than approximated: **no Indic, Hangul,
-Khmer, Myanmar, Thai or Universal Shaping Engine shaper**,
-**no vertical text**, no `GFNT_Scale` (positions are in font units), anchors by
-contour point read their stated coordinates, and a device table for a pixel size
-is ignored. The oracle (§14) is `hb-shape`, and
-`tools/oracle/hb_diff.py` names each of those as a gap and holds the rest to the
-glyph, the cluster, the advance and the offset.
+The shapers of 9.2 are all built: Arabic and the scripts that join like it, Hebrew,
+Thai and Lao, Hangul, the Indic scripts, Khmer, Myanmar and the Universal Shaping
+Engine's scripts, and vertical text (including its `VVAR` origin and advance at a
+location). Apple's `morx`/`mort`, `kerx` and `trak` are applied as HarfBuzz applies
+them. Departures from 9.2, each stated rather than approximated: no `GFNT_Scale`
+(positions are in font units), anchors by contour point read their stated
+coordinates, and a device table for a pixel size is read only when the caller gives
+`ppem`. The oracle (§14) is `hb-shape`, and `tools/oracle/hb_diff.py` names a few
+characters in nine scripts that are sorted differently as a known gap and holds the
+rest to the glyph, the cluster, the advance and the offset; `notes/font/SHAPING.md`
+records how each rule was found and what is still open in the Indic scripts.
 
 ---
 
@@ -1287,7 +1293,7 @@ drew.
 
 | # | Thing | Where |
 | --- | --- | --- |
-| 1 | Shaping | `font` shaping - the default shaper is implemented, the script shapers are not |
+| 1 | Shaping | `font` shaping - implemented, including the script shapers (§9.6) |
 | 2 | Run measurement: advance sum, ink extents | `font` shaping; the advance sum is a sum over the run, the ink extents are not built |
 | 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, not implemented |
 | 4 | Break opportunities: UAX #14 lines, UAX #29 graphemes and words | `unicode`, applied here |
@@ -1976,7 +1982,7 @@ file or the request names it, and nowhere is there a function that pretends.
 - **The TrueType hinting interpreter and any autohinter** (M3, §8.5).
 - **WOFF 2** until `compress` has Brotli.
 - **The `SVG ` table** until `text` has XML, and an SVG subset after that.
-- **AAT** (`morx`, `kerx`, `feat`, `trak`, ...), **`.dfont`**,
+- **The rest of AAT** (`feat`, `kerx` format 3 and the like; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.
 - **Synthetic bold and oblique**, LCD filtering, stem darkening.
 - **Hyphenation data**, **`SA` dictionaries**, **Knuth-Plass**, vertical layout,
@@ -3023,9 +3029,9 @@ What that cost in findings:
 
 **Not built:** `CBDT` and `sbix` (§7.5); colour
 (§7.6);
-`VVAR` and a `FeatureVariations` condition of format 2 (§7.7); shaping, layout, discovery and the writer; the multi-byte
-Macintosh and Microsoft `name` encodings (§7.2); `vhea`/`vmtx`, `gasp`, `kern`
-and WOFF 1. `maxp` has no `_dump` because nothing
+a `FeatureVariations` condition of format 2 (§7.7); paragraph layout, discovery and the writer; the multi-byte
+Macintosh and Microsoft `name` encodings (§7.2); `gasp`
+and WOFF 1 and 2. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is
 **still only its enum, and now deliberately rather than for want of a second
 arm**: there are two kinds of glyph data, and each has an accessor of its own -

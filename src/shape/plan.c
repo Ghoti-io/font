@@ -697,10 +697,12 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
       !plan->vertical);
   // Where a font carries Apple's substitution table it is used, and `GSUB` is
   // not: the font's own state machines make the forms, so no script's shaper (HarfBuzz issue 1528) is wanted.
+  // Whether marks are put where they go by the fallback is still the script's own
+  // say with a morx (Arabic and Hebrew do it, Thai and the Indic scripts do not).
+  plan->fallback_marks = plan->shaper->fallback_position;
   if (gfnt_morx_present(face, plan->vertical)) {
-    // And the glyph classes the shaper would have made up from the characters
-    // are not made either, for the scripts that had a shaper of their own.
-    plan->no_synthetic_classes = plan->shaper != &gfnt_shaper_default;
+    // Marks of a script that had a shaper of its own are classed but not zeroed.
+    plan->no_zero_marks = plan->shaper != &gfnt_shaper_default;
     plan->shaper = &gfnt_shaper_default;
   }
 
@@ -856,29 +858,43 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
     plan->tables[1].present = false;
     plan->tables[1].kern_found = false;
   }
-  // Apple's kerning replaces the font's own `GPOS`, and the `kern` table as well.
-  // A font that has both a `GSUB` and a `GPOS` is positioned by the `GPOS`, which
-  // HarfBuzz takes for an OpenType font (found with random fonts of each). In
-  // horizontal text the `kerx` is then left out altogether; in vertical text, where
-  // the `kerx` kerns nothing here anyway, marks still keep their widths for it.
-  plan->gpos_over_kerx = gfnt_kerx_present(face)
+  /*
+   * Which of GSUB, morx/mort, GPOS, kerx and kern run. None of this is in a
+   * specification; it is HarfBuzz 10.2.0's behaviour, read off
+   * tools/oracle/precedence_probe.py, which shapes a font for every subset of the
+   * tables in every direction and script and prints what was applied:
+   *
+   *   substitution  morx/mort runs if the font has one, except in vertical text
+   *                 when it also has a GSUB (then the GSUB runs). Never both.
+   *   kerx          runs unless the font has GSUB and GPOS and no morx that runs:
+   *                 then the GPOS positions and the kerx does nothing.
+   *   GPOS          is dropped when a kerx runs; otherwise it runs.
+   *   kern          runs, in horizontal text, only if no kerx is in the font
+   *                 (used or not) and the GPOS has no `kern` feature.
+   *   marks         a kerx in the font (used or not) takes away the step that
+   *                 zeroes their advance and the fallback that places them,
+   *                 except that a GPOS that kerns brings the zeroing back.
+   *                 A kern table with cross-stream kerning does the same.
+   *   morx + marks  the script's own shaper is replaced by the default one, but
+   *                 its fallback_position stays, marks are classed (they are
+   *                 skipped) but not zeroed, and zeroing never adjusts offsets.
+   */
+  plan->kerx_font = gfnt_kerx_present(face);
+  plan->gpos_over_kerx = plan->kerx_font
       && gfnt_face_has_table(face, GFNT_TAG('G', 'S', 'U', 'B'))
       && gfnt_face_has_table(face, GFNT_TAG('G', 'P', 'O', 'S'))
       && !gfnt_morx_present(face, plan->vertical);
-  plan->apply_kerx = gfnt_kerx_present(face)
-      && !(plan->gpos_over_kerx && !plan->vertical);
-  if (plan->apply_kerx && !plan->gpos_over_kerx) {
+  plan->apply_kerx = plan->kerx_font && !plan->gpos_over_kerx;
+  plan->marks_keep_width = plan->kerx_font
+      && !(plan->gpos_over_kerx && plan->tables[1].kern_found);
+  if (plan->apply_kerx) {
     plan->tables[1].present = false;
     plan->tables[1].kern_found = false;
   }
-  // Kerning is the table's job when GPOS has none of its own: a font from before
-  // OpenType layout, or one whose GPOS carries only marks.
   plan->kern_fallback = !plan->vertical && plan->kern_mask != 0
-      && !plan->tables[1].kern_found && !plan->apply_kerx;
-  // A `kern` table that moves glyphs across the line keeps marks where they were
-  // put, whichever way the text runs.
+      && !plan->tables[1].kern_found && !plan->kerx_font;
   plan->kern_cross_stream = (plan->vertical || plan->kern_mask != 0)
-      && !plan->tables[1].kern_found && !plan->apply_kerx
+      && !plan->tables[1].kern_found && !plan->kerx_font
       && gfnt_kern_has_cross_stream(face);
   if (plan->shaper->data_create) {
     plan->shaper_data = plan->shaper->data_create(plan, a);

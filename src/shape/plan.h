@@ -159,8 +159,11 @@ struct GFNT_Plan {
   size_t feature_capacity;
   uint32_t global_mask;
   uint32_t kern_mask;         ///< The `kern` feature's bits, or 0 when it is off.
-  bool apply_kerx;            ///< The font has `kerx`: it kerns, and `GPOS` and `kern` do not run (unless below).
-  bool gpos_over_kerx;        ///< ... but a font with `GSUB` and `GPOS` is positioned by the `GPOS`, not the `kerx`.
+  bool kerx_font;             ///< The font has a `kerx`, used or not: it keeps marks at their width and `kern` is left out.
+  bool fallback_marks;        ///< The script's own shaper positions marks by the fallback (kept when a morx replaces it).
+  bool marks_keep_width;      ///< A `kerx` takes the mark-zeroing step away (see `kerx_font`).
+  bool apply_kerx;            ///< The `kerx` runs: it kerns, and `GPOS` and `kern` do not.
+  bool gpos_over_kerx;        ///< A font with `GSUB` and `GPOS` and no running morx is positioned by the `GPOS`, not the `kerx`.
   bool kern_fallback;         ///< `GPOS` does not kern, so the `kern` table does.
   bool kern_cross_stream;     ///< The `kern` table kerns across the line and `GPOS` does not.
   GFNT_PlanTable tables[2];   ///< GSUB, GPOS.
@@ -177,7 +180,7 @@ struct GFNT_Plan {
   bool has_frac;
   bool has_mark_feature;      ///< `mark` is in a language system of either table.
   bool native_rtl;
-  bool no_synthetic_classes; ///< `morx` stood in for a script's own shaper.
+  bool no_zero_marks; ///< `morx` stood in for a script's own shaper: marks are classed but not zeroed.
   bool vertical;              ///< The run is top to bottom or bottom to top.
 };
 

@@ -1110,6 +1110,10 @@ check-oracle-morx: $(EXAMPLES)
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --with-gdef --kinds $$k --seeds 200 || exit 1; \
 	done
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table kern --with-gdef --seeds 200
+	@for t in latn native; do for o in "" "--gdef --glyf" "--vert --gdef --glyf"; do \
+	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/precedence_probe.py $$o --ltag $$t \
+	    --scripts latn,arab,hebr,thai,deva,khmr,mymr,bali || exit 1; \
+	done; done
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/mixed_random_diff.py --drop kerx --seeds 800
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/mixed_random_diff.py --drop morx,mort --kinds 0,2,4,5,6 --seeds 800
 	@for d in "" rtl ttb; do \

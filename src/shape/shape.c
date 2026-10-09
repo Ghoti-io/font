@@ -598,9 +598,6 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
       if (gdef.has_glyph_classes) {
         info->props = gfnt_gdef_props(&props, info->glyph);
       }
-      else if (plan.no_synthetic_classes) {
-        info->props = GFNT_PROP_BASE;
-      }
       else {
         info->props = info->gc == GUNI_GC_NONSPACING_MARK
                 && !(info->flags & GFNT_GF_DEFAULT_IGNORABLE)
@@ -688,7 +685,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   gfnt_fallback_spaces(face, &buf, options->variation, vertical);
 
   // A shaper that wants marks taken out of the width before positioning says so.
-  if (plan.shaper->zero_width_marks == 1 && !plan.apply_kerx) {
+  if (plan.shaper->zero_width_marks == 1 && !plan.marks_keep_width
+      && !plan.no_zero_marks) {
     gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl
         && !plan.kern_cross_stream);
   }
@@ -768,7 +766,8 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // A mark takes no room of its own: its advance is folded into where it sits.
   // With a GPOS the font has already said where; without one, the mark is pulled
   // back over the base it follows.
-  if (plan.shaper->zero_width_marks == 2 && !plan.apply_kerx) {
+  if (plan.shaper->zero_width_marks == 2 && !plan.marks_keep_width
+      && !plan.no_zero_marks) {
     gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl
         && !gfnt_morx_present(face, vertical)
         && !plan.kern_cross_stream);
@@ -787,11 +786,12 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   }
   // A font with no `GPOS` does not say where a mark goes, so the shaper does.
   // (Nor does Apple's `kerx`, which replaced the `GPOS` and zeroes no marks.)
-  if (!plan.tables[1].present && !plan.apply_kerx
+  if (!plan.tables[1].present && !plan.kerx_font
       && !plan.kern_cross_stream
-      && plan.shaper->fallback_position) {
-    gfnt_fallback_mark_position(face, &buf, options->variation, !native_rtl,
-        !native_rtl, !native_rtl, vertical);
+      && plan.fallback_marks) {
+    gfnt_fallback_mark_position(face, &buf, options->variation,
+        !native_rtl && !gfnt_morx_present(face, vertical), !native_rtl,
+        !native_rtl, vertical);
   }
   // The run is turned into the order it is drawn in before the default-ignorables
   // are dealt with, so that the clusters of those taken out go the way HarfBuzz

@@ -126,7 +126,7 @@ const GFNT_Shaper * gfnt_shaper_select(GFNT_Tag script, GFNT_Tag chosen,
         ? &gfnt_shaper_myanmar : &gfnt_shaper_default;
   }
   if (script == GFNT_TAG('k', 'h', 'm', 'r')) {
-    return font_has_script ? &gfnt_shaper_khmer : &gfnt_shaper_default;
+    return &gfnt_shaper_khmer;
   }
   if (gfnt_script_is_indic(script)) {
     return font_has_script ? &gfnt_shaper_indic : &gfnt_shaper_default;

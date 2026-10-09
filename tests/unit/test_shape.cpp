@@ -6005,3 +6005,61 @@ TEST(ShapeKerx, AMorxThatRunsLeavesTheKerxToPositionEvenBesideAGsubAndGpos) {
   EXPECT_EQ(g[0].x_advance, 450);
   EXPECT_EQ(g[1].x_advance, 450);
 }
+
+TEST(ShapeKerx, AKerxTheGposStandsInForStillKeepsMarksWideUnlessTheGposKerns) {
+  // GSUB, GPOS and a kerx: the GPOS positions and the kerx does nothing, yet the
+  // font has a kerx, so the mark (glyph 3, by GDEF) is not zeroed - unless the GPOS
+  // has a kern feature of its own. A kern table beside it is left out either way.
+  // (HarfBuzz 10.2.0, from precedence_probe.py.)
+  Bytes gdef = gdef_one_class(3, 3);
+  Bytes kerx = kerx_table({kerx_pairs({{1, 2, -100}})});
+  Bytes kern = kern_format0({{1, 2, -50}});
+  Bytes gsub = layout_table("latn", -1, {{"liga", {}}}, {});
+  auto run = [&](const char * gpos_feature) {
+    return shape_bytes(small_font({{kGSUB, gsub},
+        {kGPOS, layout_table("latn", -1, {{gpos_feature, {}}}, {})},
+        {GFNT_TAG('G', 'D', 'E', 'F'), gdef}, {GFNT_TAG('k', 'e', 'r', 'x'), kerx},
+        {GFNT_TAG('k', 'e', 'r', 'n'), kern}}), cps("ABC"));
+  };
+  Glyphs plain = run("ccmp");
+  Glyphs kerning = run("kern");
+
+  ASSERT_EQ(plain.size(), 3u);
+  EXPECT_EQ(plain[0].x_advance, 500);   // neither the kerx nor the kern table
+  EXPECT_EQ(plain[2].x_advance, 500);   // the mark keeps its width
+  ASSERT_EQ(kerning.size(), 3u);
+  EXPECT_EQ(kerning[0].x_advance, 500);
+  EXPECT_EQ(kerning[2].x_advance, 0);
+}
+
+TEST(ShapeKhmer, TheKhmerShaperIsUsedForAFontWithOnlyLatnLayoutToo) {
+  // Its liga is switched off, whichever script the font's GSUB is for.
+  // (HarfBuzz 10.2.0.)
+  Font font(small_font({{kGSUB, layout_table("latn", -1, {{"liga", {0}}},
+      {{1, 0, single_delta({1}, 1)}})}}, 8, {{0x1780, 1}}));
+  Glyphs g;
+  Request request;
+  request.script = "khmr";
+  ASSERT_EQ(shape(font, V{0x1780}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 1u);
+  EXPECT_EQ(g[0].glyph, 1u);
+}
+
+TEST(ShapeMorx, AThaiMarkKeepsItsWidthAndAKernSkipsItBecauseItIsClassed) {
+  // The Thai shaper is replaced by the default one, but its refusal to zero or
+  // place marks stays, while the mark is still a mark to the kerning, which pairs
+  // the base with the glyph after it. (HarfBuzz 10.2.0.)
+  Bytes sub = morx_subtable(4, 0, 1, lookup6({{9, 9}}));
+  Font font(small_font({{GFNT_TAG('m', 'o', 'r', 'x'), morx_table(1, {}, {sub})},
+      {GFNT_TAG('k', 'e', 'r', 'n'), kern_format0({{1, 2, -50}})}}, 40,
+      {{0xE01, 1}, {0xE31, 3}, {0xE02, 2}}));
+  ASSERT_EQ(font.result, GFNT_OK);
+  Glyphs g;
+  Request request;
+  request.script = "thai";
+  ASSERT_EQ(shape(font, V{0xE01, 0xE31, 0xE02}, request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(g[1].x_advance, 500);
+  EXPECT_EQ(g[1].x_offset, 0);
+  EXPECT_EQ(g[0].x_advance, 475);
+}

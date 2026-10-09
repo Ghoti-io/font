@@ -243,6 +243,9 @@
 #define gfnt_face_layout_dump GHOTIIO_FONT(gfnt_face_layout_dump)
 #define gfnt_shape_script_of GHOTIIO_FONT(gfnt_shape_script_of)
 #define gfnt_shape_script_direction GHOTIIO_FONT(gfnt_shape_script_direction)
+#define GFNT_WriteTable GHOTIIO_FONT(GFNT_WriteTable)
+#define gfnt_write_sfnt GHOTIIO_FONT(gfnt_write_sfnt)
+#define gfnt_write_woff GHOTIIO_FONT(gfnt_write_woff)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

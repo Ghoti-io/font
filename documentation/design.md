@@ -179,7 +179,7 @@ to keep open.
 | `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()`. The default shaper only: no language registry, no script shapers (§9.2) |
 | `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
 | `discover.h` | `GFNT_FontSet`, directory scanning, matching, the default fallback provider. Not implemented |
-| `write.h` | the sfnt serialiser, the subsetter, WOFF 1, the PDF helpers. Not implemented |
+| `write.h` | the sfnt serialiser and WOFF 1 writer (built), the subsetter, the PDF helpers (not built) |
 | `font.h` | umbrella for what is implemented |
 
 ---
@@ -1425,7 +1425,11 @@ Synthetic bold and oblique are §16.
 
 The library writes fonts because two consumers need it: a PDF writer must
 embed a *subset* of each font it uses (§13.3), and every fixture in §14.5 is
-produced by subsetting. Writing is not implemented. It needs the reader and nothing else.
+produced by subsetting. It needs the reader and nothing else. **Built so far**
+(`write.h`, `src/write/`): the sfnt serialiser (§12.1's table ordering, padding,
+directory search fields, checksums and `head.checkSumAdjustment`; the table
+set is supplied as bytes, and nothing parses a face back into a builder yet) and
+the WOFF 1 writer (§12.4). Everything else in this section is still to build.
 
 ### 12.1 The sfnt serialiser
 

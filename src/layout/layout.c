@@ -653,7 +653,16 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
             }
           }
         }
-        r = add_units(p, f, start, rtl, p->run_count, p->glyph_count, cps, error);
+        {
+          // Not `r = `: an out-of-memory in a glyph's outline above would be lost,
+          // and the glyphs after it would be left without their ink flag.
+          GFNT_Result units = add_units(p, f, start, rtl, p->run_count, p->glyph_count,
+              cps, error);
+
+          if (r == GFNT_OK) {
+            r = units;
+          }
+        }
         p->glyph_count += f->run.count;
         p->run_count++;
       }

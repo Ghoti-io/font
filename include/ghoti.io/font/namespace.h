@@ -289,6 +289,19 @@
 #define gfnt_layout_hit_test GHOTIIO_FONT(gfnt_layout_hit_test)
 #define gfnt_layout_caret GHOTIIO_FONT(gfnt_layout_caret)
 #define gfnt_layout_range_rects GHOTIIO_FONT(gfnt_layout_range_rects)
+#define GFNT_Color GHOTIIO_FONT(GFNT_Color)
+#define GFNT_PaletteInfo GHOTIIO_FONT(GFNT_PaletteInfo)
+#define GFNT_ColorLayer GHOTIIO_FONT(GFNT_ColorLayer)
+#define gfnt_face_has_palettes GHOTIIO_FONT(gfnt_face_has_palettes)
+#define gfnt_face_has_color_layers GHOTIIO_FONT(gfnt_face_has_color_layers)
+#define gfnt_face_palette_count GHOTIIO_FONT(gfnt_face_palette_count)
+#define gfnt_face_palette_entry_count GHOTIIO_FONT(gfnt_face_palette_entry_count)
+#define gfnt_face_palette_color GHOTIIO_FONT(gfnt_face_palette_color)
+#define gfnt_face_palette_info GHOTIIO_FONT(gfnt_face_palette_info)
+#define gfnt_face_palette_entry_label GHOTIIO_FONT(gfnt_face_palette_entry_label)
+#define gfnt_face_color_version GHOTIIO_FONT(gfnt_face_color_version)
+#define gfnt_face_color_layer_count GHOTIIO_FONT(gfnt_face_color_layer_count)
+#define gfnt_face_color_layer GHOTIIO_FONT(gfnt_face_color_layer)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

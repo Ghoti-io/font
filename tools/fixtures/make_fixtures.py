@@ -1513,6 +1513,16 @@ def build_layout_gsub(out):
     layout_fixtures.build_layout_gsub(sys.modules[__name__], out)
 
 
+def build_color_v0(out):
+    import color_fixtures
+    color_fixtures.build_color_v0(sys.modules[__name__], out)
+
+
+def build_color_cpal0(out):
+    import color_fixtures
+    color_fixtures.build_color_cpal0(sys.modules[__name__], out)
+
+
 def build_layout_gsub_cases(out):
     import layout_fixtures
     layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
@@ -4195,6 +4205,15 @@ FIXTURES = {
         "The runs variable-featurevars.ttf is shaped on, each at a location in its "
         "design space: one per FeatureVariations record, the order they are tried "
         "in, and either side of a condition's edge"),
+    "color-v0.ttf": (build_color_v0,
+        "COLR version 0 over CPAL version 1: three base glyphs of three, one and "
+        "two layers, one layer painted in the foreground color (0xFFFF), three "
+        "palettes of three colors with every alpha, light and dark usability "
+        "flags, palette labels with one missing and entry labels with one "
+        "missing - written by fontTools, which is also the oracle"),
+    "color-cpal0.ttf": (build_color_cpal0,
+        "The same COLR layers over a CPAL version 0, which has no types or "
+        "labels, and two palettes that share one run of color records"),
     "layout-gsub.ttf": (build_layout_gsub,
         "GSUB with one of every lookup type and format: single in both formats, "
         "multiple (including to nothing), alternate, ligature, context in "

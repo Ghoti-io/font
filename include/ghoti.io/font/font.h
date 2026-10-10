@@ -42,6 +42,7 @@
 #include <ghoti.io/font/bitmap.h>
 #include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/cmap.h>
+#include <ghoti.io/font/color.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/cvt.h>
 #include <ghoti.io/font/face.h>

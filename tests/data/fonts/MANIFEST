@@ -36,6 +36,8 @@ cmap-format12.ttf	cmap format 12 on (3,10) past the BMP, beside a format 4
 cmap-format6.ttf	cmap format 6 on (1,0): a trimmed array with firstCode
 cmap-symbol.ttf	cmap (3,0) symbol only: U+0041 reachable only via the 0xF0xx rule
 collection.ttc	ttcf: two faces sharing tables, with different OS/2 versions
+color-cpal0.ttf	The same COLR layers over a CPAL version 0, which has no types or labels, and two palettes that share one run of color records
+color-v0.ttf	COLR version 0 over CPAL version 1: three base glyphs of three, one and two layers, one layer painted in the foreground color (0xFFFF), three palettes of three colors with every alpha, light and dark usability flags, palette labels with one missing and entry labels with one missing - written by fontTools, which is also the oracle
 layout-gpos.shape	The runs layout-gpos.ttf is shaped on, one per line: script, language, features, code points, and what the case exercises
 layout-gpos.ttf	GPOS with one of every lookup type and format: single in both formats, pair in both (with a value for each glyph of a pair, and a value with device tables), cursive in left-to-right and right-to-left lookups, mark to base, to ligature (a different anchor on each component) and to mark, context in formats 1, 2 and 3, chain in formats 2 and 3, and a lookup behind an extension - written by fontTools
 layout-gsub.shape	The runs layout-gsub.ttf is shaped on, one per line: script, language, features, code points, and what the case exercises

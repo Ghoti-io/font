@@ -181,6 +181,9 @@ const std::vector<Entry> & every_fixture() {
       {"cmap-format6.ttf", kNumGlyphs},
       {"cmap-symbol.ttf", kNumGlyphs},
       {"collection.ttc", kNumGlyphs},
+      // The color fixtures: the five shared glyphs and three layer glyphs.
+      {"color-cpal0.ttf", 8},
+      {"color-v0.ttf", 8},
       {"name-mac-encodings.ttf", kNumGlyphs},
       {"name-macroman.ttf", kNumGlyphs},
       {"os2-v0.ttf", kNumGlyphs},

@@ -5,8 +5,9 @@ What is implemented reads the sfnt container, the metric tables, `cmap` and
 and the standalone bitmap formats, rasterises an outline, and shapes text through
 `GSUB`, `GPOS`, `kern` and Apple's `morx`/`kerx`/`trak`, with a shaper for each
 script that needs one and a bidi-aware shaping call (§9; §18 is the list and says
-what is not built). Paragraph layout and font discovery are not
-implemented, nor are WOFF 2, colour and the PNG strikes; writing is built for the sfnt and WOFF 1 and for subsetting static TrueType fonts (§12). Layout and the script shapers
+what is not built). Paragraph layout is not implemented, and font discovery
+lists faces and does not match them. WOFF 2, colour and the PNG strikes are not
+implemented; writing is built for the sfnt and WOFF 1 and for subsetting static TrueType fonts (§12). Layout and the script shapers
 need the `unicode` library. Reading a file, drawing an outline and applying a
 font's lookups do not.
 
@@ -151,7 +152,7 @@ enforces that, as `chron` does.
 | Outlines and raster | outlines as paths; rasterisation to coverage | the reader | `image`, `cjelly`, PDF | `glyf`/`loca`, `CFF ` charstrings and the scan converter. §18 is the list |
 | Shaping | `GDEF`/`GSUB`/`GPOS`, the script shapers, the cluster map | the reader, `unicode` | `cjelly`, PDF (for text extraction) | no |
 | Layout | itemisation, bidi, breaking, paragraphs, boxes, hit testing | shaping, `unicode` | `cjelly`, `image` | no |
-| Discovery | directories, matching, the platform APIs | the reader, the OS | `cjelly` | no |
+| Discovery | directories, matching, the platform APIs | the reader, the OS | `cjelly` | the list is built; matching is not |
 | Writing | writing and subsetting | the reader | PDF, tools | no |
 
 `image` wants the reader, rasterisation and layout ("draw this wrapped
@@ -178,7 +179,7 @@ to keep open.
 | `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Implemented; of the four containers that feed them, `CFF ` inside an sfnt is read |
 | `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()`. The default shaper only: no language registry, no script shapers (§9.2) |
 | `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
-| `discover.h` | `GFNT_FontSet`, directory scanning, matching, the default fallback provider. Not implemented |
+| `discover.h` | `GFNT_FontSet` and directory scanning are built. Matching and the default fallback provider are not |
 | `write.h` | the sfnt serialiser, WOFF 1 writer and TrueType subsetter (built); the PDF helpers (not built) |
 | `font.h` | umbrella for what is implemented |
 
@@ -1393,9 +1394,10 @@ box sharing its line.
 
 ## 11. Discovery and fallback
 
-Not implemented. The only part that touches the operating system, kept to one file per
+The list is built and matching is not. The only part that touches the operating system, kept to one file per
 platform. `GFNT_FontSet` is built by scanning directories - the caller's list,
-or the platform's conventional ones: `$XDG_DATA_DIRS/fonts`,
+or the platform's conventional ones: `$XDG_DATA_HOME/fonts`,
+`$XDG_DATA_DIRS/fonts`,
 `~/.local/share/fonts`, `~/.fonts`, `/usr/share/fonts` and its `X11` bitmap
 trees with their `fonts.dir`/`fonts.alias` on Linux; `%WINDIR%\Fonts` and the
 per-user fonts directory on Windows; the three `Library/Fonts` on macOS - and
@@ -3118,7 +3120,7 @@ What that cost in findings:
 
 **Not built:** `CBDT` and `sbix` (§7.5); colour
 (§7.6);
-a `FeatureVariations` condition of format 2 (§7.7); paragraph layout and discovery; the `CFF` writer (§12); the multi-byte
+a `FeatureVariations` condition of format 2 (§7.7); paragraph layout, and font matching (discovery lists faces, §11); the `CFF` writer (§12); the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `gasp`
 and WOFF 2. `maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is

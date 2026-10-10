@@ -251,6 +251,21 @@
 #define gfnt_subset GHOTIIO_FONT(gfnt_subset)
 #define GFNT_SubsetMap GHOTIIO_FONT(GFNT_SubsetMap)
 #define gfnt_subset_map_free GHOTIIO_FONT(gfnt_subset_map_free)
+#define GFNT_Slant GHOTIIO_FONT(GFNT_Slant)
+#define GFNT_FontRecord GHOTIIO_FONT(GFNT_FontRecord)
+#define GFNT_FontAlias GHOTIIO_FONT(GFNT_FontAlias)
+#define GFNT_FontSkip GHOTIIO_FONT(GFNT_FontSkip)
+#define GFNT_FontSet GHOTIIO_FONT(GFNT_FontSet)
+#define gfnt_fontset_scan GHOTIIO_FONT(gfnt_fontset_scan)
+#define gfnt_fontset_scan_system GHOTIIO_FONT(gfnt_fontset_scan_system)
+#define gfnt_fontset_count GHOTIIO_FONT(gfnt_fontset_count)
+#define gfnt_fontset_at GHOTIIO_FONT(gfnt_fontset_at)
+#define gfnt_fontset_alias_count GHOTIIO_FONT(gfnt_fontset_alias_count)
+#define gfnt_fontset_alias_at GHOTIIO_FONT(gfnt_fontset_alias_at)
+#define gfnt_fontset_skip_count GHOTIIO_FONT(gfnt_fontset_skip_count)
+#define gfnt_fontset_skip_at GHOTIIO_FONT(gfnt_fontset_skip_at)
+#define gfnt_fontset_resolve_alias GHOTIIO_FONT(gfnt_fontset_resolve_alias)
+#define gfnt_fontset_free GHOTIIO_FONT(gfnt_fontset_free)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

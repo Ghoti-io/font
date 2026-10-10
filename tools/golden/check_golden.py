@@ -77,6 +77,8 @@ TARGETS = {
 SHIMMED = {
     "gcu_allocator_default", "gcu_file_read", "gcu_file_free",
     "gcu_file_result_string", "gcu_mmap_open", "gcu_mmap_close",
+    "gcu_dir_open", "gcu_dir_read", "gcu_dir_close", "gcu_file_stat",
+    "gcu_path_join", "gcu_path_canonicalize", "gcu_env_get",
     "gcomp_decode_alloc", "gcomp_buffer_free", "gcomp_options_create",
     "gcomp_options_destroy", "gcomp_options_set_bool",
     "gcomp_options_set_uint64", "gcomp_status_to_string",

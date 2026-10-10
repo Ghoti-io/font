@@ -37,7 +37,9 @@
  * they are the whole of what it needs:
  *
  *   gcu_allocator_default, gcu_file_read, gcu_file_free,
- *   gcu_file_result_string, gcu_mmap_open, gcu_mmap_close
+ *   gcu_file_result_string, gcu_mmap_open, gcu_mmap_close,
+ *   gcu_dir_open, gcu_dir_read, gcu_dir_close, gcu_file_stat,
+ *   gcu_path_join, gcu_path_canonicalize, gcu_env_get
  *   gcomp_decode_alloc, gcomp_buffer_free, gcomp_options_create,
  *   gcomp_options_destroy, gcomp_options_set_bool, gcomp_options_set_uint64,
  *   gcomp_status_to_string
@@ -72,8 +74,11 @@
 #include <ghoti.io/compress/errors.h>
 #include <ghoti.io/compress/options.h>
 #include <ghoti.io/cutil/allocator.h>
+#include <ghoti.io/cutil/dir.h>
+#include <ghoti.io/cutil/env.h>
 #include <ghoti.io/cutil/file.h>
 #include <ghoti.io/cutil/mmap.h>
+#include <ghoti.io/cutil/path.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -195,6 +200,67 @@ int gcu_mmap_open(GCU_Mapped_File * map, const char * path, bool writable) {
 
 int gcu_mmap_close(GCU_Mapped_File * map) {
   (void)map;
+  return 0;
+}
+
+GCU_File_Result gcu_dir_open(GCU_Dir * dir, const char * path,
+    const GCU_Allocator * allocator) {
+  // Refused. Discovery walks directories; this gate does not, and a real
+  // walk here would be the host's filesystem rather than the arithmetic under
+  // test.
+  (void)path;
+  (void)allocator;
+  if (!dir) {
+    return GCU_FILE_ERR_INVALID;
+  }
+  memset(dir, 0, sizeof *dir);
+  return GCU_FILE_ERR_IO;
+}
+
+GCU_File_Result gcu_dir_read(GCU_Dir * dir, const char ** out_name,
+    GCU_File_Type * out_type, bool * out_done) {
+  (void)dir;
+  (void)out_name;
+  (void)out_type;
+  (void)out_done;
+  return GCU_FILE_ERR_IO;
+}
+
+void gcu_dir_close(GCU_Dir * dir) {
+  if (dir) {
+    memset(dir, 0, sizeof *dir);
+  }
+}
+
+GCU_File_Result gcu_file_stat(const char * path, GCU_File_Info * out) {
+  (void)path;
+  (void)out;
+  return GCU_FILE_ERR_IO;
+}
+
+GCU_Path_Result gcu_path_join(GCU_Path_Flavor flavor, const char * base,
+    const char * relative, char * out, size_t out_size, size_t * out_len) {
+  (void)flavor;
+  (void)base;
+  (void)relative;
+  (void)out;
+  (void)out_size;
+  (void)out_len;
+  return GCU_PATH_ERR_IO;
+}
+
+GCU_Path_Result gcu_path_canonicalize(const char * path,
+    const GCU_Allocator * allocator, char ** out) {
+  (void)path;
+  (void)allocator;
+  (void)out;
+  return GCU_PATH_ERR_IO;
+}
+
+size_t gcu_env_get(const char * name, char * buffer, size_t size) {
+  (void)name;
+  (void)buffer;
+  (void)size;
   return 0;
 }
 

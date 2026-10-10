@@ -65,6 +65,22 @@ bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Extents * out);
 
 /**
+ * The same, from the outline alone: what a glyph is when its font paints nothing
+ * over it, and what a PaintGlyph clips to.
+ */
+bool gfnt_glyph_plain_extents(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Extents * out);
+
+/**
+ * HarfBuzz's box for a glyph of a COLR version 1 font: its clip box, or what its
+ * paint graph draws, and nothing for glyph 0.
+ * @param handled Set false when the font is not version 1 or the glyph has no
+ *   paint, and the outline's box stands.
+ */
+bool gfnt_color_extents(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Extents * out, bool * handled);
+
+/**
  * Position the marks of every cluster of the run.
  *
  * @param adjust_offsets_when_zeroing Whether a mark whose advance is taken away

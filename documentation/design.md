@@ -808,22 +808,52 @@ tables round, and not clamped. This library does not composite gradients: that
 is a graphics library's job, and `GFNT_GLYPH_COLR_LAYERS` is the description, not
 the pixels.
 
-**No real font to check against.** The oracle image holds no font with `COLR` or
-`CPAL` (its one color font, Noto Color Emoji, is `CBDT`), so the fixtures
-`color-v0.ttf`, `color-cpal0.ttf` and the three version 1 fixtures (every paint
-format; the variable forms over a store of weight and width regions, with and
-without an index map) are the whole population, written by fontTools' own
-builder. The unit tests take their expected values from fontTools' dump, and
-`make check-oracle-color` reads every palette, label, layer, paint node, color stop
-and clip box back through fontTools' decompiler, the variable ones at eight
-locations (the default, each axis moved each way, and both). The locations are
+**Real fonts to check against.** Debian has no font with `COLR` or `CPAL` (its
+Noto Color Emoji is `CBDT`), so the image fetches fifteen from googlefonts/color-fonts
+at a pinned commit, each file checked against its SHA-256
+(`fonttools-fetch-color-fonts`): Google's COLR v1 test-glyph fonts (221 glyphs
+covering every paint format, static and variable, with and without a clip list),
+three producers' samples in glyf, CFF and CFF2 outlines, and a full Twemoji and Noto
+Emoji. The repository is Apache-2.0; its Noto fonts derive from Noto Emoji (SIL OFL
+1.1) and its Twemoji fonts from Twemoji (graphics CC-BY 4.0); the fonts carry no
+license string of their own. They live in the image and nowhere in this repository.
+Beside them the fixtures `color-v0.ttf`, `color-cpal0.ttf` and the four version 1
+fixtures (every paint format; the variable forms over a store of weight and width
+regions, with an index map, without one, and with a map of nothing but "no
+variation") are written by fontTools' own builder. The unit tests take their expected
+values from fontTools' dump, and `make check-oracle-color` reads every palette,
+label, layer, paint node, color stop and clip box back through fontTools'
+decompiler: 21 fonts, 218 comparisons, 331,336 paint nodes, 0 differences. A
+variable font is read at locations made from its own axes; the test-glyph font has 43,
+one per variable paint field, so each is moved alone (half way each side) and then
+all together (half way and at the ends), 96 locations in all. The locations are
 binary fractions so that every delta is exact in both fontTools' floats and the
 library's 16.16 arithmetic: at a general point the library's rounding of a delta to
 1/64 before the final rounding can cross a tie, as the other variation tables'
-documented arithmetic can, and this gate is not the place that is held. Six
-breaks of the reader (the index map ignored, a delta slot off by one, the
-backdrop read as the source, the clip range, the color stop's size, a channel
-swap) are each caught.
+documented arithmetic can, and this gate is not the place that is held. A graph that
+names itself (the test font has a pair on purpose) is refused by both readers, which
+the gate counts as agreement. Seven breaks of the reader (the index map ignored, a
+delta slot off by one, the backdrop read as the source, the clip range, the color
+stop's size, a channel swap, a no-variation base wrapping to row 0) are each caught.
+
+The real fonts found two defects the fixtures could not: a delta-set index map entry
+of `0xFFFF:0xFFFF` is "no variation" and was read as a store row that does not exist,
+and a paint whose `VarIndexBase` is `0xFFFFFFFF` had its slot number added to it, so
+slot 1 wrapped to row 0 and moved a number the font fixed.
+
+**The box of a color glyph.** HarfBuzz does not measure a glyph of a COLR version 1
+font by its outline, and the box places a mark when no `GPOS` does
+(`gfnt_glyph_extents()`). Found by experiment against `hb-shape --show-extents` and
+held to it by `make check-oracle-color-extents`, which compares every mapped glyph of
+every color font (3,834 boxes, 0 differences): glyph 0 has no box at all; a base glyph
+with a clip box is measured by the clip box; one without by what its paint graph
+draws, the union of the clip each leaf paint sits inside (every PaintGlyph clips to its
+glyph's box carried through the transforms above it), a composite keeping both halves
+except where the mode drops one; a glyph with only version 0 layers in a version 1 table
+by the union of its layers' glyphs; a graph that names itself by nothing. The box is
+truncated toward zero, so 868.8 high is 868 and -99.5 is -99, in `float` arithmetic
+applied factor by factor in the order HarfBuzz pushes them. Six breaks (glyph 0,
+the truncation, the atop modes, a skew's sign, the layers, the clip) are each caught.
 
 ### 7.7 Variations
 
@@ -1574,7 +1604,9 @@ which is what a PDF `CIDFontType2` with an identity `CIDToGIDMap` needs).
 ids renumbered; instructions removed on `drop_hinting`), `cmap` (formats 4 and
 12 in the Unicode and Windows records, for the requested characters only),
 `post` (format 3), `OS/2` (character range updated), `name`, `gasp` and the
-hinting tables are written. The layout tables - `GSUB`, `GPOS`, `GDEF`, the legacy
+hinting tables are written. `COLR` and `CPAL` are **not** carried, so the subset of
+a color font is its outlines without the color (the paint graph would need its glyph ids
+renumbered; `make check-oracle-subset` names the fonts it therefore sets aside). The layout tables - `GSUB`, `GPOS`, `GDEF`, the legacy
 `kern` table and the vertical metrics (`vhea`, `vmtx`, `VORG`) - are carried unless
 `drop_layout` is set. With `retain_gids` the ids have not moved, so they are copied
 verbatim. Without it they are **rewritten** for the new numbering
@@ -1666,8 +1698,8 @@ letter-spacing (the rule would be written twice from one reading); those are hel
 `test_layout.cpp` alone.
 
 `make check-oracle-subset` (`tools/oracle/subset_diff.py`) subsets the sfnt fonts
-of the image that it can (443 of 507: 58 are declined as CFF or variable, 6 are
-skipped for AAT shaping tables) for 17 script groups, 1,560 of which the font has
+of the image that it can (443 of 522: 58 are declined as CFF or variable, 21 are
+skipped for AAT shaping tables or COLR) for 17 script groups, 1,560 of which the font has
 glyphs for, and holds the result to two references: HarfBuzz
 shapes the text with the original and with the subset, and the two runs must
 agree in every glyph, cluster, advance and offset; fontTools must open the subset,

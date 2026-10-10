@@ -21,6 +21,10 @@
 #include <ghoti.io/font/color.h>
 #include <ghoti.io/font/variation.h>
 
+extern "C" {
+#include "../../src/shape/fallback.h"
+}
+
 namespace {
 
 /** A font loaded from bytes. */
@@ -709,4 +713,49 @@ TEST(ColorPaint, EveryByteOfAVersionOneTableOverwrittenGivesAnAnswerOrAnError) {
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+// The box the shaper measures a glyph with. HarfBuzz gives a glyph of a COLR
+// version 1 font a box of its own - the clip box, or what its paint graph draws,
+// and none at all for glyph 0 - and the numbers below are what `hb-shape
+// --show-extents` says of these fonts (tools/oracle/color_extents_diff.py holds
+// the whole population to it).
+GFNT_Extents extents_of(const Font & font, uint32_t glyph) {
+  GFNT_Extents e;
+  EXPECT_TRUE(gfnt_glyph_extents(font.face, glyph, nullptr, &e));
+  return e;
+}
+
+#define EXPECT_EXTENTS(e, xb, yb, w, h) \
+  EXPECT_EQ((e).x_bearing, xb); EXPECT_EQ((e).y_bearing, yb); \
+  EXPECT_EQ((e).width, w); EXPECT_EQ((e).height, h)
+
+TEST(ColorExtents, AColorGlyphWithAClipIsMeasuredByTheClip) {
+  Font font("color-v1.ttf");
+  const GFNT_Extents a = extents_of(font, kA);   // clip 0 -100 700 900
+  EXPECT_EXTENTS(a, 0, 900, 700, -1000);
+}
+
+TEST(ColorExtents, GlyphZeroOfAVersionOneFontHasNoBoxAndOfAVersionZeroFontHasOne) {
+  Font v1("color-v1.ttf");
+  EXPECT_EXTENTS(extents_of(v1, 0), 0, 0, 0, 0);   // its outline is 60 0 540 700
+  Font v0("color-v0.ttf");
+  EXPECT_EXTENTS(extents_of(v0, 0), 0, 700, 480, -700);
+  // A glyph that paints nothing keeps its outline's box in either.
+  EXPECT_EXTENTS(extents_of(v1, 5), 0, 720, 560, -720);
+}
+
+TEST(ColorExtents, WithNoClipListAColorGlyphIsMeasuredByWhatItsGraphDraws) {
+  // Zero the COLR header's ClipList offset (byte 22). A is one PaintGlyph; B is
+  // under transforms, so its box is the layer glyph's carried through them.
+  Font source("color-v1.ttf");
+  size_t at = 0, length = 0;
+  ASSERT_TRUE(table_range(source.bytes, "COLR", &at, &length));
+  std::vector<uint8_t> bytes = source.bytes;
+  for (size_t k = 22; k < 26; ++k) {
+    bytes[at + k] = 0;
+  }
+  Font font(bytes);
+  EXPECT_EXTENTS(extents_of(font, kA), 0, 720, 560, -720);
+  EXPECT_EXTENTS(extents_of(font, kB), -143, 376, 806, -536);
 }

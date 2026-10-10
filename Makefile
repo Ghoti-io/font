@@ -683,7 +683,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-layout check-oracle-color
+.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -965,7 +965,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-layout check-oracle-color
+check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents
 check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
@@ -1148,6 +1148,10 @@ check-oracle-layout: $(EXAMPLES)
 check-oracle-color: ## Read every CPAL palette and COLR layer of the color fixtures and diff against fontTools
 check-oracle-color: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/color_diff.py --quiet
+
+check-oracle-color-extents: ## Measure every glyph of every color font and diff against HarfBuzz
+check-oracle-color-extents: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools,harfbuzz -- python3 $(ORACLE)/color_extents_diff.py --quiet
 
 check-oracle-subset: ## Subset every corpus font, ids retained and renumbered; hold HarfBuzz's shaping and fontTools' closure to it
 check-oracle-subset: $(EXAMPLES)

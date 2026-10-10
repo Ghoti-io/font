@@ -54,6 +54,16 @@
  */
 bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Extents * out) {
+  bool handled = false;
+
+  if (gfnt_color_extents(face, glyph, variation, out, &handled) && handled) {
+    return true;
+  }
+  return gfnt_glyph_plain_extents(face, glyph, variation, out);
+}
+
+bool gfnt_glyph_plain_extents(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Extents * out) {
   GFNT_Box box;
   GFNT_Outline * outline = NULL;
   GFNT_Result result;

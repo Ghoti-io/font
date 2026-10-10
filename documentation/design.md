@@ -1608,9 +1608,23 @@ which is what a PDF `CIDFontType2` with an identity `CIDToGIDMap` needs).
 ids renumbered; instructions removed on `drop_hinting`), `cmap` (formats 4 and
 12 in the Unicode and Windows records, for the requested characters only),
 `post` (format 3), `OS/2` (character range updated), `name`, `gasp` and the
-hinting tables are written. `COLR` and `CPAL` are **not** carried, so the subset of
-a color font is its outlines without the color (the paint graph would need its glyph ids
-renumbered; `make check-oracle-subset` names the fonts it therefore sets aside). The layout tables - `GSUB`, `GPOS`, `GDEF`, the legacy
+hinting tables are written. `COLR` and `CPAL` are carried (`src/write/subset_colr.c`). A kept base glyph brings the
+glyphs it paints with, to a fixed point: a version 0 glyph's layers, a version 1 glyph's
+PaintGlyph outlines, and the base glyphs its PaintColrGlyph nodes name, which are kept as
+base glyphs in turn. The table is then rebuilt, not patched, so what no kept glyph reaches
+is gone: version 0's records for the kept bases, and version 1's graph copied paint by
+paint from each kept root, the glyph ids renumbered, the layers a new and shorter layer
+list, and the clip list rebuilt (consecutive new ids that share a box become one clip). A
+shared paint is copied once per use, because a child's offset counts forward from its
+parent. `CPAL` is copied as it is (unreferenced entries are not pruned). Twemoji at three
+characters goes from 1.3 MB to 7.6 KB and draws the same. A `COLR` with a delta-set index
+map or an item variation store is refused by name: the subsetter takes static fonts, which
+have neither in use. `make check-oracle-subset-color` reads original and subset back
+through fontTools: for every kept base glyph the subset's graph, layers and clip must be
+the original's with each glyph id sent through the subsetter's own numbering, no other
+base glyph may have a record, and the palettes must be equal (27 subsets of the 10 static
+`glyf` color fonts, 6,668 glyphs, 19,716 paint nodes, 0 differences; seven breaks of the
+code are each caught). The layout tables - `GSUB`, `GPOS`, `GDEF`, the legacy
 `kern` table and the vertical metrics (`vhea`, `vmtx`, `VORG`) - are carried unless
 `drop_layout` is set. With `retain_gids` the ids have not moved, so they are copied
 verbatim. Without it they are **rewritten** for the new numbering
@@ -1702,8 +1716,8 @@ letter-spacing (the rule would be written twice from one reading); those are hel
 `test_layout.cpp` alone.
 
 `make check-oracle-subset` (`tools/oracle/subset_diff.py`) subsets the sfnt fonts
-of the image that it can (443 of 522: 58 are declined as CFF or variable, 21 are
-skipped for AAT shaping tables or COLR) for 17 script groups, 1,560 of which the font has
+of the image that it can (450 of 522: 66 are declined as CFF or variable, 6 are
+skipped for AAT shaping tables) for 17 script groups, 1,560 of which the font has
 glyphs for, and holds the result to two references: HarfBuzz
 shapes the text with the original and with the subset, and the two runs must
 agree in every glyph, cluster, advance and offset; fontTools must open the subset,

@@ -137,6 +137,23 @@ GFNT_Result gfnt_subset_layout_scan(const GFNT_Face * face, GFNT_Tag tag,
     size_t feature_count, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
     uint8_t ** out_active, uint32_t * out_count, GFNT_Error * error);
 
+/**
+ * Add to @p keep the glyphs the kept color glyphs paint with, until nothing is added:
+ * a version 0 glyph's layers, a version 1 glyph's PaintGlyph outlines and the base
+ * glyphs its PaintColrGlyph nodes name. A face with no `COLR` is left as it is.
+ */
+GFNT_Result gfnt_subset_colr_closure(const GFNT_Face * face, uint8_t * keep, size_t count,
+    const GFNT_Limits * limits, const GFNT_Allocator * allocator, GFNT_Error * error);
+
+/**
+ * `COLR` for a new numbering: the kept base glyphs only, their paints renumbered and
+ * copied, the layer list and clip list rebuilt. Writes nothing when the face has none.
+ * A table with variation data is ::GFNT_ERR_UNSUPPORTED.
+ */
+GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
+    const uint32_t * new_of_old, size_t count, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
+
 #ifdef __cplusplus
 }
 #endif

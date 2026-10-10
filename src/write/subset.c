@@ -60,6 +60,8 @@
 #define T_VHEA GFNT_TAG('v', 'h', 'e', 'a')
 #define T_VMTX GFNT_TAG('v', 'm', 't', 'x')
 #define T_VORG GFNT_TAG('V', 'O', 'R', 'G')
+#define T_COLR GFNT_TAG('C', 'O', 'L', 'R')
+#define T_CPAL GFNT_TAG('C', 'P', 'A', 'L')
 
 #define NO_GLYPH 0xFFFFFFFFu
 
@@ -305,6 +307,7 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf vhea;
   GFNT_WBuf vmtx;
   GFNT_WBuf vorg;
+  GFNT_WBuf colr;
 } GFNT_SubsetWork;
 
 enum { B_HEAD, B_HHEA, B_MAXP, B_HMTX, B_GLYF, B_LOCA, B_CMAP };
@@ -324,6 +327,7 @@ static void work_free(GFNT_SubsetWork * w) {
   gfnt_wbuf_free(&w->vhea);
   gfnt_wbuf_free(&w->vmtx);
   gfnt_wbuf_free(&w->vorg);
+  gfnt_wbuf_free(&w->colr);
   w->a->free_fn(w->a->ctx, w->shape);
   w->a->free_fn(w->a->ctx, w->gsub_active);
   w->a->free_fn(w->a->ctx, w->gpos_active);
@@ -406,6 +410,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   gfnt_wbuf_init(&w.vhea, allocator);
   gfnt_wbuf_init(&w.vmtx, allocator);
   gfnt_wbuf_init(&w.vorg, allocator);
+  gfnt_wbuf_init(&w.colr, allocator);
 
   result = gfnt_face_num_glyphs(face, &count, error);
   if (result != GFNT_OK) {
@@ -446,8 +451,11 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
           "allocating the character list");
       goto done;
     }
-    memcpy(sorted, options->codepoints, options->codepoint_count * sizeof *sorted);
-    qsort(sorted, options->codepoint_count, sizeof *sorted, compare_u32);
+    // A request for glyph ids alone has no characters, and may give no array for them.
+    if (options->codepoint_count) {
+      memcpy(sorted, options->codepoints, options->codepoint_count * sizeof *sorted);
+      qsort(sorted, options->codepoint_count, sizeof *sorted, compare_u32);
+    }
     for (i = 0; i < options->codepoint_count; ++i) {
       uint32_t glyph = 0;
 
@@ -507,6 +515,12 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     memcpy(w.shape, w.keep, count);
   }
 
+  // A color glyph needs the glyphs it paints with. Text does not reach those, so like
+  // the composites' components they are added after the layout's reachable set is fixed.
+  result = gfnt_subset_colr_closure(face, w.keep, count, limits, allocator, error);
+  if (result != GFNT_OK) {
+    goto done;
+  }
   result = gfnt_face_table_reader(face, T_GLYF, &glyf, error);
   if (result != GFNT_OK) {
     goto done;
@@ -644,6 +658,13 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     goto done;
   }
 
+  // COLR for the new numbering; CPAL below, as it is.
+  result = gfnt_subset_colr(face, w.keep, w.new_of_old, count, limits, allocator, &w.colr,
+      error);
+  if (result != GFNT_OK) {
+    goto done;
+  }
+
   // GSUB, GPOS and GDEF, rewritten for the new numbering.
   if (rewrite_layout) {
     if (gfnt_face_has_table(face, T_GSUB)) {
@@ -731,7 +752,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.os2.oom || w.post.oom || w.bufs[B_HMTX].oom || w.bufs[B_LOCA].oom
       || w.gsub.oom || w.gpos.oom || w.gdef.oom || w.kern.oom || w.vhea.oom
-      || w.vmtx.oom || w.vorg.oom) {
+      || w.vmtx.oom || w.vorg.oom || w.colr.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "building the tables");
     goto done;
@@ -778,6 +799,10 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   if (w.vorg.length) {
     ADD_BUF(T_VORG, w.vorg);
   }
+  if (w.colr.length) {
+    ADD_BUF(T_COLR, w.colr);
+  }
+  ADD_SRC(T_CPAL);
   ADD_SRC(T_NAME);
   ADD_SRC(T_GASP);
   if (!options->drop_hinting) {

@@ -806,7 +806,11 @@ location the variable forms have the item variation store's deltas added (throug
 the delta-set index map when the table has one), rounded as the other variation
 tables round, and not clamped. This library does not composite gradients: that
 is a graphics library's job, and `GFNT_GLYPH_COLR_LAYERS` is the description, not
-the pixels.
+the pixels. `examples/font-color-render.c` is such a caller in about 700 lines: it walks
+the graph with `gfnt_face_color_paint()`, clips to each PaintGlyph's rasterized outline,
+evaluates the three gradients per pixel and composites by Porter-Duff and the separable
+blend modes, and writes a PPM. It draws every glyph of the test fonts without complaint;
+it is an illustration, not a renderer to ship.
 
 **Real fonts to check against.** Debian has no font with `COLR` or `CPAL` (its
 Noto Color Emoji is `CBDT`), so the image fetches fifteen from googlefonts/color-fonts

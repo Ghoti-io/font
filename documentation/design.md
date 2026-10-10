@@ -1602,6 +1602,34 @@ advance; composites renumbered; side bearings; hinting removal in simple and
 composite glyphs; the closure seen to matter, with and without; retained ids
 shaping every `GSUB` and `GPOS` fixture case as the original does). Five
 mutations of the code, each breaking one thing, are each caught by a named test.
+`make check-oracle-layout` (`tools/oracle/layout_diff.py`) holds paragraph layout
+(§10) to three references, none of which is a layout engine: ICU (the image
+`libs/unicode` builds, driven by `icu_layout.cpp`) gives every character's
+embedding level and script, the line-break opportunities and the visual order of
+each line's runs; HarfBuzz shapes each item; fontTools gives the line metrics the
+font asks for and each glyph's exact outline bounds. The greedy breaking rule and
+the placement arithmetic are written a second time in the script, structured as
+chunks between opportunities where `layout.c` scans with a candidate, from the
+same reading of §10 and CSS Text: **that part is a second reading and not an
+independent oracle**, and the gate says so. For every font that maps the glyphs
+(505 of the corpus; fontTools cannot read `mona.ttf` or `NotoColorEmoji.ttf`) it
+lays seven Latin, two Hebrew, one Arabic and three mixed-direction paragraphs out
+at their min-content, max-content and fractions of it, in the directions and
+alignments that apply, and compares every line's byte range, width and offset, and
+every glyph in visual order with its cluster, pen position and advance, then the
+two content widths. The hit-testing functions are held to each other and to the
+glyphs (a hit test at a caret returns it, a caret is on its cluster's edge, a
+line's selection rectangles add up to its glyphs), the line height to the font's
+own request, and each line's ink box to fontTools' bounds of the placed glyphs
+within a 64th of a pixel. Result: 22,887 layouts, 91,990 lines (16,953 wrapped, 9,656
+with more than one embedding level), 1.39 million glyphs, 0 differences. Nine
+mutations of `layout.c` and `hit.c`, each breaking one thing (the fit test, centring,
+the line height, the ink corner, the hang offset, min-content, the visual reorder, the
+hit test's half, the caret side, a selection rectangle), are each caught. It does not
+see: more than one face or size in a paragraph, justification, truncation, tabs and
+letter-spacing (the rule would be written twice from one reading); those are held by
+`test_layout.cpp` alone.
+
 `make check-oracle-subset` (`tools/oracle/subset_diff.py`) subsets the sfnt fonts
 of the image that it can (443 of 507: 58 are declined as CFF or variable, 6 are
 skipped for AAT shaping tables) for 17 script groups, 1,560 of which the font has

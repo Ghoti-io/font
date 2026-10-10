@@ -68,3 +68,4 @@ harfbuzz	localhost/ghoti-font-oracle-harfbuzz:10.2.0	HarfBuzz 10.2.0	What a stri
 # all three strikes: 346,780 lines of protocol, of which 28 differ and none is a
 # pixel. What remains unread by any second reader is nothing in this population -
 # which is a sentence that could not be written before that image existed.
+icu	localhost/ghoti-unicode-oracle-icu:78.3	ICU 78.3	The second opinion on text for paragraph layout: the bidirectional levels and visual order of a line (UAX #9), where a line may and must break (UAX #14) and each character's script - the image libs/unicode builds, named here so this library does not build a second one

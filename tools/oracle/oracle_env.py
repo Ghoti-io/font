@@ -86,6 +86,9 @@ PROBE = {
     # `hb-shape --version` is what the Containerfile's probe script reads, so the
     # claim is the version of the binary that will answer and not of its package.
     "harfbuzz": (["harfbuzz-version"], "HarfBuzz "),
+    # The image is `libs/unicode`'s, and its probe is the compiled icu-version
+    # that image carries; see tools/oracle/icu_layout.cpp for what is asked of it.
+    "icu": (["icu-version"], "ICU "),
 }
 
 _pins = None

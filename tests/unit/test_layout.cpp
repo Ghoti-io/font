@@ -34,7 +34,7 @@ struct Font {
   GFNT_Blob * blob = nullptr;
   GFNT_Face * face = nullptr;
 
-  explicit Font(const std::vector<uint32_t> & chars) {
+  explicit Font(const std::vector<uint32_t> & chars, bool outlines = false) {
     std::vector<gfnttest::Segment4> segments;
     std::vector<std::pair<uint32_t, uint16_t>> order;
     for (size_t i = 0; i < chars.size(); ++i) {
@@ -54,14 +54,33 @@ struct Font {
         metrics[i + 1].first = 250;
       }
     }
-    bytes = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, {
-        {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, 0)},
+    std::vector<gfnttest::Table> extra;
+    uint16_t loca_format = 0;
+    if (outlines) {
+      std::vector<std::vector<uint8_t>> shapes;
+      shapes.push_back({});
+      for (uint32_t c : chars) {
+        shapes.push_back(c == ' ' ? std::vector<uint8_t>{}
+            : gfnttest::build_glyf_glyph({{{50, 0, true}, {50, 700, true},
+                                           {450, 700, true}, {450, 0, true}}}));
+      }
+      std::vector<uint8_t> glyf, loca;
+      bool long_form = false;
+      gfnttest::build_glyf_and_loca(shapes, &glyf, &loca, &long_form);
+      loca_format = long_form ? 1 : 0;
+      extra.push_back({GFNT_TAG('g', 'l', 'y', 'f'), glyf});
+      extra.push_back({GFNT_TAG('l', 'o', 'c', 'a'), loca});
+    }
+    std::vector<gfnttest::Table> tables = {
+        {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, loca_format)},
         {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 0, glyphs)},
         {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics)},
         {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(glyphs)},
         {GFNT_TAG('c', 'm', 'a', 'p'),
             gfnttest::build_cmap({{3, 1, gfnttest::build_cmap_format4(segments)}})},
-    });
+    };
+    tables.insert(tables.end(), extra.begin(), extra.end());
+    bytes = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
     GFNT_Error error;
     gfnt_error_clear(&error);
     EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(),
@@ -815,6 +834,231 @@ TEST(LayoutTruncate, EveryAllocationFailureWhileJustifyingAndTruncatingIsReporte
       r = gfnt_paragraph_layout(p, 700, &l, nullptr);
     }
     EXPECT_TRUE(r == GFNT_OK || r == GFNT_ERR_OOM) << "request " << fail;
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
+  }
+}
+
+GFNT_TextSpan plain_span(const Font & font, size_t length, GFNT_F26Dot6 size = kSize) {
+  static const GFNT_Face * faces[1];
+  faces[0] = font.face;
+  GFNT_TextSpan span{};
+  span.length = length;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = size;
+  return span;
+}
+
+TEST(LayoutSpacing, EachCharacterIsFollowedByTheExtraSpace) {
+  Font font(latin());
+  GFNT_TextSpan span = plain_span(font, 3);
+  span.style.letter_spacing = 64;
+  Para para("ABC", {span});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  const GFNT_LineRun & run = para.layout.lines[0].runs[0];
+  EXPECT_EQ(run.glyphs[1].pen_x, kLetter + 64);
+  EXPECT_EQ(run.glyphs[2].pen_x, 2 * (kLetter + 64));
+  EXPECT_EQ(para.layout.lines[0].width, 3 * (kLetter + 64));
+  span.style.letter_spacing = -32;
+  Para tight("ABC", {span});
+  ASSERT_EQ(tight.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  EXPECT_EQ(tight.layout.lines[0].width, 3 * (kLetter - 32));
+}
+
+TEST(LayoutSpacing, ItCountsInTheLineBreakingToo) {
+  Font font(latin());
+  GFNT_TextSpan span = plain_span(font, 5);
+  span.style.letter_spacing = 80;
+  Para para("AB CD", {span});
+  // With the spacing "AB" is 800, the space 240 and "CD" 800.
+  GFNT_F26Dot6 max = 0;
+  ASSERT_EQ(gfnt_paragraph_max_content(para.p, &max), GFNT_OK);
+  EXPECT_EQ(max, 800 + 240 + 800);
+  ASSERT_EQ(para.lay(1000), GFNT_OK);
+  EXPECT_EQ(para.layout.line_count, 2u);
+}
+
+TEST(LayoutTabs, ATabGoesToTheNextStopFromTheStartOfTheLine) {
+  Font font(latin());
+  GFNT_ParagraphOptions o{};
+  o.tab_width = 1000;
+  Para para("A\tB\t\tC", {font.face}, o);
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  const GFNT_LineRun & run = para.layout.lines[0].runs[0];
+  ASSERT_EQ(run.glyph_count, 6u);
+  EXPECT_EQ(run.glyphs[1].advance, 680);     // 320 to 1000
+  EXPECT_EQ(run.glyphs[2].pen_x, 1000);      // B
+  EXPECT_EQ(run.glyphs[3].advance, 1000 - 320);
+  EXPECT_EQ(run.glyphs[4].advance, 1000);    // a tab on a stop goes a whole width
+  EXPECT_EQ(run.glyphs[5].pen_x, 3000);
+  GFNT_F26Dot6 max = 0;
+  ASSERT_EQ(gfnt_paragraph_max_content(para.p, &max), GFNT_OK);
+  EXPECT_EQ(max, 3000 + kLetter);
+}
+
+TEST(LayoutTabs, TheDefaultStopIsEightSpacesAndALineBreaksAfterATab) {
+  Font font(latin());
+  Para para("A\tB", {font.face});
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  EXPECT_EQ(para.layout.lines[0].runs[0].glyphs[2].pen_x, 8 * kSpace);
+  GFNT_ParagraphOptions o{};
+  o.tab_width = 1000;
+  Para wrap("AB\tCD", {font.face}, o);
+  ASSERT_EQ(wrap.lay(700), GFNT_OK);
+  ASSERT_EQ(wrap.layout.line_count, 2u);
+  EXPECT_EQ(wrap.layout.lines[0].width, 1000);
+  EXPECT_EQ(wrap.layout.lines[1].start, 3u);
+}
+
+TEST(LayoutTabs, StopsRestartOnEachLine) {
+  Font font(latin());
+  GFNT_ParagraphOptions o{};
+  o.tab_width = 1000;
+  Para para("A\tB\nC\tD", {font.face}, o);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[1].runs[0].glyphs[2].pen_x, 1000);
+}
+
+TEST(LayoutInk, TheInkBoxIsTheOutlinesAtTheirPlacedPositions) {
+  Font font(latin(), true);
+  Para para("A B", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  // The square spans x 50..450 and y 0..700 of 1000 units: at 10 pixels, 32..288
+  // across and 448 high above the baseline at 512.
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(line.ink.x, 32);
+  EXPECT_EQ(line.ink.y, 512 - 448);
+  EXPECT_EQ(line.ink.width, (320 + 160 + 288) - 32);
+  EXPECT_EQ(line.ink.height, 448);
+  EXPECT_EQ(para.layout.ink.x, line.ink.x);
+  EXPECT_EQ(para.layout.ink.width, line.ink.width);
+  // The typographic box is wider and taller: the two boxes differ.
+  EXPECT_LT(para.layout.ink.height, para.layout.height);
+}
+
+TEST(LayoutInk, AlignmentMovesTheInkAndSpacesHaveNone) {
+  Font font(latin(), true);
+  GFNT_ParagraphOptions o{};
+  o.align = GFNT_ALIGN_RIGHT;
+  Para para("A \nB", {font.face}, o);
+  ASSERT_EQ(para.lay(1000), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].ink.x, 1000 - 320 + 32);
+  EXPECT_EQ(para.layout.lines[0].ink.width, 256);
+  EXPECT_EQ(para.layout.lines[1].ink.y, 640 + 64);
+  EXPECT_EQ(para.layout.ink.y, 64);
+  EXPECT_EQ(para.layout.ink.height, 640 + 448);
+}
+
+TEST(LayoutInk, AFaceWithNoOutlinesHasNoInk) {
+  Font font(latin());
+  Para para("AB", {font.face});
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  EXPECT_EQ(para.layout.ink.width, 0);
+  EXPECT_EQ(para.layout.ink.height, 0);
+  EXPECT_EQ(para.layout.lines[0].ink.width, 0);
+}
+
+struct Asked {
+  const GFNT_Face * answer = nullptr;
+  std::vector<uint32_t> codepoints;
+};
+
+const GFNT_Face * provide(void * ctx, uint32_t cp, GFNT_Tag, GFNT_Tag,
+    const GFNT_TextStyle *) {
+  Asked * a = static_cast<Asked *>(ctx);
+  a->codepoints.push_back(cp);
+  return a->answer;
+}
+
+TEST(LayoutProvider, ACharacterNoFaceHasIsAskedAboutAndItsFaceUsed) {
+  Font first({'A'});
+  Font second({'B'});
+  Asked asked;
+  asked.answer = second.face;
+  GFNT_ParagraphOptions o{};
+  o.font_provider.ctx = &asked;
+  o.font_provider.font_for = provide;
+  Para para("A B", {first.face}, o);
+  ASSERT_EQ(para.created, GFNT_OK);
+  // The space is not asked about; B is, once.
+  ASSERT_EQ(asked.codepoints.size(), 1u);
+  EXPECT_EQ(asked.codepoints[0], uint32_t('B'));
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  bool found = false;
+  for (size_t i = 0; i < line.run_count; ++i) {
+    if (line.runs[i].face == second.face) {
+      found = true;
+      EXPECT_TRUE(line.runs[i].fallback);
+      EXPECT_EQ(line.runs[i].face_index, 1u);
+      EXPECT_EQ(line.runs[i].start, 2u);
+      EXPECT_EQ(line.runs[i].glyphs[0].glyph, 1u);
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(LayoutProvider, ARefusalLeavesTheFirstFacesNotdefAndTheListIsNotAskedForWhatItHas) {
+  Font first({'A'});
+  Asked asked;   // answers NULL
+  GFNT_ParagraphOptions o{};
+  o.font_provider.ctx = &asked;
+  o.font_provider.font_for = provide;
+  Para para("AAB", {first.face}, o);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  EXPECT_EQ(asked.codepoints.size(), 1u);
+  const GFNT_LineRun & run = para.layout.lines[0].runs[0];
+  EXPECT_EQ(run.face, first.face);
+  EXPECT_EQ(run.glyphs[2].glyph, 0u);
+}
+
+TEST(LayoutProvider, EveryAllocationFailureWithInkTabsAndAProviderIsReported) {
+  Font first({'A', 'B', ' '}, true);
+  Font second({'C'}, true);
+  Asked asked;
+  asked.answer = second.face;
+  GFNT_ParagraphOptions o{};
+  o.font_provider.ctx = &asked;
+  o.font_provider.font_for = provide;
+  const GFNT_Face * faces[1] = {first.face};
+  GFNT_TextSpan span{};
+  const std::string text = "AB\tC AB C\tAB";
+  span.length = text.size();
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  span.style.letter_spacing = 16;
+  size_t requests = 0;
+  {
+    gfnttest::FailingAllocator counting(static_cast<size_t>(-1));
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o,
+                  counting.get(), &p, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(p, 900, &l, nullptr), GFNT_OK);
+    EXPECT_GT(l.ink.width, 0);
+    requests = counting.requests();
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    EXPECT_EQ(counting.live(), 0u);
+  }
+  for (size_t fail = 0; fail < requests; ++fail) {
+    gfnttest::FailingAllocator failing(fail);
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    GFNT_Result r = gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o,
+        failing.get(), &p, nullptr);
+    if (r == GFNT_OK) {
+      r = gfnt_paragraph_layout(p, 900, &l, nullptr);
+    }
+    EXPECT_TRUE(r == GFNT_OK || r == GFNT_ERR_OOM) << "request " << fail << ": " << r;
     gfnt_layout_free(&l);
     gfnt_paragraph_free(p);
     EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";

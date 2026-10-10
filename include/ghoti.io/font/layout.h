@@ -36,7 +36,7 @@
  * uses: measuring and painting are one code path.
  *
  * **What it does not do, stated rather than approximated:** vertical text
- * (a span's face runs horizontally), hyphenation, tabs, kashida justification
+ * (a span's face runs horizontally), hyphenation, kashida justification
  * (spaces only), ruby, and anything that must know about a non-text box on its
  * line. Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
  * the text is otherwise one bidirectional paragraph, so a caller with several
@@ -64,6 +64,14 @@ extern "C" {
 /** @brief A width that never wraps: the text breaks only at newline characters. */
 #define GFNT_LAYOUT_UNBOUNDED INT32_MAX
 
+/** @brief A rectangle in the paragraph's coordinates, 26.6 pixels, y down. */
+typedef struct GFNT_Rect {
+  GFNT_F26Dot6 x;       ///< The left edge.
+  GFNT_F26Dot6 y;       ///< The top edge.
+  GFNT_F26Dot6 width;   ///< The width.
+  GFNT_F26Dot6 height;  ///< The height.
+} GFNT_Rect;
+
 /**
  * @brief How a stretch of text is set. Nothing here is owned: it all outlives the paragraph.
  *
@@ -80,6 +88,12 @@ typedef struct GFNT_TextStyle {
   const GFNT_Variation * variation; ///< The location in the design space, or NULL.
   /** Whose line metrics a line takes from this span; zero is the font's own. */
   GFNT_LineMetricsPolicy line_metrics;
+  /**
+   * Extra space after every character, in 26.6 pixels (negative tightens it).
+   * It is added to the advance of the last glyph of each cluster, in reading
+   * order. Ligatures are not switched off, as CSS does.
+   */
+  GFNT_F26Dot6 letter_spacing;
 } GFNT_TextStyle;
 
 /** @brief A stretch of the text and how it is set. The spans tile the text. */
@@ -111,6 +125,27 @@ typedef enum GFNT_LineBreak {
   GFNT_LINE_BREAK_ANYWHERE    ///< Breaks between any two characters.
 } GFNT_LineBreak;
 
+/**
+ * @brief A source of faces for characters a span's own faces lack.
+ *
+ * Asked once for each such character of an item, before it is shaped; a face it
+ * returns joins the span's list for that item (after the span's own faces) and
+ * the run's @p fallback flag is set. The faces must outlive the paragraph and its
+ * layouts. Control characters and spaces are not asked about.
+ */
+typedef struct GFNT_FontProvider {
+  void * ctx; ///< Passed to the callback untouched.
+  /**
+   * @brief A face that maps @p codepoint, or NULL for none.
+   *
+   * @param script The OpenType script tag of the item, or 0.
+   * @param language The span's language tag, or 0.
+   * @param style The span's style.
+   */
+  const GFNT_Face * (*font_for)(void * ctx, uint32_t codepoint, GFNT_Tag script,
+      GFNT_Tag language, const GFNT_TextStyle * style);
+} GFNT_FontProvider;
+
 /** @brief What a paragraph is, apart from its text and styles. A zeroed one is valid. */
 typedef struct GFNT_ParagraphOptions {
   GFNT_BidiDirection direction; ///< The base direction, or ::GFNT_BIDI_AUTO.
@@ -125,6 +160,12 @@ typedef struct GFNT_ParagraphOptions {
    * simply cut. It is read only when @p max_lines is not 0.
    */
   const char * ellipsis;
+  /**
+   * The distance between tab stops, from the start of each line, in 26.6
+   * pixels; 0 for eight spaces of the first span's first face.
+   */
+  GFNT_F26Dot6 tab_width;
+  GFNT_FontProvider font_provider; ///< Or zeroed for none.
 } GFNT_ParagraphOptions;
 
 /** @brief A shaped, itemised paragraph. Opaque; free with ::gfnt_paragraph_free(). */
@@ -176,6 +217,7 @@ typedef struct GFNT_Line {
   GFNT_F26Dot6 height;    ///< The line box: ascent, descent and the greatest line gap.
   bool truncated;         ///< True when text was cut from its end and a mark may follow.
   bool justified;         ///< True when its spaces were widened to fill the width.
+  GFNT_Rect ink;          ///< The box of the glyphs' outlines; all zero for a line with no ink.
 } GFNT_Line;
 
 /** @brief A paragraph laid out at one width. Free with ::gfnt_layout_free(). */
@@ -185,6 +227,12 @@ typedef struct GFNT_Layout {
   GFNT_F26Dot6 width;    ///< The width laid out to, or the widest line when unbounded.
   GFNT_F26Dot6 height;   ///< The typographic box's height: the lines stacked.
   bool truncated;        ///< True when text was dropped by the line limit or the width.
+  /**
+   * The ink box: the union of the lines' ink, from the glyphs' outline bounds at
+   * their placed positions. It differs from the typographic box (width by
+   * height) for nearly every text. All zero when nothing has ink.
+   */
+  GFNT_Rect ink;
   const GFNT_Allocator * allocator; ///< What the arrays came from.
   void * storage_;       ///< Internal: the runs and glyphs.
 } GFNT_Layout;
@@ -251,14 +299,6 @@ GFNT_API GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * paragraph
  */
 GFNT_API GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * paragraph,
     GFNT_F26Dot6 * out);
-
-/** @brief A rectangle in the paragraph's coordinates, 26.6 pixels, y down. */
-typedef struct GFNT_Rect {
-  GFNT_F26Dot6 x;       ///< The left edge.
-  GFNT_F26Dot6 y;       ///< The top edge.
-  GFNT_F26Dot6 width;   ///< The width.
-  GFNT_F26Dot6 height;  ///< The height.
-} GFNT_Rect;
 
 /**
  * @brief Which side of a boundary between two characters a caret belongs to.

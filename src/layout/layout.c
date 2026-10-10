@@ -31,7 +31,10 @@
  */
 
 #include <ghoti.io/font/layout.h>
+#include <ghoti.io/font/cmap.h>
+#include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/metrics.h>
+#include <ghoti.io/font/outline.h>
 #include <ghoti.io/unicode/bidi.h>
 #include <ghoti.io/unicode/break.h>
 #include <ghoti.io/unicode/char.h>
@@ -56,6 +59,68 @@ static bool hangs(uint32_t cp) {
     return false;
   }
   return guni_general_category(cp) == GUNI_GC_ZS;
+}
+
+#define PROVIDER_MAX 8
+#define ELL_GLYPHS 16
+
+static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
+    const uint32_t * text, size_t text_count, PGlyph * glyphs, size_t * count,
+    GFNT_F26Dot6 * total, PRun * run, GFNT_Error * error);
+
+/** The width of a unit that starts @p pos from the line's start: a tab goes to the next stop. */
+static GFNT_F26Dot6 eff_width(const GFNT_Paragraph * p, const Unit * u,
+    GFNT_F26Dot6 pos) {
+  if (!u->tab || p->tab_width <= 0) {
+    return u->width;
+  }
+  return p->tab_width - pos % p->tab_width;
+}
+
+static GFNT_F26Dot6 scale_v(GFNT_F26Dot6 v, GFNT_F16Dot16 scale) {
+  int64_t t = (int64_t)v * scale;
+
+  return (GFNT_F26Dot6)((t >= 0 ? t + 32768 : t - 32768) / 65536);
+}
+
+/** The outline box of a glyph in pixels, read once. Only an OOM is an error. */
+static GFNT_Result glyph_ink(PGlyph * pg, const GFNT_Face * face,
+    const GFNT_TextStyle * style, GFNT_F16Dot16 scale,
+    const GFNT_Allocator * allocator) {
+  GFNT_Outline * outline = NULL;
+  GFNT_Box box;
+  GFNT_Result r;
+
+  pg->has_ink = false;
+  r = gfnt_face_glyph_outline(face, pg->glyph, style->variation, allocator,
+      &outline, NULL);
+  if (r == GFNT_ERR_OOM) {
+    return r;
+  }
+  if (r != GFNT_OK) {
+    return GFNT_OK;
+  }
+  if (gfnt_outline_bounds(outline, &box) == GFNT_OK && !gfnt_box_is_empty(&box)) {
+    pg->has_ink = true;
+    pg->ix0 = scale_v(box.x_min, scale);
+    pg->iy0 = scale_v(box.y_min, scale);
+    pg->ix1 = scale_v(box.x_max, scale);
+    pg->iy1 = scale_v(box.y_max, scale);
+  }
+  gfnt_outline_destroy(outline);
+  return GFNT_OK;
+}
+
+static bool provider_skips(uint32_t cp) {
+  GUNI_GeneralCategory gc = guni_general_category(cp);
+
+  return gc == GUNI_GC_CC || gc == GUNI_GC_CF || gc == GUNI_GC_ZS;
+}
+
+static bool face_maps(const GFNT_Face * face, uint32_t cp) {
+  uint32_t g = 0;
+
+  return gfnt_face_glyph_for_codepoint(face, cp, &g, NULL) == GFNT_OK && g != 0;
 }
 
 static void scale_metrics(const GFNT_Face * face, const GFNT_TextStyle * style,
@@ -181,6 +246,17 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
     Unit * u = &p->units[i];
     bool all_space = u->cp_end > u->cp_start;
 
+    GFNT_F26Dot6 spacing = p->styles[p->runs[run].span].letter_spacing;
+
+    if (spacing && u->g_hi > u->g_lo) {
+      p->glyphs[rtl ? u->g_lo : u->g_hi - 1].advance += spacing;
+    }
+    if (u->cp_end - u->cp_start == 1 && cps[u->cp_start] == 0x09
+        && u->g_hi > u->g_lo) {
+      u->tab = true;
+      p->glyphs[u->g_lo].tab = true;
+      p->tab_width = -1;   // to be resolved once the text is shaped
+    }
     u->width = 0;
     for (size_t g = u->g_lo; g < u->g_hi; g++) {
       u->width += p->glyphs[g].advance;
@@ -271,6 +347,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   }
   p->allocator = allocator;
   p->options = *options;
+  p->provider = options->font_provider;
   if (options->ellipsis) {
     size_t len = strlen(options->ellipsis);
 
@@ -438,6 +515,9 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       const GFNT_TextStyle * style;
       bool rtl;
       uint16_t upem;
+      const GFNT_Face * const * flist;
+      size_t fcount;
+      const GFNT_Face ** owned = NULL;
 
       while (end < n && !edge[end]) {
         end++;
@@ -446,6 +526,8 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         span++;
       }
       style = &spans[span].style;
+      flist = style->faces;
+      fcount = style->face_count;
       rtl = (levels[start] & 1) != 0;
       memset(&so, 0, sizeof so);
       so.language = style->language;
@@ -461,10 +543,54 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       so.features = features;
       so.feature_count = feature_count;
       memset(&fr, 0, sizeof fr);
-      r = gfnt_faces_shape(style->faces, style->face_count, cps + start,
-          end - start, &so, allocator, &fr, error);
+      if (p->provider.font_for) {
+        GFNT_Tag item_script = gfnt_shape_script_of(cps + start, end - start);
+
+        owned = allocator->calloc_fn(allocator->ctx,
+            style->face_count + PROVIDER_MAX, sizeof *owned);
+        if (!owned) {
+          allocator->free_fn(allocator->ctx, features);
+          r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+              "no memory for the face list");
+          goto done;
+        }
+        memcpy(owned, style->faces, style->face_count * sizeof *owned);
+        flist = owned;
+        fcount = style->face_count;
+        for (size_t c = start; c < end; c++) {
+          bool mapped = false;
+          const GFNT_Face * f;
+
+          if (provider_skips(cps[c])) {
+            continue;
+          }
+          for (size_t k = 0; k < fcount && !mapped; k++) {
+            mapped = face_maps(owned[k], cps[c]);
+          }
+          if (mapped) {
+            continue;
+          }
+          f = p->provider.font_for(p->provider.ctx, cps[c], item_script,
+              style->language, style);
+          if (!f) {
+            continue;
+          }
+          for (size_t k = 0; k < fcount && f; k++) {
+            if (owned[k] == f) {
+              f = NULL;
+            }
+          }
+          if (f && fcount < style->face_count + PROVIDER_MAX) {
+            owned[fcount++] = f;
+          }
+        }
+      }
+      r = gfnt_faces_shape(flist, fcount, cps + start, end - start, &so,
+          allocator, &fr, error);
       allocator->free_fn(allocator->ctx, features);
       if (r != GFNT_OK) {
+        allocator->free_fn(allocator->ctx, owned);
+        owned = NULL;
         goto done;
       }
       // The face runs come back in visual order; take them in logical order.
@@ -497,7 +623,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         }
         pr = &p->runs[p->run_count];
         memset(pr, 0, sizeof *pr);
-        pr->face = style->faces[f->face];
+        pr->face = flist[f->face];
         pr->span = span;
         pr->face_index = f->face;
         pr->level = levels[start];
@@ -518,12 +644,21 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           pg->dx = gfnt_units_to_pixels(sg->x_offset, scale);
           pg->dy = gfnt_units_to_pixels(sg->y_offset, scale);
           pg->expand = false;
+          pg->tab = false;
+          if (r == GFNT_OK) {
+            r = glyph_ink(pg, pr->face, style, scale, allocator);
+            if (r != GFNT_OK) {
+              r = gfnt_error_set(error, r, 0, 0, GFNT_GLYPH_NONE,
+                  "no memory for a glyph's outline");
+            }
+          }
         }
         r = add_units(p, f, start, rtl, p->run_count, p->glyph_count, cps, error);
         p->glyph_count += f->run.count;
         p->run_count++;
       }
       gfnt_face_runs_free(&fr);
+      allocator->free_fn(allocator->ctx, owned);
       if (r != GFNT_OK) {
         goto done;
       }
@@ -539,6 +674,24 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       u->opportunity = opp[u->cp_end];
       u->hard = is_newline(last)
           && !(last == 0x0D && u->cp_end < n && cps[u->cp_end] == 0x0A);
+    }
+  }
+  if (p->tab_width < 0) {
+    if (options->tab_width > 0) {
+      p->tab_width = options->tab_width;
+    }
+    else {
+      uint32_t space = 0x20;
+      PGlyph g[ELL_GLYPHS];
+      size_t gn = 0;
+      GFNT_F26Dot6 w = 0;
+      PRun tr;
+
+      r = shape_string(p, 0, &space, 1, g, &gn, &w, &tr, error);
+      if (r != GFNT_OK) {
+        goto done;
+      }
+      p->tab_width = w > 0 ? 8 * w : 2 * spans[0].style.size;
     }
   }
   if (n == 0) {
@@ -573,7 +726,7 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
   for (size_t j = 0; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
 
-    total += u->width;
+    total += eff_width(p, u, total);
     if (!u->space) {
       fit = total;
     }
@@ -598,7 +751,7 @@ GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
   for (size_t j = 0; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
 
-    total += u->width;
+    total += eff_width(p, u, total);
     if (!u->space) {
       fit = total;
     }
@@ -656,7 +809,7 @@ static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     for (size_t j = i; j < p->unit_count; j++) {
       const Unit * u = &p->units[j];
 
-      total += u->width;
+      total += eff_width(p, u, total);
       if (!u->space) {
         fit = total;
       }
@@ -685,10 +838,9 @@ static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   return lines;
 }
 
-#define ELL_GLYPHS 16
-
-/** Shape the truncation mark in a span's style and first face. */
-static GFNT_Result shape_ellipsis(const GFNT_Paragraph * p, size_t span,
+/** Shape a short string in a span's style and first face. */
+static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
+    const uint32_t * text, size_t text_count,
     PGlyph * glyphs, size_t * count, GFNT_F26Dot6 * total, PRun * run,
     GFNT_Error * error) {
   const GFNT_TextStyle * style = &p->styles[span];
@@ -705,7 +857,7 @@ static GFNT_Result shape_ellipsis(const GFNT_Paragraph * p, size_t span,
   so.direction = (p->para_level & 1) ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
   *count = 0;
   *total = 0;
-  r = gfnt_faces_shape(style->faces, 1, p->ell, p->ell_count, &so, p->allocator,
+  r = gfnt_faces_shape(style->faces, 1, text, text_count, &so, p->allocator,
       &fr, error);
   if (r != GFNT_OK) {
     return r;
@@ -725,14 +877,18 @@ static GFNT_Result shape_ellipsis(const GFNT_Paragraph * p, size_t span,
 
       memset(pg, 0, sizeof *pg);
       pg->glyph = sg->glyph;
+      pg->has_ink = false;
       pg->advance = gfnt_units_to_pixels(sg->x_advance, scale);
       pg->dx = gfnt_units_to_pixels(sg->x_offset, scale);
       pg->dy = gfnt_units_to_pixels(sg->y_offset, scale);
       *total += pg->advance;
+      if (r == GFNT_OK) {
+        r = glyph_ink(pg, run->face, style, scale, p->allocator);
+      }
     }
   }
   gfnt_face_runs_free(&fr);
-  return GFNT_OK;
+  return r;
 }
 
 GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
@@ -742,6 +898,9 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   Slice * slices = NULL;
   size_t * order = NULL;
   uint8_t * slice_levels = NULL;
+  GFNT_F26Dot6 * ew = NULL;       // each unit's width in its line, tabs resolved
+  GFNT_F26Dot6 * tabadv = NULL;   // a tab glyph's advance, by glyph index
+  GFNT_Rect ink_all = {0, 0, 0, 0};
   GFNT_Line * lines = NULL;
   uint8_t * storage = NULL;
   GFNT_LineRun * runs;
@@ -763,7 +922,9 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   slices = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *slices);
   order = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *order);
   slice_levels = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, 1);
-  if (!starts || !slices || !order || !slice_levels) {
+  ew = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *ew);
+  tabadv = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, sizeof *tabadv);
+  if (!starts || !slices || !order || !slice_levels || !ew || !tabadv) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the layout");
     goto done;
@@ -796,6 +957,8 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     GFNT_F26Dot6 asc = 0, desc = 0, gap = 0;
     GFNT_F26Dot6 cursor = 0, lead = 0;
     bool seen_text = false;
+    bool ink_set = false;
+    GFNT_F26Dot6 ink_l = 0, ink_t = 0, ink_r = 0, ink_b = 0;
     PGlyph ell_g[ELL_GLYPHS];
     size_t ell_n = 0;
     GFNT_F26Dot6 ell_w = 0, natural = 0, extra = 0, extra_rem = 0;
@@ -804,12 +967,23 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     bool trunc_line = false;
     bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
 
+    {
+      GFNT_F26Dot6 pos = 0;
+
+      for (size_t j = ua; j < ub; j++) {
+        ew[j] = eff_width(p, &p->units[j], pos);
+        pos += ew[j];
+        if (p->units[j].tab) {
+          tabadv[p->units[j].g_lo] = ew[j];
+        }
+      }
+    }
     hang_from = ub;
     while (hang_from > ua && p->units[hang_from - 1].space) {
       hang_from--;
     }
     for (size_t j = ua; j < hang_from; j++) {
-      natural += p->units[j].width;
+      natural += ew[j];
     }
     if (p->options.max_lines && p->ell_count && li + 1 == line_count
         && (more || (bounded && natural > width))) {
@@ -817,7 +991,8 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
                             : (ua < p->unit_count ? p->runs[p->units[ua].run].span
                                                   : 0);
 
-      r = shape_ellipsis(p, span, ell_g, &ell_n, &ell_w, &ell_run, error);
+      r = shape_string(p, span, p->ell, p->ell_count, ell_g, &ell_n, &ell_w,
+          &ell_run, error);
       if (r != GFNT_OK) {
         goto done;
       }
@@ -825,8 +1000,8 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
         GFNT_F26Dot6 room = width - ell_w, used = 0;
         size_t k = ua;
 
-        while (k < ub && used + p->units[k].width <= room) {
-          used += p->units[k].width;
+        while (k < ub && used + ew[k] <= room) {
+          used += ew[k];
           k++;
         }
         ub = k;
@@ -951,7 +1126,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       for (size_t g = s->g_lo; g < s->g_hi; g++) {
         const PGlyph * pg = &s->src[g];
         GFNT_PlacedGlyph * pl = &placed[glyph_used++];
-        GFNT_F26Dot6 adv = pg->advance;
+        GFNT_F26Dot6 adv = pg->tab && s->src == p->glyphs ? tabadv[g] : pg->advance;
 
         if (line->justified && pg->expand && !s->hang) {
           adv += extra + (expanded < (size_t)extra_rem ? 1 : 0);
@@ -965,6 +1140,21 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
         pl->y = line->baseline - pg->dy;
         pl->advance = adv;
         cursor += adv;
+        if (pg->has_ink) {
+          GFNT_F26Dot6 l = pl->x + pg->ix0, t = pl->y - pg->iy1;
+          GFNT_F26Dot6 rr = pl->x + pg->ix1, b = pl->y - pg->iy0;
+
+          if (!ink_set) {
+            ink_l = l; ink_t = t; ink_r = rr; ink_b = b;
+            ink_set = true;
+          }
+          else {
+            if (l < ink_l) ink_l = l;
+            if (t < ink_t) ink_t = t;
+            if (rr > ink_r) ink_r = rr;
+            if (b > ink_b) ink_b = b;
+          }
+        }
       }
       lr->advance = cursor - lr->x;
       lr->start = s->b_lo;
@@ -978,6 +1168,12 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       }
     }
     line->truncated = trunc_line;
+    if (ink_set) {
+      line->ink.x = ink_l;
+      line->ink.y = ink_t;
+      line->ink.width = ink_r - ink_l;
+      line->ink.height = ink_b - ink_t;
+    }
     line->x = -lead;   // made absolute by the alignment pass
     if (line->width > widest) {
       widest = line->width;
@@ -986,6 +1182,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   }
   {
     GFNT_F26Dot6 avail = width == GFNT_LAYOUT_UNBOUNDED ? widest : width;
+    bool ink_any = false;
 
     for (size_t li = 0; li < line_count; li++) {
       GFNT_Line * line = &lines[li];
@@ -1011,6 +1208,23 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       }
       shift = off + line->x;   // line->x held minus the leading hang
       line->x = off;
+      if (line->ink.width || line->ink.height) {
+        line->ink.x += shift;
+        if (ink_any) {
+          GFNT_F26Dot6 r1 = ink_all.x + ink_all.width, b1 = ink_all.y + ink_all.height;
+          GFNT_F26Dot6 r2 = line->ink.x + line->ink.width;
+          GFNT_F26Dot6 b2 = line->ink.y + line->ink.height;
+
+          if (line->ink.x < ink_all.x) ink_all.x = line->ink.x;
+          if (line->ink.y < ink_all.y) ink_all.y = line->ink.y;
+          ink_all.width = (r2 > r1 ? r2 : r1) - ink_all.x;
+          ink_all.height = (b2 > b1 ? b2 : b1) - ink_all.y;
+        }
+        else {
+          ink_all = line->ink;
+          ink_any = true;
+        }
+      }
       for (size_t k = 0; k < line->run_count; k++) {
         GFNT_LineRun * lr = (GFNT_LineRun *)&line->runs[k];
 
@@ -1029,6 +1243,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   out->width = width == GFNT_LAYOUT_UNBOUNDED ? widest : width;
   out->height = y;
   out->truncated = any_truncated;
+  out->ink = ink_all;
   out->allocator = allocator;
   out->storage_ = storage;
   lines = NULL;
@@ -1038,6 +1253,8 @@ done:
   allocator->free_fn(allocator->ctx, slices);
   allocator->free_fn(allocator->ctx, order);
   allocator->free_fn(allocator->ctx, slice_levels);
+  allocator->free_fn(allocator->ctx, ew);
+  allocator->free_fn(allocator->ctx, tabadv);
   allocator->free_fn(allocator->ctx, lines);
   allocator->free_fn(allocator->ctx, storage);
   return r;

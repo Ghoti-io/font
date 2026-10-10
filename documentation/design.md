@@ -1425,8 +1425,23 @@ first face, fits; with no string the lines are only counted. The mark is a
 `GFNT_LineRun` with `ellipsis` set, stands for no bytes and is not a box for hit
 testing.
 
-Not yet: tabs, the ink box, letter-spacing, kashida, and a caller-supplied font
-provider (a span names its list of faces).
+Letter-spacing (`GFNT_TextStyle.letter_spacing`) is added to the advance of the
+last glyph of every cluster, in reading order, before any line is broken, so it
+counts in the widths; ligatures are not switched off, as CSS does. A tab
+advances to the next multiple of `tab_width` from the start of its line (0 means
+eight spaces of the first span's first face); stops restart on each line, a tab
+is a break opportunity, and `min_content` measures from the start of the
+unbreakable stretch, which is an approximation. A `GFNT_FontProvider` is asked
+once per character of an item that none of the span's faces maps (spaces and
+controls excepted) and a face it returns is appended to that item's list, so the
+run is flagged as a fallback and the item is split at face boundaries by the
+fallback shaping already there. The **ink box** (`GFNT_Line.ink`,
+`GFNT_Layout.ink`) is the union of the glyphs' exact outline bounds
+(`gfnt_outline_bounds`) at their placed positions, read once per glyph when the
+paragraph is made and never by rasterising; a glyph with no outline (a space, a
+bitmap strike) has none.
+
+Not yet: kashida, vertical text, and a hyphenation provider.
 
 ### 10.7 Deliberately not here
 

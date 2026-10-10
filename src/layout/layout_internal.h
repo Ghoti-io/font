@@ -36,6 +36,9 @@ typedef struct {
   uint32_t cluster;   // byte offset
   GFNT_F26Dot6 advance, dx, dy;
   bool expand;        // a justification opportunity: the space this stands for
+  bool tab;           // a tab: its advance is the distance to the next stop
+  bool has_ink;
+  GFNT_F26Dot6 ix0, iy0, ix1, iy1;   // the outline's box in pixels from the pen, y up
 } PGlyph;
 
 /** What a unit's glyphs were shaped with. */
@@ -56,6 +59,7 @@ typedef struct {
   bool space;                  // hangs at the end of a line
   bool opportunity;            // a line may break after it
   bool hard;                   // a line must break after it
+  bool tab;                    // one tab character
 } Unit;
 
 struct GFNT_Paragraph {
@@ -69,6 +73,8 @@ struct GFNT_Paragraph {
   uint8_t para_level;
   uint32_t ell[8];             // the truncation mark
   size_t ell_count;
+  GFNT_FontProvider provider;
+  GFNT_F26Dot6 tab_width;      // 0 when the text has no tab
   PRun * runs;
   size_t run_count;
   PGlyph * glyphs;

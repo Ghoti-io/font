@@ -36,8 +36,8 @@
  * uses: measuring and painting are one code path.
  *
  * **What it does not do, stated rather than approximated:** vertical text
- * (a span's face runs horizontally), hyphenation, justification, tabs and
- * truncation, ruby, and anything that must know about a non-text box on its
+ * (a span's face runs horizontally), hyphenation, tabs, kashida justification
+ * (spaces only), ruby, and anything that must know about a non-text box on its
  * line. Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
  * the text is otherwise one bidirectional paragraph, so a caller with several
  * paragraphs lays out one object per paragraph.
@@ -94,7 +94,13 @@ typedef enum GFNT_Align {
   GFNT_ALIGN_END,       ///< The other side.
   GFNT_ALIGN_LEFT,
   GFNT_ALIGN_RIGHT,
-  GFNT_ALIGN_CENTER
+  GFNT_ALIGN_CENTER,
+  /**
+   * Both edges: spaces on a line grow so it fills the width. A line that ends
+   * a paragraph or a newline, a truncated line, a line with no space on it and
+   * any line of an unbounded layout is aligned to the start instead.
+   */
+  GFNT_ALIGN_JUSTIFY
 } GFNT_Align;
 
 /** @brief How eagerly a line breaks, after CSS `line-break`. */
@@ -110,6 +116,15 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_BidiDirection direction; ///< The base direction, or ::GFNT_BIDI_AUTO.
   GFNT_Align align;             ///< Where the slack of a short line goes.
   GFNT_LineBreak line_break;    ///< How eagerly lines break.
+  /** The most lines to lay out, or 0 for all of them. Text past them is dropped. */
+  size_t max_lines;
+  /**
+   * UTF-8 (at most 8 characters, copied) set at the end of a line that
+   * @p max_lines cut short or that overflows its width, in the style of the text
+   * it follows and with that span's first face. NULL puts no mark: the lines are
+   * simply cut. It is read only when @p max_lines is not 0.
+   */
+  const char * ellipsis;
 } GFNT_ParagraphOptions;
 
 /** @brief A shaped, itemised paragraph. Opaque; free with ::gfnt_paragraph_free(). */
@@ -136,6 +151,7 @@ typedef struct GFNT_LineRun {
   size_t span;                  ///< The index of the span whose style it is.
   size_t face_index;            ///< The face's index in the span's list.
   bool fallback;                ///< True when it is not the span's first face (M8).
+  bool ellipsis;                ///< True for the truncation mark, which stands for no text.
   uint8_t level;                ///< The bidirectional level; odd reads right to left.
   size_t start;                 ///< The first byte of the text it stands for.
   size_t end;                   ///< One past the last.
@@ -158,6 +174,8 @@ typedef struct GFNT_Line {
   GFNT_F26Dot6 ascent;    ///< Above the baseline: the greatest of its runs' faces.
   GFNT_F26Dot6 descent;   ///< Below it, positive.
   GFNT_F26Dot6 height;    ///< The line box: ascent, descent and the greatest line gap.
+  bool truncated;         ///< True when text was cut from its end and a mark may follow.
+  bool justified;         ///< True when its spaces were widened to fill the width.
 } GFNT_Line;
 
 /** @brief A paragraph laid out at one width. Free with ::gfnt_layout_free(). */
@@ -166,6 +184,7 @@ typedef struct GFNT_Layout {
   size_t line_count;     ///< How many; at least one.
   GFNT_F26Dot6 width;    ///< The width laid out to, or the widest line when unbounded.
   GFNT_F26Dot6 height;   ///< The typographic box's height: the lines stacked.
+  bool truncated;        ///< True when text was dropped by the line limit or the width.
   const GFNT_Allocator * allocator; ///< What the arrays came from.
   void * storage_;       ///< Internal: the runs and glyphs.
 } GFNT_Layout;

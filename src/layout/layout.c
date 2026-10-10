@@ -189,6 +189,9 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
       all_space = all_space && hangs(cps[c]);
     }
     u->space = all_space;
+    if (all_space && u->g_hi > u->g_lo) {
+      p->glyphs[u->g_lo].expand = true;
+    }
   }
   (void)error;
   return GFNT_OK;
@@ -223,7 +226,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     allocator = gfnt_allocator_default();
   }
   if ((unsigned)options->direction > GFNT_BIDI_AUTO
-      || (unsigned)options->align > GFNT_ALIGN_CENTER
+      || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE) {
     return GFNT_ERR_INVALID;
   }
@@ -268,6 +271,16 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   }
   p->allocator = allocator;
   p->options = *options;
+  if (options->ellipsis) {
+    size_t len = strlen(options->ellipsis);
+
+    for (size_t at = 0; at < len && p->ell_count < 8;) {
+      uint32_t cp;
+
+      at += guni_utf8_decode(options->ellipsis + at, len - at, &cp, NULL);
+      p->ell[p->ell_count++] = cp;
+    }
+  }
   p->cp_byte = allocator->calloc_fn(allocator->ctx, length + 1, sizeof *p->cp_byte);
   p->styles = allocator->calloc_fn(allocator->ctx, span_count, sizeof *p->styles);
   if (!p->cp_byte || !p->styles) {
@@ -504,6 +517,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           pg->advance = gfnt_units_to_pixels(sg->x_advance, scale);
           pg->dx = gfnt_units_to_pixels(sg->x_offset, scale);
           pg->dy = gfnt_units_to_pixels(sg->y_offset, scale);
+          pg->expand = false;
         }
         r = add_units(p, f, start, rtl, p->run_count, p->glyph_count, cps, error);
         p->glyph_count += f->run.count;
@@ -612,9 +626,11 @@ void gfnt_layout_free(GFNT_Layout * layout) {
 
 /** A slice of a line: units of one run, at one level. */
 typedef struct {
-  size_t run;
+  const PRun * pr;
+  const PGlyph * src;
   uint8_t level;
   bool hang;
+  bool ellipsis;
   size_t g_lo, g_hi;
   size_t b_lo, b_hi;   // the bytes of text it stands for
   GFNT_F26Dot6 advance;
@@ -669,6 +685,56 @@ static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   return lines;
 }
 
+#define ELL_GLYPHS 16
+
+/** Shape the truncation mark in a span's style and first face. */
+static GFNT_Result shape_ellipsis(const GFNT_Paragraph * p, size_t span,
+    PGlyph * glyphs, size_t * count, GFNT_F26Dot6 * total, PRun * run,
+    GFNT_Error * error) {
+  const GFNT_TextStyle * style = &p->styles[span];
+  GFNT_ShapeOptions so;
+  GFNT_FaceRuns fr;
+  GFNT_Result r;
+  uint16_t upem = 0;
+  GFNT_F16Dot16 scale;
+
+  memset(&so, 0, sizeof so);
+  memset(&fr, 0, sizeof fr);
+  so.language = style->language;
+  so.variation = style->variation;
+  so.direction = (p->para_level & 1) ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
+  *count = 0;
+  *total = 0;
+  r = gfnt_faces_shape(style->faces, 1, p->ell, p->ell_count, &so, p->allocator,
+      &fr, error);
+  if (r != GFNT_OK) {
+    return r;
+  }
+  memset(run, 0, sizeof *run);
+  run->face = style->faces[0];
+  run->span = span;
+  run->level = p->para_level;
+  if (gfnt_face_units_per_em(run->face, &upem, NULL) != GFNT_OK || !upem) {
+    upem = 1000;
+  }
+  scale = (GFNT_F16Dot16)(((int64_t)style->size * 1024 + upem / 2) / upem);
+  for (size_t k = 0; k < fr.count; k++) {
+    for (size_t g = 0; g < fr.runs[k].run.count && *count < ELL_GLYPHS; g++) {
+      const GFNT_ShapedGlyph * sg = &fr.runs[k].run.glyphs[g];
+      PGlyph * pg = &glyphs[(*count)++];
+
+      memset(pg, 0, sizeof *pg);
+      pg->glyph = sg->glyph;
+      pg->advance = gfnt_units_to_pixels(sg->x_advance, scale);
+      pg->dx = gfnt_units_to_pixels(sg->x_offset, scale);
+      pg->dy = gfnt_units_to_pixels(sg->y_offset, scale);
+      *total += pg->advance;
+    }
+  }
+  gfnt_face_runs_free(&fr);
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     GFNT_Layout * out, GFNT_Error * error) {
   const GFNT_Allocator * allocator;
@@ -680,7 +746,8 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   uint8_t * storage = NULL;
   GFNT_LineRun * runs;
   GFNT_PlacedGlyph * placed;
-  size_t line_count, run_used = 0, glyph_used = 0;
+  size_t line_count, total_lines, run_used = 0, glyph_used = 0;
+  bool more = false, any_truncated = false;
   size_t runs_bytes, total_bytes;
   GFNT_F26Dot6 y = 0, widest = 0;
   bool para_rtl;
@@ -703,8 +770,13 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   }
   line_count = break_lines(p, width, starts);
   starts[line_count] = p->unit_count;
-  runs_bytes = (p->unit_count + 1) * sizeof *runs;
-  total_bytes = runs_bytes + (p->glyph_count + 1) * sizeof *placed;
+  total_lines = line_count;
+  if (p->options.max_lines && line_count > p->options.max_lines) {
+    line_count = p->options.max_lines;
+    more = true;
+  }
+  runs_bytes = (p->unit_count + 2) * sizeof *runs;
+  total_bytes = runs_bytes + (p->glyph_count + ELL_GLYPHS + 1) * sizeof *placed;
   lines = allocator->calloc_fn(allocator->ctx, line_count, sizeof *lines);
   storage = allocator->calloc_fn(allocator->ctx, total_bytes, 1);
   if (!lines || !storage) {
@@ -717,16 +789,73 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
 
   for (size_t li = 0; li < line_count; li++) {
     size_t ua = starts[li];
-    size_t ub = li + 1 < line_count ? starts[li + 1] : p->unit_count;
+    size_t ub = starts[li + 1];
     GFNT_Line * line = &lines[li];
-    size_t hang_from = ub;
+    size_t hang_from;
     size_t ns = 0;
     GFNT_F26Dot6 asc = 0, desc = 0, gap = 0;
     GFNT_F26Dot6 cursor = 0, lead = 0;
     bool seen_text = false;
+    PGlyph ell_g[ELL_GLYPHS];
+    size_t ell_n = 0;
+    GFNT_F26Dot6 ell_w = 0, natural = 0, extra = 0, extra_rem = 0;
+    size_t expanded = 0;
+    PRun ell_run;
+    bool trunc_line = false;
+    bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
 
+    hang_from = ub;
     while (hang_from > ua && p->units[hang_from - 1].space) {
       hang_from--;
+    }
+    for (size_t j = ua; j < hang_from; j++) {
+      natural += p->units[j].width;
+    }
+    if (p->options.max_lines && p->ell_count && li + 1 == line_count
+        && (more || (bounded && natural > width))) {
+      size_t span = ub > ua ? p->runs[p->units[ub - 1].run].span
+                            : (ua < p->unit_count ? p->runs[p->units[ua].run].span
+                                                  : 0);
+
+      r = shape_ellipsis(p, span, ell_g, &ell_n, &ell_w, &ell_run, error);
+      if (r != GFNT_OK) {
+        goto done;
+      }
+      if (bounded) {
+        GFNT_F26Dot6 room = width - ell_w, used = 0;
+        size_t k = ua;
+
+        while (k < ub && used + p->units[k].width <= room) {
+          used += p->units[k].width;
+          k++;
+        }
+        ub = k;
+      }
+      while (ub > ua && p->units[ub - 1].space) {
+        ub--;
+      }
+      hang_from = ub;
+      trunc_line = true;
+      any_truncated = true;
+    }
+    if (more && li + 1 == line_count) {
+      any_truncated = true;
+    }
+    if (p->options.align == GFNT_ALIGN_JUSTIFY && bounded && !trunc_line
+        && li + 1 < total_lines && ub > ua && !p->units[ub - 1].hard) {
+      size_t spaces = 0;
+      GFNT_F26Dot6 slack = width - natural;
+
+      for (size_t j = ua; j < hang_from; j++) {
+        if (p->units[j].space && p->units[j].g_hi > p->units[j].g_lo) {
+          spaces++;
+        }
+      }
+      if (spaces && slack > 0) {
+        extra = slack / (GFNT_F26Dot6)spaces;
+        extra_rem = slack % (GFNT_F26Dot6)spaces;
+        line->justified = true;
+      }
     }
     // Slices: a run of units of one face and level.
     for (size_t j = ua; j < ub; j++) {
@@ -739,9 +868,11 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       if (pr->ascent > asc) asc = pr->ascent;
       if (pr->descent > desc) desc = pr->descent;
       if (pr->gap > gap) gap = pr->gap;
-      if (!s || s->run != u->run || s->level != level || s->hang != hang) {
+      if (!s || s->pr != pr || s->level != level || s->hang != hang) {
         s = &slices[ns++];
-        s->run = u->run;
+        s->pr = pr;
+        s->src = p->glyphs;
+        s->ellipsis = false;
         s->level = level;
         s->hang = hang;
         s->g_lo = u->g_lo;
@@ -754,6 +885,25 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       if (p->cp_byte[u->cp_end] > s->b_hi) s->b_hi = p->cp_byte[u->cp_end];
       if (u->g_lo < s->g_lo) s->g_lo = u->g_lo;
       if (u->g_hi > s->g_hi) s->g_hi = u->g_hi;
+    }
+    if (trunc_line) {
+      size_t at = ub > ua ? p->cp_byte[p->units[ub - 1].cp_end]
+                          : (ua < p->unit_count ? p->cp_byte[p->units[ua].cp_start]
+                                                : p->cp_byte[p->length]);
+      Slice * s = &slices[ns++];
+
+      for (size_t g = 0; g < ell_n; g++) {
+        ell_g[g].cluster = (uint32_t)at;
+      }
+      s->pr = &ell_run;
+      s->src = ell_g;
+      s->ellipsis = true;
+      s->level = p->para_level;
+      s->hang = false;
+      s->g_lo = 0;
+      s->g_hi = ell_n;
+      s->b_lo = s->b_hi = at;
+      s->advance = 0;
     }
     if (ua == ub) {
       const PRun * pr = ua < p->unit_count ? &p->runs[p->units[ua].run]
@@ -786,28 +936,35 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     line->baseline = y + gap / 2 + asc;
     for (size_t v = 0; v < ns; v++) {
       const Slice * s = &slices[order[v]];
-      const PRun * pr = &p->runs[s->run];
+      const PRun * pr = s->pr;
       GFNT_LineRun * lr = &runs[run_used++];
 
       lr->face = pr->face;
       lr->span = pr->span;
       lr->face_index = pr->face_index;
       lr->fallback = pr->face_index != 0;
+      lr->ellipsis = s->ellipsis;
       lr->level = s->level;
       lr->glyphs = &placed[glyph_used];
       lr->glyph_count = s->g_hi - s->g_lo;
       lr->x = cursor;
       for (size_t g = s->g_lo; g < s->g_hi; g++) {
-        const PGlyph * pg = &p->glyphs[g];
+        const PGlyph * pg = &s->src[g];
         GFNT_PlacedGlyph * pl = &placed[glyph_used++];
+        GFNT_F26Dot6 adv = pg->advance;
+
+        if (line->justified && pg->expand && !s->hang) {
+          adv += extra + (expanded < (size_t)extra_rem ? 1 : 0);
+          expanded++;
+        }
 
         pl->glyph = pg->glyph;
         pl->cluster = pg->cluster;
         pl->pen_x = cursor;
         pl->x = cursor + pg->dx;
         pl->y = line->baseline - pg->dy;
-        pl->advance = pg->advance;
-        cursor += pg->advance;
+        pl->advance = adv;
+        cursor += adv;
       }
       lr->advance = cursor - lr->x;
       lr->start = s->b_lo;
@@ -820,6 +977,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
         line->width += lr->advance;
       }
     }
+    line->truncated = trunc_line;
     line->x = -lead;   // made absolute by the alignment pass
     if (line->width > widest) {
       widest = line->width;
@@ -836,6 +994,9 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       GFNT_Align a = p->options.align;
       GFNT_F26Dot6 shift;
 
+      if (a == GFNT_ALIGN_JUSTIFY) {
+        a = GFNT_ALIGN_START;
+      }
       if (a == GFNT_ALIGN_START) {
         a = para_rtl ? GFNT_ALIGN_RIGHT : GFNT_ALIGN_LEFT;
       }
@@ -867,6 +1028,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   out->line_count = line_count;
   out->width = width == GFNT_LAYOUT_UNBOUNDED ? widest : width;
   out->height = y;
+  out->truncated = any_truncated;
   out->allocator = allocator;
   out->storage_ = storage;
   lines = NULL;

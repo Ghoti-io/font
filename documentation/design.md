@@ -1414,8 +1414,19 @@ several. A cluster of several graphemes (a ligature) is divided at the font's
 `GDEF` carets when it lists one fewer than the graphemes, and evenly otherwise.
 A newline is not a box, so nothing lands after one.
 
-Not yet: justification, tabs, truncation, the ink box, letter-spacing, and a
-caller-supplied font provider (a span names its list of faces).
+Justification (`GFNT_ALIGN_JUSTIFY`) widens the spaces of a line, sharing the
+slack out in whole 1/64 pixels; a line that ends a paragraph or a newline, a
+truncated one, one with no space but a hanging one, and every line of an
+unbounded layout are start-aligned instead. Truncation is `max_lines` plus an
+`ellipsis` string (at most 8 characters, copied): when text is left over past the
+last line, or that line overflows a bounded width, units are dropped from its
+end until the mark, shaped in the style of the text it follows with that span's
+first face, fits; with no string the lines are only counted. The mark is a
+`GFNT_LineRun` with `ellipsis` set, stands for no bytes and is not a box for hit
+testing.
+
+Not yet: tabs, the ink box, letter-spacing, kashida, and a caller-supplied font
+provider (a span names its list of faces).
 
 ### 10.7 Deliberately not here
 

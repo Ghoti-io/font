@@ -644,6 +644,183 @@ TEST(LayoutRects, ABidirectionalRangeCanBeTwoSeparateRectangles) {
   EXPECT_EQ(r[1].width, kLetter);
 }
 
+TEST(LayoutJustify, SpacesGrowSoAFullLineFillsTheWidth) {
+  Font font(latin());
+  GFNT_ParagraphOptions o{};
+  o.align = GFNT_ALIGN_JUSTIFY;
+  Para para("AB CD EF", {font.face}, o);
+  ASSERT_EQ(para.lay(1500), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  const GFNT_Line & l0 = para.layout.lines[0];
+  EXPECT_TRUE(l0.justified);
+  EXPECT_EQ(l0.width, 1500);
+  EXPECT_EQ(l0.x, 0);
+  const GFNT_LineRun & run = l0.runs[0];
+  ASSERT_GE(run.glyph_count, 5u);
+  EXPECT_EQ(run.glyphs[2].advance, kSpace + 60);    // the one space that counts
+  EXPECT_EQ(run.glyphs[3].pen_x, 2 * kLetter + kSpace + 60);
+  EXPECT_EQ(run.glyphs[5].advance, kSpace);         // the hanging one is left
+  const GFNT_Line & l1 = para.layout.lines[1];
+  EXPECT_FALSE(l1.justified);
+  EXPECT_EQ(l1.width, 2 * kLetter);
+}
+
+TEST(LayoutJustify, ALineEndingInANewlineOrWithNoSpaceIsLeftAlone) {
+  Font font(latin());
+  GFNT_ParagraphOptions o{};
+  o.align = GFNT_ALIGN_JUSTIFY;
+  Para hard("AB CD\nEF", {font.face}, o);
+  ASSERT_EQ(hard.lay(1500), GFNT_OK);
+  EXPECT_FALSE(hard.layout.lines[0].justified);
+  EXPECT_EQ(hard.layout.lines[0].width, 2 * 640 + kSpace);
+  Para word("ABCD EF", {font.face}, o);
+  ASSERT_EQ(word.lay(1400), GFNT_OK);
+  ASSERT_EQ(word.layout.line_count, 2u);
+  EXPECT_FALSE(word.layout.lines[0].justified);   // only a hanging space
+  Para unbounded("AB CD", {font.face}, o);
+  ASSERT_EQ(unbounded.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  EXPECT_FALSE(unbounded.layout.lines[0].justified);
+}
+
+TEST(LayoutJustify, TheRemainderIsSharedOutOneUnitAtATime) {
+  Font font(latin());
+  GFNT_ParagraphOptions o{};
+  o.align = GFNT_ALIGN_JUSTIFY;
+  Para para("A B C D E", {font.face}, o);
+  // Letters 320 and spaces 160: "A B C" is 1280 and D would make 1760.
+  ASSERT_EQ(para.lay(1441), GFNT_OK);
+  const GFNT_Line & l = para.layout.lines[0];
+  EXPECT_TRUE(l.justified);
+  EXPECT_EQ(l.width, 1441);   // 161 over two spaces: 81 and 80
+  EXPECT_EQ(l.runs[0].glyphs[1].advance, kSpace + 81);
+  EXPECT_EQ(l.runs[0].glyphs[3].advance, kSpace + 80);
+}
+
+std::vector<uint32_t> latin_ellipsis() {
+  return {'A', 'B', 'C', 'D', 'E', 'F', ' ', 0x2026};
+}
+
+GFNT_ParagraphOptions truncating(size_t lines, const char * mark = "\xE2\x80\xA6") {
+  GFNT_ParagraphOptions o{};
+  o.max_lines = lines;
+  o.ellipsis = mark;
+  return o;
+}
+
+TEST(LayoutTruncate, TheLastLineIsCutToMakeRoomForTheMark) {
+  Font font(latin_ellipsis());
+  Para para("AB CD EF", {font.face}, truncating(1));
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(900), GFNT_OK);
+  const GFNT_Layout & l = para.layout;
+  ASSERT_EQ(l.line_count, 1u);
+  EXPECT_TRUE(l.truncated);
+  const GFNT_Line & line = l.lines[0];
+  EXPECT_TRUE(line.truncated);
+  // Room for 580 beside a 320 mark: one letter, then the mark.
+  EXPECT_EQ(line.width, 2 * kLetter);
+  EXPECT_EQ(line.end, 1u);
+  ASSERT_EQ(line.run_count, 2u);
+  EXPECT_FALSE(line.runs[0].ellipsis);
+  EXPECT_TRUE(line.runs[1].ellipsis);
+  EXPECT_EQ(line.runs[1].x, kLetter);
+  EXPECT_EQ(line.runs[1].glyph_count, 1u);
+  EXPECT_EQ(line.runs[1].glyphs[0].glyph, 8u);
+  EXPECT_EQ(line.runs[1].start, line.runs[1].end);
+}
+
+TEST(LayoutTruncate, NothingIsCutWhenTheTextFits) {
+  Font font(latin_ellipsis());
+  Para para("AB CD", {font.face}, truncating(2));
+  ASSERT_EQ(para.lay(700), GFNT_OK);
+  EXPECT_EQ(para.layout.line_count, 2u);
+  EXPECT_FALSE(para.layout.truncated);
+  EXPECT_FALSE(para.layout.lines[1].truncated);
+  Para two("AB CD EF", {font.face}, truncating(2));
+  ASSERT_EQ(two.lay(700), GFNT_OK);
+  ASSERT_EQ(two.layout.line_count, 2u);
+  EXPECT_TRUE(two.layout.truncated);
+  EXPECT_FALSE(two.layout.lines[0].truncated);
+  EXPECT_TRUE(two.layout.lines[1].truncated);
+}
+
+TEST(LayoutTruncate, AWordTooWideForItsLineIsCutToo) {
+  Font font(latin_ellipsis());
+  Para para("ABCDEF", {font.face}, truncating(1));
+  ASSERT_EQ(para.lay(1000), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_TRUE(line.truncated);
+  EXPECT_EQ(line.end, 2u);               // 680 of room: two letters
+  EXPECT_EQ(line.width, 3 * kLetter);
+}
+
+TEST(LayoutTruncate, WithoutAMarkTheLinesAreSimplyCut) {
+  Font font(latin_ellipsis());
+  Para para("AB CD EF", {font.face}, truncating(1, nullptr));
+  ASSERT_EQ(para.lay(900), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_TRUE(para.layout.truncated);
+  EXPECT_FALSE(para.layout.lines[0].truncated);
+  EXPECT_EQ(para.layout.lines[0].run_count, 2u);   // the word and its hanging space
+  EXPECT_EQ(para.layout.lines[0].width, 2 * kLetter);
+}
+
+TEST(LayoutTruncate, TheMarkOfARightToLeftParagraphIsOnTheLeft) {
+  std::vector<uint32_t> chars = latin_and_hebrew();
+  chars.push_back(0x2026);
+  Font font(chars);
+  GFNT_ParagraphOptions o = truncating(1);
+  o.direction = GFNT_BIDI_RTL;
+  Para para("\xD7\x90\xD7\x91 \xD7\x92\xD7\x90", {font.face}, o);
+  ASSERT_EQ(para.lay(900), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  ASSERT_TRUE(line.truncated);
+  ASSERT_GE(line.run_count, 2u);
+  EXPECT_TRUE(line.runs[0].ellipsis);
+  EXPECT_EQ(line.runs[0].x, line.x);
+}
+
+TEST(LayoutTruncate, EveryAllocationFailureWhileJustifyingAndTruncatingIsReported) {
+  Font font(latin_ellipsis());
+  const GFNT_Face * faces[1] = {font.face};
+  GFNT_TextSpan span{};
+  const std::string text = "AB CD EF AB CD EF";
+  span.length = text.size();
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  GFNT_ParagraphOptions o = truncating(2);
+  o.align = GFNT_ALIGN_JUSTIFY;
+  size_t requests = 0;
+  {
+    gfnttest::FailingAllocator counting(static_cast<size_t>(-1));
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o,
+                  counting.get(), &p, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(p, 700, &l, nullptr), GFNT_OK);
+    EXPECT_TRUE(l.truncated);
+    requests = counting.requests();
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    EXPECT_EQ(counting.live(), 0u);
+  }
+  for (size_t fail = 0; fail < requests; ++fail) {
+    gfnttest::FailingAllocator failing(fail);
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    GFNT_Result r = gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o,
+        failing.get(), &p, nullptr);
+    if (r == GFNT_OK) {
+      r = gfnt_paragraph_layout(p, 700, &l, nullptr);
+    }
+    EXPECT_TRUE(r == GFNT_OK || r == GFNT_ERR_OOM) << "request " << fail;
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
+  }
+}
+
 /** The fixture with the `f i` ligature, opened from the data directory. */
 struct Fixture {
   std::vector<uint8_t> bytes;

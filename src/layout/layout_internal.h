@@ -35,6 +35,7 @@ typedef struct {
   uint32_t glyph;
   uint32_t cluster;   // byte offset
   GFNT_F26Dot6 advance, dx, dy;
+  bool expand;        // a justification opportunity: the space this stands for
 } PGlyph;
 
 /** What a unit's glyphs were shaped with. */
@@ -66,6 +67,8 @@ struct GFNT_Paragraph {
   GFNT_TextStyle * styles;     // one per span, copied
   size_t span_count;
   uint8_t para_level;
+  uint32_t ell[8];             // the truncation mark
+  size_t ell_count;
   PRun * runs;
   size_t run_count;
   PGlyph * glyphs;

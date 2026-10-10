@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Fetch the COLR v1 fonts of googlefonts/color-fonts into the corpus.
+
+Debian ships no font with a `COLR` table (its Noto Color Emoji is the CBDT
+build), and the colour readers need real producers: these are built by
+nanoemoji and by the repository's own test-glyph generator, and between them
+carry every paint format, glyf, CFF and CFF2 outlines, and a variable font.
+
+Pinned two ways: the commit names the tree, and each file's SHA-256 is checked,
+so a moved branch or a rewritten file fails the build rather than changing the
+corpus. Nothing here is committed to the library (design.md section 14.5).
+
+Licences. The repository is Apache-2.0. Its Noto fonts derive from Noto Emoji
+(SIL OFL 1.1) and its Twemoji fonts from Twemoji (graphics CC-BY 4.0). The
+fonts carry no licence strings of their own, and the test-glyph and sample
+fonts are Google-authored with no statement beyond the repository's. They are
+used here only as data a differential reads, inside the image.
+"""
+
+import hashlib
+import os
+import sys
+import urllib.request
+
+COMMIT = "0046ea4c3b69e9fbbe464c2594816894e3aa5e4b"
+BASE = "https://raw.githubusercontent.com/googlefonts/color-fonts/%s/fonts/" % COMMIT
+DEST = "/usr/share/fonts/color-fonts"
+
+FILES = {
+    "noto-glyf_colr_1.ttf": "fc1c3b581d01fcaed3283b9a12a04f784db0a22710e1c196dfb3a52696063fdc",
+    "noto_handwriting-cff2_colr_1.otf": "4c6cc9f5b70cf4898489ca8c0a7d829d7dc6e7e9533c7f04403b6c4f4b56182c",
+    "noto_handwriting-cff_colr_1.otf": "4feda21a49aef9a7a3391f83d9aa47470e5c1d86ffe24e0ac2edb5575b9c7f55",
+    "noto_handwriting-glyf_colr_1.ttf": "a9067375e2d48a7a085311291d6931fbdae6f461ee8ed1db930f417c7ea727a4",
+    "samples-cff2_colr_1.otf": "d68bdf5dd85fdd4478df8981bd7d8905de03ab7703ce695d447eca07bc179345",
+    "samples-cff_colr_1.otf": "57761c533abdfec9d0fa8f35a5633209bcc3bf7536011d6836e9c6f8038392c7",
+    "samples-glyf_colr_1.ttf": "dd87e9b9c2da1ff54b28e1ea0caecf9e57cca0e7873fd160e9a8b05287d1a248",
+    "test_glyphs-glyf_colr_1_no_cliplist.ttf": "27a99ab512b0057c10f8e40d13130b3cf45fd581fa17721e312c09204b842a64",
+    "test_glyphs-glyf_colr_1.ttf": "8aa611b1ca97044ac6f13dc982fde29256612f0a5acc6ef47ca541a7a5b99b28",
+    "test_glyphs-glyf_colr_1_variable_no_cliplist.ttf": "87cd083453a77e9f7b33d622aeda109730b5221890596f5370ec48128934e005",
+    "test_glyphs-glyf_colr_1_variable.ttf": "ad575a09d6748aebcb3b90ffd384c64d5c64b5fd9927967e7cd7cc0d70c98d34",
+    "twemoji-glyf_colr_1.ttf": "50eabcbdf1edae2de36a211cea0e257d9b7195abe1d4ee8a260d6b39d82e35ba",
+    "twemoji_smiley-cff2_colr_1.otf": "217bfb5a2876029afa9f52affe9810f398ba48574518fc228ee8966640af8ae3",
+    "twemoji_smiley-cff_colr_1.otf": "c1d6fd30c128096d776734797bcbfaa7847f8792e2c47ec1d25255e637528eba",
+    "twemoji_smiley-glyf_colr_1.ttf": "b462e4de616a38979b053a49b0b5a5f2dd72b6d5f55be43c5b1eb812fd438dbc",
+}
+
+os.makedirs(DEST, exist_ok=True)
+for name, digest in sorted(FILES.items()):
+    data = urllib.request.urlopen(BASE + name, timeout=120).read()
+    if hashlib.sha256(data).hexdigest() != digest:
+        sys.exit("fonttools-fetch-color-fonts: %s does not match its pin" % name)
+    with open(os.path.join(DEST, name), "wb") as out:
+        out.write(data)
+print("fetched %d color fonts" % len(FILES))

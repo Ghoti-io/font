@@ -230,7 +230,11 @@ def build_color_v1_var(mf, out, mapped=False):
     store = mf._var_store([([0, 1], [list(r) for r in VAR_ROWS])])
     order = font.getReverseGlyphMap()
     index_map = None
-    if mapped:
+    if mapped == "none":
+        # Every entry is 0xFFFF:0xFFFF, the map's own "no variation": all nine
+        # entries fixed, so a moved location must read the stored numbers.
+        index_map = vb.buildVarIdxMap([0xFFFFFFFF] * len(VAR_ROWS), order)
+    elif mapped:
         # Indexes into the map are the VarIndexBases; the map sends each to the
         # row in reverse, so a reader that ignored it would read the wrong delta.
         index_map = vb.buildVarIdxMap([(0 << 16) | (len(VAR_ROWS) - 1 - i)

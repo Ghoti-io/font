@@ -533,6 +533,68 @@ TEST(ColorPaintVariable, AMovedLocationAddsTheStoresDeltas) {
   }
 }
 
+TEST(ColorPaintVariable, AMapEntryOfNoVariationReadsTheStoredNumbers) {
+  // Every entry of this font's index map is 0xFFFF:0xFFFF. Read as a store row it
+  // names a VarData that does not exist and the walk fails; the entry means "no
+  // variation", as fontTools reads it, so the moved location equals the default.
+  Font font("color-v1-varnone.ttf");
+  std::vector<GFNT_F2Dot14> storage;
+  GFNT_Variation at = location(font, {650.0, 87.5}, &storage);
+  Recorder moved, stored;
+  GFNT_PaintVisitor visitor = {record_enter, nullptr};
+  GFNT_Error error;
+  gfnt_error_clear(&error);
+  ASSERT_EQ(gfnt_face_color_paint_walk(font.face, 2, &at, &visitor, &moved, &error),
+      GFNT_OK) << (error.message ? error.message : "");
+  ASSERT_EQ(gfnt_face_color_paint_walk(font.face, 2, nullptr, &visitor, &stored,
+                nullptr), GFNT_OK);
+  ASSERT_EQ(moved.nodes.size(), stored.nodes.size());
+  for (size_t i = 0; i < moved.nodes.size(); ++i) {
+    EXPECT_EQ(std::vector<int32_t>(moved.nodes[i].paint.v, moved.nodes[i].paint.v + 6),
+        std::vector<int32_t>(stored.nodes[i].paint.v, stored.nodes[i].paint.v + 6)) << i;
+  }
+  GFNT_ColorStop stop{};
+  ASSERT_EQ(gfnt_face_color_stop(font.face, &moved.nodes[2].paint, 0, &at, &stop,
+                nullptr), GFNT_OK);
+  EXPECT_EQ(stop.offset, 0);
+  EXPECT_EQ(stop.alpha, 16384);
+  GFNT_ColorBox box{};
+  bool found = false;
+  ASSERT_EQ(gfnt_face_color_clip(font.face, 2, &at, &box, &found, nullptr), GFNT_OK);
+  ASSERT_TRUE(found);
+  EXPECT_EQ(box.x_min, 0);
+  EXPECT_EQ(box.y_min, -100);
+}
+
+TEST(ColorPaintVariable, ABaseOfNoVariationLeavesEverySlotAlone) {
+  // Set the linear gradient's VarIndexBase (the six numbers 0 0 600 0 0 600,
+  // then the base) to 0xFFFFFFFF. Slot k of it is not 0xFFFFFFFF + k, which wraps
+  // to row k - 1 and moves a number the font fixed; the whole paint stays put.
+  Font source("color-v1-var.ttf");
+  size_t at = 0, length = 0;
+  ASSERT_TRUE(table_range(source.bytes, "COLR", &at, &length));
+  const uint8_t pattern[] = {0, 0, 0, 0, 0x02, 0x58, 0, 0, 0, 0, 0x02, 0x58};
+  std::vector<uint8_t> bytes = source.bytes;
+  size_t patched = 0;
+  for (size_t i = at + 4; i + 16 + 4 <= at + length; ++i) {
+    if (bytes[i - 4] == 5 && std::equal(pattern, pattern + sizeof pattern,
+                                         bytes.begin() + i)) {
+      for (size_t k = 0; k < 4; ++k) {
+        bytes[i + 12 + k] = 0xFF;
+      }
+      ++patched;
+    }
+  }
+  ASSERT_EQ(patched, 1u);
+  Font font(bytes);
+  std::vector<GFNT_F2Dot14> storage;
+  GFNT_Variation moved = location(font, {650.0, 87.5}, &storage);
+  Recorder r;
+  formats_of(font, 2, &moved, &r);
+  EXPECT_EQ(std::vector<int32_t>(r.nodes[2].paint.v, r.nodes[2].paint.v + 6),
+      (std::vector<int32_t>{0, 0, 600, 0, 0, 600}));
+}
+
 TEST(ColorPaintVariable, ANodeIsFlaggedVariableOnlyInItsVarForm) {
   Font font("color-v1-var.ttf");
   Recorder r;

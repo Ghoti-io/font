@@ -16,10 +16,18 @@ table - the committed color fixtures, and any color font the oracle image holds 
 label, and the layers of every glyph that has any) and fontTools' own decompiler
 is asked the same, in the fonttools image. The two JSON answers must be equal.
 
-**The population is the fixtures.** The image's corpus holds no font with `COLR`
-or `CPAL`: this script scans it for them and reports how many it found, so that
-the day a font appears it is compared without an edit, and the report says the
-number of real fonts compared rather than leaving it to be assumed.
+**The population is the fixtures and fifteen real fonts.** Debian has no font
+with `COLR` or `CPAL`, so the image fetches googlefonts/color-fonts at a pinned
+commit (`fonttools-fetch-color-fonts`): Google's COLR v1 test-glyph fonts, three
+producers' samples in glyf, CFF and CFF2 outlines, and a full Twemoji and Noto
+Emoji. This script scans the corpus for color tables, so a font that appears is
+compared without an edit, and the report says how many real fonts it compared.
+
+A variable font is read at locations made from its own axes. The test-glyph font
+has 43, one per variable paint field (SWPS is a sweep's start angle, GRX0 a
+gradient point, and so on), so a single axis moved to half way isolates one field
+and every Var form is exercised alone; the combined locations then move them all
+together.
 
 Usage:
     color_diff.py [--quiet] [font...]
@@ -49,6 +57,55 @@ SCRATCH = os.path.join(ROOT, "build", "oracle", "color")
 # gate is for.
 LOCATIONS = [None, "wght=650", "wght=900", "wdth=87.5", "wdth=112.5",
              "wght=650,wdth=87.5", "wght=100,wdth=125", "wght=650,wdth=112.5"]
+
+
+def axes_of(path):
+    """(tag, min, default, max) of the font's fvar axes, read without fontTools."""
+    import struct
+    with open(path, "rb") as handle:
+        data = handle.read()
+    count = struct.unpack(">H", data[4:6])[0]
+    for i in range(count):
+        tag, _, offset, length = struct.unpack(">4sIII", data[12 + 16 * i:28 + 16 * i])
+        if tag == b"fvar":
+            head = offset + struct.unpack(">H", data[offset + 4:offset + 6])[0]
+            n = struct.unpack(">H", data[offset + 8:offset + 10])[0]
+            size = struct.unpack(">H", data[offset + 10:offset + 12])[0]
+            out = []
+            for k in range(n):
+                at = head + k * size
+                t = data[at:at + 4].decode("ascii")
+                lo, df, hi = (v / 65536.0 for v in struct.unpack(">iii", data[at + 4:at + 16]))
+                out.append((t, lo, df, hi))
+            return out
+    return []
+
+
+def locations_for(path):
+    """The locations a font is read at: the shared list when it has wght or wdth,
+    else one axis at a time to half way each side, then every axis together at
+    half way and at its end. Half way is a normalized +-0.5, which is a binary
+    fraction, so a delta is a product both sides hold exactly."""
+    axes = axes_of(path)
+    tags = {a[0] for a in axes}
+    if not axes:
+        return []
+    if tags & {"wght", "wdth"}:
+        return [l for l in LOCATIONS[1:]
+                if all(part.split("=")[0] in tags for part in l.split(","))]
+
+    def at(tag, lo, df, hi, frac):
+        return "%s=%r" % (tag, df + frac * ((hi - df) if frac > 0 else (df - lo)))
+
+    out = []
+    for frac in (0.5, -0.5):
+        for tag, lo, df, hi in axes:
+            if (hi > df) if frac > 0 else (lo < df):
+                out.append(at(tag, lo, df, hi, frac))
+    for frac in (0.5, -0.5, 1.0, -1.0):
+        out.append(",".join(at(tag, lo, df, hi, frac) for tag, lo, df, hi in axes
+                            if ((hi > df) if frac > 0 else (lo < df))))
+    return out
 
 
 def has_color_tables(path):
@@ -102,12 +159,14 @@ def main(argv):
     os.makedirs(SCRATCH, exist_ok=True)
     failed = compared = 0
     glyphs = nodes = 0
-    for number, location in enumerate(LOCATIONS):
+    wanted = {font: locations_for(font) for font in fonts}
+    every = [None] + sorted({l for ls in wanted.values() for l in ls})
+    for number, location in enumerate(every):
         flag = ["--location", location] if location else []
         ours = {}
         coords = {}
         for font in fonts:
-            if location and "var" not in os.path.basename(font):
+            if location and location not in wanted[font]:
                 continue
             run = subprocess.run([DRIVER] + flag + [font], capture_output=True,
                                  text=True)
@@ -145,7 +204,7 @@ def main(argv):
                     print("     %s: this library %s, fontTools %s" % where)
     print("fonts %d (%d from the image's corpus), %d comparisons over %d locations, "
           "%d version 0 glyphs, %d paint nodes, %d differing"
-          % (len(fonts), real, compared, len(LOCATIONS), glyphs, nodes, failed))
+          % (len(fonts), real, compared, len(every), glyphs, nodes, failed))
     return 1 if failed or not fonts else 0
 
 

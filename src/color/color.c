@@ -510,6 +510,13 @@ static GFNT_Result gfnt_colr_delta(const GFNT_Face * face, const GFNT_Reader * t
     if (result != GFNT_OK) {
       return result;
     }
+    /* An entry of 0xFFFF:0xFFFF is the map's own "no variation", the mapped
+     * counterpart of a VarIndexBase of 0xFFFFFFFF. Google's test-glyph font
+     * has them for every field it leaves fixed; fontTools reads them as a delta
+     * of zero. */
+    if (outer == 0xFFFFu && inner == 0xFFFFu) {
+      return GFNT_OK;
+    }
   }
   else {
     outer = index >> 16;
@@ -662,6 +669,13 @@ typedef struct Fields {
   GFNT_Error * error;
 } Fields;
 
+/* Slot @p slot of a field group whose VarIndexBase is @p base. A base of
+ * 0xFFFFFFFF means the whole group does not vary, so every slot is that same
+ * "no variation" index; adding the slot to it would wrap to row 0 and apply
+ * deltas the font never meant (Google's test-glyph font has such paints). */
+#define GFNT_COLR_VAR_INDEX(base, slot) \
+  ((base) == 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)((base) + (uint32_t)(slot)))
+
 /** Read value slot @p slot of the paint from @p at, 16-bit (signed or not) and varied. */
 static GFNT_Result field16(Fields * f, size_t slot, size_t at, bool is_signed) {
   int32_t v = 0, d = 0;
@@ -674,7 +688,7 @@ static GFNT_Result field16(Fields * f, size_t slot, size_t at, bool is_signed) {
   }
   if (f->variable) {
     r = gfnt_colr_delta(f->face, f->table, f->v1, f->variation,
-        f->var_base + (uint32_t)slot, &d, f->error);
+        GFNT_COLR_VAR_INDEX(f->var_base, slot), &d, f->error);
     if (r != GFNT_OK) {
       return r;
     }
@@ -828,7 +842,7 @@ GFNT_Result gfnt_face_color_paint(const GFNT_Face * face, GFNT_PaintRef ref,
           return RD_FAIL(at + 4 * k, "a matrix past the table");
         }
         if (paint.variable) {
-          r = gfnt_colr_delta(face, &table, &v1, variation, f.var_base + (uint32_t)k,
+          r = gfnt_colr_delta(face, &table, &v1, variation, GFNT_COLR_VAR_INDEX(f.var_base, k),
               &d, error);
           if (r != GFNT_OK) {
             return r;
@@ -960,7 +974,7 @@ GFNT_Result gfnt_face_color_stop(const GFNT_Face * face,
     }
     r = gfnt_colr_delta(face, &table, &v1, variation, base, &d0, error);
     if (r == GFNT_OK) {
-      r = gfnt_colr_delta(face, &table, &v1, variation, base + 1, &d1, error);
+      r = gfnt_colr_delta(face, &table, &v1, variation, GFNT_COLR_VAR_INDEX(base, 1), &d1, error);
     }
     if (r != GFNT_OK) {
       return r;
@@ -1034,7 +1048,7 @@ GFNT_Result gfnt_face_color_clip(const GFNT_Face * face, uint32_t glyph,
         for (size_t k = 0; k < 4; k++) {
           int32_t d = 0;
 
-          r = gfnt_colr_delta(face, &table, &v1, variation, base + (uint32_t)k, &d,
+          r = gfnt_colr_delta(face, &table, &v1, variation, GFNT_COLR_VAR_INDEX(base, k), &d,
               error);
           if (r != GFNT_OK) {
             return r;

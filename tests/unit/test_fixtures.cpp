@@ -186,6 +186,7 @@ const std::vector<Entry> & every_fixture() {
       {"color-v0.ttf", 8},
       {"color-v1-var.ttf", 9},
       {"color-v1-varmap.ttf", 9},
+      {"color-v1-varnone.ttf", 9},
       {"color-v1.ttf", 8},
       {"name-mac-encodings.ttf", kNumGlyphs},
       {"name-macroman.ttf", kNumGlyphs},

@@ -1538,6 +1538,11 @@ def build_color_v1_varmap(out):
     color_fixtures.build_color_v1_var(sys.modules[__name__], out, mapped=True)
 
 
+def build_color_v1_varnone(out):
+    import color_fixtures
+    color_fixtures.build_color_v1_var(sys.modules[__name__], out, mapped="none")
+
+
 def build_layout_gsub_cases(out):
     import layout_fixtures
     layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
@@ -4244,6 +4249,11 @@ FIXTURES = {
         "The same graph with a delta-set index map that sends each VarIndexBase "
         "to the store's rows in reverse, so a reader that ignored the map would "
         "read the wrong delta"),
+    "color-v1-varnone.ttf": (build_color_v1_varnone,
+        "The same graph with a delta-set index map whose every entry is "
+        "0xFFFF:0xFFFF, the map's own 'no variation', so a moved location reads "
+        "the stored numbers (Google's test-glyph font leaves its fixed fields "
+        "this way, and a reader that sent the entry to the store fails)"),
     "layout-gsub.ttf": (build_layout_gsub,
         "GSUB with one of every lookup type and format: single in both formats, "
         "multiple (including to nothing), alternate, ligature, context in "

@@ -38,6 +38,8 @@
  * cannot find is a difference. A table the face lacks is null.
  */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include <ghoti.io/font/font.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,6 +75,7 @@ static int value_count(GFNT_PaintFormat f) {
 typedef struct Printer {
   const GFNT_Face * face;
   const GFNT_Variation * variation;
+  FILE * out;        // the current glyph's graph, held until it is known whole
   bool first[128];   // per depth: no child printed yet
   bool failed;
 } Printer;
@@ -82,60 +85,61 @@ static bool enter(void * user, const GFNT_ColorPaint * paint, size_t depth) {
   int n = value_count(paint->format);
 
   if (depth > 0) {
-    printf("%s", p->first[depth - 1] ? "" : ",");
+    fprintf(p->out, "%s", p->first[depth - 1] ? "" : ",");
     p->first[depth - 1] = false;
   }
   p->first[depth] = true;
-  printf("{\"f\":%d", (int)paint->format);
+  fprintf(p->out, "{\"f\":%d", (int)paint->format);
   if (paint->format == GFNT_PAINT_SOLID || paint->format == GFNT_PAINT_VAR_SOLID) {
-    printf(",\"pal\":%u,\"a\":%d", paint->palette_index, paint->v[0]);
+    fprintf(p->out, ",\"pal\":%u,\"a\":%d", paint->palette_index, paint->v[0]);
   }
   if (paint->format == GFNT_PAINT_GLYPH || paint->format == GFNT_PAINT_COLR_GLYPH) {
-    printf(",\"g\":%u", paint->glyph);
+    fprintf(p->out, ",\"g\":%u", paint->glyph);
   }
   if (paint->format == GFNT_PAINT_COMPOSITE) {
-    printf(",\"mode\":%u", paint->composite_mode);
+    fprintf(p->out, ",\"mode\":%u", paint->composite_mode);
   }
   if (n) {
-    printf(",\"v\":[");
+    fprintf(p->out, ",\"v\":[");
     for (int i = 0; i < n; i++) {
-      printf("%s%d", i ? "," : "", paint->v[i]);
+      fprintf(p->out, "%s%d", i ? "," : "", paint->v[i]);
     }
-    printf("]");
+    fprintf(p->out, "]");
   }
   if (paint->color_line) {
     GFNT_ColorLine line;
 
     if (gfnt_face_color_line(p->face, paint, &line, NULL) != GFNT_OK) {
       p->failed = true;
-      printf(",\"line\":null");
+      fprintf(p->out, ",\"line\":null");
     }
     else {
-      printf(",\"line\":{\"ext\":%d,\"stops\":[", (int)line.extend);
+      fprintf(p->out, ",\"line\":{\"ext\":%d,\"stops\":[", (int)line.extend);
       for (size_t k = 0; k < line.stop_count; k++) {
         GFNT_ColorStop stop;
 
         if (gfnt_face_color_stop(p->face, paint, k, p->variation, &stop, NULL)
             != GFNT_OK) {
           p->failed = true;
-          printf("%snull", k ? "," : "");
+          fprintf(p->out, "%snull", k ? "," : "");
           continue;
         }
-        printf("%s[%d,%u,%d]", k ? "," : "", stop.offset, stop.palette_index,
+        fprintf(p->out, "%s[%d,%u,%d]", k ? "," : "", stop.offset, stop.palette_index,
             stop.alpha);
       }
-      printf("]}");
+      fprintf(p->out, "]}");
     }
   }
-  printf(",\"c\":[");
+  fprintf(p->out, ",\"c\":[");
   return true;
 }
 
 static void leave(void * user, const GFNT_ColorPaint * paint, size_t depth) {
-  (void)user;
+  Printer * p = user;
+
   (void)paint;
   (void)depth;
-  printf("]}");
+  fprintf(p->out, "]}");
 }
 
 static int parse_location(const GFNT_Face * face, const char * text,
@@ -316,10 +320,36 @@ int main(int argc, char ** argv) {
       }
       printf("%s\"%u\":", firstp ? "" : ",", g);
       firstp = false;
-      if (gfnt_face_color_paint_walk(face, g, at, &visitor, &printer, &error)
-          != GFNT_OK) {
-        printf("null");
-        printer.failed = true;
+      {
+        char * buf = NULL;
+        size_t len = 0;
+        GFNT_Error walk;
+        GFNT_Result rc;
+
+        // A graph is printed only once the walk has finished: a refused one
+        // would otherwise leave half a node in the middle of the JSON.
+        printer.out = open_memstream(&buf, &len);
+        if (!printer.out) {
+          return 1;
+        }
+        gfnt_error_clear(&walk);
+        rc = gfnt_face_color_paint_walk(face, g, at, &visitor, &printer, &walk);
+        fclose(printer.out);
+        if (rc == GFNT_OK) {
+          fwrite(buf, 1, len, stdout);
+        }
+        else if (rc == GFNT_ERR_LIMIT) {
+          // A cycle, or a graph past the walker's bounds: the reference says
+          // the same of the cycles (see fonttools_color.py).
+          printf("{\"refused\":true}");
+        }
+        else {
+          printf("null");
+          printer.failed = true;
+          fprintf(stderr, "glyph %u: ", g);
+          gfnt_error_dump(&walk, stderr);
+        }
+        free(buf);
       }
     }
     printf("},\"clips\":{");

@@ -70,8 +70,19 @@ def half_up(value):
     return int(math.floor(round(value, 6) + 0.5))
 
 
+class Refused(Exception):
+    """A glyph's graph that no reader can walk to the end: it reaches itself.
+
+    Google's test-glyph fonts carry such a pair on purpose. This library refuses
+    them with GFNT_ERR_LIMIT and prints {"refused": true} for the glyph; the
+    reference says the same of the cycle it found, so the two agree that the
+    graph has no walk rather than disagreeing about a half-printed one.
+    """
+
+
 class Graph:
     def __init__(self, font, location):
+        self.stack = []
         self.font = font
         self.colr = font["COLR"].table
         self.location = location
@@ -130,7 +141,11 @@ class Graph:
             out["c"] = [self.node(paint.Paint)]
         elif fmt == ot.PaintFormat.PaintColrGlyph:
             out["g"] = self.font.getGlyphID(paint.Glyph)
+            if paint.Glyph in self.stack:
+                raise Refused("PaintColrGlyph reaches itself")
+            self.stack.append(paint.Glyph)
             out["c"] = [self.node(self.base[paint.Glyph])]
+            self.stack.pop()
         elif fmt in (ot.PaintFormat.PaintTransform, ot.PaintFormat.PaintVarTransform):
             t = paint.Transform
             tb = getattr(t, "VarIndexBase", 0xFFFFFFFF)
@@ -211,8 +226,14 @@ def describe(path, location=None, coords=None):
             elif location is not None and "fvar" in font:
                 normal = normalised(font, location)
             graph = Graph(font, normal)
-            out["paints"] = {str(font.getGlyphID(name)): graph.node(paint)
-                             for name, paint in graph.base.items()}
+            out["paints"] = {}
+            for name, paint in graph.base.items():
+                graph.stack = [name]
+                try:
+                    node = graph.node(paint)
+                except (Refused, RecursionError):
+                    node = {"refused": True}
+                out["paints"][str(font.getGlyphID(name))] = node
             out["clips"] = graph.clips()
     return out
 

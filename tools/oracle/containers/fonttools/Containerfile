@@ -168,6 +168,16 @@ RUN apt-get update -qq \
       fonts-cantarell=0.303.1-4 \
     && rm -rf /var/lib/apt/lists/*
 
+# The color fonts. Debian has no font with a `COLR` table, so these come from
+# googlefonts/color-fonts at a pinned commit, each file checked against its
+# SHA-256 (the script says which licences apply). Fifteen files: the repository's
+# COLR v1 test-glyph fonts - static and variable, with and without a clip list -
+# and three producers' worth of samples in glyf, CFF and CFF2 outlines, plus a
+# full Twemoji and a full Noto Emoji for bulk.
+COPY fonttools-fetch-color-fonts /usr/local/bin/
+RUN chmod +x /usr/local/bin/fonttools-fetch-color-fonts \
+    && fonttools-fetch-color-fonts
+
 # Wine puts its fonts in /usr/share/wine/fonts, which is not /usr/share/fonts, so
 # every corpus list program in this image walked past seven of the eleven EBSC
 # faces in Debian - including the sweep that found them, which is why the count

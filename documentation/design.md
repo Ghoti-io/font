@@ -5,7 +5,7 @@ What is implemented reads the sfnt container, the metric tables, `cmap` and
 and the standalone bitmap formats, rasterises an outline, and shapes text through
 `GSUB`, `GPOS`, `kern` and Apple's `morx`/`kerx`/`trak`, with a shaper for each
 script that needs one and a bidi-aware shaping call (§9; §18 is the list and says
-what is not built). Paragraph layout is not implemented, and font discovery
+what is not built). Paragraph layout is built in part (§10.8), and font discovery
 lists faces and does not match them. WOFF 2, colour and the PNG strikes are not
 implemented; writing is built for the sfnt and WOFF 1 and for subsetting static TrueType fonts (§12). Layout and the script shapers
 need the `unicode` library. Reading a file, drawing an outline and applying a
@@ -1299,9 +1299,9 @@ drew.
 | --- | --- | --- |
 | 1 | Shaping | `font` shaping - implemented, including the script shapers (§9.6) |
 | 2 | Run measurement: advance sum, ink extents | `font` shaping; the advance sum is a sum over the run, the ink extents are not built |
-| 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, not implemented |
+| 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, implemented (§10.8); a caller-supplied fallback provider is not |
 | 4 | Break opportunities: UAX #14 lines, UAX #29 graphemes and words | `unicode`, applied here |
-| 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout, not implemented |
+| 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout: wrap, stack and align are implemented (§10.8); the rest is not |
 | 6 | Inline layout: inline images and widgets, mixed sizes on one line, ruby | `cjelly` |
 | 7 | Box model: margins, padding, floats, flex, grid, constraints | `cjelly` (its Task 3.1) |
 
@@ -1379,6 +1379,31 @@ visual places); and a point to a byte offset plus a caret affinity (which side
 of a direction boundary the caret belongs on). Caret positions inside a
 ligature use `GDEF`'s ligature caret list when the font has one and even
 division when it does not.
+
+### 10.8 What is built
+
+`layout.h`, tier 3 over the shaper. `gfnt_paragraph_create()` decodes the UTF-8
+(an ill-formed sequence is one U+FFFD), runs UAX #9 over it once, and cuts it
+into items at span edges, script edges (`guni_script_items`) and level
+changes; each item is shaped with its span's face list by
+`gfnt_faces_shape()`. The result is kept as *units* - the glyphs of one cluster
+with the code points they stand for, in logical order, already scaled to 26.6 -
+so `gfnt_paragraph_layout(width)` is a pass over units and never calls the
+shaper again. It breaks greedily at the UAX #14 opportunities (`unicode`'s
+`guni_break_all_codepoints`) and at newline characters; a stretch with no
+opportunity overflows. Trailing spaces hang: they are placed, and not counted in
+the line's width. Each line's units are cut into slices of one face and one
+level, ordered by rule L2, and placed; the trailing spaces take the paragraph's
+level (rule L1). Alignment is start/end/left/right/centre; a line wider than its
+box overflows toward the end side. A line's ascent and descent are the greatest
+of its faces' (per-span metrics policy), its height adds the greatest line gap,
+split half above and half below the glyphs. Every placed glyph carries its byte
+offset in the text, the pen position and the draw position. Each run records
+which face of the span's list shaped it, and flags a fallback face (M8).
+
+Not yet: justification, tabs, truncation, min/max-content widths, hit testing,
+the ink box, letter-spacing, and a caller-supplied font provider (a span names
+its list of faces).
 
 ### 10.7 Deliberately not here
 

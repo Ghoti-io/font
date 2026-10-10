@@ -266,6 +266,20 @@
 #define gfnt_fontset_skip_at GHOTIIO_FONT(gfnt_fontset_skip_at)
 #define gfnt_fontset_resolve_alias GHOTIIO_FONT(gfnt_fontset_resolve_alias)
 #define gfnt_fontset_free GHOTIIO_FONT(gfnt_fontset_free)
+#define GFNT_TextStyle GHOTIIO_FONT(GFNT_TextStyle)
+#define GFNT_TextSpan GHOTIIO_FONT(GFNT_TextSpan)
+#define GFNT_Align GHOTIIO_FONT(GFNT_Align)
+#define GFNT_LineBreak GHOTIIO_FONT(GFNT_LineBreak)
+#define GFNT_ParagraphOptions GHOTIIO_FONT(GFNT_ParagraphOptions)
+#define GFNT_Paragraph GHOTIIO_FONT(GFNT_Paragraph)
+#define GFNT_PlacedGlyph GHOTIIO_FONT(GFNT_PlacedGlyph)
+#define GFNT_LineRun GHOTIIO_FONT(GFNT_LineRun)
+#define GFNT_Line GHOTIIO_FONT(GFNT_Line)
+#define GFNT_Layout GHOTIIO_FONT(GFNT_Layout)
+#define gfnt_paragraph_create GHOTIIO_FONT(gfnt_paragraph_create)
+#define gfnt_paragraph_free GHOTIIO_FONT(gfnt_paragraph_free)
+#define gfnt_paragraph_layout GHOTIIO_FONT(gfnt_paragraph_layout)
+#define gfnt_layout_free GHOTIIO_FONT(gfnt_layout_free)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

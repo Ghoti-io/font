@@ -40,8 +40,8 @@
  * differential against `hb-shape` is what holds this to it.
  */
 
-#ifndef GHOTI_IO_GFNT_LAYOUT_H
-#define GHOTI_IO_GFNT_LAYOUT_H
+#ifndef GHOTI_IO_GFNT_LAYOUT_TABLES_H
+#define GHOTI_IO_GFNT_LAYOUT_TABLES_H
 
 #include <ghoti.io/font/allocator.h>
 #include <ghoti.io/font/core.h>
@@ -428,4 +428,4 @@ void gfnt_gpos_position_finish_offsets(GFNT_LBuffer * b, bool rtl,
 }
 #endif
 
-#endif // GHOTI_IO_GFNT_LAYOUT_H
+#endif // GHOTI_IO_GFNT_LAYOUT_TABLES_H

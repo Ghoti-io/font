@@ -122,7 +122,8 @@ which of them this library takes, and which of those it reads today.
 | | WOFF 1 | **implemented** (§7.1): the tables are inflated and the sfnt put back before the directory is read; the metadata and private blocks are not read |
 | | `EBDT`/`EBLC`/`EBSC` strikes | **implemented** (grey depths are listed and their data declined) |
 | | `COLR` v0 + `CPAL` | **implemented** (§7.6): palettes, usability flags and labels, and the layer list of a base glyph; returned as a description, never composited |
-| | `CBDT`/`CBLC`, `sbix`, `COLR` v1 | wanted, not implemented; color bitmaps need `image` |
+| | `COLR` v1 | **implemented** (§7.6) as a paint graph read in place and walked, with the variable forms and the clip list |
+| | `CBDT`/`CBLC`, `sbix` | wanted, not implemented; color bitmaps need `image` |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |
 | | WOFF 2 | not implemented; `compress` has a full Brotli decoder now, and the glyf/loca transform is the work |
@@ -173,7 +174,7 @@ to keep open.
 | `name.h` | `name` records decoded to UTF-8 |
 | `glyph.h` | `GFNT_Glyph`, the tagged union; the strike-selection policy |
 | `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes. The four standalone containers are implemented; `EBDT`/`EBLC` are not |
-| `color.h` | `CPAL` and `COLR` v0 implemented; `COLR` v1, `CBDT`, `sbix` not |
+| `color.h` | `CPAL`, `COLR` v0 and v1 implemented (v1 as a graph, not composited); `CBDT`, `sbix` not |
 | `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Both producers are implemented |
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
 | `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Implemented; of the four containers that feed them, `CFF ` inside an sfnt is read |
@@ -788,20 +789,41 @@ stacked outlines. Both are read in place at each call, with no allocation, and a
 version 1 `COLR` serves its version 0 records the same way. A glyph with no base
 record has no layers, which is an answer and not an error. **Built.**
 
-`COLR` v1, not built: the paint graph - solid, linear, radial and sweep
-gradients with their extend modes, `PaintGlyph` clip paths, `PaintColrGlyph`
-references, the transform paints, `PaintComposite` with its modes, and the
-variable forms through the item variation store - returned as a graph the
-caller's compositor walks, with §6.2's depth. This library does not composite
-gradients: that is a graphics library's job, and `GFNT_GLYPH_COLR_LAYERS` is the
-description, not the pixels.
+`COLR` v1, **built** as a description: a base glyph's paint is the root of a
+graph of solid, linear, radial and sweep gradients (each with a color line of
+stops and an extend mode), `PaintGlyph` clip shapes, `PaintColrGlyph`
+references, the transform paints (the general matrix and the translate, scale,
+rotate and skew forms, each with and without a center), `PaintColrLayers` into
+the shared layer list, and `PaintComposite` with its mode, plus the variable
+form of every paint that has one and the clip list. `gfnt_face_color_paint()`
+reads one node into a `GFNT_ColorPaint` of integers in the file's own units (an
+F2Dot14 or Fixed stays the integer stored), by `GFNT_PaintRef` - the node's
+offset - so nothing is copied or allocated; `gfnt_face_color_paint_walk()`
+visits a glyph's graph depth first, entering a layers node's layers and a
+color-glyph node's target, bounded by `max_paint_depth` and a node budget so a
+graph that names itself or fans out is refused with `GFNT_ERR_LIMIT`. At a
+location the variable forms have the item variation store's deltas added (through
+the delta-set index map when the table has one), rounded as the other variation
+tables round, and not clamped. This library does not composite gradients: that
+is a graphics library's job, and `GFNT_GLYPH_COLR_LAYERS` is the description, not
+the pixels.
 
 **No real font to check against.** The oracle image holds no font with `COLR` or
 `CPAL` (its one color font, Noto Color Emoji, is `CBDT`), so the fixtures
-`color-v0.ttf` and `color-cpal0.ttf` are the whole population, written by
-fontTools' own builder; the unit tests take their expected values from fontTools'
-dump of them, and `make check-oracle-color` reads every glyph back through
-fontTools.
+`color-v0.ttf`, `color-cpal0.ttf` and the three version 1 fixtures (every paint
+format; the variable forms over a store of weight and width regions, with and
+without an index map) are the whole population, written by fontTools' own
+builder. The unit tests take their expected values from fontTools' dump, and
+`make check-oracle-color` reads every palette, label, layer, paint node, color stop
+and clip box back through fontTools' decompiler, the variable ones at eight
+locations (the default, each axis moved each way, and both). The locations are
+binary fractions so that every delta is exact in both fontTools' floats and the
+library's 16.16 arithmetic: at a general point the library's rounding of a delta to
+1/64 before the final rounding can cross a tie, as the other variation tables'
+documented arithmetic can, and this gate is not the place that is held. Six
+breaks of the reader (the index map ignored, a delta slot off by one, the
+backdrop read as the source, the clip range, the color stop's size, a channel
+swap) are each caught.
 
 ### 7.7 Variations
 

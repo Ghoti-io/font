@@ -88,3 +88,157 @@ def build_color_cpal0(mf, out):
     fb = _font(mf, "Color CPAL0", [PALETTES[0], PALETTES[0]])
     mf.pin(fb)
     fb.save(out)
+
+
+# --------------------------------------------------------------- COLR version 1
+
+from fontTools.ttLib.tables import otTables as ot
+
+PF = ot.PaintFormat
+LINE3 = {"Extend": "pad", "ColorStop": [
+    {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 1.0},
+    {"StopOffset": 0.5, "PaletteIndex": 1, "Alpha": 0.5},
+    {"StopOffset": 1.0, "PaletteIndex": 2, "Alpha": 0.25}]}
+LINE2 = {"Extend": "repeat", "ColorStop": [
+    {"StopOffset": 0.25, "PaletteIndex": 2, "Alpha": 1.0},
+    {"StopOffset": 0.75, "PaletteIndex": 0xFFFF, "Alpha": 0.75}]}
+LINE_REFLECT = {"Extend": "reflect", "ColorStop": [
+    {"StopOffset": 0.0, "PaletteIndex": 1, "Alpha": 1.0},
+    {"StopOffset": 1.0, "PaletteIndex": 0, "Alpha": 1.0}]}
+
+
+def solid(index=0, alpha=1.0):
+    return {"Format": PF.PaintSolid, "PaletteIndex": index, "Alpha": alpha}
+
+
+def glyph(name, paint):
+    return {"Format": PF.PaintGlyph, "Glyph": name, "Paint": paint}
+
+
+def v1_trees():
+    """The static graph: every non-variable paint format once."""
+    gradients = [
+        glyph("layer.a", solid(0, 0.5)),
+        glyph("layer.b", {"Format": PF.PaintLinearGradient, "ColorLine": LINE3,
+                          "x0": 0, "y0": 0, "x1": 600, "y1": 0, "x2": 0, "y2": 600}),
+        glyph("layer.c", {"Format": PF.PaintRadialGradient, "ColorLine": LINE2,
+                          "x0": 300, "y0": 300, "r0": 0, "x1": 300, "y1": 300,
+                          "r1": 400}),
+        glyph("layer.a", {"Format": PF.PaintSweepGradient, "ColorLine": LINE_REFLECT,
+                          "centerX": 300, "centerY": 300, "startAngle": 0.0,
+                          "endAngle": 90.0}),
+    ]
+    inner = glyph("layer.a", solid(1))
+    chain = inner
+    wrappers = [
+        lambda p: {"Format": PF.PaintSkewAroundCenter, "Paint": p, "xSkewAngle": 22.5,
+                   "ySkewAngle": -11.25, "centerX": 100, "centerY": 200},
+        lambda p: {"Format": PF.PaintSkew, "Paint": p, "xSkewAngle": 45.0,
+                   "ySkewAngle": 0.0},
+        lambda p: {"Format": PF.PaintRotateAroundCenter, "Paint": p, "angle": 45.0,
+                   "centerX": 50, "centerY": -50},
+        lambda p: {"Format": PF.PaintRotate, "Paint": p, "angle": -90.0},
+        lambda p: {"Format": PF.PaintScaleUniformAroundCenter, "Paint": p,
+                   "scale": 0.5, "centerX": 10, "centerY": 20},
+        lambda p: {"Format": PF.PaintScaleUniform, "Paint": p, "scale": 1.5},
+        lambda p: {"Format": PF.PaintScaleAroundCenter, "Paint": p, "scaleX": 0.75,
+                   "scaleY": 1.25, "centerX": 300, "centerY": 0},
+        lambda p: {"Format": PF.PaintScale, "Paint": p, "scaleX": 1.75, "scaleY": 0.5},
+        lambda p: {"Format": PF.PaintTranslate, "Paint": p, "dx": -30, "dy": 40},
+        lambda p: {"Format": PF.PaintTransform, "Paint": p,
+                   "Transform": (1.0, 0.5, -0.25, 1.0, 100.0, -200.0)},
+    ]
+    for wrap in wrappers:
+        chain = wrap(chain)
+    composite = {"Format": PF.PaintComposite, "SourcePaint": {
+                     "Format": PF.PaintColrGlyph, "Glyph": "A"},
+                 "CompositeMode": "multiply",
+                 "BackdropPaint": glyph("layer.b", solid(2, 0.75))}
+    return {"A": {"Format": PF.PaintColrLayers, "Layers": gradients},
+            "B": chain, "ghoti.alt": composite}
+
+
+def build_color_v1(mf, out):
+    fb = _font(mf, "Color v1", PALETTES)
+    order = fb.font.getReverseGlyphMap()
+    clip = (0, -100, 700, 900)
+    fb.font["COLR"] = buildCOLR(v1_trees(), version=1, glyphMap=order,
+                                clipBoxes={"A": clip, "B": clip, "ghoti.alt": clip})
+    mf.pin(fb)
+    fb.save(out)
+
+
+# The variable graph: the same shapes in their Var forms, each with a
+# VarIndexBase into a store of fifty rows over the weight and width regions.
+VAR_ROWS = [((i * 7) % 23 - 11, (i * 5) % 17 - 8) for i in range(64)]
+
+
+def v1_var_trees():
+    base = {"n": 0}
+
+    def at(count=1):
+        index = base["n"]
+        base["n"] += count
+        return index
+
+    line = {"Extend": "pad", "ColorStop": [
+        {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 1.0, "VarIndexBase": at(2)},
+        {"StopOffset": 1.0, "PaletteIndex": 1, "Alpha": 0.5, "VarIndexBase": at(2)}]}
+    solid_var = {"Format": PF.PaintVarSolid, "PaletteIndex": 2, "Alpha": 0.5,
+                 "VarIndexBase": at(1)}
+    paints = [
+        glyph("ring", {"Format": PF.PaintVarLinearGradient, "ColorLine": line,
+                       "x0": 0, "y0": 0, "x1": 600, "y1": 0, "x2": 0, "y2": 600,
+                       "VarIndexBase": at(6)}),
+        glyph("dot", {"Format": PF.PaintVarRadialGradient, "ColorLine": line,
+                      "x0": 300, "y0": 300, "r0": 10, "x1": 300, "y1": 300, "r1": 400,
+                      "VarIndexBase": at(6)}),
+        glyph("bar", {"Format": PF.PaintVarSweepGradient, "ColorLine": line,
+                      "centerX": 300, "centerY": 300, "startAngle": 0.0,
+                      "endAngle": 90.0, "VarIndexBase": at(4)}),
+    ]
+    chain = glyph("tri", solid_var)
+    for fmt, extra, count in [
+            (PF.PaintVarSkewAroundCenter, {"xSkewAngle": 22.5, "ySkewAngle": 11.25,
+                                           "centerX": 100, "centerY": 200}, 4),
+            (PF.PaintVarSkew, {"xSkewAngle": 45.0, "ySkewAngle": 0.0}, 2),
+            (PF.PaintVarRotateAroundCenter, {"angle": 45.0, "centerX": 50,
+                                             "centerY": -50}, 3),
+            (PF.PaintVarRotate, {"angle": -90.0}, 1),
+            (PF.PaintVarScaleUniformAroundCenter, {"scale": 0.5, "centerX": 10,
+                                                   "centerY": 20}, 3),
+            (PF.PaintVarScaleUniform, {"scale": 1.5}, 1),
+            (PF.PaintVarScaleAroundCenter, {"scaleX": 0.75, "scaleY": 1.25,
+                                            "centerX": 300, "centerY": 0}, 4),
+            (PF.PaintVarScale, {"scaleX": 1.75, "scaleY": 0.5}, 2),
+            (PF.PaintVarTranslate, {"dx": -30, "dy": 40}, 2)]:
+        chain = dict(Format=fmt, Paint=chain, VarIndexBase=at(count), **extra)
+    # A variable matrix keeps its base in the matrix, not in the paint.
+    chain = {"Format": PF.PaintVarTransform, "Paint": chain,
+             "Transform": {"xx": 1.0, "yx": 0.5, "xy": -0.25, "yy": 1.0,
+                           "dx": 100.0, "dy": -200.0, "VarIndexBase": at(6)}}
+    assert base["n"] <= len(VAR_ROWS), base
+    return {"tri": {"Format": PF.PaintColrLayers, "Layers": paints},
+            "bar": chain}, base["n"]
+
+
+def build_color_v1_var(mf, out, mapped=False):
+    from fontTools.varLib import builder as vb
+    fb = mf._variable_font("Color v1 var")
+    font = fb.font
+    trees, used = v1_var_trees()
+    store = mf._var_store([([0, 1], [list(r) for r in VAR_ROWS])])
+    order = font.getReverseGlyphMap()
+    index_map = None
+    if mapped:
+        # Indexes into the map are the VarIndexBases; the map sends each to the
+        # row in reverse, so a reader that ignored it would read the wrong delta.
+        index_map = vb.buildVarIdxMap([(0 << 16) | (len(VAR_ROWS) - 1 - i)
+                                       for i in range(len(VAR_ROWS))], order)
+    clip_a = (0, -100, 700, 900, 5) if not mapped else (0, -100, 700, 900, 5)
+    font["COLR"] = buildCOLR(trees, version=1, glyphMap=order, varStore=store,
+                             varIndexMap=index_map,
+                             clipBoxes={"tri": clip_a, "bar": (0, 0, 500, 500)})
+    font["CPAL"] = buildCPAL(_floats(PALETTES), nameTable=font["name"])
+    mf.pin(fb)
+    fb.save(out)

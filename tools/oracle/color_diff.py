@@ -39,6 +39,16 @@ DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
                       "font-color")
 FIXTURES = os.path.join(ROOT, "tests", "data", "fonts")
 SCRATCH = os.path.join(ROOT, "build", "oracle", "color")
+# Where the variable fixtures are read. The normalized coordinates are chosen to be
+# binary fractions with at most two bits (`avar` sends wght 650 to 0.75, and wdth
+# 87.5 and 112.5 are -0.5 and 0.5), so every delta is a product that both
+# fontTools' floats and this library's 16.16 arithmetic hold exactly. At a general
+# point the two differ by the 1/64 at which the library rounds a delta before its
+# final rounding, which moves a result across a tie once in a long while; that is
+# the library's documented arithmetic (var_diff.py holds it) and not a thing this
+# gate is for.
+LOCATIONS = [None, "wght=650", "wght=900", "wdth=87.5", "wdth=112.5",
+             "wght=650,wdth=87.5", "wght=100,wdth=125", "wght=650,wdth=112.5"]
 
 
 def has_color_tables(path):
@@ -51,6 +61,29 @@ def has_color_tables(path):
     except (OSError, ValueError):
         return False
     return b"COLR" in tags or b"CPAL" in tags
+
+
+def first_diff(a, b, path=""):
+    """Where two JSON values first differ: a path and the two values."""
+    if type(a) != type(b):
+        return path, a, b
+    if isinstance(a, dict):
+        for key in sorted(set(a) | set(b)):
+            if key not in a or key not in b:
+                return path + "/" + str(key), a.get(key), b.get(key)
+            found = first_diff(a[key], b[key], path + "/" + str(key))
+            if found:
+                return found
+        return None
+    if isinstance(a, list):
+        if len(a) != len(b):
+            return path + " (length)", len(a), len(b)
+        for i, (x, y) in enumerate(zip(a, b)):
+            found = first_diff(x, y, "%s[%d]" % (path, i))
+            if found:
+                return found
+        return None
+    return None if a == b else (path, a, b)
 
 
 def main(argv):
@@ -67,35 +100,52 @@ def main(argv):
                         os.path.join(FIXTURES, n))]
         fonts = fixtures + corpus_fonts
     os.makedirs(SCRATCH, exist_ok=True)
-    out = os.path.join(SCRATCH, "fonttools.json")
-    argv_ref = oracle_env.command("fonttools", [
-        "python3", os.path.join(ROOT, "tools", "oracle", "fonttools_color.py"),
-        out] + fonts, scratch=SCRATCH)
-    finished = subprocess.run(argv_ref, capture_output=True, text=True)
-    if finished.returncode != 0:
-        raise oracle_env.OracleUnavailable(
-            "fonttools_color failed: %s" % finished.stderr.strip()[-300:])
-    with open(out, encoding="utf-8") as handle:
-        want = json.load(handle)
-    failed = 0
-    for font in fonts:
-        ours = subprocess.run([DRIVER, font], capture_output=True, text=True)
-        try:
-            got = json.loads(ours.stdout)
-        except ValueError:
-            got = {"error": ours.stderr.strip()[:200] or "no answer"}
-        ref = want[font]
-        if got != ref:
-            failed += 1
-            print("DIFF %s" % os.path.relpath(font, ROOT))
-            for key in sorted(set(got) | set(ref)):
-                if got.get(key) != ref.get(key):
-                    print("     %s: %s vs fontTools %s" % (
-                        key, json.dumps(got.get(key))[:160],
-                        json.dumps(ref.get(key))[:160]))
-    glyphs = sum(len((want[f].get("layers") or {})) for f in fonts)
-    print("fonts compared %d (%d from the image's corpus), %d color glyphs, "
-          "%d differing" % (len(fonts), real, glyphs, failed))
+    failed = compared = 0
+    glyphs = nodes = 0
+    for number, location in enumerate(LOCATIONS):
+        flag = ["--location", location] if location else []
+        ours = {}
+        coords = {}
+        for font in fonts:
+            if location and "var" not in os.path.basename(font):
+                continue
+            run = subprocess.run([DRIVER] + flag + [font], capture_output=True,
+                                 text=True)
+            try:
+                got = json.loads(run.stdout)
+            except ValueError:
+                got = {"error": run.stderr.strip()[:200] or "no answer"}
+            if "coords" in got:
+                coords[font] = got.pop("coords")
+            ours[font] = got
+        out = os.path.join(SCRATCH, "fonttools-%d.json" % number)
+        given = os.path.join(SCRATCH, "coords-%d.json" % number)
+        with open(given, "w", encoding="utf-8") as handle:
+            json.dump(coords, handle)
+        argv_ref = oracle_env.command("fonttools", [
+            "python3", os.path.join(ROOT, "tools", "oracle", "fonttools_color.py")]
+            + flag + ["--coords", given, out] + list(ours), scratch=SCRATCH)
+        finished = subprocess.run(argv_ref, capture_output=True, text=True)
+        if finished.returncode != 0:
+            raise oracle_env.OracleUnavailable(
+                "fonttools_color failed: %s" % finished.stderr.strip()[-300:])
+        with open(out, encoding="utf-8") as handle:
+            want = json.load(handle)
+        for font, got in ours.items():
+            compared += 1
+            ref = want[font]
+            if not location:
+                glyphs += len(ref.get("layers") or {})
+                nodes += len(json.dumps(ref.get("paints") or {}).split('{"f"')) - 1
+            if got != ref:
+                failed += 1
+                print("DIFF %s %s" % (os.path.relpath(font, ROOT), location or "default"))
+                where = first_diff(got, ref)
+                if where:
+                    print("     %s: this library %s, fontTools %s" % where)
+    print("fonts %d (%d from the image's corpus), %d comparisons over %d locations, "
+          "%d version 0 glyphs, %d paint nodes, %d differing"
+          % (len(fonts), real, compared, len(LOCATIONS), glyphs, nodes, failed))
     return 1 if failed or not fonts else 0
 
 

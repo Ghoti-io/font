@@ -302,6 +302,22 @@
 #define gfnt_face_color_version GHOTIIO_FONT(gfnt_face_color_version)
 #define gfnt_face_color_layer_count GHOTIIO_FONT(gfnt_face_color_layer_count)
 #define gfnt_face_color_layer GHOTIIO_FONT(gfnt_face_color_layer)
+#define GFNT_PaintRef GHOTIIO_FONT(GFNT_PaintRef)
+#define GFNT_PaintFormat GHOTIIO_FONT(GFNT_PaintFormat)
+#define GFNT_ColorPaint GHOTIIO_FONT(GFNT_ColorPaint)
+#define GFNT_ColorExtend GHOTIIO_FONT(GFNT_ColorExtend)
+#define GFNT_ColorLine GHOTIIO_FONT(GFNT_ColorLine)
+#define GFNT_ColorStop GHOTIIO_FONT(GFNT_ColorStop)
+#define GFNT_ColorBox GHOTIIO_FONT(GFNT_ColorBox)
+#define GFNT_PaintVisitor GHOTIIO_FONT(GFNT_PaintVisitor)
+#define gfnt_face_color_base_paint GHOTIIO_FONT(gfnt_face_color_base_paint)
+#define gfnt_face_color_layer_list_count GHOTIIO_FONT(gfnt_face_color_layer_list_count)
+#define gfnt_face_color_layer_paint GHOTIIO_FONT(gfnt_face_color_layer_paint)
+#define gfnt_face_color_paint GHOTIIO_FONT(gfnt_face_color_paint)
+#define gfnt_face_color_line GHOTIIO_FONT(gfnt_face_color_line)
+#define gfnt_face_color_stop GHOTIIO_FONT(gfnt_face_color_stop)
+#define gfnt_face_color_clip GHOTIIO_FONT(gfnt_face_color_clip)
+#define gfnt_face_color_paint_walk GHOTIIO_FONT(gfnt_face_color_paint_walk)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

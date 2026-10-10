@@ -1523,6 +1523,21 @@ def build_color_cpal0(out):
     color_fixtures.build_color_cpal0(sys.modules[__name__], out)
 
 
+def build_color_v1(out):
+    import color_fixtures
+    color_fixtures.build_color_v1(sys.modules[__name__], out)
+
+
+def build_color_v1_var(out):
+    import color_fixtures
+    color_fixtures.build_color_v1_var(sys.modules[__name__], out)
+
+
+def build_color_v1_varmap(out):
+    import color_fixtures
+    color_fixtures.build_color_v1_var(sys.modules[__name__], out, mapped=True)
+
+
 def build_layout_gsub_cases(out):
     import layout_fixtures
     layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
@@ -4214,6 +4229,21 @@ FIXTURES = {
     "color-cpal0.ttf": (build_color_cpal0,
         "The same COLR layers over a CPAL version 0, which has no types or "
         "labels, and two palettes that share one run of color records"),
+    "color-v1.ttf": (build_color_v1,
+        "COLR version 1: every non-variable paint format once - layers (sharing "
+        "the layer list), solid, linear, radial and sweep gradients with pad, "
+        "repeat and reflect color lines, glyph, color glyph, transform, "
+        "translate, scale in four forms, rotate in two, skew in two, and a "
+        "composite - with a clip list sharing one box across three glyphs"),
+    "color-v1-var.ttf": (build_color_v1_var,
+        "COLR version 1 in a variable font: the Var forms of every paint that has "
+        "one, color lines whose stops vary, and a clip box that varies, over an "
+        "item variation store of weight and width regions, read through the "
+        "packed outer/inner index"),
+    "color-v1-varmap.ttf": (build_color_v1_varmap,
+        "The same graph with a delta-set index map that sends each VarIndexBase "
+        "to the store's rows in reverse, so a reader that ignored the map would "
+        "read the wrong delta"),
     "layout-gsub.ttf": (build_layout_gsub,
         "GSUB with one of every lookup type and format: single in both formats, "
         "multiple (including to nothing), alternate, ligature, context in "

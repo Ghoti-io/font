@@ -280,6 +280,15 @@
 #define gfnt_paragraph_free GHOTIIO_FONT(gfnt_paragraph_free)
 #define gfnt_paragraph_layout GHOTIIO_FONT(gfnt_paragraph_layout)
 #define gfnt_layout_free GHOTIIO_FONT(gfnt_layout_free)
+#define GFNT_Rect GHOTIIO_FONT(GFNT_Rect)
+#define GFNT_Affinity GHOTIIO_FONT(GFNT_Affinity)
+#define GFNT_Hit GHOTIIO_FONT(GFNT_Hit)
+#define GFNT_Caret GHOTIIO_FONT(GFNT_Caret)
+#define gfnt_paragraph_min_content GHOTIIO_FONT(gfnt_paragraph_min_content)
+#define gfnt_paragraph_max_content GHOTIIO_FONT(gfnt_paragraph_max_content)
+#define gfnt_layout_hit_test GHOTIIO_FONT(gfnt_layout_hit_test)
+#define gfnt_layout_caret GHOTIIO_FONT(gfnt_layout_caret)
+#define gfnt_layout_range_rects GHOTIIO_FONT(gfnt_layout_range_rects)
 /// @endcond
 
 #endif // GHOTI_IO_GFNT_NAMESPACE_H

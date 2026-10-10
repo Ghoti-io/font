@@ -1401,9 +1401,21 @@ split half above and half below the glyphs. Every placed glyph carries its byte
 offset in the text, the pen position and the draw position. Each run records
 which face of the span's list shaped it, and flags a fallback face (M8).
 
-Not yet: justification, tabs, truncation, min/max-content widths, hit testing,
-the ink box, letter-spacing, and a caller-supplied font provider (a span names
-its list of faces).
+`gfnt_paragraph_min_content()` is the widest unbreakable stretch and
+`_max_content()` the widest line when only newlines break; no line of any layout
+is wider than the larger of the width and the min-content, or than the max. Hit
+testing is built from the *boxes* of a line, one per grapheme in visual order:
+`gfnt_layout_hit_test()` gives the nearer edge of the character under a point as
+a byte offset with an affinity, `gfnt_layout_caret()` returns the point for an
+offset and affinity (a soft break and a direction boundary each have two places
+for one offset), and `gfnt_layout_range_rects()` gives the selection rectangles,
+merging those that touch, so right-to-left text inside left-to-right gives
+several. A cluster of several graphemes (a ligature) is divided at the font's
+`GDEF` carets when it lists one fewer than the graphemes, and evenly otherwise.
+A newline is not a box, so nothing lands after one.
+
+Not yet: justification, tabs, truncation, the ink box, letter-spacing, and a
+caller-supplied font provider (a span names its list of faces).
 
 ### 10.7 Deliberately not here
 

@@ -39,48 +39,7 @@
 #include <ghoti.io/unicode/utf.h>
 #include <stdlib.h>
 #include <string.h>
-
-/** One shaped glyph, already in 26.6 pixels. */
-typedef struct {
-  uint32_t glyph;
-  uint32_t cluster;   // byte offset
-  GFNT_F26Dot6 advance, dx, dy;
-} PGlyph;
-
-/** What a unit's glyphs were shaped with. */
-typedef struct {
-  const GFNT_Face * face;
-  size_t span;
-  size_t face_index;
-  uint8_t level;
-  GFNT_F26Dot6 ascent, descent, gap;   // positive, 26.6
-} PRun;
-
-/** The glyphs of one cluster. */
-typedef struct {
-  size_t cp_start, cp_end;     // the code points it stands for
-  size_t run;                  // index into the paragraph's runs
-  size_t g_lo, g_hi;           // its glyphs in the paragraph's glyph array
-  GFNT_F26Dot6 width;
-  bool space;                  // hangs at the end of a line
-  bool opportunity;            // a line may break after it
-  bool hard;                   // a line must break after it
-} Unit;
-
-struct GFNT_Paragraph {
-  const GFNT_Allocator * allocator;
-  GFNT_ParagraphOptions options;
-  size_t length;               // code points
-  size_t * cp_byte;            // length + 1 byte offsets
-  uint8_t para_level;
-  PRun * runs;
-  size_t run_count;
-  PGlyph * glyphs;
-  size_t glyph_count;
-  Unit * units;
-  size_t unit_count;
-  PRun fallback_metrics;       // the first span's first face, for an empty text
-};
+#include "layout_internal.h"
 
 #define ALLOC(p, n) (allocator->calloc_fn(allocator->ctx, (n) ? (n) : 1, sizeof *(p)))
 
@@ -160,6 +119,8 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
   const GFNT_Allocator * allocator = p->allocator;
 
   allocator->free_fn(allocator->ctx, p->cp_byte);
+  allocator->free_fn(allocator->ctx, p->cps);
+  allocator->free_fn(allocator->ctx, p->styles);
   allocator->free_fn(allocator->ctx, p->runs);
   allocator->free_fn(allocator->ctx, p->glyphs);
   allocator->free_fn(allocator->ctx, p->units);
@@ -247,6 +208,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   size_t * breaks = NULL;
   GUNI_ScriptItem * scripts = NULL;
   size_t n = 0;
+  bool cps_owned = false;   // the paragraph holds cps, and frees it
   size_t total_runs = 0;
   GFNT_Result r = GFNT_OK;
 
@@ -307,7 +269,8 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   p->allocator = allocator;
   p->options = *options;
   p->cp_byte = allocator->calloc_fn(allocator->ctx, length + 1, sizeof *p->cp_byte);
-  if (!p->cp_byte) {
+  p->styles = allocator->calloc_fn(allocator->ctx, span_count, sizeof *p->styles);
+  if (!p->cp_byte || !p->styles) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the paragraph");
     goto done;
@@ -354,6 +317,12 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     span_cp[span_count] = n;
   }
   p->length = n;
+  p->cps = cps;
+  cps_owned = true;
+  p->span_count = span_count;
+  for (size_t i = 0; i < span_count; i++) {
+    p->styles[i] = spans[i].style;
+  }
 
   levels = ALLOC(levels, n);
   edge = ALLOC(edge, n + 1);
@@ -565,7 +534,9 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   *out = p;
   p = NULL;
 done:
-  allocator->free_fn(allocator->ctx, cps);
+  if (!cps_owned) {
+    allocator->free_fn(allocator->ctx, cps);
+  }
   allocator->free_fn(allocator->ctx, levels);
   allocator->free_fn(allocator->ctx, span_cp);
   allocator->free_fn(allocator->ctx, edge);
@@ -574,6 +545,58 @@ done:
   allocator->free_fn(allocator->ctx, scripts);
   gfnt_paragraph_free(p);
   return r;
+}
+
+/* ------------------------------------------------------------ content widths */
+
+GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
+    GFNT_F26Dot6 * out) {
+  GFNT_F26Dot6 total = 0, fit = 0, widest = 0;
+
+  if (!p || !out) {
+    return GFNT_ERR_INVALID;
+  }
+  for (size_t j = 0; j < p->unit_count; j++) {
+    const Unit * u = &p->units[j];
+
+    total += u->width;
+    if (!u->space) {
+      fit = total;
+    }
+    if (fit > widest) {
+      widest = fit;
+    }
+    if (u->hard || u->opportunity) {
+      total = fit = 0;
+    }
+  }
+  *out = widest;
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
+    GFNT_F26Dot6 * out) {
+  GFNT_F26Dot6 total = 0, fit = 0, widest = 0;
+
+  if (!p || !out) {
+    return GFNT_ERR_INVALID;
+  }
+  for (size_t j = 0; j < p->unit_count; j++) {
+    const Unit * u = &p->units[j];
+
+    total += u->width;
+    if (!u->space) {
+      fit = total;
+    }
+    if (fit > widest) {
+      widest = fit;
+    }
+    if (u->hard) {
+      total = fit = 0;
+    }
+  }
+  *out = widest;
+  return GFNT_OK;
 }
 
 /* ------------------------------------------------------------------ layout */

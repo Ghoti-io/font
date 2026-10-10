@@ -212,6 +212,109 @@ GFNT_API GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * paragraph,
 /** @brief Release a layout. A zeroed one, or one already freed, is harmless. */
 GFNT_API void gfnt_layout_free(GFNT_Layout * layout);
 
+/**
+ * @brief The narrowest width the paragraph can be laid out to without a line
+ *   being wider than the width: its widest unbreakable stretch.
+ *
+ * Spaces that would hang at a break are not counted. It is what CSS calls the
+ * min-content width, and no line of any layout is wider than it unless the
+ * line holds one such stretch.
+ *
+ * @param out Receives the width in 26.6 pixels. Written only on success.
+ * @return ::GFNT_OK or ::GFNT_ERR_INVALID.
+ */
+GFNT_API GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * paragraph,
+    GFNT_F26Dot6 * out);
+
+/**
+ * @brief The width of the widest line when only newline characters break: the
+ *   max-content width. A layout to any narrower width is no wider than this.
+ */
+GFNT_API GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * paragraph,
+    GFNT_F26Dot6 * out);
+
+/** @brief A rectangle in the paragraph's coordinates, 26.6 pixels, y down. */
+typedef struct GFNT_Rect {
+  GFNT_F26Dot6 x;       ///< The left edge.
+  GFNT_F26Dot6 y;       ///< The top edge.
+  GFNT_F26Dot6 width;   ///< The width.
+  GFNT_F26Dot6 height;  ///< The height.
+} GFNT_Rect;
+
+/**
+ * @brief Which side of a boundary between two characters a caret belongs to.
+ *
+ * It matters where one logical offset has two visual places: at a soft line
+ * break (the end of one line and the start of the next) and between a
+ * left-to-right and a right-to-left run.
+ */
+typedef enum GFNT_Affinity {
+  GFNT_AFFINITY_DOWNSTREAM = 0, ///< Attached to the character after the offset.
+  GFNT_AFFINITY_UPSTREAM        ///< Attached to the character before it.
+} GFNT_Affinity;
+
+/** @brief What a point in a laid-out paragraph is on. */
+typedef struct GFNT_Hit {
+  size_t offset;          ///< A byte offset on a character boundary, in the text.
+  size_t line;            ///< The line.
+  GFNT_Affinity affinity; ///< The caret's side, so ::gfnt_layout_caret() returns the point.
+} GFNT_Hit;
+
+/** @brief Where a caret is drawn: a vertical bar of the line's height. */
+typedef struct GFNT_Caret {
+  size_t line;          ///< The line.
+  GFNT_F26Dot6 x;       ///< The bar's x.
+  GFNT_F26Dot6 top;     ///< The line's top.
+  GFNT_F26Dot6 height;  ///< The line's height.
+} GFNT_Caret;
+
+/**
+ * @brief The byte offset nearest a point.
+ *
+ * The line is the one whose box holds @p y (the first or last for a point above
+ * or below them); in it the offset is the nearer edge of the character under
+ * @p x, or the end of the line for a point past it. Characters inside a ligature
+ * are told apart: the glyph is divided at the font's `GDEF` ligature carets when
+ * it has one per component, and evenly when not. A newline is never a place to
+ * land after.
+ *
+ * @param paragraph The paragraph @p layout was made from.
+ * @param layout The layout.
+ * @param out Receives the result. Written only on success.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_layout_hit_test(const GFNT_Paragraph * paragraph,
+    const GFNT_Layout * layout, GFNT_F26Dot6 x, GFNT_F26Dot6 y, GFNT_Hit * out);
+
+/**
+ * @brief Where the caret for a byte offset is.
+ *
+ * @param offset A byte offset; one past the end gives the end of the text, and
+ *   one inside a character the character's start.
+ * @param affinity Which side of the offset the caret is attached to, where it
+ *   has two places.
+ */
+GFNT_API GFNT_Result gfnt_layout_caret(const GFNT_Paragraph * paragraph,
+    const GFNT_Layout * layout, size_t offset, GFNT_Affinity affinity,
+    GFNT_Caret * out);
+
+/**
+ * @brief The rectangles that cover a range of the text, for a selection.
+ *
+ * One range gives several rectangles when it spans lines, and also when
+ * right-to-left text puts part of it on one side of a left-to-right run and part
+ * on the other. Rectangles that touch are merged. Each is as tall as its line.
+ *
+ * @param start The first byte of the range.
+ * @param end One past the last; a range with @p end not after @p start is empty.
+ * @param out Receives the rectangles, or is NULL to count only.
+ * @param capacity How many @p out holds.
+ * @param count Receives how many there are, which may be more than @p capacity.
+ */
+GFNT_API GFNT_Result gfnt_layout_range_rects(const GFNT_Paragraph * paragraph,
+    const GFNT_Layout * layout, size_t start, size_t end, GFNT_Rect * out,
+    size_t capacity, size_t * count);
+
 #ifdef __cplusplus
 }
 #endif

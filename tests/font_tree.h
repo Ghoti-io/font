@@ -63,6 +63,8 @@ struct Spec {
   std::string family;
   std::string label;                   ///< Written as the style; what the tests compare.
   std::string legacy;                  ///< Name ID 1 when it differs from the family.
+  std::string full;                    ///< Name ID 4 when not empty.
+  std::string postscript;              ///< Name ID 6 when not empty.
   uint16_t weight = 400;
   uint16_t width = 5;
   bool italic = false;
@@ -121,6 +123,12 @@ std::vector<uint8_t> face_bytes(const Spec & s) {
       {3, 1, 0x409, 16, utf16(s.family)}, {3, 1, 0x409, 17, utf16(s.label)},
       {3, 1, 0x409, 2, utf16(s.label)}};
   names.push_back({3, 1, 0x409, 1, utf16(s.legacy.empty() ? s.family : s.legacy)});
+  if (!s.full.empty()) {
+    names.push_back({3, 1, 0x409, 4, utf16(s.full)});
+  }
+  if (!s.postscript.empty()) {
+    names.push_back({3, 1, 0x409, 6, utf16(s.postscript)});
+  }
   Os2Spec os2;
   os2.weight_class = s.weight;
   os2.width_class = s.width;

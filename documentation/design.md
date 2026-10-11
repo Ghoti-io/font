@@ -1699,7 +1699,9 @@ face whose `wght` spans 100 to 900 is every weight in between, and the match rep
 set each axis to; `gfnt_fontmatch_location()` turns it into coordinates. Two readings of the
 specification are noted in the source: its fourth style step says "italic values less than 1"
 for a small oblique request, read here as "up to 1" because an italic face is 1; and a tie is the
-first face in the set. The tests are the specification's rules worked by hand, with a planted-
+first face in the set. A CSS `local()` source is `gfnt_fontset_match_local()`: the record keeps each
+face's full name (ID 4, never a bitmap font's XLFD) and PostScript name (ID 6), a full name beats a
+PostScript name, and the comparison is the same full case folding. The tests are the specification's rules worked by hand, with a planted-
 defect check on each rule (`tests/unit/test_match.cpp`). 
 
 **Fallback** (`GFNT_FontFallback`, `src/discover/fallback.c`; `provider.h` joins it to layout's

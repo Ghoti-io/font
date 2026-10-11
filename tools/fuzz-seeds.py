@@ -865,6 +865,7 @@ def main():
 
     def face(path, family, style, legacy, index, slant, axes):
         out = lstr(path) + lstr(family) + lstr(style)
+        out += lstr(family + " " + style) + lstr(family + "-" + style)
         out += bytes([1 if legacy else 0]) + lstr(legacy or "")
         out += struct.pack("<QHH", index, 400, 5) + bytes([slant])
         out += struct.pack("<I", 0x00010000) + struct.pack("<4I", 1, 0, 0, 0)

@@ -777,6 +777,130 @@ TEST(MatchRecord, AVariableFaceStatesItsAxesAndAStaticOneStatesNone) {
   EXPECT_EQ(b->legacy_family, nullptr) << "the legacy family equals the typographic one";
 }
 
+// --- local() ---------------------------------------------------------------------
+
+namespace {
+
+size_t local_pick(const GFNT_FontSet * set, const char * name, bool * found) {
+  size_t index = 99;
+  EXPECT_EQ(gfnt_fontset_match_local(set, name, &index, found, nullptr), GFNT_OK);
+  return index;
+}
+
+}  // namespace
+
+TEST(MatchLocal, AFullNameOrAPostScriptNameFindsItsFaceWithoutRegardToCase) {
+  Fonts f;
+  Spec a;
+  a.family = "Alpha";
+  a.label = "Regular";
+  a.full = "Alpha Regular";
+  a.postscript = "Alpha-Regular";
+  Spec b;
+  b.family = "Alpha";
+  b.label = "Bold";
+  b.weight = 700;
+  b.full = "Alpha Bold";
+  b.postscript = "Alpha-Bold";
+  f.add(a);
+  f.add(b);
+  const GFNT_FontSet * set = f.scan();
+  bool found = false;
+  size_t i = local_pick(set, "alpha bold", &found);
+  ASSERT_TRUE(found);
+  EXPECT_STREQ(gfnt_fontset_at(set, i)->style, "Bold");
+  i = local_pick(set, "ALPHA-REGULAR", &found);
+  ASSERT_TRUE(found);
+  EXPECT_STREQ(gfnt_fontset_at(set, i)->style, "Regular");
+  EXPECT_STREQ(gfnt_fontset_at(set, i)->postscript_name, "Alpha-Regular");
+}
+
+TEST(MatchLocal, ANameNoFaceHasIsNotFoundAndAFamilyAloneIsNotAFullName) {
+  Fonts f;
+  Spec a;
+  a.family = "Alpha";
+  a.label = "Regular";
+  a.full = "Alpha Regular";
+  f.add(a);
+  const GFNT_FontSet * set = f.scan();
+  bool found = true;
+  local_pick(set, "Alpha", &found);
+  EXPECT_FALSE(found);
+  local_pick(set, "", &found);
+  EXPECT_FALSE(found) << "a face with no PostScript name is not found by the empty name";
+  local_pick(set, "Alpha Regular Italic", &found);
+  EXPECT_FALSE(found);
+}
+
+TEST(MatchLocal, AFullNameOutranksAPostScriptNameAndTheFirstFaceWinsAmongEquals) {
+  Fonts f;
+  Spec a;
+  a.family = "A";
+  a.label = "one";
+  a.postscript = "Shared";
+  Spec b;
+  b.family = "B";
+  b.label = "two";
+  b.full = "Shared";
+  Spec c;
+  c.family = "C";
+  c.label = "three";
+  c.full = "Shared";
+  f.add(a);
+  f.add(b);
+  f.add(c);
+  const GFNT_FontSet * set = f.scan();
+  bool found = false;
+  const size_t i = local_pick(set, "shared", &found);
+  ASSERT_TRUE(found);
+  const std::string style = gfnt_fontset_at(set, i)->style;
+  EXPECT_TRUE(style == "two" || style == "three") << "a full name, not the PostScript name";
+  EXPECT_NE(style, "one");
+  // Among the full-name matches the set's own order decides.
+  for (size_t k = 0; k < gfnt_fontset_count(set); ++k) {
+    const GFNT_FontRecord * r = gfnt_fontset_at(set, k);
+    if (std::strcmp(r->full_name, "Shared") == 0) {
+      EXPECT_EQ(k, i);
+      break;
+    }
+  }
+}
+
+TEST(MatchLocal, TheNamesSurviveASerialisedSet) {
+  Fonts f;
+  Spec a;
+  a.family = "Alpha";
+  a.label = "Regular";
+  a.full = "Alpha Regular";
+  a.postscript = "Alpha-Regular";
+  f.add(a);
+  const GFNT_FontSet * set = f.scan();
+  size_t need = 0;
+  ASSERT_EQ(gfnt_fontset_serialize(set, nullptr, 0, &need, nullptr), GFNT_ERR_LIMIT);
+  std::vector<uint8_t> bytes(need);
+  ASSERT_EQ(gfnt_fontset_serialize(set, bytes.data(), need, &need, nullptr), GFNT_OK);
+  GFNT_FontSet * back = nullptr;
+  ASSERT_EQ(gfnt_fontset_deserialize(bytes.data(), bytes.size(), nullptr, &back, nullptr),
+      GFNT_OK);
+  bool found = false;
+  const size_t i = local_pick(back, "alpha-regular", &found);
+  EXPECT_TRUE(found);
+  EXPECT_STREQ(gfnt_fontset_at(back, i)->full_name, "Alpha Regular");
+  gfnt_fontset_free(back);
+}
+
+TEST(MatchLocal, ABadCallIsRefused) {
+  size_t i = 0;
+  bool found = false;
+  EXPECT_EQ(gfnt_fontset_match_local(nullptr, "x", &i, &found, nullptr), GFNT_ERR_INVALID);
+  Fonts f;
+  Spec a;
+  a.family = "A";
+  a.label = "one";
+  f.add(a);
+  EXPECT_EQ(gfnt_fontset_match_local(f.scan(), nullptr, &i, &found, nullptr), GFNT_ERR_INVALID);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

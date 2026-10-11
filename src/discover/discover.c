@@ -768,6 +768,7 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
   char * legacy = NULL;
   char * style = NULL;
   char * full = NULL;
+  char * postscript = NULL;
   char * path_copy = NULL;
   bool found = false;
   const GFNT_Os2 * os2 = NULL;
@@ -858,10 +859,31 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
   if (found && full && full[0] == '-') {
     discover_apply_xlfd(&built, full);
   }
-  discover_free(set->allocator, full);
-
+  if (found && full && full[0] == '-') {
+    // An XLFD stands in the full name of a bitmap font and is no name to call it by.
+    discover_free(set->allocator, full);
+    full = NULL;
+  }
+  result = discover_copy_name(face, GFNT_NAME_POSTSCRIPT, set->allocator, &postscript, &found,
+      error);
+  if (result != GFNT_OK) {
+    discover_free(set->allocator, full);
+    discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
+    discover_free(set->allocator, style);
+    return result;
+  }
+  if (!full) {
+    full = discover_dup(set->allocator, "", 0);
+  }
+  if (!postscript) {
+    postscript = discover_dup(set->allocator, "", 0);
+  }
   path_copy = discover_dup_str(set->allocator, path);
-  if (!path_copy) {
+  if (!full || !postscript || !path_copy) {
+    discover_free(set->allocator, full);
+    discover_free(set->allocator, postscript);
+    discover_free(set->allocator, path_copy);
     discover_free(set->allocator, family);
     discover_free(set->allocator, legacy);
     discover_free(set->allocator, style);
@@ -879,10 +901,14 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
   built.rec.family = family;
   built.rec.legacy_family = legacy;
   built.rec.style = style;
+  built.rec.full_name = full;
+  built.rec.postscript_name = postscript;
 
   grown = discover_grow(set->allocator, set->faces, &set->face_cap,
       set->face_count, sizeof *grown);
   if (!grown) {
+    discover_free(set->allocator, full);
+    discover_free(set->allocator, postscript);
     discover_free(set->allocator, path_copy);
     discover_free(set->allocator, family);
     discover_free(set->allocator, legacy);
@@ -1409,7 +1435,7 @@ GFNT_Result gfnt_fontset_record_current(const GFNT_FontRecord * record, bool * o
   return GFNT_OK;
 }
 
-#define SET_MAGIC "GFNTSET1"
+#define SET_MAGIC "GFNTSET2"
 
 typedef struct SetWriter {
   uint8_t * out;
@@ -1472,6 +1498,8 @@ GFNT_Result gfnt_fontset_serialize(const GFNT_FontSet * set, uint8_t * out, size
     sw_str(&w, r->path);
     sw_str(&w, r->family);
     sw_str(&w, r->style);
+    sw_str(&w, r->full_name);
+    sw_str(&w, r->postscript_name);
     sw_u(&w, r->legacy_family ? 1 : 0, 1);
     sw_str(&w, r->legacy_family ? r->legacy_family : "");
     sw_u(&w, r->index, 8);
@@ -1598,6 +1626,8 @@ GFNT_Result gfnt_fontset_deserialize(const uint8_t * data, size_t length,
     f.rec.path = sr_str(&r, allocator, &oom);
     f.rec.family = oom ? NULL : sr_str(&r, allocator, &oom);
     f.rec.style = oom ? NULL : sr_str(&r, allocator, &oom);
+    f.rec.full_name = oom ? NULL : sr_str(&r, allocator, &oom);
+    f.rec.postscript_name = oom ? NULL : sr_str(&r, allocator, &oom);
     {
       const uint64_t has_legacy = sr_u(&r, 1);
       char * legacy = oom ? NULL : sr_str(&r, allocator, &oom);
@@ -1640,10 +1670,13 @@ GFNT_Result gfnt_fontset_deserialize(const uint8_t * data, size_t length,
     }
     f.rec.file_size = sr_u(&r, 8);
     f.rec.file_mtime_ns = (int64_t)sr_u(&r, 8);
-    if (r.bad || oom || !f.rec.path || !f.rec.family || !f.rec.style) {
+    if (r.bad || oom || !f.rec.path || !f.rec.family || !f.rec.style
+        || !f.rec.full_name || !f.rec.postscript_name) {
       discover_free(allocator, (void *)f.rec.path);
       discover_free(allocator, (void *)f.rec.family);
       discover_free(allocator, (void *)f.rec.style);
+      discover_free(allocator, (void *)f.rec.full_name);
+      discover_free(allocator, (void *)f.rec.postscript_name);
       discover_free(allocator, (void *)f.rec.legacy_family);
       break;
     }
@@ -1653,6 +1686,8 @@ GFNT_Result gfnt_fontset_deserialize(const uint8_t * data, size_t length,
       discover_free(allocator, (void *)f.rec.path);
       discover_free(allocator, (void *)f.rec.family);
       discover_free(allocator, (void *)f.rec.style);
+      discover_free(allocator, (void *)f.rec.full_name);
+      discover_free(allocator, (void *)f.rec.postscript_name);
       discover_free(allocator, (void *)f.rec.legacy_family);
       break;
     }
@@ -1706,6 +1741,8 @@ void gfnt_fontset_free(GFNT_FontSet * set) {
     discover_free(allocator, (void *)set->faces[i].rec.family);
     discover_free(allocator, (void *)set->faces[i].rec.legacy_family);
     discover_free(allocator, (void *)set->faces[i].rec.style);
+    discover_free(allocator, (void *)set->faces[i].rec.full_name);
+    discover_free(allocator, (void *)set->faces[i].rec.postscript_name);
   }
   discover_free(allocator, set->faces);
   for (i = 0; i < set->alias_count; i++) {

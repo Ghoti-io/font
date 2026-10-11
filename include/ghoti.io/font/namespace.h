@@ -290,6 +290,7 @@
 #define gfnt_fontquery_init GHOTIIO_FONT(gfnt_fontquery_init)
 #define gfnt_fontset_match GHOTIIO_FONT(gfnt_fontset_match)
 #define gfnt_fontset_match_family GHOTIIO_FONT(gfnt_fontset_match_family)
+#define gfnt_fontset_match_local GHOTIIO_FONT(gfnt_fontset_match_local)
 #define gfnt_fontmatch_location GHOTIIO_FONT(gfnt_fontmatch_location)
 #define GFNT_FontScriptPreference GHOTIIO_FONT(GFNT_FontScriptPreference)
 #define GFNT_FontFallbackOptions GHOTIIO_FONT(GFNT_FontFallbackOptions)

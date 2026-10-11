@@ -42,8 +42,7 @@
  * and matching reports the value to set the axis to. ::gfnt_fontmatch_location() turns
  * that into the coordinates a shaper or an outline takes.
  *
- * **Not here.** Synthetic bold and oblique (design.md section 16); `local()` full-name
- * matching; and `unicode-range`. Choosing a face for a *character* is the second half of
+ * **Not here.** Synthetic bold and oblique (design.md section 16) and `unicode-range`. Choosing a face for a *character* is the second half of
  * this header, ::GFNT_FontFallback.
  */
 
@@ -122,6 +121,23 @@ GFNT_API void gfnt_fontquery_init(GFNT_FontQuery * query);
 GFNT_API GFNT_Result gfnt_fontset_match(const GFNT_FontSet * set,
     const GFNT_FontQuery * query, const GFNT_Allocator * allocator,
     GFNT_FontMatch * out_match, bool * out_found, GFNT_Error * error);
+
+/**
+ * @brief The face a CSS `local()` source names: its full name (name ID 4) or its PostScript
+ * name (name ID 6).
+ * Compared by full Unicode case folding, as family names are. A face whose full name matches
+ * wins over one whose PostScript name does, and the first such face in the set wins among
+ * equals. Nothing is synthesised and no style is chosen: `local("Arial Bold")` is that face or
+ * none.
+ * @param set The set.
+ * @param name The name. UTF-8.
+ * @param out_index Receives the face's place in the set (::gfnt_fontset_at()) when found.
+ * @param out_found Receives whether a face has the name.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK (found or not) or ::GFNT_ERR_INVALID.
+ */
+GFNT_API GFNT_Result gfnt_fontset_match_local(const GFNT_FontSet * set, const char * name,
+    size_t * out_index, bool * out_found, GFNT_Error * error);
 
 /**
  * @brief The best face of one named family, whatever the query's own list says.

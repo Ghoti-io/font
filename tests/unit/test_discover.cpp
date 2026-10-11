@@ -1119,6 +1119,8 @@ void expect_same_record(const GFNT_FontRecord * a, const GFNT_FontRecord * b) {
   EXPECT_STREQ(a->path, b->path);
   EXPECT_STREQ(a->family, b->family);
   EXPECT_STREQ(a->style, b->style);
+  EXPECT_STREQ(a->full_name, b->full_name);
+  EXPECT_STREQ(a->postscript_name, b->postscript_name);
   EXPECT_EQ(a->legacy_family == nullptr, b->legacy_family == nullptr);
   if (a->legacy_family && b->legacy_family) {
     EXPECT_STREQ(a->legacy_family, b->legacy_family);
@@ -1257,9 +1259,9 @@ TEST(DiscoverKeep, ValuesTheChecksumCannotCatchAreRefusedOnTheirOwn) {
   nul = resealed(nul);
   EXPECT_EQ(gfnt_fontset_deserialize(nul.data(), nul.size(), nullptr, &set, nullptr), GFNT_ERR_CORRUPT);
   // Fields of the first face with a value they cannot have: where they sit follows from the
-  // three strings before them.
+  // five strings before them (path, family, style, full name, PostScript name).
   size_t at = 16;
-  for (int s = 0; s < 3; ++s) {
+  for (int s = 0; s < 5; ++s) {
     at += 4 + (good[at] | (good[at + 1] << 8) | (good[at + 2] << 16));
   }
   const size_t legacy_flag = at;
@@ -1275,7 +1277,7 @@ TEST(DiscoverKeep, ValuesTheChecksumCannotCatchAreRefusedOnTheirOwn) {
   }
   // Another version, and not a set at all.
   std::vector<uint8_t> other = good;
-  other[7] = '2';
+  other[7] = '9';
   other = resealed(other);
   EXPECT_EQ(gfnt_fontset_deserialize(other.data(), other.size(), nullptr, &set, nullptr), GFNT_ERR_UNSUPPORTED);
   const std::vector<uint8_t> junk(64, 'x');

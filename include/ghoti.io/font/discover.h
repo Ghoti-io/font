@@ -134,6 +134,8 @@ typedef struct GFNT_FontRecord {
   size_t index;                 ///< Face index within that file.
   const char * family;          ///< Name ID 16, else 1. Never NULL.
   const char * style;           ///< Name ID 17, else 2. Never NULL.
+  const char * full_name;       ///< Name ID 4, or "" (a bitmap font's XLFD is not one). Never NULL.
+  const char * postscript_name; ///< Name ID 6, or "". Never NULL.
   uint16_t weight;              ///< 0 when the face did not state one.
   uint16_t width;               ///< 0 when the face did not state one.
   GFNT_Slant slant;             ///< Roman when the face did not state one.

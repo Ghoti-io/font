@@ -470,6 +470,32 @@ static GFNT_Result match_one(const GFNT_FontSet * set, const char * family,
   return GFNT_OK;
 }
 
+GFNT_Result gfnt_fontset_match_local(const GFNT_FontSet * set, const char * name,
+    size_t * out_index, bool * out_found, GFNT_Error * error) {
+  size_t pass;
+  size_t i;
+  const size_t count = set ? gfnt_fontset_count(set) : 0;
+
+  if (!set || !name || !out_index || !out_found) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no set, name or place for the answer");
+  }
+  *out_found = false;
+  // The full name outranks the PostScript name when both would match, whichever face comes first.
+  for (pass = 0; pass < 2; pass++) {
+    for (i = 0; i < count; i++) {
+      const GFNT_FontRecord * r = gfnt_fontset_at(set, i);
+
+      if (name_is(pass == 0 ? r->full_name : r->postscript_name, name)) {
+        *out_index = i;
+        *out_found = true;
+        return GFNT_OK;
+      }
+    }
+  }
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_fontset_match_family(const GFNT_FontSet * set, const char * family,
     const GFNT_FontQuery * query, const GFNT_Allocator * allocator, GFNT_FontMatch * out_match,
     bool * out_found, GFNT_Error * error) {

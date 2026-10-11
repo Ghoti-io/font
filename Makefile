@@ -1139,6 +1139,10 @@ check-oracle-morx: $(EXAMPLES)
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table kern --with-gdef --seeds 200
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table kern --apple --seeds 400
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table kern --apple --ms --seeds 400
+	@for a in "" --ms; do for d in "" rtl ttb; do \
+	  KA_CROSS=0.5 KA_VERT=0.4 $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table kern --apple $$a --with-gdef --kinds 0,1,2,3 $${d:+--direction $$d} --seeds 300 || exit 1; \
+	done; done
+	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kerx_random_diff.py --table kern --apple --kinds 1 --subs 1 --dont 0.4 --seeds 400
 	@$(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/kern_subset_random_diff.py --seeds 300
 	@for t in latn native; do for o in "" "--gdef --glyf" "--vert --gdef --glyf"; do \
 	  $(ORACLE_RUN) harfbuzz -- python3 $(ORACLE)/precedence_probe.py $$o --ltag $$t \

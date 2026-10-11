@@ -686,7 +686,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
 
   // A shaper that wants marks taken out of the width before positioning says so.
   if (plan.shaper->zero_width_marks == 1 && !plan.marks_keep_width
-      && !plan.no_zero_marks) {
+      && !plan.no_zero_marks && !plan.kern_state_machine) {
     gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl
         && !plan.kern_cross_stream);
   }
@@ -734,7 +734,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
     if (native_rtl) {
       gfnt_lbuf_reverse(&buf);
     }
-    result = gfnt_kern_apply(face, &buf, &gdef, plan.kern_mask, error);
+    result = gfnt_kern_apply(face, &buf, &gdef, plan.kern_mask, plan.vertical, error);
     if (native_rtl) {
       gfnt_lbuf_reverse(&buf);
     }
@@ -767,7 +767,7 @@ GFNT_Result gfnt_face_shape(const GFNT_Face * face, const uint32_t * codepoints,
   // With a GPOS the font has already said where; without one, the mark is pulled
   // back over the base it follows.
   if (plan.shaper->zero_width_marks == 2 && !plan.marks_keep_width
-      && !plan.no_zero_marks) {
+      && !plan.no_zero_marks && !plan.kern_state_machine) {
     gfnt_zero_mark_widths(&buf, !plan.tables[1].present && !native_rtl
         && !gfnt_morx_present(face, vertical)
         && !plan.kern_cross_stream);

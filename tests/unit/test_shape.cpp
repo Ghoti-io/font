@@ -896,6 +896,191 @@ TEST(ShapeKern, ACrossStreamOrVerticalSubtableIsNotAppliedToHorizontalText) {
       500);
 }
 
+namespace {
+
+/**
+ * A format 1 (state machine) `kern` subtable body in the 16-bit form: glyphs A and D are class 4,
+ * B class 5, C class 1 (out of bounds). In the start state an A pushes itself and stays on the
+ * stack; a B after one applies the value list to the stack and goes back to the start. So "AB"
+ * kerns the A by the one value, "AAB" has two glyphs to give values to and "ACB" none.
+ */
+std::vector<uint8_t> kern_machine(const std::vector<int16_t> & values) {
+  std::vector<uint8_t> out;
+  const uint16_t classes = 6;
+  const uint16_t class_at = 10;
+  const uint16_t states_at = class_at + 4 + 4;      // First glyph, count, four classes.
+  const uint16_t entries_at = states_at + 2 * classes;
+  const uint16_t values_at = entries_at + 3 * 4;
+
+  for (uint16_t v : {classes, class_at, states_at, entries_at, values_at}) {
+    gfnttest::put_u16(out, v);
+  }
+  for (uint16_t v : {uint16_t(1), uint16_t(4)}) {
+    gfnttest::put_u16(out, v);
+  }
+  for (uint8_t c : {4, 5, 1, 4}) {
+    gfnttest::put_u8(out, c);
+  }
+  for (uint8_t e : {0, 0, 0, 0, 1, 0,       // The start state: an A or D pushes (entry 1).
+                    0, 0, 0, 0, 1, 2}) {    // After one: another pushes, a B applies (entry 2).
+    gfnttest::put_u8(out, e);
+  }
+  gfnttest::put_u16(out, states_at);                  // Entry 0: nothing, to the start.
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u16(out, states_at + classes);        // Entry 1: push, to the second state.
+  gfnttest::put_u16(out, 0x8000);
+  gfnttest::put_u16(out, states_at);                  // Entry 2: apply the values, to the start.
+  gfnttest::put_u16(out, values_at);
+  for (int16_t v : values) {
+    gfnttest::put_s16(out, v);
+  }
+  return out;
+}
+
+/** A `kern` table, Microsoft header, of subtables each given as (coverage, body). */
+std::vector<uint8_t> kern_subtables(
+    const std::vector<std::pair<uint16_t, std::vector<uint8_t>>> & subs) {
+  std::vector<uint8_t> out;
+
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u16(out, static_cast<uint16_t>(subs.size()));
+  for (const auto & sub : subs) {
+    gfnttest::put_u16(out, 0);
+    gfnttest::put_u16(out, static_cast<uint16_t>(6 + sub.second.size()));
+    gfnttest::put_u16(out, sub.first);
+    out.insert(out.end(), sub.second.begin(), sub.second.end());
+  }
+  return out;
+}
+
+const uint16_t kHorizontalMachine = 0x0101;   // Format 1, horizontal.
+const uint16_t kCrossMachine = 0x0105;        // ... and cross-stream.
+const uint16_t kVerticalCrossMachine = 0x0104;
+
+}  // namespace
+
+// The state machines below were each run through HarfBuzz 10.2.0 and the offsets and advances
+// compared (tools/oracle/kerx_random_diff.py --table kern --apple holds the reading to it over
+// random tables, behind both headers, in all three directions).
+
+TEST(ShapeKern, AFormatOneStateMachineKernsWhatItsTransitionsSay) {
+  const auto font = small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kHorizontalMachine, kern_machine({-49})}})}});
+  // The value's low bit marks the last glyph to take it and is not part of it: -49 is -50.
+  Glyphs g = shape_bytes(font, cps("AB"));
+  ASSERT_EQ(g.size(), 2u);
+  EXPECT_EQ(g[0].x_advance, 450);
+  EXPECT_EQ(g[0].x_offset, -50) << "HarfBuzz moves the glyph with its advance";
+  EXPECT_EQ(g[1].x_advance, 500);
+  EXPECT_EQ(g[1].x_offset, 0);
+  g = shape_bytes(font, cps("ABDB"));
+  ASSERT_EQ(g.size(), 4u);
+  EXPECT_EQ(g[0].x_advance, 450);
+  EXPECT_EQ(g[2].x_advance, 450) << "D is in A's class";
+  g = shape_bytes(font, cps("ACB"));
+  EXPECT_EQ(g[0].x_advance, 500) << "C is out of bounds, which starts the machine over";
+  g = shape_bytes(font, cps("BA"));
+  EXPECT_EQ(g[1].x_advance, 500);
+  EXPECT_EQ(shape_bytes(font, cps("AB"), "-kern")[0].x_advance, 500) << "`kern` turned off";
+  // A cross-stream machine is not governed by the feature, which HarfBuzz leaves it to say.
+  const auto cross = small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kCrossMachine, kern_machine({-49})}})}});
+  EXPECT_EQ(shape_bytes(cross, cps("AB"), "-kern")[0].y_offset, -50);
+}
+
+TEST(ShapeKern, AValueListShorterThanTheStackAppliesNothing) {
+  // Two glyphs are on the stack at the B and the list has one value, with no end mark to stop
+  // at: HarfBuzz checks that a value is there for every glyph and applies none when it is not.
+  const auto font = small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kHorizontalMachine, kern_machine({-50})}})}});
+  Glyphs g = shape_bytes(font, cps("AAB"));
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(g[0].x_advance, 500);
+  EXPECT_EQ(g[1].x_advance, 500);
+  EXPECT_EQ(g[1].x_offset, 0);
+  // With the end mark the single A is reached first, as the top of the stack.
+  g = shape_bytes(small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kHorizontalMachine, kern_machine({-49})}})}}), cps("AB"));
+  EXPECT_EQ(g[0].x_advance, 450);
+}
+
+TEST(ShapeKern, ASubtablesValueListEndsWhereTheSubtableDoes) {
+  // The list is one value long, so "AAB" would read a second one - from the bytes of the
+  // subtable that follows, if the list's bound were the table's end rather than its own.
+  const auto machine = kern_machine({-50});
+  const auto font = small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kHorizontalMachine, machine}, {kHorizontalMachine, machine}})}});
+  Glyphs g = shape_bytes(font, cps("AAB"));
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(g[0].x_advance, 500);
+  EXPECT_EQ(g[1].x_advance, 500);
+}
+
+TEST(ShapeKern, ACrossStreamStateMachineHangsEveryGlyphFromTheOneBeforeIt) {
+  const auto font = small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kCrossMachine, kern_machine({-49})}})}});
+  Glyphs g = shape_bytes(font, cps("ABAB"));
+  ASSERT_EQ(g.size(), 4u);
+  // The A is moved down 50, and the B, which was not given a value, goes with it: they hang from
+  // one another all along the line, so the next pair starts 50 lower still.
+  EXPECT_EQ(g[0].y_offset, -50);
+  EXPECT_EQ(g[1].y_offset, -50);
+  EXPECT_EQ(g[2].y_offset, -100);
+  EXPECT_EQ(g[3].y_offset, -100);
+  EXPECT_EQ(g[0].x_advance, 500) << "across the line, so the advance is left";
+  // With no pair in the text nothing is written, and nothing hangs.
+  g = shape_bytes(font, cps("ACB"));
+  EXPECT_EQ(g[2].y_offset, 0);
+}
+
+TEST(ShapeKern, AVerticalCrossStreamStateMachineMovesVerticalTextSideways) {
+  const auto kerned = shape_vertical(small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kVerticalCrossMachine, kern_machine({-49})}})}}), cps("ABAB"),
+      GFNT_DIRECTION_TTB);
+  const auto plain = shape_vertical(small_font({}), cps("ABAB"), GFNT_DIRECTION_TTB);
+  ASSERT_EQ(kerned.size(), 4u);
+  ASSERT_EQ(plain.size(), 4u);
+  EXPECT_EQ(kerned[0].x_offset, plain[0].x_offset - 50);
+  // The B hangs from the A and so adds its own place to where the A went.
+  EXPECT_EQ(kerned[1].x_offset, plain[1].x_offset + kerned[0].x_offset);
+  EXPECT_EQ(kerned[0].y_advance, plain[0].y_advance);
+  // A state machine not marked cross-stream does nothing in vertical text, nor does one not
+  // marked vertical, as the pair formats do nothing there either.
+  const auto plain_machine = shape_vertical(small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{0x0100, kern_machine({-49})}})}}), cps("ABAB"), GFNT_DIRECTION_TTB);
+  for (size_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(plain_machine[i].x_offset, plain[i].x_offset) << i;
+    EXPECT_EQ(plain_machine[i].y_advance, plain[i].y_advance) << i;
+  }
+  const auto horizontal = shape_vertical(small_font({{GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kCrossMachine, kern_machine({-49})}})}}), cps("ABAB"),
+      GFNT_DIRECTION_TTB);
+  for (size_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(horizontal[i].x_offset, plain[i].x_offset) << i;
+  }
+}
+
+TEST(ShapeKern, ATableWithAStateMachineLeavesMarksTheirAdvance) {
+  // GDEF calls C a mark. Marks lose their advance, except that HarfBuzz treats a `kern` table
+  // with a state machine in it as Apple's and does not take them away.
+  std::vector<uint8_t> gdef;
+  for (uint16_t v : {1, 0, 12, 0, 0, 0, 1, 1, 4, 1, 1, 3, 1}) {
+    gfnttest::put_u16(gdef, v);
+  }
+  const gfnttest::Table gdef_table{GFNT_TAG('G', 'D', 'E', 'F'), gdef};
+  std::vector<uint8_t> pairs;
+  for (uint16_t v : {0, 0, 0, 0}) {
+    gfnttest::put_u16(pairs, v);
+  }
+  Glyphs g = shape_bytes(small_font({gdef_table, {GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{0x0001, pairs}})}}), cps("ACB"));
+  ASSERT_EQ(g.size(), 3u);
+  EXPECT_EQ(g[1].x_advance, 0) << "with only pairs the mark is zeroed";
+  g = shape_bytes(small_font({gdef_table, {GFNT_TAG('k', 'e', 'r', 'n'),
+      kern_subtables({{kHorizontalMachine, kern_machine({-49})}})}}), cps("ACB"));
+  EXPECT_EQ(g[1].x_advance, 500);
+}
+
 TEST(ShapeKern, AClassBasedSubtableCountsItsClassValuesFromTheSubtableStart) {
   // HarfBuzz's reading, found by experiment: a left class value is the offset of its
   // row from the start of the subtable, so A D is the first cell and C E the last.

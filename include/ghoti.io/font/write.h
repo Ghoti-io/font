@@ -427,8 +427,9 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * that name kept glyphs (a rule survives exactly when the `GSUB` closure counted
  * it), lookups nothing calls are left out, pair and mark-attachment classes no
  * kept glyph uses are removed, and `GDEF` keeps its classes, attachment points,
- * ligature carets and mark sets for the kept glyphs. `kern` is carried as format 0
- * subtables only and is left out whole if it has any other form. A subtable the
+ * ligature carets and mark sets for the kept glyphs. `kern` is carried in formats 0 to 3
+ * (format 1's machine as it is, its class array written again for the new ids) and refused in
+ * another form. A subtable the
  * rewrite would have to split to keep 16-bit offsets is ::GFNT_ERR_LIMIT, and a
  * layout table with `FeatureVariations` is ::GFNT_ERR_UNSUPPORTED (set
  * ::GFNT_SubsetOptions::drop_layout to subset such a font anyway).
@@ -455,8 +456,7 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * shared tuples, with its offsets rebuilt, `cvar` goes with the control values it varies, and the
  * tables above are carried or rebuilt as for `CFF2`.
  *
- * **Not built**: Type 1 outlines, a CFF with Type 1 charstrings, `kern` in Apple's state-table
- * format 1, and `cmap` format 14. The Apple shaping tables (`morx`, `mort`, `kerx`, `trak`, `ankr`)
+ * **Not built**: Type 1 outlines, a CFF with Type 1 charstrings, and `cmap` format 14. The Apple shaping tables (`morx`, `mort`, `kerx`, `trak`, `ankr`)
  * are dropped, as HarfBuzz's own subsetter drops them. Each is refused or dropped as stated
  * here, not approximated.
  *

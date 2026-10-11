@@ -43,6 +43,8 @@ def main(argv):
         if a == "--seeds": seeds = int(argv[i + 1])
         elif a == "--first": first = int(argv[i + 1])
         elif a == "--keep": keep = argv[i + 1]
+        elif a == "--subs": K.SUBS = int(argv[i + 1])
+        elif a == "--kinds": K.AKINDS = tuple(int(x) for x in argv[i + 1].split(","))
     os.makedirs(SCRATCH, exist_ok=True)
     cmap = {65 + i: i + 1 for i in range(8)}
     unicodes = ",".join("%X" % ord(c) for c in keep)

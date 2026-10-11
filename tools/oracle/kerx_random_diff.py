@@ -34,7 +34,7 @@ SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "kerx-random")
 GL = list(range(1, 9))
 KINDS = (0, 0, 1, 2, 6)
 CROSS_A, VERT_A, VAR_A = float(os.environ.get('KA_CROSS', .12)), float(os.environ.get('KA_VERT', .08)), float(os.environ.get('KA_VAR', .06))
-AKINDS = (0, 2, 3, 3)    # an Apple `kern` subtable's formats
+AKINDS = (0, 1, 2, 3, 3)    # an Apple `kern` subtable's formats
 ATTACH = (4, 5)   # format 4 with coordinates (5 stands for anchors from `ankr`)
 DONT = 0.0
 SUBS = 3
@@ -241,6 +241,8 @@ class Gen:
                 body = u16(len(ps), 0, 0, 0) + b''.join(u16(a, b) + s16(v) for (a, b), v in ps)
             elif fmt == 2:
                 body = self.kern_format2(header)
+            elif fmt == 1:
+                body = self.kern_format1()
             else:
                 body = self.kern_format3()
             if apple:
@@ -275,6 +277,41 @@ class Gen:
         rt = table(set(rg), lambda g: rcols[g] * 2)
         arr = b''.join(s16(r.randint(-120, 120)) for _ in range(nl * nr))
         return u16(row, left_at, left_at + len(lt), arr_at) + lt + rt + arr
+
+
+    def kern_format1(self):
+        """Apple's state-table kerning in the older 16-bit form: byte classes, a state array of
+        entry numbers, and transitions that name the next state by the byte offset of its row."""
+        r = self.r
+        nclasses = r.randint(5, 8)
+        nstates = r.randint(2, 5)
+        nentries = r.randint(2, 6)
+        first = r.choice((1, 1, 2))
+        count = r.randint(8, 14)
+        classes = bytes(r.choice(tuple(range(4, nclasses))) if r.random() < .9 else 1
+                        for _ in range(count))
+        cls = pad(u16(first, count) + classes, 2)
+        rows = [bytes(r.randrange(nentries) for _ in range(nclasses)) for _ in range(nstates)]
+        stt = pad(b''.join(rows), 2)
+        o_cls = 10
+        o_stt = o_cls + len(cls)
+        o_ent = o_stt + len(stt)
+        o_val = o_ent + 4 * nentries
+        nvals = r.randint(2, 12)
+        entries = b''
+        for _ in range(nentries):
+            flags = (0x8000 if r.random() < .6 else 0) | (0x4000 if r.random() < DONT else 0)
+            flags |= (0x2000 if r.random() < .1 else 0)
+            if r.random() < .8:
+                flags |= o_val + 2 * r.randrange(nvals)
+            entries += u16(o_stt + nclasses * r.randrange(nstates), flags)
+        vals = []
+        for _ in range(nvals):
+            v = r.randint(-60, 60) * 2
+            if r.random() < .3:
+                v |= 1
+            vals.append(v & 0xFFFF)
+        return u16(nclasses, o_cls, o_stt, o_ent, o_val) + cls + stt + entries + u16(*vals)
 
     def kern_format3(self):
         r = self.r
@@ -383,7 +420,7 @@ def main(argv):
             compared += 1
             if norm(a) != norm(b):
                 bad += 1
-                if shown < 6 and "-v" in argv:
+                if shown < int(os.environ.get("KA_SHOW", 6)) and "-v" in argv:
                     shown += 1
                     print("seed", seed, txt[i], "\n  hb ", norm(a), "\n  our", norm(b))
     print("kerx_random_diff: %s, %d seeds from %d, %d strings, %d differ, %d skipped"

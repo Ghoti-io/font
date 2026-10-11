@@ -891,11 +891,15 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
     plan->tables[1].present = false;
     plan->tables[1].kern_found = false;
   }
-  plan->kern_fallback = !plan->vertical && plan->kern_mask != 0
-      && !plan->tables[1].kern_found && !plan->kerx_font;
-  plan->kern_cross_stream = (plan->vertical || plan->kern_mask != 0)
-      && !plan->tables[1].kern_found && !plan->kerx_font
-      && gfnt_kern_has_cross_stream(face);
+  // These follow the table, not the `kern` feature: with the feature off HarfBuzz still runs a
+  // cross-stream machine and still leaves marks their advance (found by experiment).
+  {
+    const bool table_kerns = !plan->tables[1].kern_found && !plan->kerx_font;
+
+    plan->kern_fallback = table_kerns;
+    plan->kern_state_machine = table_kerns && gfnt_kern_has_state_machine(face);
+    plan->kern_cross_stream = table_kerns && gfnt_kern_has_cross_stream(face);
+  }
   if (plan->shaper->data_create) {
     plan->shaper_data = plan->shaper->data_create(plan, a);
     if (!plan->shaper_data) {

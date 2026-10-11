@@ -523,6 +523,81 @@ void check_kern(bool apple, bool format2, bool format3 = false) {
   EXPECT_LT(table_of(sub.font, "kern").size(), kern.size());
 }
 
+/**
+ * A format 1 (state machine) body: glyphs 1 and 4 and 7 are class 4, which pushes them, 2 and 5
+ * class 5, which applies the one value (-30) to the pushed glyph, and 6 class 1, out of bounds.
+ * Glyph 3, which the subset drops, is class 4.
+ */
+std::vector<uint8_t> kern1_body() {
+  std::vector<uint8_t> b;
+  const uint16_t classes = 6;
+  const uint16_t states_at = 10 + 4 + 7 + 1;
+  const uint16_t entries_at = states_at + 2 * classes;
+  const uint16_t values_at = entries_at + 12;
+
+  for (uint16_t v : {classes, uint16_t(10), states_at, entries_at, values_at, uint16_t(1),
+                     uint16_t(7)}) {
+    put_u16(b, v);
+  }
+  b.insert(b.end(), {4, 5, 4, 4, 5, 1, 4, 0});
+  b.insert(b.end(), {0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 2});
+  for (uint16_t v : {states_at, uint16_t(0), uint16_t(states_at + classes), uint16_t(0x8000),
+                     states_at, values_at}) {
+    put_u16(b, v);
+  }
+  put_s16(b, -29);
+  return b;
+}
+
+void check_kern1(bool apple) {
+  const auto kern = kern_table(apple, {{1, kern1_body()}});
+  Font src;
+  ASSERT_EQ(src.open(glyph_font(8, {{GFNT_TAG('k', 'e', 'r', 'n'), kern}})), GFNT_OK);
+  Subset sub;
+  make_subset(sub, src, {kFirstChar, kFirstChar + 1, kFirstChar + 3, kFirstChar + 4,
+      kFirstChar + 5, kFirstChar + 6});
+  ASSERT_EQ(sub.result, GFNT_OK) << (sub.error.message ? sub.error.message : "");
+  ASSERT_TRUE(gfnt_face_has_table(sub.font.face, GFNT_TAG('k', 'e', 'r', 'n')));
+  size_t distinct = 0;
+  for (uint32_t a : {1u, 2u, 4u, 6u}) {
+    for (uint32_t b : {2u, 4u, 5u, 7u}) {
+      expect_same(src, sub, {kFirstChar + a - 1, kFirstChar + b - 1},
+          std::string(apple ? "apple " : "ot ") + std::to_string(a) + "," + std::to_string(b));
+      const Shaped s = shape(src.face, {kFirstChar + a - 1, kFirstChar + b - 1});
+      if (s.size() == 2 && s[0][2] != 500) {
+        ++distinct;
+      }
+    }
+  }
+  // Three glyphs, so that the class of the one in the middle and of the last one decides who
+  // takes the value.
+  for (const std::vector<uint32_t> & run : {std::vector<uint32_t>{1, 7, 5}, {4, 7, 5}, {1, 4, 2},
+                                           {7, 1, 5}, {2, 1, 4, 5}}) {
+    std::vector<uint32_t> text;
+    std::string label = apple ? "apple" : "ot";
+
+    for (uint32_t g : run) {
+      text.push_back(kFirstChar + g - 1);
+      label += " " + std::to_string(g);
+    }
+    expect_same(src, sub, text, label);
+    const Shaped s = shape(src.face, text);
+    for (const auto & glyph : s) {
+      if (glyph[2] != 500) {
+        ++distinct;
+      }
+    }
+  }
+  EXPECT_GT(distinct, 0u) << "the source kerns these pairs, so the comparison means something";
+  // The machine is carried as it is; only the class array, which names glyphs, is written again.
+  const auto out = table_of(sub.font, "kern");
+  EXPECT_EQ(out.size(), kern.size());
+  const size_t body = out.size() - kern1_body().size();
+  EXPECT_EQ(std::vector<uint8_t>(out.begin() + body + 24, out.end()),
+      std::vector<uint8_t>(kern.begin() + body + 24, kern.end()))
+      << "the states, transitions and values are byte for byte";
+}
+
 }  // namespace
 
 TEST(SubsetLayout, KernFormat0InTheMicrosoftHeaderFollowsTheNumbering) { check_kern(false, false); }
@@ -531,6 +606,9 @@ TEST(SubsetLayout, KernFormat2InTheMicrosoftHeaderFollowsTheNumbering) { check_k
 TEST(SubsetLayout, KernFormat2InAppleHeaderFollowsTheNumbering) { check_kern(true, true); }
 
 TEST(SubsetLayout, KernFormat3InAppleHeaderFollowsTheNumbering) { check_kern(true, false, true); }
+
+TEST(SubsetLayout, KernFormat1InTheMicrosoftHeaderFollowsTheNumbering) { check_kern1(false); }
+TEST(SubsetLayout, KernFormat1InAppleHeaderFollowsTheNumbering) { check_kern1(true); }
 
 namespace {
 
@@ -613,8 +691,19 @@ TEST(SubsetLayout, AKernSubtableThatVariesWithTheDesignSpaceIsNotApplied) {
   EXPECT_EQ(s[0][2], 500);
 }
 
+TEST(SubsetLayout, AFormatOneKernSubtableWhoseClassArrayIsOutsideItIsCorrupt) {
+  auto body = kern1_body();
+  body[2] = 0x7F;                       // The class array is said to start far past the end.
+  const auto kern = kern_table(false, {{1, body}});
+  Font src;
+  ASSERT_EQ(src.open(glyph_font(8, {{GFNT_TAG('k', 'e', 'r', 'n'), kern}})), GFNT_OK);
+  Subset refused;
+  make_subset(refused, src, {kFirstChar, kFirstChar + 3});
+  EXPECT_EQ(refused.result, GFNT_ERR_CORRUPT);
+}
+
 TEST(SubsetLayout, AKernSubtableOfAnotherFormatIsRefused) {
-  const auto kern = kern_table(false, {{1, kern0_body({{1, 4, -30}})}});
+  const auto kern = kern_table(false, {{4, kern0_body({{1, 4, -30}})}});
   Font src;
   ASSERT_EQ(src.open(glyph_font(8, {{GFNT_TAG('k', 'e', 'r', 'n'), kern}})), GFNT_OK);
   Subset refused;

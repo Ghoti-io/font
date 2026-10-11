@@ -398,12 +398,21 @@ bool gfnt_gsub_apply_subtable(GFNT_LApply * c, uint16_t type, size_t subtable);
 bool gfnt_gpos_apply_subtable(GFNT_LApply * c, uint16_t type, size_t subtable);
 bool gfnt_gsub_is_reverse(uint16_t type);
 
-/** The `kern` table's pair kerning, applied to the run (kern.c). */
+/**
+ * The `kern` table applied to the run (kern.c): pair kerning in a horizontal run, and in a vertical
+ * one only the cross-stream state machines marked vertical.
+ */
 GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
-    const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error);
+    const GFNT_Gdef * gdef, uint32_t kern_mask, bool vertical, GFNT_Error * error);
 
 /** Whether any of the `kern` table's subtables is cross-stream (kern.c). */
 bool gfnt_kern_has_cross_stream(const GFNT_Face * face);
+
+/**
+ * Whether any of the `kern` table's subtables is a state machine (format 1, kern.c). HarfBuzz
+ * treats such a table as Apple's, and zeroes no mark's advance for it.
+ */
+bool gfnt_kern_has_state_machine(const GFNT_Face * face);
 
 /**
  * The `kerx` table (kerx.c). A font that has one is kerned by it alone: the

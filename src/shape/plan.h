@@ -165,6 +165,7 @@ struct GFNT_Plan {
   bool apply_kerx;            ///< The `kerx` runs: it kerns, and `GPOS` and `kern` do not.
   bool gpos_over_kerx;        ///< A font with `GSUB` and `GPOS` and no running morx is positioned by the `GPOS`, not the `kerx`.
   bool kern_fallback;         ///< `GPOS` does not kern, so the `kern` table does.
+  bool kern_state_machine;    ///< The `kern` table has a state machine and `GPOS` does not kern: no mark is zeroed.
   bool kern_cross_stream;     ///< The `kern` table kerns across the line and `GPOS` does not.
   GFNT_PlanTable tables[2];   ///< GSUB, GPOS.
   uint8_t gsub_stage;         ///< The stage features are being asked for in.

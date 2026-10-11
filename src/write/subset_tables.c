@@ -26,6 +26,7 @@
  */
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
@@ -420,6 +421,95 @@ static GFNT_Result kern_format3(const GFNT_Reader * r, size_t at, size_t header,
   }
 }
 
+/**
+ * Apple's state-machine format 1, behind either header, for a new numbering.
+ *
+ * The machine (its states, transitions and values) names no glyph: only the class array, which is
+ * indexed by glyph id, does. So the machine is carried byte for byte and the class array is
+ * written again for the new ids where the old one was, trimmed to the span of glyphs that are not
+ * out of bounds (class 1, which is also what a glyph outside the array is in). That always fits,
+ * because new ids rise with old ones, and it leaves everything in the subtable where it was, even
+ * the length HarfBuzz bounds the value list by (a list cut short by it applies nothing).
+ */
+static GFNT_Result kern_format1(const GFNT_Reader * r, size_t at, size_t header, size_t length,
+    const uint32_t * new_of_old, size_t count, const GFNT_Allocator * a, GFNT_WBuf * body,
+    bool * kept, GFNT_Error * error) {
+  const GFNT_Tag tag = GFNT_TAG('k', 'e', 'r', 'n');
+  const size_t base = at + header;
+  const size_t start = body->length - header;
+  uint16_t class_offset = 0;
+  uint16_t first = 0;
+  uint16_t glyphs = 0;
+  size_t new_count = 0;
+  size_t lo = SIZE_MAX;
+  size_t hi = 0;
+  size_t span;
+  size_t g;
+  size_t i;
+  uint8_t * classes;
+
+  if (length < header + 10
+      || gfnt_reader_u16_at(r, base + 2, &class_offset) != GFNT_OK
+      || gfnt_reader_u16_at(r, base + class_offset, &first) != GFNT_OK
+      || gfnt_reader_u16_at(r, base + class_offset + 2, &glyphs) != GFNT_OK
+      || (size_t)class_offset + 4 + glyphs > length - header) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, tag, at, GFNT_GLYPH_NONE,
+        "a kern subtable cut short");
+  }
+  for (g = 0; g < count; ++g) {
+    if (new_of_old[g] != 0xFFFFFFFFu && (size_t)new_of_old[g] + 1 > new_count) {
+      new_count = (size_t)new_of_old[g] + 1;
+    }
+  }
+  if (new_count == 0 || new_count > 0xFFFFu) {
+    *kept = false;
+    return GFNT_OK;
+  }
+  classes = a->calloc_fn(a->ctx, new_count, 1);
+  if (!classes) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, tag, at, GFNT_GLYPH_NONE, "building kern");
+  }
+  memset(classes, 1, new_count);
+  for (g = 0; g < count; ++g) {
+    uint8_t klass = 0;
+
+    if (new_of_old[g] == 0xFFFFFFFFu || g < first || g - first >= glyphs) {
+      continue;
+    }
+    gfnt_reader_u8_at(r, base + class_offset + 4 + (g - first), &klass);
+    classes[new_of_old[g]] = klass;
+    if (klass != 1) {
+      lo = lo < new_of_old[g] ? lo : new_of_old[g];
+      hi = hi > new_of_old[g] ? hi : new_of_old[g];
+    }
+  }
+  span = lo == SIZE_MAX ? 0 : hi - lo + 1;
+  if (span > glyphs) {
+    // New ids rise with old ones, so the glyphs an array covered land in no wider a span.
+    a->free_fn(a->ctx, classes);
+    return gfnt_error_set(error, GFNT_ERR_INTERNAL, tag, at, GFNT_GLYPH_NONE,
+        "a renumbering that is not in order widens a kern class array");
+  }
+  for (i = header; i < length; ++i) {
+    uint8_t v = 0;
+
+    gfnt_reader_u8_at(r, at + i, &v);
+    gfnt_wbuf_u8(body, v);
+  }
+  if (!body->oom) {
+    uint8_t * array = body->data + start + header + class_offset;
+
+    memset(array, 0, 4 + (size_t)glyphs);
+    gfnt_write_put16(array, (uint32_t)(span ? lo : 0));
+    gfnt_write_put16(array + 2, (uint32_t)span);
+    if (span) {
+      memcpy(array + 4, classes + lo, span);
+    }
+  }
+  a->free_fn(a->ctx, classes);
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_subset_kern(const GFNT_Face * face, const uint8_t * shape,
     const uint32_t * new_of_old, size_t count, GFNT_WBuf * out,
     const GFNT_Allocator * a, GFNT_Error * error) {
@@ -488,7 +578,7 @@ GFNT_Result gfnt_subset_kern(const GFNT_Face * face, const uint8_t * shape,
     if (length < header) {
       break;
     }
-    if (format != 0 && format != 2 && format != 3) {
+    if (format > 3) {
       result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, tag, at, GFNT_GLYPH_NONE,
           "a kern subtable of a form that cannot be renumbered");
       goto done;
@@ -550,6 +640,12 @@ GFNT_Result gfnt_subset_kern(const GFNT_Face * face, const uint8_t * shape,
         gfnt_write_put16(body.data + start + header + 2, (uint32_t)(6 * power));
         gfnt_write_put16(body.data + start + header + 4, (uint32_t)entry);
         gfnt_write_put16(body.data + start + header + 6, (uint32_t)(6 * (kept_pairs - power)));
+      }
+    }
+    else if (format == 1) {
+      result = kern_format1(&r, at, header, length, new_of_old, count, a, &body, &kept, error);
+      if (result != GFNT_OK) {
+        goto done;
       }
     }
     else if (format == 3) {

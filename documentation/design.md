@@ -490,7 +490,7 @@ the last advance repeats), `maxp`, `OS/2` versions 0-5 (`fsType` reported,
 `fsSelection`, the four vertical metrics, `xAvgCharWidth`, `capHeight` and
 `xHeight` from version 2, the Unicode and code-page ranges, weight and width
 class, PANOSE), `post` (format 2.0 glyph names; 1.0's standard 258; 3.0 none),
-`gasp` (advisory), `kern` formats 0, 2 and 3 (§9.4).
+`gasp` (advisory), `kern` formats 0 to 3 (§9.4).
 
 **`numGlyphs` is the minimum** across `maxp`, `loca`, `hmtx` and `CFF`'s
 `CharStrings`, and a disagreement is a diagnostic on the face (M12).
@@ -1400,8 +1400,26 @@ at `unitsPerEm` and a caller wanting pixels passes `ppem * 64 / upem`.
 font has no `GPOS` `kern` feature for the script, never in addition (M16), and
 its format 2 (class-based) is read as well as format 0, and so is format 3 (a matrix of
 byte classes, behind either header; a glyph past its class arrays is in class 0, which kerns like any other). An Apple
-subtable with the variation bit (0x2000) is not applied, as in HarfBuzz; Apple's state-table
-format 1 is not read.
+subtable with the variation bit (0x2000) is not applied, as in HarfBuzz.
+
+**Format 1, the state machine**, is read too, behind either header: a byte class per glyph, a
+state array of entry numbers, and transitions that name the next state by the byte offset of its
+row. A transition may push the glyph (a stack of eight), may leave the glyph for the next
+transition (`dont advance`, bounded by the shaper's operation budget) and may name a list of
+values, which go to the glyphs on the stack from the top until one has its low bit set. The
+details are HarfBuzz's, found by experiment and held to it by `kerx_random_diff.py --table kern
+--apple` over random machines: the value goes to a glyph's advance and its offset alike; a list
+that the subtable's end cuts short for the glyphs on the stack applies nothing; a machine run
+over a text that is all out of bounds does not make its end-of-text transition; the budget is
+shared by the machines of one table. A cross-stream machine writes across the line (`y` in a
+horizontal run, `x` in a vertical one, where only machines marked vertical run at all) and then
+hangs every glyph from the one before it, replacing the hanging a pair subtable gave. A table
+with a state machine in it is Apple's as far as marks go: none has its advance taken away.
+These two follow the table and not the `kern` feature, which turns off only the horizontal
+machine and the pair formats. **A known difference:** a machine that loops on a glyph without
+advancing until the operation budget is spent, in a table with several such machines, spends it a
+step differently from HarfBuzz in about 1 string in 5,000 of the random machines built to do
+that (`--dont 0.4` and higher); no real font does it.
 
 ### 9.5 Language
 
@@ -1816,7 +1834,9 @@ verbatim. Without it they are **rewritten** for the new numbering
   lookup indices renumbered; a condition of a format the specification does not define is
   `GFNT_ERR_UNSUPPORTED`. `kern` is carried in format 0 and the
   class-based format 2, Microsoft or Apple header, and in format 3 (its two class
-  arrays rewritten for the new ids); another format is `GFNT_ERR_UNSUPPORTED`. `GFNT_SubsetOptions::map` reports which source glyph each
+  arrays rewritten for the new ids), and in format 1 (the state machine is copied byte for byte and
+  its glyph-to-class array is rewritten in place for the new ids); another format is
+  `GFNT_ERR_UNSUPPORTED`. `GFNT_SubsetOptions::map` reports which source glyph each
   subset glyph is.
 
 **`CFF ` outlines are subset too** (`src/write/subset_cff.c`), by writing the table afresh:
@@ -1880,7 +1900,7 @@ original family left in a family record, every other record unchanged).
 
 Refused with `GFNT_ERR_UNSUPPORTED`: Type 1 outlines and a CFF with Type 1 charstrings. Silently
 not written, and stated in `write.h`: the Apple tables (`morx`, `mort`, `kerx`, `trak`, `ankr`;
-HarfBuzz's subsetter drops them too), `cmap` format 14, and Apple's `kern` state table.
+HarfBuzz's subsetter drops them too), and `cmap` format 14.
 
 **What a caller must request.** The closure sees tables, not text. The shaper
 sets the glyph of one character where it hides or sizes another: U+0020 for an

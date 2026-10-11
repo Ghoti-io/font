@@ -179,13 +179,181 @@ static int32_t gfnt_kern_subtable_pair(const GFNT_Reader * r, size_t cursor,
 }
 
 /**
+ * A state-machine (format 1) subtable: contextual kerning, in the older 16-bit form of an AAT
+ * state table. A glyph's class comes from a byte array, the state array holds entry numbers, and
+ * a transition names its next state by the *byte offset* of that state's row. The actions are the
+ * same as `kerx`'s format 1: glyphs a transition pushes are kept on a stack of eight, and a
+ * transition that names values applies them to the stack from the top until one has its low bit
+ * set. HarfBuzz applies the value to the glyph's advance and its offset alike.
+ */
+#define KERN_STACK 8u
+#define KERN_DETACHED INT32_MIN
+
+static bool gfnt_kern_format1(const GFNT_Reader * r, size_t machine, size_t end, bool cross,
+    bool vertical, GFNT_LBuffer * b, uint32_t kern_mask, bool * bad) {
+  uint32_t classes = gfnt_lr_u16(r, machine, bad);
+  size_t class_table = machine + gfnt_lr_u16(r, machine + 2, bad);
+  size_t state_array = machine + gfnt_lr_u16(r, machine + 4, bad);
+  size_t entry_table = machine + gfnt_lr_u16(r, machine + 6, bad);
+  size_t values = machine + gfnt_lr_u16(r, machine + 8, bad);
+  uint32_t first_glyph = gfnt_lr_u16(r, class_table, bad);
+  uint32_t glyph_count = gfnt_lr_u16(r, class_table + 2, bad);
+  size_t stack[KERN_STACK];
+  size_t depth = 0;
+  size_t row = state_array;       /* the byte offset of the current state's row */
+  bool wrote = false;             /* a cross-stream value landed on some glyph */
+
+  // Found by experiment on tables built to tell the readings apart, and not understood: HarfBuzz
+  // does not perform the end-of-text transition of a run in which every glyph is out of bounds
+  // (outside the class table or in class 1), no transition has yet named an action, and the
+  // machine is back in the start state. That fits every table tried but a sliver of the random
+  // ones (about 1 string in 1,200), which the differential reports.
+  bool every_glyph_out = true;
+  bool acted = false;
+  {
+    size_t i;
+
+    for (i = 0; i < b->len && every_glyph_out; i++) {
+      uint32_t glyph = b->info[i].glyph;
+
+      if (glyph >= first_glyph && glyph - first_glyph < glyph_count
+          && gfnt_lr_u8(r, class_table + 4 + (glyph - first_glyph), bad) != 1) {
+        every_glyph_out = false;
+      }
+    }
+  }
+  b->idx = 0;
+  while (!*bad && classes) {
+    uint32_t klass = 0;
+    uint32_t index;
+    size_t entry;
+    uint32_t new_state;
+    uint32_t flags;
+
+    if (b->idx < b->len) {
+      uint32_t glyph = b->info[b->idx].glyph;
+
+      if (glyph == 0xFFFFu) {
+        klass = 2;
+      }
+      else if (glyph >= first_glyph && glyph - first_glyph < glyph_count) {
+        klass = gfnt_lr_u8(r, class_table + 4 + (glyph - first_glyph), bad);
+      }
+      else {
+        klass = 1;
+      }
+    }
+    if (klass >= classes) {
+      klass = 1;
+    }
+    index = gfnt_lr_u8(r, row + klass, bad);
+    entry = entry_table + 4 * (size_t)index;
+    new_state = gfnt_lr_u16(r, entry, bad);
+    flags = gfnt_lr_u16(r, entry + 2, bad);
+    if (*bad) {
+      return wrote;
+    }
+    if (b->idx >= b->len && every_glyph_out && !acted && row == state_array) {
+      break;
+    }
+    if (flags & 0x2000u) {
+      depth = 0;
+    }
+    if (flags & 0x8000u) {
+      if (depth < KERN_STACK) {
+        stack[depth++] = b->idx;
+      }
+      else {
+        depth = 0;
+      }
+    }
+    if (flags & 0x3FFFu) {
+      acted = true;
+    }
+    if ((flags & 0x3FFFu) && depth) {
+      size_t at = machine + (flags & 0x3FFFu);
+      bool last = false;
+
+      // HarfBuzz checks that a value is there for every glyph on the stack, whether or not an
+      // end mark comes sooner, and when the list is cut short by the subtable's end it applies
+      // nothing and empties the stack.
+      if (at + 2 * depth > end) {
+        depth = 0;
+      }
+      while (!last && depth && !*bad) {
+        size_t g = stack[--depth];
+        int32_t v = (int16_t)gfnt_lr_u16(r, at, bad);
+
+        at += 2;
+        if (g >= b->len) {
+          continue;
+        }
+        last = (v & 1) != 0;
+        v &= ~1;
+        if (cross) {
+          // Across the line of text: y in a horizontal run, x in a vertical one.
+          int32_t * across = vertical ? &b->pos[g].x_offset : &b->pos[g].y_offset;
+
+          wrote = true;
+          if (v == -0x8000) {
+            *across = KERN_DETACHED;
+          }
+          else if (*across != KERN_DETACHED) {
+            *across += v;
+          }
+        }
+        else if (b->info[g].mask & kern_mask) {
+          b->pos[g].x_advance += v;
+          b->pos[g].x_offset += v;
+        }
+      }
+      (void)values;
+    }
+    if (new_state < (uint32_t)(state_array - machine)) {
+      return wrote;
+    }
+    row = machine + new_state;
+    if (b->idx >= b->len) {
+      break;
+    }
+    if (!(flags & 0x4000u) || b->max_ops-- <= 0) {
+      b->idx++;
+    }
+  }
+  return wrote;
+}
+
+/**
+ * After a cross-stream state machine: a glyph it detached lands at zero, and every other glyph
+ * hangs from the one before it, so that the offsets of a chain add up (as `kerx` does).
+ */
+static void gfnt_kern_hang_shifts(GFNT_LBuffer * b, bool vertical) {
+  size_t i;
+
+  for (i = 0; i < b->len; i++) {
+    int32_t * across = vertical ? &b->pos[i].x_offset : &b->pos[i].y_offset;
+
+    if (*across == KERN_DETACHED) {
+      *across = 0;
+      b->pos[i].attach_type = 0;
+      b->pos[i].attach_chain = 0;
+    }
+    else if (i) {
+      b->pos[i].attach_type = GFNT_ATTACH_CURSIVE;
+      b->pos[i].attach_chain = -1;
+      b->has_attachment = true;
+    }
+  }
+}
+
+/**
  * Run every horizontal subtable over the run in turn, as HarfBuzz does: each one
  * splits its own values between the two glyphs of a pair, and a cross-stream one
  * hangs the second glyph from the first and sets that glyph's own shift, which
  * what an earlier subtable gave it yields to.
  */
 static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer * b,
-    uint32_t kern_mask, bool * bad) {
+    uint32_t kern_mask, bool vertical, bool * bad) {
   uint32_t version = gfnt_lr_u16(r, 0, bad);
   size_t cursor;
   uint32_t tables;
@@ -211,6 +379,7 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
     uint32_t format;
     size_t header;
     bool horizontal;
+    bool vertical_cross;
     bool cross;
     size_t idx = 0;
 
@@ -220,6 +389,7 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
       format = coverage & 0xFFu;
       // A subtable that varies with the design space (0x2000) is one HarfBuzz does not apply.
       horizontal = !(coverage & 0x8000u) && !(coverage & 0x2000u);
+      vertical_cross = (coverage & 0x8000u) && !(coverage & 0x2000u);
       cross = (coverage & 0x4000u) != 0;
       header = 8;
     }
@@ -228,13 +398,28 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
       coverage = gfnt_lr_u16(r, cursor + 4, bad);
       format = coverage >> 8;
       horizontal = (coverage & 1u) != 0;
+      vertical_cross = !horizontal;
       cross = (coverage & 4u) != 0;
       header = 6;
     }
     if (*bad || length < header) {
       break;
     }
-    if (horizontal && (format == 0 || format == 2 || format == 3)) {
+    if (vertical) {
+      // HarfBuzz leaves the pair tables alone in a vertical run, and of the state machines runs only
+      // the cross-stream ones that are marked vertical, which then move glyphs sideways.
+      if (format == 1 && cross && vertical_cross) {
+        if (gfnt_kern_format1(r, cursor + header, cursor + length, true, true, b, kern_mask, bad)) {
+          gfnt_kern_hang_shifts(b, true);
+        }
+      }
+    }
+    else if (horizontal && format == 1) {
+      if (gfnt_kern_format1(r, cursor + header, cursor + length, cross, false, b, kern_mask, bad)) {
+        gfnt_kern_hang_shifts(b, false);
+      }
+    }
+    else if (horizontal && (format == 0 || format == 2 || format == 3)) {
       GFNT_LIter it;
 
       if (cross && !seen_cross) {
@@ -273,8 +458,11 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
           if (kern) {
             b->pos[j].y_offset = kern;
           }
-          b->pos[j].attach_type = GFNT_ATTACH_CURSIVE;
-          b->pos[j].attach_chain = (int32_t)((int64_t)i - (int64_t)j);
+          // A state machine's hanging of every glyph from the one before it stands.
+          if (!b->pos[j].attach_type) {
+            b->pos[j].attach_type = GFNT_ATTACH_CURSIVE;
+            b->pos[j].attach_chain = (int32_t)((int64_t)i - (int64_t)j);
+          }
           b->has_attachment = true;
         }
         else if (kern) {
@@ -295,7 +483,7 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
 }
 
 GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
-    const GFNT_Gdef * gdef, uint32_t kern_mask, GFNT_Error * error) {
+    const GFNT_Gdef * gdef, uint32_t kern_mask, bool vertical, GFNT_Error * error) {
   GFNT_Reader table;
   GFNT_LApply c;
   bool bad = false;
@@ -318,7 +506,8 @@ GFNT_Result gfnt_kern_apply(const GFNT_Face * face, GFNT_LBuffer * b,
   c.is_gpos = true;
   c.auto_zwnj = true;
   c.auto_zwj = true;
-  gfnt_kern_run(&table, &c, b, kern_mask, &bad);
+  c.vertical = vertical;
+  gfnt_kern_run(&table, &c, b, kern_mask, vertical, &bad);
   if (bad) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_kern, 0,
         GFNT_GLYPH_NONE, "the kern table reads past itself");
@@ -362,6 +551,49 @@ bool gfnt_kern_has_cross_stream(const GFNT_Face * face) {
       break;
     }
     if (apple ? (coverage & 0x4000u) != 0 : (coverage & 4u) != 0) {
+      return true;
+    }
+    cursor += length;
+  }
+  return false;
+}
+
+bool gfnt_kern_has_state_machine(const GFNT_Face * face) {
+  GFNT_Reader table;
+  bool bad = false;
+  bool apple = false;
+  uint32_t version;
+  uint32_t tables;
+  size_t cursor;
+  uint32_t t;
+
+  if (!gfnt_face_has_table(face, GFNT_TAG_kern)
+      || gfnt_face_table_reader(face, GFNT_TAG_kern, &table, NULL) != GFNT_OK) {
+    return false;
+  }
+  table.error = NULL;
+  version = gfnt_lr_u16(&table, 0, &bad);
+  if (version == 0) {
+    tables = gfnt_lr_u16(&table, 2, &bad);
+    cursor = 4;
+  }
+  else if (version == 1 && gfnt_lr_u16(&table, 2, &bad) == 0) {
+    apple = true;
+    tables = gfnt_lr_u32(&table, 4, &bad);
+    cursor = 8;
+  }
+  else {
+    return false;
+  }
+  for (t = 0; t < tables && !bad; t++) {
+    size_t length = apple ? gfnt_lr_u32(&table, cursor, &bad)
+        : gfnt_lr_u16(&table, cursor + 2, &bad);
+    uint32_t coverage = gfnt_lr_u16(&table, cursor + 4, &bad);
+
+    if (bad || length < (apple ? 8u : 6u)) {
+      break;
+    }
+    if (apple ? (coverage & 0xFFu) == 1 : (coverage >> 8) == 1) {
       return true;
     }
     cursor += length;

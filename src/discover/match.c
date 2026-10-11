@@ -38,7 +38,7 @@
  * covers that axis's italic values.
  */
 
-#include <ghoti.io/font/match.h>
+#include "match_int.h"
 
 #include <ghoti.io/font/variation.h>
 #include <ghoti.io/unicode/case.h>
@@ -351,11 +351,40 @@ static int64_t clamp64(int64_t v, int64_t lo, int64_t hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-/** The faces of one family name, narrowed to one; false when the family has none. */
+/** The faces of one family name, narrowed to one; @p found is false when the family has none. */
 static GFNT_Result match_name(const GFNT_FontSet * set, const char * name,
-    const GFNT_FontQuery * q, Cand * cands, GFNT_FontMatch * out, bool * found) {
+    const GFNT_FontQuery * q, const GFNT_Allocator * allocator,
+    const GFNT_FontRecord ** recs, GFNT_FontMatch * out, bool * found) {
   const size_t total = gfnt_fontset_count(set);
   size_t n = 0;
+  size_t i;
+  size_t pick = 0;
+  GFNT_Result result;
+
+  *found = false;
+  for (i = 0; i < total; i++) {
+    const GFNT_FontRecord * r = gfnt_fontset_at(set, i);
+
+    if (name_is(r->family, name) || name_is(r->legacy_family, name)) {
+      recs[n++] = r;
+    }
+  }
+  if (n == 0) {
+    return GFNT_OK;
+  }
+  result = gfnt_match_pick(recs, n, q, allocator, &pick, out);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  out->index = (size_t)(recs[pick] - gfnt_fontset_at(set, 0));
+  *found = true;
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_match_pick(const GFNT_FontRecord * const * recs, size_t n,
+    const GFNT_FontQuery * q, const GFNT_Allocator * allocator, size_t * out_pick,
+    GFNT_FontMatch * out_values) {
+  Cand * cands;
   size_t i;
   size_t first = 0;
   int64_t want_weight = q->weight ? q->weight : 400 * ONE;
@@ -364,21 +393,17 @@ static GFNT_Result match_name(const GFNT_FontSet * set, const char * name,
   int64_t lo;
   int64_t hi;
   Style style;
-  const GFNT_FontRecord * chosen;
 
-  *found = false;
-  for (i = 0; i < total; i++) {
-    const GFNT_FontRecord * r = gfnt_fontset_at(set, i);
-
-    if (name_is(r->family, name) || name_is(r->legacy_family, name)) {
-      cands[n].rec = r;
-      cands[n].alive = true;
-      // Remember the set index in a parallel place: the record pointer gives it back.
-      n++;
-    }
-  }
   if (n == 0) {
-    return GFNT_OK;
+    return GFNT_ERR_INVALID;
+  }
+  cands = allocator->calloc_fn(allocator->ctx, n, sizeof *cands);
+  if (!cands) {
+    return GFNT_ERR_OOM;
+  }
+  for (i = 0; i < n; i++) {
+    cands[i].rec = recs[i];
+    cands[i].alive = true;
   }
   match_width(cands, n, want_width);
   match_style(cands, n, q->slant, q->slant == GFNT_SLANT_OBLIQUE ? angle : 0, &style);
@@ -387,17 +412,19 @@ static GFNT_Result match_name(const GFNT_FontSet * set, const char * name,
     first++;
   }
   if (first == n) {
+    allocator->free_fn(allocator->ctx, cands);
     return GFNT_ERR_INTERNAL;
   }
-  chosen = cands[first].rec;
-  out->index = (size_t)(chosen - gfnt_fontset_at(set, 0));
-  range_of(chosen, DIM_WEIGHT, false, &lo, &hi);
-  out->weight = (GFNT_F16Dot16)clamp64(want_weight, lo, hi);
-  range_of(chosen, DIM_WIDTH, false, &lo, &hi);
-  out->width = (GFNT_F16Dot16)clamp64(want_width, lo, hi);
-  out->italic = (GFNT_F16Dot16)style.italic;
-  out->oblique = (GFNT_F16Dot16)style.oblique;
-  *found = true;
+  *out_pick = first;
+  if (out_values) {
+    range_of(cands[first].rec, DIM_WEIGHT, false, &lo, &hi);
+    out_values->weight = (GFNT_F16Dot16)clamp64(want_weight, lo, hi);
+    range_of(cands[first].rec, DIM_WIDTH, false, &lo, &hi);
+    out_values->width = (GFNT_F16Dot16)clamp64(want_width, lo, hi);
+    out_values->italic = (GFNT_F16Dot16)style.italic;
+    out_values->oblique = (GFNT_F16Dot16)style.oblique;
+  }
+  allocator->free_fn(allocator->ctx, cands);
   return GFNT_OK;
 }
 
@@ -411,7 +438,7 @@ static GFNT_Result match_one(const GFNT_FontSet * set, const char * family,
     const GFNT_FontQuery * q, const GFNT_Allocator * allocator, GFNT_FontMatch * out,
     bool * found, GFNT_Error * error) {
   const size_t total = gfnt_fontset_count(set);
-  Cand * cands;
+  const GFNT_FontRecord ** recs;
   GFNT_Result result;
   const char * alias = NULL;
 
@@ -419,18 +446,18 @@ static GFNT_Result match_one(const GFNT_FontSet * set, const char * family,
   if (total == 0) {
     return GFNT_OK;
   }
-  cands = allocator->calloc_fn(allocator->ctx, total, sizeof *cands);
-  if (!cands) {
+  recs = allocator->calloc_fn(allocator->ctx, total, sizeof *recs);
+  if (!recs) {
     return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "allocating the faces of a family");
   }
-  result = match_name(set, family, q, cands, out, found);
+  result = match_name(set, family, q, allocator, recs, out, found);
   if (result == GFNT_OK && !*found
       && gfnt_fontset_resolve_alias(set, family, &alias, NULL) == GFNT_OK
       && alias && strcmp(alias, family) != 0) {
-    result = match_name(set, alias, q, cands, out, found);
+    result = match_name(set, alias, q, allocator, recs, out, found);
   }
-  allocator->free_fn(allocator->ctx, cands);
+  allocator->free_fn(allocator->ctx, recs);
   if (result != GFNT_OK) {
     return gfnt_error_set(error, result, 0, 0, GFNT_GLYPH_NONE, "matching a family");
   }

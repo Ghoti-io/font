@@ -1400,6 +1400,9 @@ TIER3_FORBIDDEN := font/(discover|write)\.h
 TIER4_FILES := include/ghoti.io/font/discover.h include/ghoti.io/font/match.h src/discover/*.c src/discover/*.h
 TIER4_FORBIDDEN := font/(outline|raster|shape|layout|write)\.h
 
+TIER5_FILES := include/ghoti.io/font/provider.h src/provider/*.c src/provider/*.h
+TIER5_FORBIDDEN := font/write\.h
+
 TIERW_FILES := include/ghoti.io/font/write.h src/write/*.c src/write/*.h
 TIERW_FORBIDDEN := font/(outline|raster|shape|layout|discover)\.h
 
@@ -1432,6 +1435,7 @@ check-layering: ## Fail if a lower tier includes a higher tier's header
 	$(call layering-check,2,$(TIER2_FORBIDDEN),$(TIER2_FILES))
 	$(call layering-check,3,$(TIER3_FORBIDDEN),$(TIER3_FILES))
 	$(call layering-check,4,$(TIER4_FORBIDDEN),$(TIER4_FILES))
+	$(call layering-check,5,$(TIER5_FORBIDDEN),$(TIER5_FILES))
 	$(call layering-check,W,$(TIERW_FORBIDDEN),$(TIERW_FILES))
 	@printf "\033[0;32mNo tier includes a higher tier's header.\033[0m\n"
 

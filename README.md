@@ -27,7 +27,7 @@ This is what the library implements.
 
 **What shaping does not do**, stated rather than approximated: Apple's AAT beyond `morx`/`mort`, `kerx` (formats 0, 1, 2, 4 and 6) and `trak`, `GSUB`/`GPOS` `BASE` and `JSTF`, and a hinting device table unless the caller gives a pixel size. A mixed-direction paragraph is shaped by `gfnt_faces_shape_bidi()` (UAX #9 from the `unicode` library, one line, visual order); breaking it into lines is the caller's. A few characters in nine scripts are sorted into a different category than HarfBuzz sorts them into, and `tools/oracle/hb_diff.py` names them as a known gap.
 
-**Not built yet**, each refused with `GFNT_ERR_UNSUPPORTED` where a file or request names it: the `SVG ` table, kashida and hyphenation in paragraph layout, and a fallback font provider over a scanned set (font *matching* by family, weight, width and style is built, `match.h`). The design document (`documentation/design.md`) §10 to §12 says what each is to be. Embedded bitmap strikes in `EBDT`/`EBLC` are read.
+**Not built yet**, each refused with `GFNT_ERR_UNSUPPORTED` where a file or request names it: the `SVG ` table, and kashida and hyphenation in paragraph layout. Font matching (`match.h`) and a fallback provider over a scanned set (`provider.h`) are built. The design document (`documentation/design.md`) §10 to §12 says what each is to be. Embedded bitmap strikes in `EBDT`/`EBLC` are read.
 ## Before you call it
 
 - A table this library does not parse yet comes back as `GFNT_ERR_UNSUPPORTED` and names what it could not read. An empty result is reserved for a font that states the thing is absent.

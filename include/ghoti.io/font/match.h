@@ -43,8 +43,8 @@
  * that into the coordinates a shaper or an outline takes.
  *
  * **Not here.** Synthetic bold and oblique (design.md section 16); `local()` full-name
- * matching; `unicode-range`; and choosing a face for a character, which is
- * ::GFNT_FontFallback in the same header's second half.
+ * matching; and `unicode-range`. Choosing a face for a *character* is the second half of
+ * this header, ::GFNT_FontFallback.
  */
 
 #ifndef GHOTI_IO_GFNT_MATCH_H
@@ -150,6 +150,76 @@ GFNT_API GFNT_Result gfnt_fontset_match_family(const GFNT_FontSet * set,
 GFNT_API GFNT_Result gfnt_fontmatch_location(const GFNT_Face * face,
     const GFNT_FontMatch * match, GFNT_F2Dot14 * out_coordinates, size_t capacity,
     size_t * out_count, GFNT_Error * error);
+
+
+/**
+ * @brief The families to try first for a script (and optionally a language).
+ *
+ * Han is the usual reason: a Japanese reader and a Chinese reader want different faces for the
+ * same characters, and the faces on a machine do not say which is which. A preference with a
+ * language is used for that language and one without for the script's other languages.
+ */
+typedef struct GFNT_FontScriptPreference {
+  GFNT_Tag script;                ///< The OpenType script tag, `'hani'`.
+  GFNT_Tag language;              ///< The OpenType language tag, or 0 for any.
+  const char * const * families;  ///< In order of preference. UTF-8.
+  size_t family_count;            ///< How many.
+} GFNT_FontScriptPreference;
+
+/** @brief What the fallback is given beyond the set. A zeroed one is valid. */
+typedef struct GFNT_FontFallbackOptions {
+  const GFNT_FontScriptPreference * preferences; ///< Or NULL.
+  size_t preference_count;                       ///< How many.
+} GFNT_FontFallbackOptions;
+
+/**
+ * @brief A face for a character the primary face lacks, drawn from a scanned set.
+ *
+ * Opaque. The faces it returns are opened from the files on first need and **stay open until
+ * the object is freed**, so a pointer it gave out is good for as long as the object is: the
+ * contract a paragraph's font provider needs. The set must outlive it.
+ */
+typedef struct GFNT_FontFallback GFNT_FontFallback;
+
+/**
+ * @brief Prepare a fallback over @p set.
+ *
+ * Nothing is opened yet. The families that preferences name are looked up by the same
+ * caseless comparison matching uses; one the set does not have is simply never tried.
+ */
+GFNT_API GFNT_Result gfnt_fontfallback_create(const GFNT_FontSet * set,
+    const GFNT_FontFallbackOptions * options, const GFNT_Allocator * allocator,
+    GFNT_FontFallback ** out_fallback, GFNT_Error * error);
+
+/**
+ * @brief A face in the set that maps @p codepoint.
+ *
+ * Families are tried in this order: the script's preference list (the language's own first), the
+ * family of @p wanted's first name, then every other family in the order the set lists them.
+ * Within a family the face is the one CSS matching picks for @p wanted's weight, width and
+ * style among the faces that map the character. Faces whose `OS/2` range bits claim the
+ * character are tried before faces that do not (a font with no bits set claims nothing and
+ * everything), and a face is chosen only if its `cmap` really maps the character: a claim is a
+ * hint, never a proof.
+ *
+ * @param fallback The fallback.
+ * @param codepoint The character.
+ * @param script The OpenType script tag of the run, or 0.
+ * @param language The OpenType language tag, or 0.
+ * @param wanted The style asked for (weight, width, slant, and a first family to prefer), or
+ *   NULL for the initial values.
+ * @param out_face Receives the face, owned by @p fallback. Written only when found.
+ * @param out_index Receives the face's place in the set, or NULL.
+ * @param out_found Receives whether any face maps the character.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK (found or not), ::GFNT_ERR_INVALID, ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_fontfallback_face(GFNT_FontFallback * fallback, uint32_t codepoint,
+    GFNT_Tag script, GFNT_Tag language, const GFNT_FontQuery * wanted,
+    const GFNT_Face ** out_face, size_t * out_index, bool * out_found, GFNT_Error * error);
+
+/** @brief Close every face the fallback opened and release it. NULL is ignored. */
+GFNT_API void gfnt_fontfallback_free(GFNT_FontFallback * fallback);
 
 #ifdef __cplusplus
 }

@@ -523,6 +523,7 @@ struct Os2Spec {
   uint16_t fs_selection = 0;
   uint16_t weight_class = 400;
   uint16_t width_class = 5;
+  uint32_t unicode_range[4] = {0x10000000u, 0x20000000u, 0x30000000u, 0x40000000u};
   int16_t typo_ascender = 800;
   int16_t typo_descender = -200;
   int16_t typo_line_gap = 100;
@@ -555,7 +556,7 @@ inline std::vector<uint8_t> build_os2(const Os2Spec & spec = Os2Spec{}) {
     put_u8(os2, static_cast<uint8_t>(i + 1)); // panose
   }
   for (int i = 0; i < 4; i++) {
-    put_u32(os2, 0x10000000u * (i + 1)); // ulUnicodeRange1..4
+    put_u32(os2, spec.unicode_range[i]); // ulUnicodeRange1..4
   }
   for (char c : std::string("GHTI")) {
     put_u8(os2, static_cast<uint8_t>(c));

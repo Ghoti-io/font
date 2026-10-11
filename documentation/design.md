@@ -1639,7 +1639,7 @@ box sharing its line.
 
 ## 11. Discovery and fallback
 
-The list is built and so is matching; the fallback provider is not yet. The only part that touches the operating system, kept to one file per
+The list is built, and so are matching and the fallback provider. The only part that touches the operating system, kept to one file per
 platform. `GFNT_FontSet` is built by scanning directories - the caller's list,
 or the platform's conventional ones: `$XDG_DATA_HOME/fonts`,
 `$XDG_DATA_DIRS/fonts`,
@@ -1673,9 +1673,20 @@ set each axis to; `gfnt_fontmatch_location()` turns it into coordinates. Two rea
 specification are noted in the source: its fourth style step says "italic values less than 1"
 for a small oblique request, read here as "up to 1" because an italic face is 1; and a tie is the
 first face in the set. The tests are the specification's rules worked by hand, with a planted-
-defect check on each rule (`tests/unit/test_match.cpp`). The default
-`GFNT_FontProvider` over a set answers fallback by Unicode-range claim, then by
-actual `cmap` coverage, with a per-script preference list the caller can set.
+defect check on each rule (`tests/unit/test_match.cpp`). 
+
+**Fallback** (`GFNT_FontFallback`, `src/discover/fallback.c`; `provider.h` joins it to layout's
+`GFNT_FontProvider`) finds a face that maps a character. The set is grouped by family once (a face
+is in its typographic family's group and its legacy family's). A request tries the families in a
+fixed order - the preference list for the run's script and language (the language's own first), then
+the family of the face the span asked for, then every other family as the set lists them - and in
+each lets the matching algorithm above pick the face nearest the wanted weight, width and slant
+among those that can map the character. A face whose `OS/2` Unicode range bits claim the character
+(or that sets none, which claims everything) is tried first, in every family; the rest are tried only
+if no claimant maps it, and a face is accepted only if its `cmap` really maps the character, so a
+claim is a hint and never a proof. Faces are opened from their files on first need and stay open
+until the fallback is freed, because a paragraph keeps the pointers it was given. Script
+preferences are the caller's (the faces on a machine do not say which Han face is Japanese).
 Synthetic bold and oblique are §16.
 
 ---

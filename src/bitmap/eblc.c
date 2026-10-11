@@ -390,18 +390,20 @@ GFNT_Result gfnt_face_cblc(const GFNT_Face * face, const GFNT_Eblc ** out_cblc,
 /**
  * Read a `BigGlyphMetrics`, keeping the horizontal five.
  *
- * The three vertical bytes are skipped rather than stored, for the reason
- * ::GFNT_EblcMetrics gives: nothing reads a vertical advance, and a field parsed
- * but unread is one a differential can compare without either side meaning it.
+ * The three vertical bytes go to `vertical` rather than into ::GFNT_EblcMetrics, for
+ * the reason it gives: nothing measures with them. Only the subsetter reads them
+ * back, to write them into the metrics of a glyph whose index stated them.
  */
 static GFNT_Result gfnt_eblc_read_big_metrics(GFNT_Reader * reader,
-    GFNT_EblcMetrics * out) {
+    GFNT_EblcMetrics * out, uint8_t vertical[3]) {
   if (gfnt_read_u8(reader, &out->height) != GFNT_OK
       || gfnt_read_u8(reader, &out->width) != GFNT_OK
       || gfnt_read_s8(reader, &out->bearing_x) != GFNT_OK
       || gfnt_read_s8(reader, &out->bearing_y) != GFNT_OK
       || gfnt_read_u8(reader, &out->advance) != GFNT_OK
-      || gfnt_reader_skip(reader, 3) != GFNT_OK) {
+      || gfnt_read_u8(reader, &vertical[0]) != GFNT_OK
+      || gfnt_read_u8(reader, &vertical[1]) != GFNT_OK
+      || gfnt_read_u8(reader, &vertical[2]) != GFNT_OK) {
     return GFNT_ERR_CORRUPT;
   }
   return GFNT_OK;
@@ -556,7 +558,8 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
 
     if (gfnt_eblc_index_is_constant(entry->index_format)) {
       if (gfnt_read_u32(&at, &entry->image_size) != GFNT_OK
-          || gfnt_eblc_read_big_metrics(&at, &entry->metrics) != GFNT_OK) {
+          || gfnt_eblc_read_big_metrics(&at, &entry->metrics,
+              entry->vertical) != GFNT_OK) {
         result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table,
             entry->body_offset, GFNT_GLYPH_NONE,
             "an EBLC index subtable too short for its constant metrics");

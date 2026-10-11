@@ -156,6 +156,26 @@ TEST(SubsetStrikes, AnImageFormatThatNeededItsIndexForMetricsIsRewrittenWithThem
   EXPECT_EQ(b.advance, 9);
 }
 
+TEST(SubsetStrikes, TheVerticalHalfOfAnIndexsMetricsSurvivesTheRewrite) {
+  Font source("color-cbdt.ttf");
+  // Glyph 5: index 5, image 19, whose index states vertical metrics 5, -6, 12 (format 18
+  // gains height 8, width 8, bearing 0, 8, advance 9 and then those three). The
+  // 4-byte dataLen sits between the metrics and the PNG in format 18, so look for the
+  // metrics ahead of it.
+  Subset sub(source.face, {5});
+  ASSERT_EQ(sub.result, GFNT_OK);
+  const std::vector<uint8_t> metrics = {8, 8, 0, 8, 9, 5, 0xFA, 12};
+  const uint8_t * d = gfnt_blob_data(sub.blob);
+  const size_t n = gfnt_blob_size(sub.blob);
+  bool found = false;
+  static const uint8_t png[4] = {0x89, 'P', 'N', 'G'};
+  for (size_t i = 0; i + 8 + 4 + 4 <= n && !found; ++i) {
+    found = std::memcmp(d + i, metrics.data(), 8) == 0
+        && std::memcmp(d + i + 12, png, 4) == 0;
+  }
+  EXPECT_TRUE(found);
+}
+
 TEST(SubsetStrikes, EveryStrikeStaysBecauseASizeChoosesTheStrike) {
   Font source("color-cbdt-sizes.ttf");
   // Glyph 5 is in the 20 by 20 strike alone. The others carry nothing of the subset but

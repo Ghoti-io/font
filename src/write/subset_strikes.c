@@ -29,8 +29,8 @@
  * consecutive new glyph ids that share an image format. Two image formats do not
  * survive a copy, because they have no metrics of their own and the index that stated
  * them is gone: format 5 becomes 7 and format 19 becomes 18, each gaining the big
- * metrics the old index gave every glyph (the vertical half of those is not kept, as
- * the reader keeps only the horizontal). a table with no kept glyph in any strike is not written. A strike with no kept glyph stays,
+ * metrics the old index gave every glyph, the vertical three bytes included. A table
+ * with no kept glyph in any strike is not written. A strike with no kept glyph stays,
  * empty: readers choose a strike by its size alone, and removing one would change which
  * strike answers for the glyphs that remain. A composite (formats 8 and 9) is
  * refused: its components are glyph ids of the same strike, which would have to be
@@ -234,15 +234,15 @@ static GFNT_Result carry_bitmaps(const GFNT_Face * face, GFNT_Tag index_tag,
       run.last = (uint32_t)n;
       gfnt_wbuf_u32(&run.offsets, (uint32_t)(out_data->length - run.data_at));
       if (prefix) {
-        // BigGlyphMetrics from the index's horizontal five, the vertical three zero.
+        // BigGlyphMetrics as the index stated them: the horizontal five, then the vertical three.
         gfnt_wbuf_u8(out_data, sub->metrics.height);
         gfnt_wbuf_u8(out_data, sub->metrics.width);
         gfnt_wbuf_u8(out_data, (uint8_t)sub->metrics.bearing_x);
         gfnt_wbuf_u8(out_data, (uint8_t)sub->metrics.bearing_y);
         gfnt_wbuf_u8(out_data, sub->metrics.advance);
-        gfnt_wbuf_u8(out_data, 0);
-        gfnt_wbuf_u8(out_data, 0);
-        gfnt_wbuf_u8(out_data, 0);
+        gfnt_wbuf_u8(out_data, sub->vertical[0]);
+        gfnt_wbuf_u8(out_data, sub->vertical[1]);
+        gfnt_wbuf_u8(out_data, sub->vertical[2]);
       }
       gfnt_wbuf_bytes(out_data, bytes, length);
       if (strikes[s].any) {

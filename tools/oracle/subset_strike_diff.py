@@ -75,11 +75,34 @@ def eblc_reference(font):
         out[index] = ((size.ppemX, size.ppemY), glyphs)
     return out
 
+def verticals(font):
+    # The vertical half of each BigGlyphMetrics, which the picture comparison leaves out:
+    # {(table, strike): {glyph id: (vertBearingX, vertBearingY, vertAdvance)}}. For image
+    # formats 5 and 19 they are the index subtable's, for 6, 7 and 18 the glyph's own.
+    out = {}
+    ids = {n: i for i, n in enumerate(font.getGlyphOrder())}
+    for lo, da in (("EBLC", "EBDT"), ("CBLC", "CBDT")):
+        if lo not in font:
+            continue
+        for index, strike in enumerate(font[lo].strikes):
+            found = {}
+            for name, g in font[da].strikeData[index].items():
+                if g.getFormat() in (8, 9) or name not in ids:
+                    continue
+                if g.getFormat() in (5, 19):
+                    m = next(st.metrics for st in strike.indexSubTables if name in st.names)
+                else:
+                    m = g.metrics
+                if hasattr(m, "vertBearingX"):
+                    found[ids[name]] = (m.vertBearingX, m.vertBearingY, m.vertAdvance)
+            out[(lo, index)] = found
+    return out
+
 def read(path):
     font = TTFont(path)
     if "CBLC" in font or "sbix" in font:
-        return reference(font), ranges(font), heads(font)
-    return eblc_reference(font), ranges(font), heads(font)
+        return reference(font), ranges(font), heads(font), verticals(font)
+    return eblc_reference(font), ranges(font), heads(font), verticals(font)
 
 def ranges(font):
     # Each strike's stated glyph range, by size: what the BitmapSize record says.
@@ -105,7 +128,7 @@ def check(orig_path, sub_path, map_path):
         # fontTools refuses some real fonts that every renderer shows (mona.ttf states an
         # index size that overlaps its neighbour); there is no second reader of those.
         return "skip %s" % str(why)[:60]
-    (a, a_ranges, a_heads), (b, b_ranges, b_heads) = a, read(sub_path)
+    (a, a_ranges, a_heads, a_vert), (b, b_ranges, b_heads, b_vert) = a, read(sub_path)
     if a_heads != b_heads:
         return "table versions differ: %s vs %s" % (a_heads, b_heads)
     pictures = 0
@@ -129,6 +152,15 @@ def check(orig_path, sub_path, map_path):
     for key in b:
         if key not in a:
             return "a strike %s appeared" % (key,)
+    # Vertical metrics: every kept glyph that states them keeps them. Glyphs that were
+    # format 5 or 19 now carry them in their own data, so compare by value, not format.
+    for key, glyphs in a_vert.items():
+        for g, v in glyphs.items():
+            if g in new_of_old:
+                got = b_vert.get(key, {}).get(new_of_old[g])
+                if got != v:
+                    return "strike %s glyph %d vertical metrics %s vs %s" % (key, g, got, v)
+                pictures += 0
     return "ok %d %d" % (len(old_of_new), pictures)
 
 pairs = json.load(open(sys.argv[1]))

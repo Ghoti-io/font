@@ -95,9 +95,9 @@ def small(height, width, bearing_x, bearing_y, advance):
     return struct.pack(">BBbbB", height, width, bearing_x, bearing_y, advance)
 
 
-def big(height, width, bearing_x, bearing_y, advance):
+def big(height, width, bearing_x, bearing_y, advance, vertical=(0, 0, 0)):
     return struct.pack(">BBbbBbbB", height, width, bearing_x, bearing_y, advance,
-                       0, 0, 0)
+                       *vertical)
 
 
 def solid(width, height):
@@ -180,7 +180,7 @@ def build_color_cbdt(mf, out):
     for p in pngs:
         cbdt += struct.pack(">I", len(p)) + p + b"\x00" * (size - 4 - len(p))
     body = (struct.pack(">HHI", 5, 19, at) + struct.pack(">I", size)
-            + big(8, 8, 0, 8, 9) + struct.pack(">I", 2) + struct.pack(">HH", 5, 6))
+            + big(8, 8, 0, 8, 9, (5, -6, 12)) + struct.pack(">I", 2) + struct.pack(">HH", 5, 6))
     subtables.append((5, 6, body))
 
     # Index 4: glyph 8 is in the range 7..9 and not in the list.
@@ -202,7 +202,7 @@ def build_color_cbdt(mf, out):
     for p in pngs:
         cbdt += struct.pack(">I", len(p)) + p + b"\x00" * (size - 4 - len(p))
     subtables.append((1, 2, struct.pack(">HHI", 2, 19, at) + struct.pack(">I", size)
-                      + big(18, 16, 2, 17, 19)))
+                      + big(18, 16, 2, 17, 19, (-1, 2, 3))))
     at = len(cbdt)
     offsets = [0]
     for g, (bx, by) in zip((3, 4), ((-3, 20), (4, -1))):
@@ -668,7 +668,7 @@ def build_color_cbdt_bgra(mf, out):
     at = len(cbdt)
     cbdt += bgra_rows(6, width, height)
     bodies.append((6, 6, struct.pack(">HHI", 5, 5, at)
-                   + struct.pack(">I", width * height * 4) + big(height, width, 1, 6, 9)
+                   + struct.pack(">I", width * height * 4) + big(height, width, 1, 6, 9, (-3, 7, 11))
                    + struct.pack(">I", 1) + struct.pack(">H", 6)))
     # A composite: components after small metrics and a pad byte. Declined.
     at = len(cbdt)

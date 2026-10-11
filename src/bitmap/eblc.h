@@ -98,7 +98,8 @@ extern "C" {
  * @brief Bytes in a `BigGlyphMetrics`, which index formats 2 and 5 carry.
  *
  * Eight: the horizontal five and a vertical three. ::GFNT_EblcMetrics keeps only
- * the five, so this is the size on disk rather than `sizeof` anything.
+ * the five, and ::GFNT_EblcSubtable::vertical holds the three the subsetter must
+ * carry; this is the size on disk rather than `sizeof` anything.
  */
 #define GFNT_EBLC_METRICS_BYTES 8u
 
@@ -189,6 +190,7 @@ typedef struct GFNT_EblcSubtable {
   size_t body_offset;         ///< Into `EBLC`, past the `indexSubHeader`.
   uint32_t image_size;        ///< Index formats 2 and 5: bytes per glyph.
   GFNT_EblcMetrics metrics;   ///< Index formats 2 and 5: every glyph's box.
+  uint8_t vertical[3];        ///< Index formats 2 and 5: the box's vertical bearing X, bearing Y and advance, as stored.
   uint32_t sparse_count;      ///< Index formats 4 and 5: glyph ids listed.
 } GFNT_EblcSubtable;
 

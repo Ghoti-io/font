@@ -847,10 +847,14 @@ def main():
                         ("layout-gsub.ttf", "gsub"), ("layout-gpos.ttf", "gpos"),
                         ("basic.ttf", "basic"), ("variable-gvar.ttf", "variable-gvar"),
                         ("variable-hvar.ttf", "variable-hvar"),
-                        ("variable-cvar.ttf", "variable-cvar")):
+                        ("variable-cvar.ttf", "variable-cvar"),
+                        ("cff-names.otf", "cff-names"), ("cff-cid-names.otf", "cff-cid-names"),
+                        ("cff2-fds.otf", "cff2-fds"),
+                        ("variable-featurevars-nested.ttf", "featurevars-nested")):
         data = (root / "tests/data/fonts" / fixture).read_bytes()
         for options, kind in ((0x00, "renumber"), (0x01, "retain"),
-                              (0x05, "retain-unhinted"), (0x43, "restricted")):
+                              (0x05, "retain-unhinted"), (0x43, "restricted"),
+                              (0x80, "renamed"), (0x81, "retain-renamed")):
             write(corpus / ("subset/%s-%s.seed" % (label, kind)), options, data)
     return 0
 

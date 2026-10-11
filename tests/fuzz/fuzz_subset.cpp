@@ -32,13 +32,15 @@
  *
  * The first byte: bit 0 retains glyph ids, 1 skips the `GSUB` closure, 2 drops
  * hinting, 3 drops the layout tables, 4 caps the glyph limit low, 5 caps the
- * blob limit low, 6 asks for a restricted feature list.
+ * blob limit low, 6 asks for a restricted feature list, 7 renames the family (and then the
+ * subset's `name` must say so).
  */
 
 #include <cstdint>
 #include <cstring>
 
 #include <ghoti.io/font/font.h>
+#include <ghoti.io/font/name.h>
 #include <ghoti.io/font/write.h>
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
@@ -82,6 +84,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
       options.features = kFeatures;
       options.feature_count = 2;
     }
+    if (bits & 0x80u) {
+      options.family_name = "Fuzz Name";
+    }
 
     GFNT_Blob * out = nullptr;
     if (gfnt_subset(face, &options, &limits, nullptr, &out, nullptr) == GFNT_OK) {
@@ -93,6 +98,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
       size_t count = 0;
       if (gfnt_face_num_glyphs(again, &count, nullptr) != GFNT_OK || count == 0) {
         __builtin_trap();
+      }
+      if (bits & 0x80u) {
+        char * family = nullptr;
+
+        if (gfnt_face_name(again, GFNT_NAME_FAMILY, GFNT_LANGUAGE_ANY, nullptr, &family, nullptr,
+                nullptr) != GFNT_OK || !family || std::strcmp(family, "Fuzz Name") != 0) {
+          __builtin_trap();
+        }
+        gfnt_name_free(nullptr, family);
       }
       gfnt_face_free(again);
       gfnt_blob_destroy(out);

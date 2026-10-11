@@ -15,7 +15,7 @@ class arrays (format 2) in kerx, ordered pairs in kern - shaped with a dozen str
 glyphs, advances and offsets compared. Nothing is committed: every font is a function
 of its seed.
 
-Usage: kerx_random_diff.py [--seeds N] [--first K] [--table kerx|kern] [-v]
+Usage: kerx_random_diff.py [--seeds N] [--first K] [--table kerx|kern] [--apple [--ms]] [-v]
                            [--direction rtl|ttb] [--driver PATH] [--scratch DIR]
 """
 
@@ -33,6 +33,8 @@ from gsub_random_diff import u16, u32, base_font
 SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "kerx-random")
 GL = list(range(1, 9))
 KINDS = (0, 0, 1, 2, 6)
+CROSS_A, VERT_A, VAR_A = float(os.environ.get('KA_CROSS', .12)), float(os.environ.get('KA_VERT', .08)), float(os.environ.get('KA_VAR', .06))
+AKINDS = (0, 2, 3, 3)    # an Apple `kern` subtable's formats
 ATTACH = (4, 5)   # format 4 with coordinates (5 stands for anchors from `ankr`)
 DONT = 0.0
 SUBS = 3
@@ -223,13 +225,77 @@ class Gen:
             subs += u16(0, 6 + len(body), cov) + body
         return u16(0, n) + subs
 
+    def kern_apple(self, apple=True):
+        """`kern` with subtables of formats 0, 2 and 3, some malformed, behind Apple's header
+        (version 1) or Microsoft's (version 0)."""
+        r = self.r
+        n = r.randint(1, min(3, SUBS))
+        header = 8 if apple else 6
+        subs = b''
+        for _ in range(n):
+            fmt = r.choice(AKINDS)
+            cross = r.random() < CROSS_A
+            vertical = r.random() < VERT_A
+            if fmt == 0:
+                ps = self.pairs()
+                body = u16(len(ps), 0, 0, 0) + b''.join(u16(a, b) + s16(v) for (a, b), v in ps)
+            elif fmt == 2:
+                body = self.kern_format2(header)
+            else:
+                body = self.kern_format3()
+            if apple:
+                flags = (0x4000 if cross else 0) | (0x8000 if vertical else 0)
+                if r.random() < VAR_A:
+                    flags |= 0x2000       # varies with the design space: not applied
+                subs += u32(header + len(body)) + u16(flags | fmt, 0) + body
+            else:
+                flags = (0 if vertical else 1) | (4 if cross else 0)
+                subs += u16(0, header + len(body), (fmt << 8) | flags) + body
+        return (u32(0x10000, n) if apple else u16(0, n)) + subs
+
+    def kern_format2(self, header=8):
+        r = self.r
+        nl, nr = r.randint(2, 4), r.randint(2, 4)
+        row = 2 * nr
+        # Offsets count from the start of the subtable, after its header.
+        left_at = header + 8
+        lg = [g for g in GL if r.random() < .85]
+        rg = [g for g in GL if r.random() < .85]
+
+        def table(glyphs, value):
+            lo, hi = (min(glyphs), max(glyphs)) if glyphs else (1, 0)
+            return u16(lo, hi - lo + 1 if glyphs else 0) + b''.join(
+                u16(value(g) if g in glyphs else 0) for g in range(lo, hi + 1))
+        lrows = {g: r.randrange(nl) for g in lg}
+        rcols = {g: r.randrange(nr) for g in rg}
+        lt0 = table(set(lg), lambda g: 0)
+        rt0 = table(set(rg), lambda g: 0)
+        arr_at = header + 8 + len(lt0) + len(rt0)
+        lt = table(set(lg), lambda g: arr_at + lrows[g] * row)
+        rt = table(set(rg), lambda g: rcols[g] * 2)
+        arr = b''.join(s16(r.randint(-120, 120)) for _ in range(nl * nr))
+        return u16(row, left_at, left_at + len(lt), arr_at) + lt + rt + arr
+
+    def kern_format3(self):
+        r = self.r
+        glyphs = r.choice((30, 30, 30, 12, 6, 1, 0))
+        kv = r.choice((1, 2, 3, 4, 6, 0))
+        lc = r.choice((1, 2, 3, 4))
+        rc = r.choice((1, 2, 3, 4))
+        over = r.random() < .3          # classes and indices that run past their tables
+        values = b''.join(s16(r.randint(-120, 120)) for _ in range(kv))
+        left = bytes(r.randrange(lc + (2 if over else 0)) for _ in range(glyphs))
+        right = bytes(r.randrange(rc + (2 if over else 0)) for _ in range(glyphs))
+        index = bytes(r.randrange(max(1, kv) + (2 if over else 0)) for _ in range(lc * rc))
+        return u16(glyphs) + bytes([kv, lc, rc, 0]) + values + left + right + index
+
 
 def ptem_for(seed):
     return random.Random(seed * 17 + 3).randint(3, 70)
 
 
 def main(argv):
-    global KINDS, CROSS, SUBS, DONT
+    global KINDS, AKINDS, CROSS, SUBS, DONT
     seeds, first, driver, scratch, table = 200, 0, G.DRIVER, SCRATCH, "kerx"
     direction = ""
     for i, a in enumerate(argv):
@@ -239,7 +305,8 @@ def main(argv):
         elif a == "--scratch": scratch = argv[i + 1]
         elif a == "--table": table = argv[i + 1]
         elif a == "--direction": direction = argv[i + 1]
-        elif a == "--kinds": KINDS = tuple(int(x) for x in argv[i + 1].split(","))
+        elif a == "--kinds":
+            KINDS = AKINDS = tuple(int(x) for x in argv[i + 1].split(","))
         elif a == "--attach": KINDS = (4, 5)
         elif a == "--dont": DONT = float(argv[i + 1])
         elif a == "--subs": SUBS = int(argv[i + 1])
@@ -252,7 +319,8 @@ def main(argv):
         text = os.path.join(scratch, "s%d.txt" % seed)
         g = Gen(seed)
         with open(font, "wb") as h:
-            tab = g.kerx() if table == "kerx" else g.kern()
+            tab = (g.kerx() if table == "kerx" else g.kern_apple("--ms" not in argv)
+                   if "--apple" in argv else g.kern())
             extra = {table: tab}
             if g.has_ankr:
                 extra["ankr"] = g.ankr()

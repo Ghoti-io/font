@@ -448,6 +448,24 @@ std::vector<uint8_t> kern2_body(size_t header) {
   return b;
 }
 
+/**
+ * An Apple format 3 body over eight glyphs: left glyphs 1..3 in classes 1, 2, 1 and right
+ * glyphs 4 and 5 in classes 1 and 2; class 0 (every other glyph) is a class like another,
+ * and kerns where the matrix says. Four values and a three-by-three matrix of indices.
+ */
+std::vector<uint8_t> kern3_body() {
+  std::vector<uint8_t> b;
+  put_u16(b, 8);
+  b.insert(b.end(), {4, 3, 3, 0});
+  for (int16_t v : {0, -30, -60, -90}) {
+    put_s16(b, v);
+  }
+  b.insert(b.end(), {0, 1, 2, 1, 0, 0, 0, 0});     // left classes
+  b.insert(b.end(), {0, 0, 0, 0, 1, 2, 0, 0});     // right classes
+  b.insert(b.end(), {0, 0, 0, 0, 1, 2, 3, 3, 1});  // the matrix: index of the value
+  return b;
+}
+
 std::vector<uint8_t> kern_table(bool apple, const std::vector<std::pair<int, std::vector<uint8_t>>> & subs) {
   std::vector<uint8_t> t;
   if (apple) {
@@ -476,10 +494,10 @@ std::vector<uint8_t> kern_table(bool apple, const std::vector<std::pair<int, std
   return t;
 }
 
-void check_kern(bool apple, bool format2) {
-  const auto body = format2 ? kern2_body(apple ? 8 : 6)
+void check_kern(bool apple, bool format2, bool format3 = false) {
+  const auto body = format3 ? kern3_body() : format2 ? kern2_body(apple ? 8 : 6)
       : kern0_body({{1, 4, -30}, {1, 5, -31}, {2, 4, -32}, {2, 5, -34}, {3, 5, -33}});
-  const auto kern = kern_table(apple, {{format2 ? 2 : 0, body}});
+  const auto kern = kern_table(apple, {{format3 ? 3 : format2 ? 2 : 0, body}});
   Font src;
   ASSERT_EQ(src.open(glyph_font(8, {{GFNT_TAG('k', 'e', 'r', 'n'), kern}})), GFNT_OK);
   // Keep glyphs 1, 2, 4 and 5, and 6 and 7, which the class tables of format 2 do not
@@ -493,7 +511,7 @@ void check_kern(bool apple, bool format2) {
   for (uint32_t a : {1u, 2u, 6u}) {
     for (uint32_t b : {4u, 5u, 7u}) {
       expect_same(src, sub, {kFirstChar + a - 1, kFirstChar + b - 1},
-          std::string(apple ? "apple " : "ot ") + (format2 ? "f2 " : "f0 ") + std::to_string(a)
+          std::string(apple ? "apple " : "ot ") + (format3 ? "f3 " : format2 ? "f2 " : "f0 ") + std::to_string(a)
           + "," + std::to_string(b));
       const Shaped s = shape(src.face, {kFirstChar + a - 1, kFirstChar + b - 1});
       if (s.size() == 2 && s[0][2] != 500) {
@@ -511,6 +529,89 @@ TEST(SubsetLayout, KernFormat0InTheMicrosoftHeaderFollowsTheNumbering) { check_k
 TEST(SubsetLayout, KernFormat0InAppleHeaderFollowsTheNumbering) { check_kern(true, false); }
 TEST(SubsetLayout, KernFormat2InTheMicrosoftHeaderFollowsTheNumbering) { check_kern(false, true); }
 TEST(SubsetLayout, KernFormat2InAppleHeaderFollowsTheNumbering) { check_kern(true, true); }
+
+TEST(SubsetLayout, KernFormat3InAppleHeaderFollowsTheNumbering) { check_kern(true, false, true); }
+
+namespace {
+
+/**
+ * A format 3 body whose arrays cover glyphs 0..2 only, so every other glyph is in class 0:
+ * two values (0 and -55), two classes each way, left glyph 1 in left class 1 and right glyph
+ * 2 in right class 1, and the matrix [0][0] = value 1, [0][1] = index 7 (past the values),
+ * [1][0] = value 0, [1][1] = value 1. Two bytes follow the matrix that an index 7 would
+ * read as a value (-200) if it were not bounded.
+ */
+std::vector<uint8_t> kern3_short_body() {
+  std::vector<uint8_t> b;
+  put_u16(b, 3);
+  b.insert(b.end(), {2, 2, 2, 0});
+  put_s16(b, 0);
+  put_s16(b, -55);
+  b.insert(b.end(), {0, 1, 0});
+  b.insert(b.end(), {0, 0, 1});
+  b.insert(b.end(), {1, 7, 0, 1});
+  put_s16(b, -200);
+  return b;
+}
+
+/** The two advances of the pair of glyphs a and c (glyph n is the character kFirstChar + n - 1). */
+using Pair = std::pair<int64_t, int64_t>;
+
+Pair pair_advances(const Font & f, uint32_t a, uint32_t c) {
+  const Shaped s = shape(f.face, {kFirstChar + a - 1, kFirstChar + c - 1});
+  EXPECT_EQ(s.size(), 2u);
+  return s.size() == 2 ? Pair(s[0][2], s[1][2]) : Pair(0, 0);
+}
+
+}  // namespace
+
+TEST(SubsetLayout, KernFormat3ReadsGlyphsPastItsClassArraysAsClassZero) {
+  // The numbers are what HarfBuzz 10.2.0 gives for this table (tools/oracle/kerx_random_diff.py
+  // --table kern --apple holds the reading to it over random tables): a value of -55 is split
+  // -28 and -27 between the pair, and every glyph has an advance of 500.
+  const auto kern = kern_table(true, {{3, kern3_short_body()}});
+  Font src;
+  ASSERT_EQ(src.open(glyph_font(8, {{GFNT_TAG('k', 'e', 'r', 'n'), kern}})), GFNT_OK);
+  const auto kerned = Pair(472, 473);
+  const auto plain = Pair(500, 500);
+  EXPECT_EQ(pair_advances(src, 5, 6), kerned) << "class 0 against class 0, both past the arrays";
+  EXPECT_EQ(pair_advances(src, 1, 2), kerned) << "class 1 against class 1, both in the arrays";
+  EXPECT_EQ(pair_advances(src, 1, 5), plain) << "[1][0] holds value 0";
+  EXPECT_EQ(pair_advances(src, 5, 2), plain) << "[0][1] names a value that does not exist";
+  Subset sub;
+  make_subset(sub, src, {kFirstChar, kFirstChar + 1, kFirstChar + 4, kFirstChar + 5});
+  ASSERT_EQ(sub.result, GFNT_OK) << (sub.error.message ? sub.error.message : "");
+  for (uint32_t a : {1u, 2u, 5u, 6u}) {
+    for (uint32_t c : {1u, 2u, 5u, 6u}) {
+      expect_same(src, sub, {kFirstChar + a - 1, kFirstChar + c - 1},
+          "past the arrays " + std::to_string(a) + "," + std::to_string(c));
+    }
+  }
+}
+
+TEST(SubsetLayout, KernFormat3IsReadBehindTheMicrosoftHeaderToo) {
+  // HarfBuzz 10.2.0 kerns the same pairs by the same table whichever header carries it.
+  const auto kern = kern_table(false, {{3, kern3_short_body()}});
+  Font src;
+  ASSERT_EQ(src.open(glyph_font(8, {{GFNT_TAG('k', 'e', 'r', 'n'), kern}})), GFNT_OK);
+  EXPECT_EQ(pair_advances(src, 5, 6), Pair(472, 473));
+  EXPECT_EQ(pair_advances(src, 1, 2), Pair(472, 473));
+  EXPECT_EQ(pair_advances(src, 1, 5), Pair(500, 500));
+  EXPECT_EQ(pair_advances(src, 5, 2), Pair(500, 500));
+}
+
+TEST(SubsetLayout, KernFormat3InTheMicrosoftHeaderFollowsTheNumbering) { check_kern(false, false, true); }
+
+TEST(SubsetLayout, AKernSubtableThatVariesWithTheDesignSpaceIsNotApplied) {
+  // HarfBuzz skips an Apple subtable with the variation bit; so does the shaper, and the
+  // subset of it keeps shaping the same.
+  const auto kern = kern_table(true, {{0x2000 | 0, kern0_body({{1, 4, -30}})}});
+  Font src;
+  ASSERT_EQ(src.open(glyph_font(8, {{GFNT_TAG('k', 'e', 'r', 'n'), kern}})), GFNT_OK);
+  const Shaped s = shape(src.face, {kFirstChar, kFirstChar + 3});
+  ASSERT_EQ(s.size(), 2u);
+  EXPECT_EQ(s[0][2], 500);
+}
 
 TEST(SubsetLayout, AKernSubtableOfAnotherFormatIsRefused) {
   const auto kern = kern_table(false, {{1, kern0_body({{1, 4, -30}})}});

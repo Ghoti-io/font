@@ -490,7 +490,7 @@ the last advance repeats), `maxp`, `OS/2` versions 0-5 (`fsType` reported,
 `fsSelection`, the four vertical metrics, `xAvgCharWidth`, `capHeight` and
 `xHeight` from version 2, the Unicode and code-page ranges, weight and width
 class, PANOSE), `post` (format 2.0 glyph names; 1.0's standard 258; 3.0 none),
-`gasp` (advisory), `kern` format 0 and Apple's format 2 (§9.4).
+`gasp` (advisory), `kern` formats 0, 2 and 3 (§9.4).
 
 **`numGlyphs` is the minimum** across `maxp`, `loca`, `hmtx` and `CFF`'s
 `CharStrings`, and a disagreement is a diagnostic on the face (M12).
@@ -1398,7 +1398,10 @@ at `unitsPerEm` and a caller wanting pixels passes `ppem * 64 / upem`.
 
 `GPOS` pair adjustment is kerning. The `kern` table is consulted only when the
 font has no `GPOS` `kern` feature for the script, never in addition (M16), and
-its format 2 (Apple's class-based) is read as well as format 0.
+its format 2 (class-based) is read as well as format 0, and so is format 3 (a matrix of
+byte classes, behind either header; a glyph past its class arrays is in class 0, which kerns like any other). An Apple
+subtable with the variation bit (0x2000) is not applied, as in HarfBuzz; Apple's state-table
+format 1 is not read.
 
 ### 9.5 Language
 
@@ -1780,8 +1783,8 @@ verbatim. Without it they are **rewritten** for the new numbering
   format: an axis range, a varied value, and, or and not, nested to sixteen deep) is carried, its
   lookup indices renumbered; a condition of a format the specification does not define is
   `GFNT_ERR_UNSUPPORTED`. `kern` is carried in format 0 and the
-  class-based format 2, Microsoft or Apple header; another format is
-  `GFNT_ERR_UNSUPPORTED`. `GFNT_SubsetOptions::map` reports which source glyph each
+  class-based format 2, Microsoft or Apple header, and in format 3 (its two class
+  arrays rewritten for the new ids); another format is `GFNT_ERR_UNSUPPORTED`. `GFNT_SubsetOptions::map` reports which source glyph each
   subset glyph is.
 
 **`CFF ` outlines are subset too** (`src/write/subset_cff.c`), by writing the table afresh:

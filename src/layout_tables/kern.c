@@ -29,9 +29,9 @@
  * M16 names: the pair would be tightened twice.
  *
  * Format 0 subtables, horizontal and not cross-stream, in the Microsoft header
- * (version 0) and Apple's (version 1). The class-based format 2 is read in the
- * Microsoft header; Apple's state-machine formats are not, and a subtable of a
- * format this reads is added to the kerning of the pair with every other.
+ * (version 0) and Apple's (version 1). The class-based format 2 and the compact format 3 (a
+ * matrix of byte classes) are read in both; Apple's state-machine format 1 is not. A subtable of a format this reads is added to the kerning of the
+ * pair with every other.
  */
 
 #include <string.h>
@@ -108,10 +108,67 @@ static int32_t gfnt_kern_format2(const GFNT_Reader * r, size_t subtable,
   return (int16_t)gfnt_lr_u16(r, subtable + l + k, bad);
 }
 
+static uint32_t gfnt_lr_u8(const GFNT_Reader * r, size_t offset, bool * bad) {
+  uint8_t v = 0;
+
+  if (gfnt_reader_u8_at(r, offset, &v) != GFNT_OK) {
+    *bad = true;
+  }
+  return v;
+}
+
+/**
+ * One pair's kerning from a compact format 3 subtable, or 0. HarfBuzz reads it behind either
+ * header, and so does this.
+ *
+ * Each glyph has a left class and a right class (a byte each, indexed by glyph id), a
+ * pair picks a cell of the class matrix, the cell holds an index, and the index picks a
+ * value. A glyph past the class arrays is in class 0, which is a class like another: its
+ * cell is read. A class past the matrix, or an index past the values, kerns nothing.
+ */
+static int32_t gfnt_kern_format3(const GFNT_Reader * r, size_t subtable, size_t header,
+    uint32_t left, uint32_t right, bool * bad) {
+  size_t body = subtable + header;
+  uint32_t glyphs = gfnt_lr_u16(r, body, bad);
+  uint32_t values = gfnt_lr_u8(r, body + 2, bad);
+  uint32_t left_classes = gfnt_lr_u8(r, body + 3, bad);
+  uint32_t right_classes = gfnt_lr_u8(r, body + 4, bad);
+  size_t value_at = body + 6;
+  size_t left_at = value_at + 2 * (size_t)values;
+  size_t right_at = left_at + glyphs;
+  size_t index_at = right_at + glyphs;
+  uint32_t l = 0;
+  uint32_t k = 0;
+  uint32_t cell;
+  uint32_t index;
+
+  if (*bad) {
+    return 0;
+  }
+  if (left < glyphs) {
+    l = gfnt_lr_u8(r, left_at + left, bad);
+  }
+  if (right < glyphs) {
+    k = gfnt_lr_u8(r, right_at + right, bad);
+  }
+  if (*bad || l >= left_classes || k >= right_classes) {
+    return 0;
+  }
+  cell = l * right_classes + k;
+  index = gfnt_lr_u8(r, index_at + cell, bad);
+  if (*bad || index >= values) {
+    return 0;
+  }
+  return (int16_t)gfnt_lr_u16(r, value_at + 2 * (size_t)index, bad);
+}
+
 /** One subtable's value for a pair, or 0. */
 static int32_t gfnt_kern_subtable_pair(const GFNT_Reader * r, size_t cursor,
     size_t length, size_t header, uint32_t format, uint32_t left, uint32_t right,
     bool * bad) {
+  if (format == 3) {
+    return gfnt_kern_format3(r, cursor, header, left, right, bad);
+  }
   if (format == 0) {
     return gfnt_kern_format0(r, cursor, header, left, right, bad);
   }
@@ -161,7 +218,8 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
       length = gfnt_lr_u32(r, cursor, bad);
       coverage = gfnt_lr_u16(r, cursor + 4, bad);
       format = coverage & 0xFFu;
-      horizontal = !(coverage & 0x8000u);
+      // A subtable that varies with the design space (0x2000) is one HarfBuzz does not apply.
+      horizontal = !(coverage & 0x8000u) && !(coverage & 0x2000u);
       cross = (coverage & 0x4000u) != 0;
       header = 8;
     }
@@ -176,7 +234,7 @@ static void gfnt_kern_run(const GFNT_Reader * r, GFNT_LApply * c, GFNT_LBuffer *
     if (*bad || length < header) {
       break;
     }
-    if (horizontal && (format == 0 || format == 2)) {
+    if (horizontal && (format == 0 || format == 2 || format == 3)) {
       GFNT_LIter it;
 
       if (cross && !seen_cross) {

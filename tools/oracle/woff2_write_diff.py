@@ -105,8 +105,7 @@ def main(argv):
               os.path.getsize(os.path.join(SCRATCH, key(f) + ".woff2")))
              for f in present]
     print("woff2 written: %d fonts, %d compared; %d corpus fonts left out "
-          "(over %d bytes); output is %.0f%% of the input's size (Brotli is stored, "
-          "so this is the transform alone)"
+          "(over %d bytes); output is %.0f%% of the input's size"
           % (len(fonts), compared["checked"], len(everything) - len(fonts),
              max_bytes, 100.0 * sum(b for _, b in sizes) / max(1, sum(a for a, _ in sizes))))
     if compared["explained"]:

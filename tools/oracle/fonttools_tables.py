@@ -257,6 +257,21 @@ def readable(font, table, out):
         return None
 
 
+
+def condition_text(condition):
+    """A FeatureVariations condition as the library prints it."""
+    fmt = condition.Format
+    if fmt == 1:
+        return "range %d %d %d" % (condition.AxisIndex,
+                                   round(condition.FilterRangeMinValue * 16384),
+                                   round(condition.FilterRangeMaxValue * 16384))
+    if fmt in (3, 4):
+        parts = ",".join(condition_text(c) for c in condition.ConditionTable)
+        return ("and(%s)" if fmt == 3 else "or(%s)") % parts
+    if fmt == 5:
+        return "not(%s)" % condition_text(condition.ConditionTable)
+    return "format %d" % fmt
+
 def main(argv):
     if len(argv) != 3:
         sys.stderr.write("usage: fonttools_tables.py <font> <face-index>\n")
@@ -337,7 +352,7 @@ def main(argv):
 
     # FeatureVariations of GSUB and GPOS: the conditions as `range axis min max` in
     # 2.14 integers and the substitutes as the feature and its lookup indices.
-    # Only format 1 conditions are written, which is every one fontTools builds.
+    # Conditions in the library's own grammar: `range axis min max`, and(...), or(...), not(...).
     for layout in ("GSUB", "GPOS"):
         if layout not in font:
             continue
@@ -356,10 +371,7 @@ def main(argv):
             out.write("%s.fv.%d\t%d %d\n"
                       % (layout, r, len(conditions), len(substitutes)))
             for c, condition in enumerate(conditions):
-                out.write("%s.fv.%d.cond.%d\trange %d %d %d\n"
-                          % (layout, r, c, condition.AxisIndex,
-                             round(condition.FilterRangeMinValue * 16384),
-                             round(condition.FilterRangeMaxValue * 16384)))
+                out.write("%s.fv.%d.cond.%d\t%s\n" % (layout, r, c, condition_text(condition)))
             for k, substitute in enumerate(substitutes):
                 out.write("%s.fv.%d.sub.%d\tfeature %d lookups%s\n"
                           % (layout, r, k, substitute.FeatureIndex,

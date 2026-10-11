@@ -1425,7 +1425,9 @@ def _variable_cff2_font(label):
     fb.setupCFF2(glyphs, regions=CFF2_REGIONS)
     from fontTools.varLib import builder
     store = fb.font["CFF2"].cff.topDictIndex[0].VarStore.otVarStore
-    store.VarData.append(builder.buildVarData([0], None))
+    # One region, one (all-zero) row: a VarData with no row at all is written with no regions, and
+    # a `vsindex` choosing it would then blend by nothing, which is not what the glyph is for.
+    store.VarData.append(builder.buildVarData([0], [[0]], optimize=False))
     store.VarDataCount = len(store.VarData)
     return fb
 
@@ -2943,8 +2945,10 @@ def build_cff_cid3(out):
         "three": charstring(100, 100, "rmoveto", 100, "hlineto", 100, "vlineto",
             -100, "hlineto", "endchar"),
     }
+    # Three strings: the ROS registry and ordering are SIDs 391 and 392, and each Font DICT's
+    # FontName is 391 plus its number, so the third DICT names SID 393.
     table = assemble_cff(names("CFF cid3")["psName"],
-        [programs[name] for name in order], strings=["Ghoti", "Fixture"],
+        [programs[name] for name in order], strings=["Ghoti", "Fixture", "Third"],
         charset=cff_charset_ranges([(11, 0), (22, 0), (33, 0)], wide=True),
         is_cid=True,
         fdselect=cff_fdselect_format3([(0, 0), (1, 1), (2, 2)], len(order)),

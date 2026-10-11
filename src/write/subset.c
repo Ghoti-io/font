@@ -33,6 +33,8 @@
 #include <string.h>
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/metrics.h>
+#include "../bitmap/eblc.h"
+#include "../bitmap/sbix.h"
 #include "../glyf/glyf.h"
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
@@ -280,7 +282,7 @@ static GFNT_Result copy_table(const GFNT_Face * face, GFNT_Tag tag,
       "copying a table") : GFNT_OK;
 }
 
-#define MAX_OUT_TABLES 24
+#define MAX_OUT_TABLES 32
 
 typedef struct GFNT_SubsetWork {
   const GFNT_Allocator * a;
@@ -308,6 +310,7 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf vmtx;
   GFNT_WBuf vorg;
   GFNT_WBuf colr;
+  GFNT_SubsetStrikes strikes;
 } GFNT_SubsetWork;
 
 enum { B_HEAD, B_HHEA, B_MAXP, B_HMTX, B_GLYF, B_LOCA, B_CMAP };
@@ -328,6 +331,7 @@ static void work_free(GFNT_SubsetWork * w) {
   gfnt_wbuf_free(&w->vmtx);
   gfnt_wbuf_free(&w->vorg);
   gfnt_wbuf_free(&w->colr);
+  gfnt_subset_strikes_free(&w->strikes);
   w->a->free_fn(w->a->ctx, w->shape);
   w->a->free_fn(w->a->ctx, w->gsub_active);
   w->a->free_fn(w->a->ctx, w->gpos_active);
@@ -359,6 +363,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   size_t i;
   uint32_t g;
   bool retain;
+  bool outlines;
   bool rewrite_layout;
   GFNT_Result result;
 
@@ -383,7 +388,12 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
         "a count with no array");
   }
-  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_GLYF
+  // A bitmap-only sfnt (a color emoji font of PNG strikes has no outlines at all) has no
+  // glyf to rewrite, and is subset by its strikes alone.
+  outlines = gfnt_sfnt_producer(face) == GFNT_PRODUCER_GLYF;
+  if ((!outlines && !(gfnt_sfnt_producer(face) == GFNT_PRODUCER_NONE
+                      && (gfnt_face_has_cblc(face) || gfnt_face_has_eblc(face)
+                          || gfnt_face_has_sbix(face))))
       || gfnt_face_has_table(face, GFNT_TAG('f', 'v', 'a', 'r'))
       || gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
@@ -411,6 +421,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   gfnt_wbuf_init(&w.vmtx, allocator);
   gfnt_wbuf_init(&w.vorg, allocator);
   gfnt_wbuf_init(&w.colr, allocator);
+  gfnt_subset_strikes_init(&w.strikes, allocator);
 
   result = gfnt_face_num_glyphs(face, &count, error);
   if (result != GFNT_OK) {
@@ -521,11 +532,13 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   if (result != GFNT_OK) {
     goto done;
   }
-  result = gfnt_face_table_reader(face, T_GLYF, &glyf, error);
-  if (result != GFNT_OK) {
-    goto done;
+  if (outlines) {
+    result = gfnt_face_table_reader(face, T_GLYF, &glyf, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
   }
-  for (g = 0; g < count; ++g) {
+  for (g = 0; g < count && outlines; ++g) {
     if (w.keep[g]) {
       w.stack[sp++] = g;
     }
@@ -581,7 +594,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   for (i = 0; i < new_count; ++i) {
     w.offsets[i] = (uint32_t)w.bufs[B_GLYF].length;
-    if (w.old_of_new[i] != NO_GLYPH) {
+    if (outlines && w.old_of_new[i] != NO_GLYPH) {
       const uint8_t * data;
       size_t length;
 
@@ -661,6 +674,13 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   // COLR for the new numbering; CPAL below, as it is.
   result = gfnt_subset_colr(face, w.keep, w.new_of_old, count, limits, allocator, &w.colr,
       error);
+  if (result != GFNT_OK) {
+    goto done;
+  }
+
+  // Bitmap strikes, indexed again for the new numbering.
+  result = gfnt_subset_strikes(face, w.new_of_old, w.old_of_new, count, new_count, limits,
+      allocator, &w.strikes, error);
   if (result != GFNT_OK) {
     goto done;
   }
@@ -752,7 +772,8 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.os2.oom || w.post.oom || w.bufs[B_HMTX].oom || w.bufs[B_LOCA].oom
       || w.gsub.oom || w.gpos.oom || w.gdef.oom || w.kern.oom || w.vhea.oom
-      || w.vmtx.oom || w.vorg.oom || w.colr.oom) {
+      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
+      || w.strikes.cblc.oom || w.strikes.cbdt.oom || w.strikes.sbix.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "building the tables");
     goto done;
@@ -772,8 +793,10 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   ADD_BUF(T_MAXP, w.bufs[B_MAXP]);
   ADD_BUF(T_HMTX, w.bufs[B_HMTX]);
   ADD_BUF(T_CMAP, w.bufs[B_CMAP]);
-  ADD_BUF(T_LOCA, w.bufs[B_LOCA]);
-  ADD_BUF(T_GLYF, w.bufs[B_GLYF]);
+  if (outlines) {
+    ADD_BUF(T_LOCA, w.bufs[B_LOCA]);
+    ADD_BUF(T_GLYF, w.bufs[B_GLYF]);
+  }
   if (w.os2.length) {
     ADD_BUF(T_OS2, w.os2);
   }
@@ -801,6 +824,19 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.colr.length) {
     ADD_BUF(T_COLR, w.colr);
+  }
+  if (w.strikes.eblc.length && w.strikes.ebdt.length) {
+    ADD_BUF(GFNT_TAG('E', 'B', 'L', 'C'), w.strikes.eblc);
+    ADD_BUF(GFNT_TAG('E', 'B', 'D', 'T'), w.strikes.ebdt);
+    // The scaled sizes name strikes by position, and every strike stays in place.
+    ADD_SRC(GFNT_TAG('E', 'B', 'S', 'C'));
+  }
+  if (w.strikes.cblc.length && w.strikes.cbdt.length) {
+    ADD_BUF(GFNT_TAG('C', 'B', 'L', 'C'), w.strikes.cblc);
+    ADD_BUF(GFNT_TAG('C', 'B', 'D', 'T'), w.strikes.cbdt);
+  }
+  if (w.strikes.sbix.length) {
+    ADD_BUF(GFNT_TAG('s', 'b', 'i', 'x'), w.strikes.sbix);
   }
   ADD_SRC(T_CPAL);
   ADD_SRC(T_NAME);

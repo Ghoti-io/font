@@ -689,3 +689,21 @@ def build_color_cbdt_bgra(mf, out):
     mf.set_raw_table(fb, "CBLC", cblc)
     mf.set_raw_table(fb, "CBDT", bytes(cbdt))
     fb.save(out)
+
+
+def build_color_cbdt_only(mf, out):
+    """The color-cbdt strikes in a font with no outlines at all.
+
+    Noto Color Emoji is this shape: a `CBLC` and `CBDT`, a `cmap`, metrics, and no `glyf`
+    or `loca`. It is color-cbdt.ttf with those two removed, so a subsetter that insists on
+    outlines refuses it and one that reads a bitmap-only font keeps its pictures.
+    """
+    from fontTools.ttLib import TTFont
+
+    build_color_cbdt(mf, out)
+    font = TTFont(out, recalcTimestamp=False)
+    del font["glyf"]
+    del font["loca"]
+    font["head"].indexToLocFormat = 0
+    font["maxp"].tableVersion = 0x00005000
+    font.save(out)

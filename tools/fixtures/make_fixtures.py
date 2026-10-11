@@ -1583,6 +1583,11 @@ def build_color_cbdt_bgra(out):
     strike_color_fixtures.build_color_cbdt_bgra(sys.modules[__name__], out)
 
 
+def build_color_cbdt_only(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_cbdt_only(sys.modules[__name__], out)
+
+
 def build_layout_gsub_cases(out):
     import layout_fixtures
     layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
@@ -4331,6 +4336,9 @@ FIXTURES = {
         "CBDT with uncompressed premultiplied BGRA pictures under EBDT image formats "
         "1, 2, 5, 6 and 7 (and a composite, 8, which is declined), at a strike depth "
         "of 32 and under index formats 1, 3 and 5"),
+    "color-cbdt-only.ttf": (build_color_cbdt_only,
+        "color-cbdt.ttf with its glyf and loca removed: a font of pictures and no outlines, "
+        "as Noto Color Emoji is"),
     "layout-gsub.ttf": (build_layout_gsub,
         "GSUB with one of every lookup type and format: single in both formats, "
         "multiple (including to nothing), alternate, ligature, context in "

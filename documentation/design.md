@@ -1677,7 +1677,24 @@ through fontTools: for every kept base glyph the subset's graph, layers and clip
 the original's with each glyph id sent through the subsetter's own numbering, no other
 base glyph may have a record, and the palettes must be equal (27 subsets of the 10 static
 `glyf` color fonts, 6,668 glyphs, 19,716 paint nodes, 0 differences; seven breaks of the
-code are each caught). The layout tables - `GSUB`, `GPOS`, `GDEF`, the legacy
+code are each caught). **Bitmap strikes are carried** (`src/write/subset_strikes.c`):
+`EBLC`/`EBDT`, `CBLC`/`CBDT` and `sbix`. A kept glyph's bytes are copied out of the data table as
+the font stores them and indexed again, one index subtable (format 1) for each run of
+consecutive new ids that share an image format; image formats 5 and 19, whose metrics lived in
+the index being replaced, become 7 and 18 and gain big metrics (their vertical half is not
+kept). In `sbix` a `dupe` still points at its target when that is kept, in the new numbering,
+and otherwise carries the picture the chain reached; every other record is copied untouched.
+**Every strike stays**, an empty one with no glyph, because a reader chooses its strike by size
+alone and removing the larger of two would hand every glyph to the smaller (found by the gate:
+HarfBuzz measured a glyph from a different strike in the subset); only a font with no kept
+picture in any strike loses the tables. A composite bitmap glyph (`EBDT` formats 8 and 9) is
+refused by name, and `EBSC` is copied as it is (it names strikes by position, and none moves). A font with **no outlines at all** - Noto Color
+Emoji is one, a `CBLC`/`CBDT` and a `cmap` - is subset by its pictures: no `glyf` or `loca` is
+written. `make check-oracle-subset-strikes` reads original and subset back through fontTools
+(bytes, metrics and origins of every picture, the stated glyph range of every strike, the table
+versions) and shapes the same text in both with HarfBuzz: 43 fonts, 205 subsets, 92,854
+pictures, 0 differences (Noto Color Emoji at 11 MB subset to a few kilobytes; seven breaks of
+the code are each caught). The layout tables - `GSUB`, `GPOS`, `GDEF`, the legacy
 `kern` table and the vertical metrics (`vhea`, `vmtx`, `VORG`) - are carried unless
 `drop_layout` is set. With `retain_gids` the ids have not moved, so they are copied
 verbatim. Without it they are **rewritten** for the new numbering

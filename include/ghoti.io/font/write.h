@@ -226,10 +226,12 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * rewrite would have to split to keep 16-bit offsets is ::GFNT_ERR_LIMIT, and a
  * layout table with `FeatureVariations` is ::GFNT_ERR_UNSUPPORTED (set
  * ::GFNT_SubsetOptions::drop_layout to subset such a font anyway).
- * Anything else in the source is not written.
+ * Bitmap strikes (`EBLC`/`EBDT`, `CBLC`/`CBDT`, `sbix`) are carried, and a font with no
+ * outlines, a bitmap-only one, is subset by them; a composite bitmap glyph is
+ * ::GFNT_ERR_UNSUPPORTED. `EBSC` is copied. Anything else in the source is not written.
  *
  * **Not built**: `CFF`, `CFF2` and Type 1 outlines, variable fonts (`fvar`,
- * `gvar`), bitmap and colour tables, the Apple tables (`morx`, `mort`, `kerx`,
+ * `gvar`), the Apple tables (`morx`, `mort`, `kerx`,
  * `trak`, `ankr`), class-based `kern`, `cmap` format 14, and the family rename
  * the licence reading in documentation/design.md section 14.5 wants. Each is
  * refused or dropped as stated here, not approximated.

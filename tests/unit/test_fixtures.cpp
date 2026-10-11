@@ -184,6 +184,7 @@ const std::vector<Entry> & every_fixture() {
       // The color fixtures: the five shared glyphs and three layer glyphs.
       // The color bitmap strikes: .notdef and eleven, 127 and six glyphs.
       {"color-cbdt-bgra.ttf", 8},
+      {"color-cbdt-only.ttf", 12},
       {"color-cbdt-deep.ttf", 6},
       {"color-cbdt-metrics.ttf", 128},
       {"color-cbdt-sizes.ttf", 7},
@@ -800,9 +801,9 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
   // Counted, because the three branches above are only worth anything if the
   // fixture set reaches all of them: a sweep over a set that had lost its
   // multi-strike font would pass every assertion and check nothing new.
-  EXPECT_EQ(with_strikes, 21u) << "ten standalone containers, strikes.ttf, "
-      "strike-formats.ttf, strike-composite.ttf the three color-cbdt fonts and the three sbix ones";
-  EXPECT_EQ(with_many, 6u) << "strikes.ttf, the three color-cbdt fonts and the two sbix fonts have a "
+  EXPECT_EQ(with_strikes, 22u) << "ten standalone containers, strikes.ttf, "
+      "strike-formats.ttf, strike-composite.ttf the five color-cbdt fonts and the three sbix ones";
+  EXPECT_EQ(with_many, 7u) << "strikes.ttf, the color-cbdt fonts and the sbix fonts have a "
       "choice of strike; the other two EBLC fixtures have one strike each and vary "
       "how it is laid out";
 }

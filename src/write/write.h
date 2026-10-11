@@ -154,6 +154,23 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
     const uint32_t * new_of_old, size_t count, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
 
+/** The bitmap strike tables of a subset, each empty (length 0) when not carried. */
+typedef struct GFNT_SubsetStrikes {
+  GFNT_WBuf eblc, ebdt, cblc, cbdt, sbix;
+} GFNT_SubsetStrikes;
+
+void gfnt_subset_strikes_init(GFNT_SubsetStrikes * s, const GFNT_Allocator * allocator);
+void gfnt_subset_strikes_free(GFNT_SubsetStrikes * s);
+
+/**
+ * `EBLC`/`EBDT`, `CBLC`/`CBDT` and `sbix` for a new numbering: the kept glyphs' pictures,
+ * indexed again. A composite bitmap glyph is ::GFNT_ERR_UNSUPPORTED; `EBSC` is not carried.
+ */
+GFNT_Result gfnt_subset_strikes(const GFNT_Face * face, const uint32_t * new_of_old,
+    const uint32_t * old_of_new, size_t count, size_t new_count,
+    const GFNT_Limits * limits, const GFNT_Allocator * allocator, GFNT_SubsetStrikes * out,
+    GFNT_Error * error);
+
 #ifdef __cplusplus
 }
 #endif

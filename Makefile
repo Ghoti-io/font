@@ -699,7 +699,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images
+.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -981,7 +981,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images
+check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes
 check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
@@ -1172,6 +1172,10 @@ check-oracle-color-extents: $(EXAMPLES)
 check-oracle-strike-images: ## Read every picture of every color bitmap strike and diff against fontTools and Pillow
 check-oracle-strike-images: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/strike_image_diff.py --quiet
+
+check-oracle-subset-strikes: ## Subset every font with bitmap strikes and read the pictures back through fontTools and HarfBuzz
+check-oracle-subset-strikes: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools,harfbuzz -- python3 $(ORACLE)/subset_strike_diff.py --quiet
 
 check-oracle-subset-color: ## Subset every static color font and read the COLR and CPAL back through fontTools
 check-oracle-subset-color: $(EXAMPLES)

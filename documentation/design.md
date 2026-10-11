@@ -1799,9 +1799,8 @@ callers.
 
 ### 12.4 Other writers
 
-WOFF 1 (per-table zlib through `compress`, with the metadata block). BDF from
-a bitmap face, so that a fixture can be regenerated from a font this library
-subsetted. PCF and PSF writing are tools, not library (`bdftopcf` exists), and
+WOFF 1 (per-table zlib through `compress`, with the metadata block).
+
 WOFF 2 (`gfnt_write_woff2()`): the same transforms run forward - the smallest triplet
 for each point, an explicit box only where the stated one is not the points', the
 overlap bitmap when a glyph has the flag, `hmtx` without its bearings when they are
@@ -1809,6 +1808,25 @@ the glyphs' `xMin`, `loca` after `glyf` - under `compress`'s Brotli encoder (LZ7
 Huffman; no context model or static dictionary, so about a fifth larger than the
 reference encoder's). A font whose `glyf` does not parse is stored untransformed
 (version 3), not refused. One font; no collection writer.
+
+The bitmap containers (`gfnt_write_bitmap_font()`): BDF, PCF, PSF 1 and 2 and
+GNU Unifont's `.hex`, from one strike of any face that has a one-bit strike - so it
+also converts, an `EBDT` font to a BDF, a PCF to a console font. Every format is
+written from one neutral model (each glyph's box, advance and rows, the baseline, the
+(codepoint, glyph) pairs the container states or the `cmap` gives, glyph names), and
+what a format cannot say is refused with `GFNT_ERR_UNSUPPORTED` and a message
+instead of dropped: PSF and `.hex` are one cell size with no bearings, so a strike
+whose advances differ, or whose glyphs stick out of the cell, is refused; PSF 1 is 8
+wide and holds 256 or 512 glyphs; `.hex` is 16 rows and needs an encoding; PCF and
+PSF 1 hold two-byte codepoints. `make check-oracle-bitmap-write` writes the 234
+terminus PCFs, the fixtures and the 33 `EBDT` sfnts as PCF and BDF: for the PCFs and
+fixtures the dump of the written font is identical to the dump of the original
+(only the container's name differs), and Pillow, which shares no code with either
+side, reads all 542 written files the way this library does (2,995,434 fields, no
+disagreement). Two sources are refused and say why: `mona.ttf` has a glyph its strike
+gets wrong, and `wqy-zenhei.ttc` keeps its strikes in another face. PSF and `.hex`
+have no outside reader and are covered by `tests/unit/test_bitmap_write.cpp`, which
+writes every bitmap fixture as every container and reads each back.
 
 ### 12.5 The gate
 

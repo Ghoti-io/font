@@ -145,6 +145,47 @@ GFNT_API GFNT_Result gfnt_write_woff2(GFNT_Tag flavour,
     const GFNT_WriteTable * tables, size_t count, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
 
+/** The standalone bitmap containers ::gfnt_write_bitmap_font() can write. */
+typedef enum {
+  GFNT_BITMAP_FORMAT_BDF = 0, ///< Adobe BDF 2.1, text.
+  GFNT_BITMAP_FORMAT_PCF,     ///< X11 PCF, MSB first, rows padded to four bytes.
+  GFNT_BITMAP_FORMAT_PSF1,    ///< Linux console font version 1: 8 wide, 256 or 512 glyphs.
+  GFNT_BITMAP_FORMAT_PSF2,    ///< Linux console font version 2.
+  GFNT_BITMAP_FORMAT_HEX,     ///< GNU Unifont `.hex`: 16 rows, keyed by codepoint.
+  GFNT_BITMAP_FORMAT_COUNT    ///< Closes the enum for the string table's test.
+} GFNT_BitmapFormat;
+
+/**
+ * @brief Write one strike of a face as a standalone bitmap font.
+ *
+ * The face can be any that has a one-bit strike - another bitmap container, or an
+ * sfnt with `EBDT`/`EBLC` - so this converts as well as saves. What is written is
+ * what the strike states: each glyph's box, bearings, advance and rows, the
+ * baseline, and the (codepoint, glyph) pairs the container states or the `cmap`
+ * gives, with glyph names where the face has them. Nothing is invented.
+ *
+ * What a format cannot say is refused with ::GFNT_ERR_UNSUPPORTED and a message,
+ * never dropped: PSF and `.hex` have one cell size and no bearings, so a strike
+ * whose advances differ or whose glyphs do not fit the cell is refused; PSF 1 is 8
+ * pixels wide and holds 256 or 512 glyphs; `.hex` is 16 rows and needs an
+ * encoding; PCF and PSF 1 hold two-byte codepoints. A glyph with several
+ * codepoints is written once per codepoint in BDF, once in PCF (the encoding table
+ * repeats the index) and with all of them in PSF's table.
+ *
+ * @param face The face.
+ * @param strike Which strike, from 0.
+ * @param format The container to write.
+ * @param limits Caps, or NULL for the defaults.
+ * @param allocator Where the blob comes from, or NULL for the default.
+ * @param out_blob Receives the font. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID; ::GFNT_ERR_UNSUPPORTED; ::GFNT_ERR_LIMIT;
+ *   ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_write_bitmap_font(const GFNT_Face * face, size_t strike,
+    GFNT_BitmapFormat format, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
+
 /**
  * Which source glyph each glyph of a subset is.
  *

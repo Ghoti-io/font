@@ -21,9 +21,10 @@
 /**
  * @file
  *
- * Rewrite a font as an sfnt, a WOFF or a WOFF 2.
+ * Rewrite a font as an sfnt, a WOFF, a WOFF 2 or a bitmap font.
  *
  * Usage: font-convert <font> <output> sfnt|woff|woff2 [face-index]
+ *        font-convert <font> <output> bdf|pcf|psf1|psf2|hex [strike-index]
  *
  * Reads the font (any container this library reads), takes its tables as the face
  * holds them - so a WOFF or WOFF 2 input is already unwrapped - and writes them with
@@ -38,6 +39,19 @@
 
 #include <ghoti.io/font/font.h>
 #include <ghoti.io/font/write.h>
+
+/** The bitmap container a name asks for, or -1. */
+static int bitmap_format(const char * name) {
+  static const char * const names[] = {"bdf", "pcf", "psf1", "psf2", "hex"};
+  int i;
+
+  for (i = 0; i < 5; ++i) {
+    if (strcmp(name, names[i]) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
 
 int main(int argc, char ** argv) {
   GFNT_Blob * blob = NULL;
@@ -62,7 +76,9 @@ int main(int argc, char ** argv) {
   gfnt_error_clear(&error);
   result = gfnt_blob_create_file(argv[1], NULL, NULL, &blob, &error);
   if (result == GFNT_OK) {
-    result = gfnt_face_load(blob, index, NULL, NULL, &face, &error);
+    // For a bitmap format the number names a strike, and the face is the first.
+    result = gfnt_face_load(blob, bitmap_format(argv[3]) >= 0 ? 0 : index, NULL,
+        NULL, &face, &error);
   }
   if (result != GFNT_OK) {
     fprintf(stderr, "%s: %s\n", argv[1], gfnt_result_string(result));
@@ -93,6 +109,10 @@ int main(int argc, char ** argv) {
   else if (strcmp(argv[3], "woff") == 0) {
     result = gfnt_write_woff(gfnt_face_flavour(face), tables, count, NULL, NULL,
         &out, &error);
+  }
+  else if (bitmap_format(argv[3]) >= 0) {
+    result = gfnt_write_bitmap_font(face, index, (GFNT_BitmapFormat)bitmap_format(argv[3]),
+        NULL, NULL, &out, &error);
   }
   else if (strcmp(argv[3], "woff2") == 0) {
     result = gfnt_write_woff2(gfnt_face_flavour(face), tables, count, NULL, NULL,

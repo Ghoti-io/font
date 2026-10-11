@@ -138,6 +138,7 @@
 #define gfnt_bitmap_dump GHOTIIO_FONT(gfnt_bitmap_dump)
 #define gfnt_bitmap_pixel GHOTIIO_FONT(gfnt_bitmap_pixel)
 #define gfnt_color_bitmap_free GHOTIIO_FONT(gfnt_color_bitmap_free)
+#define gfnt_color_bitmap_to_8bit GHOTIIO_FONT(gfnt_color_bitmap_to_8bit)
 #define gfnt_coverage_from_bitmap GHOTIIO_FONT(gfnt_coverage_from_bitmap)
 #define gfnt_face_bitmap_encoding_at GHOTIIO_FONT(gfnt_face_bitmap_encoding_at)
 #define gfnt_face_bitmap_encoding_count GHOTIIO_FONT(gfnt_face_bitmap_encoding_count)

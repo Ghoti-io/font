@@ -313,6 +313,8 @@ static GFNT_Result gfnt_color_decode(const GFNT_Face * face,
   uint32_t height;
   uint8_t * rgba;
   bool gray;
+  bool deep;
+  size_t sample;
 
   gimg_limits_default(&limits);
   // The cap that bounds a decoded picture is the same one that bounds a
@@ -377,25 +379,26 @@ static GFNT_Result gfnt_color_decode(const GFNT_Face * face,
   format = gimg_raster_format(raster);
   if (!format || format->channel_type != GIMG_CHANNEL_UNORM
       || format->layout != GIMG_LAYOUT_INTERLEAVED
-      || format->bits_per_channel[0] != 8
+      || (format->bits_per_channel[0] != 8 && format->bits_per_channel[0] != 16)
       || !((format->channel_model == GIMG_CHANNEL_RGBA
                && format->channel_count == 4)
           || (format->channel_model == GIMG_CHANNEL_GRAY
               && format->channel_count == 1))) {
-    // image decodes a PNG to the form the file is in: RGBA8 for color and for
-    // grey with alpha, GRAY8 for grey. A 16-bit file would have to be narrowed,
-    // and narrowing is a rounding choice this library has no reference for, so it
-    // is declined by name rather than guessed at.
+    // image decodes a PNG to the form the file is in: RGBA for color and for grey
+    // with alpha, GRAY for grey, at 8 or 16 bits. Anything else is a picture this
+    // library has no reading of.
     result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
-        "a glyph picture that is not 8 bits per channel, grey or RGBA");
+        "a glyph picture that is not grey or RGBA at 8 or 16 bits per channel");
     goto done;
   }
   gray = format->channel_model == GIMG_CHANNEL_GRAY;
+  deep = format->bits_per_channel[0] == 16;
+  sample = deep ? 2u : 1u;
 
   width = gimg_raster_width(raster);
   height = gimg_raster_height(raster);
   if (!gcu_safe_mul_size((size_t)width, (size_t)height, &pixels)
-      || !gcu_safe_mul_size(pixels, 4u, &bytes)
+      || !gcu_safe_mul_size(pixels, 4u * sample, &bytes)
       || bytes > face->limits.max_raster_bytes) {
     result = gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
         "a picture larger than GFNT_Limits::max_raster_bytes allows");
@@ -408,21 +411,27 @@ static GFNT_Result gfnt_color_decode(const GFNT_Face * face,
     goto done;
   }
   {
-    // The raster's rows may be padded to its own alignment; ours are not.
+    // The raster's rows may be padded to its own alignment; ours are not. A grey
+    // sample is repeated into the three colors with an opaque alpha.
     const uint8_t * source = gimg_raster_pixels_const(raster);
     size_t source_stride = gimg_raster_stride_bytes(raster);
+    size_t row = (size_t)width * 4u * sample;
 
     for (uint32_t y = 0; y < height; ++y) {
       const uint8_t * from = source + (size_t)y * source_stride;
-      uint8_t * to = rgba + (size_t)y * width * 4u;
+      uint8_t * to = rgba + (size_t)y * row;
 
       if (!gray) {
-        memcpy(to, from, (size_t)width * 4u);
+        memcpy(to, from, row);
         continue;
       }
       for (uint32_t x = 0; x < width; ++x) {
-        to[4u * x] = to[4u * x + 1u] = to[4u * x + 2u] = from[x];
-        to[4u * x + 3u] = 255u;
+        for (size_t c = 0; c < sample; ++c) {
+          to[(4u * x) * sample + c] = from[x * sample + c];
+          to[(4u * x + 1u) * sample + c] = from[x * sample + c];
+          to[(4u * x + 2u) * sample + c] = from[x * sample + c];
+          to[(4u * x + 3u) * sample + c] = 0xFFu;
+        }
       }
     }
   }
@@ -430,10 +439,12 @@ static GFNT_Result gfnt_color_decode(const GFNT_Face * face,
   *out = (GFNT_ColorBitmap) {
     .width = width,
     .height = height,
-    .stride = (size_t)width * 4u,
+    .stride = (size_t)width * 4u * sample,
     .bearing_x = image->bearing_x,
     .bearing_y = image->origin_y + (int32_t)height,
     .advance = image->advance,
+    .bits_per_channel = deep ? 16 : 8,
+    .premultiplied = false,
     .rgba = rgba,
     .strike = image->strike,
     .allocator = face->allocator,
@@ -470,6 +481,30 @@ GFNT_Result gfnt_face_glyph_color_bitmap(const GFNT_Face * face, uint32_t glyph,
     return result;
   }
   *out_bitmap = bitmap;
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_color_bitmap_to_8bit(GFNT_ColorBitmap * bitmap) {
+  if (!bitmap || !bitmap->rgba) {
+    return GFNT_ERR_INVALID;
+  }
+  if (bitmap->bits_per_channel == 16) {
+    const uint16_t * from = (const uint16_t *)(const void *)bitmap->rgba;
+    size_t row = (size_t)bitmap->width * 4u;
+
+    // In place, front to back: an 8-bit sample is written at or before the place its
+    // 16-bit source was read from, so nothing is overwritten before it is read.
+    for (uint32_t y = 0; y < bitmap->height; ++y) {
+      const uint16_t * source = from + (size_t)y * (bitmap->stride / 2u);
+      uint8_t * to = bitmap->rgba + (size_t)y * row;
+
+      for (size_t i = 0; i < row; ++i) {
+        to[i] = (uint8_t)(source[i] >> 8);
+      }
+    }
+    bitmap->stride = row;
+    bitmap->bits_per_channel = 8;
+  }
   return GFNT_OK;
 }
 

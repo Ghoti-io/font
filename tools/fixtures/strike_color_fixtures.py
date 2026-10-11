@@ -24,6 +24,7 @@ without this file being the only opinion about them.
 
 import io
 import struct
+import zlib
 
 from PIL import Image
 
@@ -526,4 +527,71 @@ def build_color_sbix_dupes(mf, out):
     strike = (struct.pack(">HH", 20, 72) + b"".join(struct.pack(">I", o) for o in offsets)
               + bytes(body))
     mf.set_raw_table(fb, "sbix", struct.pack(">HHII", 1, 1, 1, 12) + strike)
+    fb.save(out)
+
+
+def png16(width, height, color_type, sample):
+    """A 16-bit PNG written by hand: Pillow cannot write RGBA at 16 bits.
+
+    `sample(x, y, c)` gives channel `c` of a pixel as 0..65535. Color type 0 is grey
+    (one channel), 2 is RGB, 4 grey with alpha, 6 RGBA. Filter 0 on every row, so the
+    decoded samples are exactly what `sample` returned - which is the oracle for the
+    pixels: no other decoder is asked.
+    """
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}[color_type]
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)
+        for x in range(width):
+            for c in range(channels):
+                rows += struct.pack(">H", sample(x, y, c))
+
+    def chunk(kind, data):
+        body = kind + data
+        return (struct.pack(">I", len(data)) + body
+                + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 16, color_type, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(rows), 9)) + chunk(b"IEND", b""))
+
+
+DEEP_ORDER = [".notdef"] + ["h%02d" % i for i in range(1, 6)]
+
+
+def deep_sample(glyph, x, y, c):
+    """The samples of the 16-bit pictures: every channel a different, wide value, so a
+    decoder that kept only the high byte, or swapped the bytes, is a different picture."""
+    return (glyph * 4099 + x * 7919 + y * 12289 + c * 20011) % 65536
+
+
+def build_color_cbdt_deep(mf, out):
+    """16-bit PNGs in a CBDT strike: RGBA, RGB, grey, grey with alpha, and an 8-bit one.
+
+    Glyphs 1 to 4 are the four 16-bit color types at 6 x 5 pixels, 5 is an 8-bit RGBA
+    so that one strike holds both depths. Index format 1 under image format 17, one
+    strike at 20 ppem.
+    """
+    mapping = {0x41 + i: name for i, name in enumerate(DEEP_ORDER[1:])}
+    fb = mf.truetype("CBDT Deep", [mf.subtable(4, 3, 1, mapping)], order=DEEP_ORDER,
+                     glyphs={name: mf.raw_glyph([]) for name in DEEP_ORDER},
+                     advances={name: 600 for name in DEEP_ORDER})
+    cbdt = bytearray(struct.pack(">I", 0x00030000))
+    at = len(cbdt)
+    offsets = [0]
+    for glyph, color_type in ((1, 6), (2, 2), (3, 0), (4, 4)):
+        data = png16(6, 5, color_type, lambda x, y, c, g=glyph: deep_sample(g, x, y, c))
+        cbdt += small(5, 6, 0, 5, 7) + struct.pack(">I", len(data)) + data
+        offsets.append(len(cbdt) - at)
+    data = picture(5, 6, 5, "rgba")
+    cbdt += small(5, 6, 0, 5, 7) + struct.pack(">I", len(data)) + data
+    offsets.append(len(cbdt) - at)
+    body = struct.pack(">HHI", 1, 17, at) + b"".join(struct.pack(">I", o) for o in offsets)
+    region = struct.pack(">HHI", 1, 5, 8) + body
+    cblc = (struct.pack(">II", 0x00030000, 1)
+            + struct.pack(">IIII", 8 + 48, len(region), 1, 0)
+            + line_metrics(5, -1, 7) + line_metrics(0, 0, 0)
+            + struct.pack(">HHBBBb", 1, 5, 20, 20, 32, 1) + region)
+    mf.set_raw_table(fb, "CBLC", cblc)
+    mf.set_raw_table(fb, "CBDT", bytes(cbdt))
     fb.save(out)

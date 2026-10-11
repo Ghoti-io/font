@@ -27,8 +27,8 @@
  *
  * For each color strike (`GFNT_GLYPH_BITMAP_PNG`) and each glyph it carries, writes
  * the font's own bytes to `<out-dir>/<strike>-<glyph>.img` and, with `--decode`,
- * the decoded pixels to `<out-dir>/<strike>-<glyph>.rgba` (8-bit, straight alpha,
- * rows top first with no padding). Prints one JSON line per glyph:
+ * the decoded pixels to `<out-dir>/<strike>-<glyph>.rgba` (as decoded: 8 or 16 bits
+ * a channel, native byte order, rows top first with no padding; `bits` says which). Prints one JSON line per glyph:
  *
  *   {"strike":0,"glyph":5,"format":"png","length":799,"w":136,"h":128,
  *    "bx":0,"by":101,"oy":-27,"adv":136}
@@ -186,8 +186,9 @@ int main(int argc, char ** argv) {
         result = gfnt_face_glyph_color_bitmap(face, (uint32_t)g, s, &bitmap,
             &error);
         if (result == GFNT_OK) {
-          printf(",\"dw\":%" PRIu32 ",\"dh\":%" PRIu32, bitmap.width,
-              bitmap.height);
+          printf(",\"dw\":%" PRIu32 ",\"dh\":%" PRIu32 ",\"bits\":%u,\"pre\":%s",
+              bitmap.width, bitmap.height, (unsigned)bitmap.bits_per_channel,
+              bitmap.premultiplied ? "true" : "false");
           if (write_file(dir, s, (uint32_t)g, "rgba", bitmap.rgba,
                   bitmap.height * bitmap.stride)) {
             status = 1;

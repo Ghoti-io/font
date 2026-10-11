@@ -298,22 +298,31 @@ GFNT_API GFNT_Result gfnt_face_glyph_image(const GFNT_Face * face,
     GFNT_Error * error);
 
 /**
- * @brief A color glyph decoded to pixels: 8-bit RGBA, **not** premultiplied.
+ * @brief A color glyph decoded to pixels: four channels, straight alpha unless said.
  *
- * Straight alpha, as a PNG stores it, so that nothing is lost to rounding on the
- * way here; a caller compositing premultiplied multiplies once. Rows run top
- * first, `stride` bytes apart. Unlike ::GFNT_BitmapGlyph this is **owned by the
- * caller**: decoding makes the pixels, and a face that cached every decoded glyph
- * would hold a few hundred kilobytes for each one a program ever drew.
+ * The depth is the picture's own: `bits_per_channel` is 8 for the usual 8-bit PNG and
+ * for BGRA strikes, and 16 for a 16-bit PNG, whose samples are `uint16_t` in the
+ * machine's byte order (so `stride` is `width * 8`). Nothing is narrowed on the way
+ * out; ::gfnt_color_bitmap_to_8bit() does it when a caller wants 8 bits. Channels are
+ * always R, G, B, A in that order, a grey picture repeated into the three colors.
+ *
+ * `premultiplied` is false for a PNG (straight alpha, as the file stores it, so that
+ * nothing is lost to rounding) and true for the uncompressed BGRA strikes `CBDT`
+ * defines, whose color channels are already multiplied by alpha. Rows run top first.
+ * Unlike ::GFNT_BitmapGlyph this is **owned by the caller**: decoding makes the
+ * pixels, and a face that cached every decoded glyph would hold a few hundred
+ * kilobytes for each one a program ever drew.
  */
 typedef struct GFNT_ColorBitmap {
   uint32_t width;          ///< Pixels across, from the decoded picture.
   uint32_t height;         ///< Rows.
-  size_t stride;           ///< Bytes per row: `width * 4`.
+  size_t stride;           ///< Bytes per row: `width * 4 * (bits_per_channel / 8)`.
   int32_t bearing_x;       ///< As ::GFNT_GlyphImage::bearing_x.
   int32_t bearing_y;       ///< As ::GFNT_GlyphImage::bearing_y.
   int32_t advance;         ///< As ::GFNT_GlyphImage::advance.
-  uint8_t * rgba;          ///< `height * stride` bytes, R then G then B then A.
+  uint8_t bits_per_channel; ///< 8 or 16.
+  bool premultiplied;      ///< Whether the color channels are multiplied by alpha.
+  uint8_t * rgba;          ///< `height * stride` bytes of R, G, B, A samples.
   GFNT_Strike strike;      ///< Which strike answered.
   const GFNT_Allocator * allocator; ///< What ::gfnt_color_bitmap_free() frees with.
 } GFNT_ColorBitmap;
@@ -332,6 +341,18 @@ typedef struct GFNT_ColorBitmap {
 GFNT_API GFNT_Result gfnt_face_glyph_color_bitmap(const GFNT_Face * face,
     uint32_t glyph, size_t strike, GFNT_ColorBitmap * out_bitmap,
     GFNT_Error * error);
+
+/**
+ * @brief Narrow a 16-bit bitmap to 8 bits in place.
+ *
+ * Each sample becomes its high byte, which is what `image` does
+ * (`gimg_ops_convert_bit_depth`) so the two libraries narrow alike; the result is
+ * not rounded. A bitmap already 8 bits is left alone. `stride` shrinks to match.
+ *
+ * @param bitmap A bitmap from ::gfnt_face_glyph_color_bitmap().
+ * @return ::GFNT_OK, or ::GFNT_ERR_INVALID for no bitmap.
+ */
+GFNT_API GFNT_Result gfnt_color_bitmap_to_8bit(GFNT_ColorBitmap * bitmap);
 
 /** @brief Release a ::GFNT_ColorBitmap's pixels. Harmless on a zeroed one. */
 GFNT_API void gfnt_color_bitmap_free(GFNT_ColorBitmap * bitmap);

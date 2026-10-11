@@ -33,6 +33,7 @@ the fonttools image, where Pillow is.
 import io
 import json
 import os
+import struct
 import sys
 
 from fontTools.ttLib import TTFont
@@ -163,12 +164,27 @@ def main(argv):
                      % (index, g, r["adv"], adv))
             if "dw" in r:
                 pixels += 1
-                img = Image.open(io.BytesIO(data)).convert("RGBA")
+                pil = Image.open(io.BytesIO(data))
                 with open(os.path.join(folder, "%d-%d.rgba" % (index, g)), "rb") as f:
                     mine_px = f.read()
-                if (r["dw"], r["dh"]) != img.size or mine_px != img.tobytes():
-                    note("strike %d glyph %d: pixels differ (%s vs %s)"
-                         % (index, g, (r["dw"], r["dh"]), img.size))
+                if r["bits"] == 16:
+                    # Pillow narrows RGB(A) and grey-alpha at 16 bits to 8 by taking
+                    # the high byte, so those are compared after the same narrowing;
+                    # a 16-bit grey it keeps whole (mode I;16), so that one is
+                    # compared at full depth.
+                    words = struct.unpack("<%dH" % (len(mine_px) // 2), mine_px)
+                    if pil.mode == "I;16":
+                        expected = [v for v in pil.getdata() for _ in range(3)]
+                        got = [w for i, w in enumerate(words) if i % 4 != 3]
+                        same = got == expected and all(
+                            w == 65535 for w in words[3::4])
+                    else:
+                        same = bytes(w >> 8 for w in words) == pil.convert("RGBA").tobytes()
+                else:
+                    same = mine_px == pil.convert("RGBA").tobytes()
+                if (r["dw"], r["dh"]) != pil.size or not same:
+                    note("strike %d glyph %d: pixels differ (%s vs %s, %d bits)"
+                         % (index, g, (r["dw"], r["dh"]), pil.size, r["bits"]))
             elif "decode_error" in r:
                 note("strike %d glyph %d: %s" % (index, g, r["decode_error"]))
     with open(out, "w", encoding="utf-8") as handle:

@@ -526,6 +526,91 @@ TEST(ColorBitmapExtents, EqualStrikesGoToTheFirst) {
   EXPECT_BOX(extents(font, 3, 24), 83, 250, 167, -333);
 }
 
+// ---- 16-bit pictures
+
+namespace {
+
+/** The fixture's samples: tools/fixtures/strike_color_fixtures.py deep_sample(). */
+uint16_t deep_sample(uint32_t glyph, uint32_t x, uint32_t y, uint32_t c) {
+  return static_cast<uint16_t>((glyph * 4099u + x * 7919u + y * 12289u + c * 20011u) % 65536u);
+}
+
+uint16_t word(const GFNT_ColorBitmap & b, uint32_t x, uint32_t y, uint32_t c) {
+  uint16_t v;
+  std::memcpy(&v, b.rgba + y * b.stride + (4u * x + c) * 2u, 2);
+  return v;
+}
+
+}  // namespace
+
+TEST(ColorStrikeDeep, ASixteenBitPngKeepsEverySample) {
+  Font font("color-cbdt-deep.ttf");
+  {
+    Decoded d(font, 1, 0);   // RGBA
+    ASSERT_EQ(d.result, GFNT_OK);
+    EXPECT_EQ(d.bitmap.bits_per_channel, 16);
+    EXPECT_FALSE(d.bitmap.premultiplied);
+    EXPECT_EQ(d.bitmap.stride, 6u * 8u);
+    for (uint32_t y = 0; y < 5; ++y) {
+      for (uint32_t x = 0; x < 6; ++x) {
+        for (uint32_t c = 0; c < 4; ++c) {
+          EXPECT_EQ(word(d.bitmap, x, y, c), deep_sample(1, x, y, c)) << x << "," << y << "," << c;
+        }
+      }
+    }
+  }
+  {
+    Decoded d(font, 2, 0);   // RGB: alpha is full
+    ASSERT_EQ(d.result, GFNT_OK);
+    EXPECT_EQ(word(d.bitmap, 2, 3, 1), deep_sample(2, 2, 3, 1));
+    EXPECT_EQ(word(d.bitmap, 2, 3, 3), 65535u);
+  }
+  {
+    Decoded d(font, 3, 0);   // grey: the one sample in all three colors
+    ASSERT_EQ(d.result, GFNT_OK);
+    for (uint32_t c = 0; c < 3; ++c) {
+      EXPECT_EQ(word(d.bitmap, 4, 1, c), deep_sample(3, 4, 1, 0));
+    }
+    EXPECT_EQ(word(d.bitmap, 4, 1, 3), 65535u);
+  }
+  {
+    Decoded d(font, 4, 0);   // grey with alpha
+    ASSERT_EQ(d.result, GFNT_OK);
+    EXPECT_EQ(word(d.bitmap, 1, 1, 0), deep_sample(4, 1, 1, 0));
+    EXPECT_EQ(word(d.bitmap, 1, 1, 2), deep_sample(4, 1, 1, 0));
+    EXPECT_EQ(word(d.bitmap, 1, 1, 3), deep_sample(4, 1, 1, 1));
+  }
+  {
+    Decoded d(font, 5, 0);   // an 8-bit one beside them
+    ASSERT_EQ(d.result, GFNT_OK);
+    EXPECT_EQ(d.bitmap.bits_per_channel, 8);
+    EXPECT_EQ(d.bitmap.stride, 6u * 4u);
+  }
+}
+
+TEST(ColorStrikeDeep, NarrowingTakesTheHighByteAsImageDoes) {
+  Font font("color-cbdt-deep.ttf");
+  Decoded d(font, 1, 0);
+  ASSERT_EQ(d.result, GFNT_OK);
+  ASSERT_EQ(gfnt_color_bitmap_to_8bit(&d.bitmap), GFNT_OK);
+  EXPECT_EQ(d.bitmap.bits_per_channel, 8);
+  EXPECT_EQ(d.bitmap.stride, 6u * 4u);
+  for (uint32_t y = 0; y < 5; ++y) {
+    for (uint32_t x = 0; x < 6; ++x) {
+      for (uint32_t c = 0; c < 4; ++c) {
+        EXPECT_EQ(d.bitmap.rgba[y * d.bitmap.stride + 4u * x + c], deep_sample(1, x, y, c) >> 8)
+            << x << "," << y << "," << c;
+      }
+    }
+  }
+  // Already 8 bits: left alone. No bitmap: invalid.
+  ASSERT_EQ(gfnt_color_bitmap_to_8bit(&d.bitmap), GFNT_OK);
+  EXPECT_EQ(d.bitmap.stride, 6u * 4u);
+  EXPECT_EQ(gfnt_color_bitmap_to_8bit(nullptr), GFNT_ERR_INVALID);
+  GFNT_ColorBitmap empty{};
+  EXPECT_EQ(gfnt_color_bitmap_to_8bit(&empty), GFNT_ERR_INVALID);
+}
+
 // ---- sbix
 
 TEST(SbixStrike, TheStrikeListIsInTheTablesOrder) {

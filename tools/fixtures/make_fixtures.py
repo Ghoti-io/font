@@ -1573,6 +1573,11 @@ def build_color_sbix_dupes(out):
     strike_color_fixtures.build_color_sbix_dupes(sys.modules[__name__], out)
 
 
+def build_color_cbdt_deep(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_cbdt_deep(sys.modules[__name__], out)
+
+
 def build_layout_gsub_cases(out):
     import layout_fixtures
     layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
@@ -4313,6 +4318,10 @@ FIXTURES = {
         "sbix with a chain of dupe records twelve long (HarfBuzz follows eight hops), "
         "a dupe of itself, and a dupe whose target id is above 255, so it needs both "
         "bytes of the glyph id"),
+    "color-cbdt-deep.ttf": (build_color_cbdt_deep,
+        "CBDT with 16-bit PNGs written by hand (RGBA, RGB, grey, grey with alpha) and "
+        "one 8-bit one in the same strike: a PNG's depth is the picture's, and the "
+        "decoded samples are exactly the ones written"),
     "layout-gsub.ttf": (build_layout_gsub,
         "GSUB with one of every lookup type and format: single in both formats, "
         "multiple (including to nothing), alternate, ligature, context in "

@@ -42,6 +42,7 @@
 #include <ghoti.io/font/color.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/metrics.h>
+#include <ghoti.io/font/variation.h>
 #include <ghoti.io/font/write.h>
 
 #include <gtest/gtest.h>
@@ -100,6 +101,11 @@ struct Subset {
     gfnt_face_free(face);
     gfnt_blob_destroy(blob);
     gfnt_subset_map_free(&map, nullptr);
+  }
+  /** The subset's bytes. */
+  std::vector<uint8_t> blob_bytes() const {
+    const uint8_t * d = static_cast<const uint8_t *>(gfnt_blob_data(blob));
+    return std::vector<uint8_t>(d, d + gfnt_blob_size(blob));
   }
   /** The glyph the source's @p old glyph became, or -1. */
   long new_of(uint32_t old) const {
@@ -272,9 +278,131 @@ TEST(SubsetColor, AFontWithNoColorGlyphKeptStaysWithoutAnyBase) {
   }
 }
 
-TEST(SubsetColor, ATableWithAnIndexMapIsRefusedByName) {
-  // Point the header's delta-set index map offset (byte 26) inside the table.
-  Font source("color-v1.ttf");
+namespace {
+
+/** Every node of a graph at a place: its format, numbers, glyph (as a source glyph), stops, clip. */
+struct Node {
+  int format;
+  std::vector<int32_t> v;
+  uint32_t glyph;
+  std::vector<std::vector<int32_t>> stops;
+  bool operator==(const Node & o) const {
+    return format == o.format && v == o.v && glyph == o.glyph && stops == o.stops;
+  }
+};
+
+struct Collect {
+  const GFNT_Face * face;
+  const GFNT_Variation * variation;
+  const GFNT_SubsetMap * map;     // sub glyph -> source glyph, or null for the source
+  std::vector<Node> nodes;
+};
+
+bool collect(void * user, const GFNT_ColorPaint * p, size_t) {
+  auto * c = static_cast<Collect *>(user);
+  Node n;
+  n.format = static_cast<int>(p->format);
+  n.v.assign(p->v, p->v + 6);
+  n.glyph = p->glyph;
+  if (c->map && (p->format == GFNT_PAINT_GLYPH || p->format == GFNT_PAINT_COLR_GLYPH)) {
+    n.glyph = c->map->old_of_new[p->glyph];
+  }
+  if (p->color_line) {
+    GFNT_ColorLine line{};
+    if (gfnt_face_color_line(c->face, p, &line, nullptr) == GFNT_OK) {
+      for (size_t i = 0; i < line.stop_count; ++i) {
+        GFNT_ColorStop stop{};
+        EXPECT_EQ(gfnt_face_color_stop(c->face, p, i, c->variation, &stop, nullptr), GFNT_OK);
+        n.stops.push_back({stop.offset, stop.palette_index, stop.alpha});
+      }
+    }
+  }
+  c->nodes.push_back(n);
+  return true;
+}
+
+std::vector<Node> graph_at(const GFNT_Face * face, uint32_t glyph, const GFNT_SubsetMap * map,
+    const std::vector<GFNT_F2Dot14> & coords) {
+  GFNT_Variation v{coords.data(), coords.size(), GFNT_DELTA_ROUND_HALF_UP};
+  Collect c{face, coords.empty() ? nullptr : &v, map, {}};
+  GFNT_PaintVisitor visitor = {collect, nullptr};
+  EXPECT_EQ(gfnt_face_color_paint_walk(face, glyph, c.variation, &visitor, &c, nullptr), GFNT_OK);
+  return c.nodes;
+}
+
+std::vector<std::vector<GFNT_F2Dot14>> places(const GFNT_Face * face) {
+  size_t axes = 0;
+  EXPECT_EQ(gfnt_face_axis_count(face, &axes, nullptr), GFNT_OK);
+  std::vector<std::vector<GFNT_F2Dot14>> out = {std::vector<GFNT_F2Dot14>(axes, 0)};
+  for (size_t a = 0; a < axes; ++a) {
+    for (int v : {-16384, -8192, 8192, 16384}) {
+      std::vector<GFNT_F2Dot14> c(axes, 0);
+      c[a] = static_cast<GFNT_F2Dot14>(v);
+      out.push_back(c);
+    }
+  }
+  out.push_back(std::vector<GFNT_F2Dot14>(axes, 16384));
+  out.push_back(std::vector<GFNT_F2Dot14>(axes, -16384));
+  return out;
+}
+
+}  // namespace
+
+TEST(SubsetColor, AVariableTableKeepsItsStoreAndMapAndEveryVariedValueMatchesAtEveryPlace) {
+  for (const char * name : {"color-v1-var.ttf", "color-v1-varmap.ttf", "color-v1-varnone.ttf"}) {
+    for (bool retain : {false, true}) {
+      for (std::vector<uint32_t> cps : {std::vector<uint32_t>{0x41}, std::vector<uint32_t>{0x42},
+               std::vector<uint32_t>{0x41, 0x42}}) {
+        SCOPED_TRACE(std::string(name) + (retain ? " retained" : " renumbered"));
+        Font font(name);
+        Subset sub(font.face, cps, {}, retain);
+        ASSERT_EQ(sub.result, GFNT_OK);
+        const std::vector<uint8_t> was = table_bytes(font.bytes, "COLR");
+        const std::vector<uint8_t> now = table_bytes(sub.blob_bytes(), "COLR");
+        ASSERT_GE(now.size(), 34u);
+        // The store and the map are still there.
+        // (color-v1-var.ttf has no map: the index is the store's row directly.)
+        EXPECT_EQ((was[26] | was[27] | was[28] | was[29]) != 0,
+            (now[26] | now[27] | now[28] | now[29]) != 0) << "the index map is carried";
+        EXPECT_NE((was[30] | was[31] | was[32] | was[33]), 0) << "control: the source varies";
+        EXPECT_NE((now[30] | now[31] | now[32] | now[33]), 0) << "the store is carried";
+        size_t compared = 0;
+        for (uint32_t cp : cps) {
+          uint32_t old = 0;
+          ASSERT_EQ(gfnt_face_glyph_for_codepoint(font.face, cp, &old, nullptr), GFNT_OK);
+          const long now_glyph = sub.new_of(old);
+          ASSERT_GE(now_glyph, 0);
+          for (const auto & at : places(font.face)) {
+            const auto want = graph_at(font.face, old, nullptr, at);
+            const auto got = graph_at(sub.face, static_cast<uint32_t>(now_glyph), &sub.map, at);
+            ASSERT_FALSE(want.empty());
+            EXPECT_EQ(want.size(), got.size());
+            for (size_t i = 0; i < want.size() && i < got.size(); ++i) {
+              EXPECT_TRUE(want[i] == got[i]) << "node " << i << " at place " << compared;
+            }
+            ++compared;
+          }
+          // The clip box varies too.
+          for (const auto & at : places(font.face)) {
+            GFNT_Variation v{at.data(), at.size(), GFNT_DELTA_ROUND_HALF_UP};
+            GFNT_ColorBox x{}, y{};
+            bool fx = false, fy = false;
+            ASSERT_EQ(gfnt_face_color_clip(font.face, old, &v, &x, &fx, nullptr), GFNT_OK);
+            ASSERT_EQ(gfnt_face_color_clip(sub.face, static_cast<uint32_t>(now_glyph), &v, &y,
+                          &fy, nullptr), GFNT_OK);
+            EXPECT_EQ(fx, fy);
+            EXPECT_TRUE(x.x_min == y.x_min && x.y_min == y.y_min && x.x_max == y.x_max
+                && x.y_max == y.y_max);
+          }
+        }
+        EXPECT_GT(compared, 6u);
+      }
+    }
+  }
+}
+
+TEST(SubsetColor, AnIndexMapThatRunsPastTheTableIsCorruptNotCopied) {
+  Font source("color-v1-varmap.ttf");
   const std::vector<uint8_t> colr = table_bytes(source.bytes, "COLR");
   ASSERT_GE(colr.size(), 34u);
   std::vector<uint8_t> bytes = source.bytes;
@@ -286,10 +414,14 @@ TEST(SubsetColor, ATableWithAnIndexMapIsRefusedByName) {
     }
   }
   ASSERT_GT(at, 0u);
-  bytes[at + 29] = 34;
+  // The map's count, made huge: it would run past the table.
+  const size_t map = (colr[26] << 24) | (colr[27] << 16) | (colr[28] << 8) | colr[29];
+  ASSERT_GT(map, 0u);
+  bytes[at + map + 2] = 0xFF;
+  bytes[at + map + 3] = 0xFF;
   Font font(bytes);
   Subset sub(font.face, {0x41});
-  EXPECT_EQ(sub.result, GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(sub.result, GFNT_ERR_CORRUPT);
 }
 
 TEST(SubsetColor, EveryByteOfTheTableOverwrittenGivesASubsetOrAnError) {

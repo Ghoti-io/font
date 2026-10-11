@@ -57,6 +57,28 @@ def carry(node, new_of_old):
     out["c"] = [carry(c, new_of_old) for c in node.get("c", [])]
     return out
 
+def variation(path):
+    from fontTools.ttLib import TTFont
+    font = TTFont(path, lazy=True)
+    if "COLR" not in font:
+        return None
+    table = getattr(font["COLR"], "table", None)
+    if table is None:
+        return None
+    mapping = getattr(table, "VarIndexMap", None)
+    store = getattr(table, "VarStore", None)
+    sig = [None if mapping is None else
+           (sorted(mapping.mapping.items()) if hasattr(mapping.mapping, "items")
+            else list(mapping.mapping))]
+    if store is not None:
+        regions = [[(a.StartCoord, a.PeakCoord, a.EndCoord) for a in r.VarRegionAxis]
+                   for r in store.VarRegionList.Region]
+        data = [(list(d.VarRegionIndex), [list(row) for row in d.Item]) for d in store.VarData]
+        sig.append((regions, data))
+    else:
+        sig.append(None)
+    return json.dumps(sig, default=str)
+
 def check(orig_path, sub_path, map_path):
     old_of_new = [int(l) for l in open(map_path).read().split()]
     new_of_old = {o: n for n, o in enumerate(old_of_new)}
@@ -70,6 +92,9 @@ def check(orig_path, sub_path, map_path):
             want_layers[str(new_of_old[int(g)])] = [[new_of_old[l], p] for l, p in layers]
     if (b["layers"] or {}) != want_layers:
         return "version 0 layers differ: %s vs %s" % (sorted(want_layers)[:5], sorted(b["layers"] or {})[:5])
+    # The variation data is carried whole: the same index map and the same store rows.
+    if variation(orig_path) != variation(sub_path):
+        return "variation data differs"
     nodes = 0
     if a["paints"] is not None:
         want = {str(new_of_old[int(g)]): carry(n, new_of_old)
@@ -116,7 +141,7 @@ def main(argv):
                     for n in sorted(os.listdir(color_diff.FIXTURES))
                     if n.endswith((".ttf", ".otf"))]
         fonts = [f for f in fixtures + corpus.fonts("sfnt")
-                 if color_diff.has_color_tables(f) and not color_diff.axes_of(f)]
+                 if color_diff.has_color_tables(f)]
     os.makedirs(SCRATCH, exist_ok=True)
     script = os.path.join(SCRATCH, "dump.py")
     info_path = os.path.join(SCRATCH, "info.json")

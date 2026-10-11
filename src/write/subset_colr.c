@@ -40,9 +40,11 @@
  * clip. `CPAL` is carried as it is by the caller: a palette entry's index does not
  * depend on any glyph.
  *
- * What it does not do: a table with a delta-set index map or an item variation
- * store is refused (the subsetter takes only static fonts, which have neither
- * in use), and unreferenced palette entries are not pruned.
+ * A variable table keeps its delta-set index map and item variation store whole,
+ * behind the paints: a variation index in a paint, a color line or a clip box
+ * addresses a row of the store (through the map) and names no glyph, so nothing in
+ * either is renumbered. Unreferenced palette entries, and store rows no kept paint
+ * uses, are not pruned.
  */
 
 #include <stdlib.h>
@@ -552,6 +554,9 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
   GFNT_Result r;
   size_t header, at;
   size_t v0_base_pos = 0, v0_layer_pos = 0, bgl_pos = 0, lay_pos = 0, clip_pos = 0, p_pos;
+  const uint8_t * var_map_bytes = NULL;
+  const uint8_t * var_store_bytes = NULL;
+  size_t var_map_len = 0, var_store_len = 0, var_map_pos = 0, var_store_pos = 0, tail;
 
   if (!gfnt_face_has_table(face, T_COLR)) {
     return GFNT_OK;
@@ -560,9 +565,42 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
   if (r != GFNT_OK) {
     return r;
   }
-  if (c.var_map || c.var_store) {
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, T_COLR, 0, GFNT_GLYPH_NONE,
-        "a COLR with variation data cannot be subset");
+  if (c.version >= 1 && (c.var_map || c.var_store)) {
+    const uint8_t * bytes = NULL;
+
+    if (c.var_map) {
+      uint32_t format, entry_format, n;
+      size_t head, len;
+
+      if (c.var_map >= c.length || bytes_at(&c.r, c.var_map, 2, &bytes) != GFNT_OK) {
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, T_COLR, 0, GFNT_GLYPH_NONE,
+            "a COLR delta-set index map outside the table");
+      }
+      format = rd8(&c, c.var_map);
+      entry_format = rd8(&c, (size_t)c.var_map + 1);
+      head = format == 0 ? 4u : 6u;
+      n = format == 0 ? rd16(&c, (size_t)c.var_map + 2) : rd32(&c, (size_t)c.var_map + 2);
+      len = head + (size_t)n * (((entry_format >> 4) & 3u) + 1u);
+      if (format > 1 || c.bad || len > c.length - c.var_map
+          || bytes_at(&c.r, c.var_map, len, &bytes) != GFNT_OK) {
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, T_COLR, 0, GFNT_GLYPH_NONE,
+            "a COLR delta-set index map that cannot be read");
+      }
+      var_map_bytes = bytes;
+      var_map_len = len;
+    }
+    if (c.var_store) {
+      size_t len = 0;
+
+      if (c.var_store >= c.length || bytes_at(&c.r, c.var_store, 8, &bytes) != GFNT_OK
+          || bytes_at(&c.r, c.var_store, c.length - c.var_store, &bytes) != GFNT_OK
+          || !gfnt_subset_ivs_extent(bytes, c.length - c.var_store, &len)) {
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, T_COLR, 0, GFNT_GLYPH_NONE,
+            "a COLR item variation store that cannot be read");
+      }
+      var_store_bytes = bytes;
+      var_store_len = len;
+    }
   }
   memset(&b, 0, sizeof b);
   b.c = &c;
@@ -750,6 +788,14 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
     at += clips.length;
   }
   p_pos = at;
+  tail = (p_pos + b.p.length + 3) & ~(size_t)3;
+  if (var_map_len) {
+    var_map_pos = tail;
+    tail = (tail + var_map_len + 3) & ~(size_t)3;
+  }
+  if (var_store_len) {
+    var_store_pos = tail;
+  }
 
   gfnt_wbuf_u16(out, c.version);
   gfnt_wbuf_u16(out, (uint32_t)nv0);
@@ -760,8 +806,8 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
     gfnt_wbuf_u32(out, (uint32_t)bgl_pos);
     gfnt_wbuf_u32(out, (uint32_t)lay_pos);
     gfnt_wbuf_u32(out, (uint32_t)clip_pos);
-    gfnt_wbuf_u32(out, 0);
-    gfnt_wbuf_u32(out, 0);
+    gfnt_wbuf_u32(out, (uint32_t)var_map_pos);
+    gfnt_wbuf_u32(out, (uint32_t)var_store_pos);
   }
   if (nv0) {
     gfnt_wbuf_bytes(out, recs.data, recs.length);
@@ -784,6 +830,14 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
     gfnt_wbuf_bytes(out, clips.data, clips.length);
   }
   gfnt_wbuf_bytes(out, b.p.data, b.p.length);
+  if (var_map_len) {
+    gfnt_wbuf_align(out, 4);
+    gfnt_wbuf_bytes(out, var_map_bytes, var_map_len);
+  }
+  if (var_store_len) {
+    gfnt_wbuf_align(out, 4);
+    gfnt_wbuf_bytes(out, var_store_bytes, var_store_len);
+  }
   r = out->oom ? GFNT_ERR_OOM : GFNT_OK;
 
 done:

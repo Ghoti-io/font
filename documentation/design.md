@@ -1727,13 +1727,15 @@ paint from each kept root, the glyph ids renumbered, the layers a new and shorte
 list, and the clip list rebuilt (consecutive new ids that share a box become one clip). A
 shared paint is copied once per use, because a child's offset counts forward from its
 parent. `CPAL` is copied as it is (unreferenced entries are not pruned). Twemoji at three
-characters goes from 1.3 MB to 7.6 KB and draws the same. A `COLR` with a delta-set index
-map or an item variation store is refused by name: the subsetter takes static fonts, which
-have neither in use. `make check-oracle-subset-color` reads original and subset back
+characters goes from 1.3 MB to 7.6 KB and draws the same. A variable `COLR` keeps its
+delta-set index map and item variation store whole behind the paints: a variation index in a
+paint, a color line stop or a clip box addresses a row (through the map) and names no glyph,
+so nothing in either is renumbered; the store's unused rows stay. `make check-oracle-subset-color` reads original and subset back
 through fontTools: for every kept base glyph the subset's graph, layers and clip must be
 the original's with each glyph id sent through the subsetter's own numbering, no other
-base glyph may have a record, and the palettes must be equal (27 subsets of the 10 static
-`glyf` color fonts, 6,668 glyphs, 19,716 paint nodes, 0 differences; seven breaks of the
+base glyph may have a record, the palettes must be equal, and a variable table's index map
+and store must be the original's row for row (68 subsets of 24 color fonts, `glyf`, CFF and CFF2,
+static and variable, 9,880 glyphs, 25,902 paint nodes, 0 differences; seven breaks of the
 code are each caught). **Bitmap strikes are carried** (`src/write/subset_strikes.c`):
 `EBLC`/`EBDT`, `CBLC`/`CBDT` and `sbix`. A kept glyph's bytes are copied out of the data table as
 the font stores them and indexed again, one index subtable (format 1) for each run of

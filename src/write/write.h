@@ -155,6 +155,14 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
     const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
 
 /**
+ * `SVG ` for a subset that retains its glyph ids: the documents that serve a kept glyph, each
+ * with its range, written again into @p out (left empty when there are none or the table is of
+ * a version this library does not read). With renumbered ids the table is not carried.
+ */
+GFNT_Result gfnt_subset_svg(const GFNT_Face * face, const uint8_t * keep, size_t count,
+    const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
+
+/**
  * Add to @p keep the glyphs a kept CFF glyph builds an accented character from (`seac`,
  * or `endchar` given four operands), until nothing is added.
  */

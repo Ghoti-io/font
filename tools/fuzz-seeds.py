@@ -807,6 +807,18 @@ def main():
         for options in (0x00, 0x01, 0x03, 0x07, 0x10, 0x17, 0x47, 0x0F, 0x1F):
             write_pair(corpus / ("shape/%s-%02x.seed" % (fixture, options)), options,
                        (256 * len(gsub)) // max(1, total), gsub + gpos + gdef)
+    # `SVG ` for fuzz_svg: the fixture fontTools wrote (plain and gzip documents, ranges and
+    # gaps), with and without a tight cap on what a document may inflate to.
+    svg_font = (root / "tests/data/fonts/svg-docs.ttf").read_bytes()
+    svg_count = struct.unpack(">H", svg_font[4:6])[0]
+    for i in range(svg_count):
+        entry = svg_font[12 + 16 * i:28 + 16 * i]
+        if entry[:4] == b"SVG ":
+            offset, length = struct.unpack(">II", entry[8:16])
+            svg_table = svg_font[offset:offset + length]
+            write(corpus / "svg/fixture.seed", 0x00, svg_table)
+            write(corpus / "svg/fixture-tight.seed", 0x01, svg_table)
+            write(corpus / "svg/truncated.seed", 0x00, svg_table[:len(svg_table) // 2])
     write_pair(corpus / "vartables/avar2-no-store.seed", 0x31, 0x00,
                avar2_table([[(-16384, -16384), (0, 0), (16384, 16384)], []], b""))
 

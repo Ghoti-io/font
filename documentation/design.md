@@ -6,7 +6,7 @@ and the standalone bitmap formats, rasterises an outline, and shapes text throug
 `GSUB`, `GPOS`, `kern` and Apple's `morx`/`kerx`/`trak`, with a shaper for each
 script that needs one and a bidi-aware shaping call (§9; §18 is the list and says
 what is not built). Paragraph layout is built in part (§10.8), and font discovery
-lists faces and does not match them. The `SVG ` table is not implemented;
+lists faces and does not match them. The `SVG ` table is read (`svg.h`) and not drawn;
 writing is built for the sfnt and WOFF 1 and for subsetting static TrueType fonts (§12). Layout and the script shapers
 need the `unicode` library. Reading a file, drawing an outline and applying a
 font's lookups do not.
@@ -130,7 +130,7 @@ which of them this library takes, and which of those it reads today.
 | | WOFF 2 | **implemented** (§7.1): one Brotli stream through `compress`, `glyf`/`loca` and `hmtx` transforms undone, collections rebuilt as `ttcf`; the metadata and private blocks are range-checked and not read. **Written** too (§12.4), one font at a time |
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
-| | `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
+| | `.dfont`, `.eot`, hinting | absent, §16 |
 | **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
@@ -2555,7 +2555,10 @@ file or the request names it, and nowhere is there a function that pretends.
 
 - **The TrueType hinting interpreter and any autohinter** (M3, §8.5).
 - **A WOFF 2 collection writer.**
-- **The `SVG ` table** until `text` has XML, and an SVG subset after that.
+- **Drawing or rewriting the `SVG ` table's documents.** The table is read (`svg.h`: the index, the
+  document for a glyph, gzip inflated) and carried by a subset that retains glyph ids; the documents
+  name glyph ids inside themselves, so a renumbering subset leaves the table out rather than rewrite
+  them, and an SVG renderer is the caller's.
 - **The rest of AAT** (`feat`, `kerx` format 3 and the like; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.
 - **Synthetic bold and oblique**, LCD filtering, stem darkening.

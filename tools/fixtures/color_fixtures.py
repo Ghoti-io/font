@@ -23,6 +23,9 @@ this library and, in `tools/oracle/color_diff.py`, by fontTools again.
     flags, palette labels and entry labels, colors with every alpha.
   * `color-cpal0.ttf` - the same layers over a `CPAL` version 0, which has no
     types or labels, and two palettes that share color records.
+  * `svg-docs.ttf` - an `SVG ` table of four documents over ranges and gaps: a plain one for
+    glyphs 2 to 3, a gzip one for glyph 4, a plain one for glyphs 6 to 7, and a gzip one for
+    glyph 0 (the `.notdef`), with glyph 5 and everything past 7 in no document.
   * `color-v0-edges.ttf` - version 0 layers whose boxes HarfBuzz measures in
     unexpected ways: empty layers, a scaled composite, and a side bearing that is
     not the outline's.
@@ -293,5 +296,28 @@ def build_color_v1_var(mf, out, mapped=False):
                              varIndexMap=index_map,
                              clipBoxes={"tri": clip_a, "bar": (0, 0, 500, 500)})
     font["CPAL"] = buildCPAL(_floats(PALETTES), nameTable=font["name"])
+    mf.pin(fb)
+    fb.save(out)
+
+
+def build_svg_docs(mf, out):
+    from fontTools.ttLib import newTable
+    from fontTools.ttLib.tables.S_V_G_ import SVGDocument
+
+    fb = mf.truetype("SVG documents", mf.unicode_cmap(), order=ORDER, glyphs=_glyphs(mf),
+                     advances=dict(mf.ADVANCES))
+
+    def svg(ids, text):
+        body = "".join('<g id="glyph%d"><rect width="10" height="10"/></g>' % i for i in ids)
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">%s%s</svg>' % (
+            body, text)
+    table = newTable("SVG ")
+    table.docList = [
+        SVGDocument(svg([0], "<!-- notdef -->"), 0, 0, True),
+        SVGDocument(svg([2, 3], ""), 2, 3, False),
+        SVGDocument(svg([4], "<!-- compressed -->" * 20), 4, 4, True),
+        SVGDocument(svg([6, 7], "<title>caf\u00e9</title>"), 6, 7, False),
+    ]
+    fb.font["SVG "] = table
     mf.pin(fb)
     fb.save(out)

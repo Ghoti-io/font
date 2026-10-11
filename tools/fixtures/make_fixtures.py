@@ -1722,6 +1722,11 @@ def build_color_v0(out):
     color_fixtures.build_color_v0(sys.modules[__name__], out)
 
 
+def build_svg_docs(out):
+    import color_fixtures
+    color_fixtures.build_svg_docs(sys.modules[__name__], out)
+
+
 def build_color_v0_edges(out):
     import color_fixtures
     color_fixtures.build_color_v0_edges(sys.modules[__name__], out)
@@ -4694,6 +4699,11 @@ FIXTURES = {
         "palettes of three colors with every alpha, light and dark usability "
         "flags, palette labels with one missing and entry labels with one "
         "missing - written by fontTools, which is also the oracle"),
+    "svg-docs.ttf": (build_svg_docs,
+        "An SVG table of four documents: a gzip one for glyph 0, a plain one for glyphs 2 "
+        "and 3, a gzip one for glyph 4 and a plain one with a non-ASCII character for "
+        "glyphs 6 and 7, with glyph 5 and everything past 7 in none - written by "
+        "fontTools, which is also the oracle"),
     "color-v0-edges.ttf": (build_color_v0_edges,
         "COLR version 0 layers HarfBuzz measures by what they draw: a drawn layer "
         "beside an empty one, a glyph of only empty layers, a layer that is a "

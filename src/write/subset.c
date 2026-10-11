@@ -310,6 +310,7 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf vmtx;
   GFNT_WBuf vorg;
   GFNT_WBuf colr;
+  GFNT_WBuf svg;
   GFNT_WBuf cff;
   GFNT_WBuf hvar;
   GFNT_WBuf vvar;
@@ -338,6 +339,7 @@ static void work_free(GFNT_SubsetWork * w) {
   gfnt_wbuf_free(&w->gvar);
   gfnt_wbuf_free(&w->name);
   gfnt_wbuf_free(&w->colr);
+  gfnt_wbuf_free(&w->svg);
   gfnt_wbuf_free(&w->cff);
   gfnt_wbuf_free(&w->hvar);
   gfnt_wbuf_free(&w->vvar);
@@ -437,6 +439,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   gfnt_wbuf_init(&w.vmtx, allocator);
   gfnt_wbuf_init(&w.vorg, allocator);
   gfnt_wbuf_init(&w.colr, allocator);
+  gfnt_wbuf_init(&w.svg, allocator);
   gfnt_wbuf_init(&w.cff, allocator);
   gfnt_wbuf_init(&w.hvar, allocator);
   gfnt_wbuf_init(&w.vvar, allocator);
@@ -742,6 +745,14 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     goto done;
   }
 
+  // SVG documents are named for glyph ids inside themselves, so they are carried only as they are.
+  if (retain) {
+    result = gfnt_subset_svg(face, w.keep, count, allocator, &w.svg, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+  }
+
   // Bitmap strikes, indexed again for the new numbering.
   result = gfnt_subset_strikes(face, w.new_of_old, w.old_of_new, count, new_count, limits,
       allocator, &w.strikes, error);
@@ -836,7 +847,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.os2.oom || w.post.oom || w.bufs[B_HMTX].oom || w.bufs[B_LOCA].oom
       || w.gsub.oom || w.gpos.oom || w.gdef.oom || w.kern.oom || w.vhea.oom
-      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.cff.oom || w.hvar.oom || w.vvar.oom || w.gvar.oom || w.name.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
+      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.svg.oom || w.cff.oom || w.hvar.oom || w.vvar.oom || w.gvar.oom || w.name.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
       || w.strikes.cblc.oom || w.strikes.cbdt.oom || w.strikes.sbix.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "building the tables");
@@ -891,6 +902,9 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.colr.length) {
     ADD_BUF(T_COLR, w.colr);
+  }
+  if (w.svg.length) {
+    ADD_BUF(GFNT_TAG('S', 'V', 'G', ' '), w.svg);
   }
   if (w.strikes.eblc.length && w.strikes.ebdt.length) {
     ADD_BUF(GFNT_TAG('E', 'B', 'L', 'C'), w.strikes.eblc);

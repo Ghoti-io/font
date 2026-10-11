@@ -693,14 +693,14 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
 .PHONY: fuzz-cff2 fuzz-run-cff2 fuzz-metvar fuzz-run-metvar fuzz-vartables fuzz-run-vartables
-.PHONY: fuzz-shape fuzz-run-shape fuzz-subset fuzz-run-subset fuzz-fontset fuzz-run-fontset
+.PHONY: fuzz-shape fuzz-run-shape fuzz-subset fuzz-run-subset fuzz-fontset fuzz-run-fontset fuzz-svg fuzz-run-svg
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -982,7 +982,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-rename check-oracle-strike-images check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
@@ -1180,6 +1180,10 @@ check-oracle-color-extents: $(EXAMPLES)
 check-oracle-strike-images: ## Read every picture of every color bitmap strike and diff against fontTools and Pillow
 check-oracle-strike-images: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/strike_image_diff.py --quiet
+
+check-oracle-svg: ## Read every `SVG ` document of every font that has the table and diff against fontTools
+check-oracle-svg: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/svg_diff.py --quiet
 
 check-oracle-subset-strikes: ## Subset every font with bitmap strikes and read the pictures back through fontTools and HarfBuzz
 check-oracle-subset-strikes: $(EXAMPLES)
@@ -1930,6 +1934,8 @@ $(eval $(call fuzz-rule,fuzz_subset,subset))
 # since a checksum is what a fuzzer cannot write; it checks that what is read is a fixed point of
 # writing.
 $(eval $(call fuzz-rule,fuzz_fontset,fontset))
+# fuzz_svg takes a whole `SVG ` table after an options byte and runs every reader of it.
+$(eval $(call fuzz-rule,fuzz_svg,svg))
 # fuzz_cff takes the whole `CFF ` table, because a CFF is a nest of offsets that
 # point at each other - the Top DICT at the charset and the CharStrings INDEX, the
 # Private DICT at its local subroutines *relative to itself* - and a fuzzer given
@@ -1964,7 +1970,7 @@ $(eval $(call fuzz-rule,fuzz_type1,type1))
 # input either.
 $(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
 
-FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables shape subset fontset
+FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables shape subset fontset svg
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

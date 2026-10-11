@@ -456,6 +456,9 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * shared tuples, with its offsets rebuilt, `cvar` goes with the control values it varies, and the
  * tables above are carried or rebuilt as for `CFF2`.
  *
+ * `SVG ` is carried only when ids are retained (the documents name glyph ids inside themselves): the
+ * documents that serve a kept glyph, unchanged; renumbering leaves the table out.
+ *
  * **Not built**: Type 1 outlines, a CFF with Type 1 charstrings, and `cmap` format 14. The Apple shaping tables (`morx`, `mort`, `kerx`, `trak`, `ankr`)
  * are dropped, as HarfBuzz's own subsetter drops them. Each is refused or dropped as stated
  * here, not approximated.

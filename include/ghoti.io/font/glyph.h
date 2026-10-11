@@ -70,7 +70,7 @@ typedef enum {
   GFNT_GLYPH_BITMAP_GRAY, ///< A 2-, 4- or 8-bit strike.
   GFNT_GLYPH_BITMAP_PNG,  ///< `CBDT` or `sbix` bytes, needing a decoder.
   GFNT_GLYPH_COLR_LAYERS, ///< A `COLR` v0 layer list or a v1 paint graph.
-  GFNT_GLYPH_SVG,         ///< Absent (section 16); the arm completes the enum.
+  GFNT_GLYPH_SVG,         ///< An `SVG ` document (svg.h); the outline calls return documents, not paths.
   GFNT_GLYPH_KIND_COUNT   ///< Closes the enum, so a test can check the strings.
 } GFNT_GlyphKind;
 

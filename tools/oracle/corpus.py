@@ -61,6 +61,8 @@ LISTS = {
     # Real WOFF 2 files and the W3C suite's index pages. Not sfnts, so no other
     # list selects them; see `fonttools-fetch-woff2`.
     "woff2": "fonttools-corpus-woff2",
+    # The Type 1 programs, by signature; see `fonttools-corpus-type1`.
+    "type1": "fonttools-corpus-type1",
 }
 
 

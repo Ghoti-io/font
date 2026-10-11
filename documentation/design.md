@@ -1828,6 +1828,21 @@ gets wrong, and `wqy-zenhei.ttc` keeps its strikes in another face. PSF and `.he
 have no outside reader and are covered by `tests/unit/test_bitmap_write.cpp`, which
 writes every bitmap fixture as every container and reads each back.
 
+Three writers re-wrap and do not re-encode. `gfnt_write_cff()` is the `CFF ` table
+of an OpenType font as a file of its own (byte for byte the table; a TrueType, CFF2
+or bitmap face is refused, because outlines of one kind are not converted to
+charstrings of another). `gfnt_write_type1()` writes a Type 1 face as PFA or PFB:
+the cleartext as it was, the private portion encrypted afresh with four arbitrary
+leading bytes chosen so the ciphertext cannot be mistaken for hex, the charstrings
+carried exactly, and the ASCII trailer regenerated. A `.t1` whose private portion is
+raw binary has no end of cipher, so the face holds its trailer deciphered into
+noise; the writer ends the private portion at `closefile`. `gfnt_write_gzip()` wraps
+any blob. `make check-oracle-type1-write` writes the 70 Type 1 programs of the oracle
+image (the URW base 35, as PFB and as raw-binary `.t1`) both ways and has fontTools'
+`t1Lib`, which shares no code with this library, read all 140 files: the font and
+private dictionaries and every decrypted charstring and subroutine match the
+original's.
+
 ### 12.5 The gate
 
 Every writer is proven by reading its output back. **Built:** `tests/unit/test_write.cpp`

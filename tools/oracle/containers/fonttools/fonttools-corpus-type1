@@ -1,0 +1,10 @@
+#!/bin/sh
+# The Type 1 font programs in this image, one per line: the URW base 35 as Debian
+# ships them. Selected by what they are, a PFB's first byte or a PFA's `%!` header,
+# and not by name, for the reason `fonttools-corpus` selects sfnts that way.
+find /usr/share/fonts -type f 2>/dev/null | sort | while read -r f; do
+  head=$(head -c 2 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+  case "$head" in
+    8001|2521) printf '%s\n' "$f" ;;
+  esac
+done

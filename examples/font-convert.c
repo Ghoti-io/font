@@ -25,6 +25,9 @@
  *
  * Usage: font-convert <font> <output> sfnt|woff|woff2 [face-index]
  *        font-convert <font> <output> bdf|pcf|psf1|psf2|hex [strike-index]
+ *        font-convert <font> <output> cff|pfa|pfb
+ *
+ * Any format name may carry a `.gz` suffix (`pcf.gz`), which gzips the result.
  *
  * Reads the font (any container this library reads), takes its tables as the face
  * holds them - so a WOFF or WOFF 2 input is already unwrapped - and writes them with
@@ -46,7 +49,10 @@ static int bitmap_format(const char * name) {
   int i;
 
   for (i = 0; i < 5; ++i) {
-    if (strcmp(name, names[i]) == 0) {
+    size_t n = strlen(names[i]);
+
+    if (strncmp(name, names[i], n) == 0
+        && (name[n] == '\0' || strcmp(name + n, ".gz") == 0)) {
       return i;
     }
   }
@@ -64,6 +70,8 @@ int main(int argc, char ** argv) {
   size_t count;
   size_t i;
   int status = 1;
+  char name[32] = {0};
+  int gzip = 0;
 
   if (argc < 4) {
     fprintf(stderr, "usage: %s <font> <output> sfnt|woff|woff2 [face-index]\n",
@@ -102,25 +110,45 @@ int main(int argc, char ** argv) {
     }
     tables[i] = (GFNT_WriteTable){tag, data, length};
   }
-  if (strcmp(argv[3], "sfnt") == 0) {
+  strncpy(name, argv[3], sizeof name - 1);
+  if (strlen(name) > 3 && strcmp(name + strlen(name) - 3, ".gz") == 0) {
+    name[strlen(name) - 3] = '\0';
+    gzip = 1;
+  }
+  if (strcmp(name, "cff") == 0) {
+    result = gfnt_write_cff(face, NULL, NULL, &out, &error);
+  }
+  else if (strcmp(name, "pfa") == 0 || strcmp(name, "pfb") == 0) {
+    result = gfnt_write_type1(face, name[2] == 'a' ? GFNT_TYPE1_FORMAT_PFA
+                                                   : GFNT_TYPE1_FORMAT_PFB,
+        NULL, NULL, &out, &error);
+  }
+  else if (strcmp(name, "sfnt") == 0) {
     result = gfnt_write_sfnt(gfnt_face_flavour(face), tables, count, NULL, NULL,
         &out, &error);
   }
-  else if (strcmp(argv[3], "woff") == 0) {
+  else if (strcmp(name, "woff") == 0) {
     result = gfnt_write_woff(gfnt_face_flavour(face), tables, count, NULL, NULL,
         &out, &error);
   }
-  else if (bitmap_format(argv[3]) >= 0) {
-    result = gfnt_write_bitmap_font(face, index, (GFNT_BitmapFormat)bitmap_format(argv[3]),
+  else if (bitmap_format(name) >= 0) {
+    result = gfnt_write_bitmap_font(face, index, (GFNT_BitmapFormat)bitmap_format(name),
         NULL, NULL, &out, &error);
   }
-  else if (strcmp(argv[3], "woff2") == 0) {
+  else if (strcmp(name, "woff2") == 0) {
     result = gfnt_write_woff2(gfnt_face_flavour(face), tables, count, NULL, NULL,
         &out, &error);
   }
   else {
     fprintf(stderr, "unknown output format %s\n", argv[3]);
     goto done;
+  }
+  if (result == GFNT_OK && gzip) {
+    GFNT_Blob * zipped = NULL;
+
+    result = gfnt_write_gzip(out, NULL, NULL, &zipped, &error);
+    gfnt_blob_destroy(out);
+    out = zipped;
   }
   if (result != GFNT_OK) {
     fprintf(stderr, "writing: %s\n", gfnt_result_string(result));

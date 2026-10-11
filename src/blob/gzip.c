@@ -166,3 +166,44 @@ GFNT_Result gfnt_gzip_inflate(const GFNT_Blob * in, const GFNT_Limits * limits,
   gcomp_buffer_free(NULL, inflated);
   return result;
 }
+
+/*
+ * The public ::gfnt_write_gzip() of <ghoti.io/font/write.h>, defined here because
+ * this is the one module allowed to take bytes out of a blob and to call the
+ * compression library. It does not include that header: this is tier 0 and the
+ * writers' header is not.
+ */
+GFNT_API GFNT_Result gfnt_write_gzip(const GFNT_Blob * in, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error) {
+  gcomp_options_t * options = NULL;
+  gcomp_status_t status;
+  void * packed = NULL;
+  size_t packed_length = 0;
+  GFNT_Limits defaults;
+  GFNT_Result result;
+
+  if (!in || !out_blob) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "nothing to compress, or nowhere to put it");
+  }
+  if (!limits) {
+    gfnt_limits_default(&defaults);
+    limits = &defaults;
+  }
+  if (gcomp_options_create(&options) != GCOMP_OK) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "allocating the options for a compress");
+  }
+  status = gcomp_encode_alloc(NULL, "gzip", options, gfnt_blob_data(in),
+      gfnt_blob_size(in), &packed, &packed_length);
+  gcomp_options_destroy(options);
+  if (status != GCOMP_OK) {
+    return gfnt_error_set(error,
+        status == GCOMP_ERR_MEMORY ? GFNT_ERR_OOM : GFNT_ERR_INTERNAL, 0, 0,
+        GFNT_GLYPH_NONE, gcomp_status_to_string(status));
+  }
+  result = gfnt_blob_create_memory(packed, packed_length, GFNT_BLOB_COPY, limits,
+      allocator, out_blob, error);
+  gcomp_buffer_free(NULL, packed);
+  return result;
+}

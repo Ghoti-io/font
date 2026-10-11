@@ -130,6 +130,13 @@ struct GFNT_Face {
   size_t directory_offset;          ///< Where this face's offset table is.
   GFNT_SfntTable * tables;          ///< Directory entries, in file order.
   size_t table_count;               ///< How many.
+  /**
+   * Type 1 only: where the private portion's plaintext begins in the derived
+   * program. Before it is the cleartext, and for a PFB the ASCII trailer that the
+   * container keeps after the binary segment, joined on in file order; a writer
+   * that re-wraps the program needs the boundary and cannot find it by looking.
+   */
+  size_t type1_private;
 
   /**
    * Guards every cache below, and nothing else.

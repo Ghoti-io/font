@@ -145,6 +145,68 @@ GFNT_API GFNT_Result gfnt_write_woff2(GFNT_Tag flavour,
     const GFNT_WriteTable * tables, size_t count, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
 
+/**
+ * @brief The bare CFF an OpenType font carries, as a file of its own.
+ *
+ * The `CFF ` table's bytes, which is what a `.cff` file is. A face without one
+ * - TrueType outlines, CFF2, a bitmap font - is ::GFNT_ERR_UNSUPPORTED: outlines of
+ * one kind are not converted to charstrings of another.
+ *
+ * @param face The face.
+ * @param limits Caps, or NULL for the defaults.
+ * @param allocator Where the blob comes from, or NULL for the default.
+ * @param out_blob Receives the CFF. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID; ::GFNT_ERR_UNSUPPORTED; ::GFNT_ERR_LIMIT;
+ *   ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_write_cff(const GFNT_Face * face,
+    const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    GFNT_Blob ** out_blob, GFNT_Error * error);
+
+/** How ::gfnt_write_type1() frames a Type 1 program. */
+typedef enum {
+  GFNT_TYPE1_FORMAT_PFA = 0, ///< PostScript text, the private portion as hex.
+  GFNT_TYPE1_FORMAT_PFB,     ///< Adobe's segmented binary container.
+  GFNT_TYPE1_FORMAT_COUNT    ///< Closes the enum for the string table's test.
+} GFNT_Type1Format;
+
+/**
+ * @brief A Type 1 face as a PFA or PFB file.
+ *
+ * The cleartext header is written as it was and the private portion, which is the
+ * part Adobe's `eexec` cipher hides, is encrypted afresh with four arbitrary
+ * leading bytes; the charstrings inside it are carried exactly as the font stored
+ * them. So this converts between PFA and PFB, and rewrites a `.pfb.gz` plain. A face
+ * that is not Type 1 is ::GFNT_ERR_UNSUPPORTED: there is no conversion from other
+ * outlines.
+ *
+ * @param face The face.
+ * @param format PFA or PFB.
+ * @param limits Caps, or NULL for the defaults.
+ * @param allocator Where the blob comes from, or NULL for the default.
+ * @param out_blob Receives the program. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID; ::GFNT_ERR_UNSUPPORTED;
+ *   ::GFNT_ERR_CORRUPT; ::GFNT_ERR_LIMIT; ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_write_type1(const GFNT_Face * face, GFNT_Type1Format format,
+    const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    GFNT_Blob ** out_blob, GFNT_Error * error);
+
+/**
+ * @brief Compress a blob as gzip, which is how a PCF or PSF usually ships.
+ *
+ * @param in The bytes.
+ * @param limits Caps, or NULL for the defaults.
+ * @param allocator Where the blob comes from, or NULL for the default.
+ * @param out_blob Receives the gzip stream. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID; ::GFNT_ERR_LIMIT; ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_write_gzip(const GFNT_Blob * in, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
+
 /** The standalone bitmap containers ::gfnt_write_bitmap_font() can write. */
 typedef enum {
   GFNT_BITMAP_FORMAT_BDF = 0, ///< Adobe BDF 2.1, text.

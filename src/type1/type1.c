@@ -380,6 +380,7 @@ GFNT_Result gfnt_type1_derive(GFNT_Face * face, GFNT_Error * error) {
   // One program, cleartext then plaintext, which is what the font would have
   // been if nobody had encrypted half of it. Every offset this module records is
   // into these bytes.
+  face->type1_private = clear.length;
   if (!gfnt_buffer_add(&clear, cipher.data, cipher.length)) {
     gfnt_buffer_free(&clear);
     gfnt_buffer_free(&cipher);

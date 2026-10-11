@@ -192,8 +192,9 @@ RUN chmod +x /usr/local/bin/fonttools-fetch-bungee \
 # the fontTools and Brotli already in the image. Debian packages none. Under
 # /usr/share/fonts, where the sfnt lists walk, but by signature: a `wOF2` file is not
 # an sfnt and no list selects it.
-COPY fonttools-fetch-woff2 fonttools-corpus-woff2 /usr/local/bin/
+COPY fonttools-fetch-woff2 fonttools-corpus-woff2 fonttools-corpus-type1 /usr/local/bin/
 RUN chmod +x /usr/local/bin/fonttools-fetch-woff2 /usr/local/bin/fonttools-corpus-woff2 \
+      /usr/local/bin/fonttools-corpus-type1 \
     && fonttools-fetch-woff2
 
 # Wine puts its fonts in /usr/share/wine/fonts, which is not /usr/share/fonts, so

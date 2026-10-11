@@ -159,6 +159,13 @@ typedef struct GFNT_FontRecord {
    * `italicAngle`, negated), or 0 when the face does not state one.
    */
   GFNT_F16Dot16 oblique_angle;
+  /**
+   * The file's size and modification time (nanoseconds since 1970) when the scan read it, so that
+   * a set kept between runs can tell which of its records are out of date
+   * (::gfnt_fontset_record_current()). Zero for a record not made from a file.
+   */
+  uint64_t file_size;
+  int64_t file_mtime_ns;
 } GFNT_FontRecord;
 
 /**
@@ -306,6 +313,59 @@ GFNT_API const GFNT_FontSkip * gfnt_fontset_skip_at(const GFNT_FontSet * set,
  */
 GFNT_API GFNT_Result gfnt_fontset_resolve_alias(const GFNT_FontSet * set,
     const char * name, const char ** out_target, GFNT_Error * error);
+
+/**
+ * @brief Whether a record's file is as it was when the scan read it.
+ *
+ * Compares the file's size and modification time with the record's. A file that is gone, or that
+ * cannot be examined, is not current. It reads nothing of the file.
+ *
+ * @param record A record of a set.
+ * @param out_current Receives the answer.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK or ::GFNT_ERR_INVALID.
+ */
+GFNT_API GFNT_Result gfnt_fontset_record_current(const GFNT_FontRecord * record,
+    bool * out_current, GFNT_Error * error);
+
+/**
+ * @brief Write a set as bytes, to be read back by ::gfnt_fontset_deserialize().
+ *
+ * The faces and aliases, with every field of every record, so that a scan of two thousand files
+ * is done once and kept. The skips are not kept (they say what a particular walk could not read).
+ * The form is versioned, little-endian and ends in a checksum; it is not a format to share between
+ * machines, since the paths in it are the ones of the machine that scanned.
+ *
+ * Call it with a NULL @p out and a zero @p capacity to learn the size.
+ *
+ * @param set The set.
+ * @param out Where to write, or NULL.
+ * @param capacity How many bytes @p out holds.
+ * @param out_length Receives the size the form needs, whether or not it fitted.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, or ::GFNT_ERR_LIMIT when @p capacity is short.
+ */
+GFNT_API GFNT_Result gfnt_fontset_serialize(const GFNT_FontSet * set, uint8_t * out,
+    size_t capacity, size_t * out_length, GFNT_Error * error);
+
+/**
+ * @brief Read a set back from ::gfnt_fontset_serialize()'s bytes.
+ *
+ * Nothing is trusted: every length is checked against the bytes left, a string with a NUL in it, a
+ * count that could not fit, a value out of range, a form of another version and a checksum that
+ * does not match are each refused, and a set is made only from bytes that pass all of them. The
+ * files are not examined; ::gfnt_fontset_record_current() asks whether each is as it was.
+ *
+ * @param data The bytes.
+ * @param length How many.
+ * @param allocator Allocator for the set, or NULL for the default.
+ * @param out_set Receives the set. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_FORMAT for bytes that are not a serialised
+ *   set, ::GFNT_ERR_UNSUPPORTED for another version of the form, ::GFNT_ERR_CORRUPT, ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_fontset_deserialize(const uint8_t * data, size_t length,
+    const GFNT_Allocator * allocator, GFNT_FontSet ** out_set, GFNT_Error * error);
 
 /**
  * @brief Release a set. NULL is ignored.

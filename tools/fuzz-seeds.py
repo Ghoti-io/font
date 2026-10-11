@@ -856,6 +856,31 @@ def main():
                               (0x05, "retain-unhinted"), (0x43, "restricted"),
                               (0x80, "renamed"), (0x81, "retain-renamed")):
             write(corpus / ("subset/%s-%s.seed" % (label, kind)), options, data)
+
+    # A kept font set: two faces and an alias. The harness takes the body after its options
+    # byte and adds the magic and the checksum itself.
+    def lstr(text):
+        raw = text.encode()
+        return struct.pack("<I", len(raw)) + raw
+
+    def face(path, family, style, legacy, index, slant, axes):
+        out = lstr(path) + lstr(family) + lstr(style)
+        out += bytes([1 if legacy else 0]) + lstr(legacy or "")
+        out += struct.pack("<QHH", index, 400, 5) + bytes([slant])
+        out += struct.pack("<I", 0x00010000) + struct.pack("<4I", 1, 0, 0, 0)
+        out += struct.pack("<i", 14 << 16)
+        for present, lo, hi in axes:
+            out += bytes([present]) + struct.pack("<ii", lo << 16, hi << 16)
+        out += struct.pack("<Qq", 1234, 1700000000000000000)
+        return out
+    no_axes = [(0, 0, 0)] * 4
+    body = struct.pack("<II", 2, 1)
+    body += face("/fonts/a.ttf", "Alpha", "Regular", None, 0, 0, no_axes)
+    body += face("/fonts/b.ttf", "Beta", "Italic", "Beta Legacy", 1, 1,
+                 [(1, 100, 900), (1, 75, 125), (0, 0, 0), (0, 0, 0)])
+    body += lstr("sans-serif") + lstr("Alpha")
+    write(corpus / "fontset/two-faces.seed", 0, body)
+    write(corpus / "fontset/empty.seed", 0, struct.pack("<II", 0, 0))
     return 0
 
 

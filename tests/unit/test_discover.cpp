@@ -11,6 +11,7 @@
 #endif
 
 #include "test_helpers.h"
+#include "failing_allocator.h"
 
 #include <ghoti.io/cutil/dir.h>
 #include <ghoti.io/cutil/env.h>
@@ -1090,6 +1091,258 @@ TEST(Discover, SystemEmptyWhenDirectoriesAreAbsent) {
 }
 
 #endif
+
+// --- keeping a set -------------------------------------------------------------------
+
+namespace {
+
+/** A tree holding a variable font, a collection and a bitmap font, with an alias and a fonts.dir. */
+bool keep_tree(TempTree & tree) {
+  return tree.ok()
+      && copy_file(gfnttest::data("fonts/variable-gvar.ttf"), tree.child("variable.ttf"))
+      && copy_file(gfnttest::data("fonts/collection.ttc"), tree.child("collection.ttc"))
+      && copy_file(gfnttest::data("fonts/cff-names.otf"), tree.child("names.otf"))
+      && copy_file(gfnttest::data("fonts/bitmap.pcf"), tree.child("bitmap.pcf"));
+}
+
+std::vector<uint8_t> serialised(const GFNT_FontSet * set) {
+  size_t need = 0;
+  EXPECT_EQ(gfnt_fontset_serialize(set, nullptr, 0, &need, nullptr), GFNT_ERR_LIMIT);
+  std::vector<uint8_t> bytes(need);
+  size_t wrote = 0;
+  EXPECT_EQ(gfnt_fontset_serialize(set, bytes.data(), bytes.size(), &wrote, nullptr), GFNT_OK);
+  EXPECT_EQ(wrote, need);
+  return bytes;
+}
+
+void expect_same_record(const GFNT_FontRecord * a, const GFNT_FontRecord * b) {
+  EXPECT_STREQ(a->path, b->path);
+  EXPECT_STREQ(a->family, b->family);
+  EXPECT_STREQ(a->style, b->style);
+  EXPECT_EQ(a->legacy_family == nullptr, b->legacy_family == nullptr);
+  if (a->legacy_family && b->legacy_family) {
+    EXPECT_STREQ(a->legacy_family, b->legacy_family);
+  }
+  EXPECT_EQ(a->index, b->index);
+  EXPECT_EQ(a->weight, b->weight);
+  EXPECT_EQ(a->width, b->width);
+  EXPECT_EQ(a->slant, b->slant);
+  EXPECT_EQ(a->flavour, b->flavour);
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(a->unicode_range[i], b->unicode_range[i]);
+  }
+  EXPECT_EQ(a->oblique_angle, b->oblique_angle);
+  const GFNT_FontAxisRange * ax[2][4] = {
+      {&a->wght_axis, &a->wdth_axis, &a->slnt_axis, &a->ital_axis},
+      {&b->wght_axis, &b->wdth_axis, &b->slnt_axis, &b->ital_axis}};
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_EQ(ax[0][i]->present, ax[1][i]->present);
+    EXPECT_EQ(ax[0][i]->min, ax[1][i]->min);
+    EXPECT_EQ(ax[0][i]->max, ax[1][i]->max);
+  }
+  EXPECT_EQ(a->file_size, b->file_size);
+  EXPECT_EQ(a->file_mtime_ns, b->file_mtime_ns);
+}
+
+}  // namespace
+
+TEST(DiscoverKeep, ASetComesBackWithEveryFieldOfEveryRecordAndAlias) {
+  TempTree tree;
+  ASSERT_TRUE(keep_tree(tree));
+  const GFNT_FontAlias aliases[] = {{"sans-serif", "Ghoti Fixture Basic"}, {"mono", "Other"}};
+  Set held;
+  ASSERT_EQ(scan_one(tree.path(), aliases, 2, &held.set, nullptr), GFNT_OK);
+  ASSERT_GE(gfnt_fontset_count(held.set), 4u);
+  const std::vector<uint8_t> bytes = serialised(held.set);
+  Set back;
+  ASSERT_EQ(gfnt_fontset_deserialize(bytes.data(), bytes.size(), nullptr, &back.set, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_fontset_count(back.set), gfnt_fontset_count(held.set));
+  for (size_t i = 0; i < gfnt_fontset_count(held.set); ++i) {
+    expect_same_record(gfnt_fontset_at(held.set, i), gfnt_fontset_at(back.set, i));
+  }
+  ASSERT_EQ(gfnt_fontset_alias_count(back.set), gfnt_fontset_alias_count(held.set));
+  for (size_t i = 0; i < gfnt_fontset_alias_count(held.set); ++i) {
+    EXPECT_STREQ(gfnt_fontset_alias_at(back.set, i)->name, gfnt_fontset_alias_at(held.set, i)->name);
+    EXPECT_STREQ(gfnt_fontset_alias_at(back.set, i)->target, gfnt_fontset_alias_at(held.set, i)->target);
+  }
+  // The control: the set has the things that are easy to drop.
+  bool variable = false;
+  bool legacy_or_wide = false;
+  for (size_t i = 0; i < gfnt_fontset_count(held.set); ++i) {
+    variable = variable || gfnt_fontset_at(held.set, i)->wght_axis.present;
+    legacy_or_wide = legacy_or_wide || gfnt_fontset_at(held.set, i)->file_size > 0;
+  }
+  EXPECT_TRUE(variable);
+  EXPECT_TRUE(legacy_or_wide);
+  EXPECT_EQ(serialised(back.set), bytes) << "serialising what was read back gives the same bytes";
+}
+
+TEST(DiscoverKeep, ABufferTooShortIsReportedWithTheSizeNeeded) {
+  TempTree tree;
+  ASSERT_TRUE(keep_tree(tree));
+  Set held;
+  ASSERT_EQ(scan_one(tree.path(), nullptr, 0, &held.set, nullptr), GFNT_OK);
+  const std::vector<uint8_t> bytes = serialised(held.set);
+  std::vector<uint8_t> small(bytes.size() - 1);
+  size_t need = 0;
+  EXPECT_EQ(gfnt_fontset_serialize(held.set, small.data(), small.size(), &need, nullptr), GFNT_ERR_LIMIT);
+  EXPECT_EQ(need, bytes.size());
+  EXPECT_EQ(gfnt_fontset_serialize(nullptr, nullptr, 0, &need, nullptr), GFNT_ERR_INVALID);
+}
+
+TEST(DiscoverKeep, AnEmptySetRoundTrips) {
+  TempTree tree;
+  ASSERT_TRUE(tree.ok());
+  Set held;
+  ASSERT_EQ(scan_one(tree.path(), nullptr, 0, &held.set, nullptr), GFNT_OK);
+  const std::vector<uint8_t> bytes = serialised(held.set);
+  Set back;
+  ASSERT_EQ(gfnt_fontset_deserialize(bytes.data(), bytes.size(), nullptr, &back.set, nullptr), GFNT_OK);
+  EXPECT_EQ(gfnt_fontset_count(back.set), 0u);
+}
+
+TEST(DiscoverKeep, EveryTruncationAndEveryChangedByteIsRefused) {
+  TempTree tree;
+  ASSERT_TRUE(keep_tree(tree));
+  Set held;
+  ASSERT_EQ(scan_one(tree.path(), nullptr, 0, &held.set, nullptr), GFNT_OK);
+  const std::vector<uint8_t> bytes = serialised(held.set);
+  for (size_t cut = 0; cut < bytes.size(); ++cut) {
+    GFNT_FontSet * set = nullptr;
+    EXPECT_NE(gfnt_fontset_deserialize(bytes.data(), cut, nullptr, &set, nullptr), GFNT_OK)
+        << "cut at " << cut;
+    EXPECT_EQ(set, nullptr);
+  }
+  for (size_t at = 0; at < bytes.size(); ++at) {
+    std::vector<uint8_t> broken = bytes;
+    broken[at] ^= 0x5A;
+    GFNT_FontSet * set = nullptr;
+    EXPECT_NE(gfnt_fontset_deserialize(broken.data(), broken.size(), nullptr, &set, nullptr), GFNT_OK)
+        << "byte " << at;
+    EXPECT_EQ(set, nullptr);
+  }
+}
+
+TEST(DiscoverKeep, ValuesTheChecksumCannotCatchAreRefusedOnTheirOwn) {
+  // A writer that is wrong but self-consistent: the checksum is right, the content is not.
+  TempTree tree;
+  ASSERT_TRUE(keep_tree(tree));
+  Set held;
+  ASSERT_EQ(scan_one(tree.path(), nullptr, 0, &held.set, nullptr), GFNT_OK);
+  const std::vector<uint8_t> good = serialised(held.set);
+  auto resealed = [](std::vector<uint8_t> b) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i + 4 < b.size(); ++i) {
+      h = (h ^ b[i]) * 16777619u;
+    }
+    for (int i = 0; i < 4; ++i) {
+      b[b.size() - 4 + i] = static_cast<uint8_t>(h >> (8 * i));
+    }
+    return b;
+  };
+  GFNT_FontSet * set = nullptr;
+  // A count that claims more faces than the bytes could hold.
+  std::vector<uint8_t> many = good;
+  many[8] = many[9] = many[10] = many[11] = 0xFF;
+  many = resealed(many);
+  EXPECT_EQ(gfnt_fontset_deserialize(many.data(), many.size(), nullptr, &set, nullptr), GFNT_ERR_CORRUPT);
+  // A face count that is short of what follows: the bytes left over are refused.
+  std::vector<uint8_t> fewer = good;
+  fewer[8] -= 1;
+  fewer = resealed(fewer);
+  EXPECT_EQ(gfnt_fontset_deserialize(fewer.data(), fewer.size(), nullptr, &set, nullptr), GFNT_ERR_CORRUPT);
+  // A string that holds a NUL: the first path's first byte (after the 4-byte length at 16).
+  std::vector<uint8_t> nul = good;
+  nul[20] = 0;
+  nul = resealed(nul);
+  EXPECT_EQ(gfnt_fontset_deserialize(nul.data(), nul.size(), nullptr, &set, nullptr), GFNT_ERR_CORRUPT);
+  // Fields of the first face with a value they cannot have: where they sit follows from the
+  // three strings before them.
+  size_t at = 16;
+  for (int s = 0; s < 3; ++s) {
+    at += 4 + (good[at] | (good[at + 1] << 8) | (good[at + 2] << 16));
+  }
+  const size_t legacy_flag = at;
+  const size_t legacy_len = good[at + 1] | (good[at + 2] << 8) | (good[at + 3] << 16);
+  const size_t slant_at = at + 1 + 4 + legacy_len + 8 + 2 + 2;
+  const size_t axis_present = slant_at + 1 + 4 + 16 + 4;
+  for (size_t where : {legacy_flag, slant_at, axis_present}) {
+    std::vector<uint8_t> bad = good;
+    bad[where] = 7;
+    bad = resealed(bad);
+    EXPECT_EQ(gfnt_fontset_deserialize(bad.data(), bad.size(), nullptr, &set, nullptr), GFNT_ERR_CORRUPT)
+        << "a byte of 7 at " << where;
+  }
+  // Another version, and not a set at all.
+  std::vector<uint8_t> other = good;
+  other[7] = '2';
+  other = resealed(other);
+  EXPECT_EQ(gfnt_fontset_deserialize(other.data(), other.size(), nullptr, &set, nullptr), GFNT_ERR_UNSUPPORTED);
+  const std::vector<uint8_t> junk(64, 'x');
+  EXPECT_EQ(gfnt_fontset_deserialize(junk.data(), junk.size(), nullptr, &set, nullptr), GFNT_ERR_FORMAT);
+  EXPECT_EQ(gfnt_fontset_deserialize(nullptr, 0, nullptr, &set, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(set, nullptr);
+}
+
+TEST(DiscoverKeep, ARecordKnowsWhetherItsFileHasChanged) {
+  TempTree tree;
+  ASSERT_TRUE(keep_tree(tree));
+  Set held;
+  ASSERT_EQ(scan_one(tree.path(), nullptr, 0, &held.set, nullptr), GFNT_OK);
+  const GFNT_FontRecord * rec = find_ending(held.set, "/names.otf");
+  ASSERT_NE(rec, nullptr);
+  EXPECT_GT(rec->file_size, 0u);
+  bool current = false;
+  ASSERT_EQ(gfnt_fontset_record_current(rec, &current, nullptr), GFNT_OK);
+  EXPECT_TRUE(current);
+  // Kept and read back, the record is still current.
+  const std::vector<uint8_t> bytes = serialised(held.set);
+  Set back;
+  ASSERT_EQ(gfnt_fontset_deserialize(bytes.data(), bytes.size(), nullptr, &back.set, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_fontset_record_current(find_ending(back.set, "/names.otf"), &current, nullptr), GFNT_OK);
+  EXPECT_TRUE(current);
+  // Appending a byte changes the size.
+  {
+    FILE * f = fopen(tree.child("names.otf").c_str(), "ab");
+    ASSERT_NE(f, nullptr);
+    fputc(0, f);
+    fclose(f);
+  }
+  ASSERT_EQ(gfnt_fontset_record_current(rec, &current, nullptr), GFNT_OK);
+  EXPECT_FALSE(current);
+  // And a file that is gone is not current.
+  ASSERT_EQ(unlink(tree.child("bitmap.pcf").c_str()), 0);
+  ASSERT_EQ(gfnt_fontset_record_current(find_ending(held.set, "/bitmap.pcf"), &current, nullptr), GFNT_OK);
+  EXPECT_FALSE(current);
+  EXPECT_EQ(gfnt_fontset_record_current(nullptr, &current, nullptr), GFNT_ERR_INVALID);
+}
+
+TEST(DiscoverKeep, EveryAllocationFailureReadingASetIsSurvived) {
+  TempTree tree;
+  ASSERT_TRUE(keep_tree(tree));
+  const GFNT_FontAlias aliases[] = {{"sans-serif", "Ghoti Fixture Basic"}};
+  Set held;
+  ASSERT_EQ(scan_one(tree.path(), aliases, 1, &held.set, nullptr), GFNT_OK);
+  const std::vector<uint8_t> bytes = serialised(held.set);
+  size_t requests = 0;
+  {
+    gfnttest::FailingAllocator counting(static_cast<size_t>(-1));
+    GFNT_FontSet * set = nullptr;
+    ASSERT_EQ(gfnt_fontset_deserialize(bytes.data(), bytes.size(), counting.get(), &set, nullptr), GFNT_OK);
+    requests = counting.requests();
+    gfnt_fontset_free(set);
+    EXPECT_EQ(counting.live(), 0u);
+  }
+  ASSERT_GT(requests, 10u);
+  for (size_t fail = 0; fail < requests; ++fail) {
+    gfnttest::FailingAllocator failing(fail);
+    GFNT_FontSet * set = nullptr;
+    EXPECT_EQ(gfnt_fontset_deserialize(bytes.data(), bytes.size(), failing.get(), &set, nullptr),
+        GFNT_ERR_OOM) << "request " << fail;
+    EXPECT_EQ(set, nullptr);
+    EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
+  }
+}
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

@@ -867,6 +867,14 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
     discover_free(set->allocator, style);
     return GFNT_ERR_OOM;
   }
+  {
+    GCU_File_Info info;
+
+    if (gcu_file_stat(path, &info) == GCU_FILE_OK) {
+      built.rec.file_size = info.size;
+      built.rec.file_mtime_ns = info.mtime_ns;
+    }
+  }
   built.rec.path = path_copy;
   built.rec.family = family;
   built.rec.legacy_family = legacy;
@@ -1384,6 +1392,305 @@ GFNT_Result gfnt_fontset_resolve_alias(const GFNT_FontSet * set,
   }
   return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
       "an alias chain longer than 7 steps");
+}
+
+/* --- keeping a set ------------------------------------------------------------------------ */
+
+GFNT_Result gfnt_fontset_record_current(const GFNT_FontRecord * record, bool * out_current,
+    GFNT_Error * error) {
+  GCU_File_Info info;
+
+  if (!record || !out_current) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no record or nowhere to put the answer");
+  }
+  *out_current = gcu_file_stat(record->path, &info) == GCU_FILE_OK
+      && info.size == record->file_size && info.mtime_ns == record->file_mtime_ns;
+  return GFNT_OK;
+}
+
+#define SET_MAGIC "GFNTSET1"
+
+typedef struct SetWriter {
+  uint8_t * out;
+  size_t capacity;
+  size_t length;
+} SetWriter;
+
+static void sw_bytes(SetWriter * w, const void * data, size_t n) {
+  if (w->out && w->length + n <= w->capacity) {
+    memcpy(w->out + w->length, data, n);
+  }
+  w->length += n;
+}
+
+static void sw_u(SetWriter * w, uint64_t v, size_t bytes) {
+  uint8_t b[8];
+  size_t i;
+
+  for (i = 0; i < bytes; i++) {
+    b[i] = (uint8_t)(v >> (8 * i));
+  }
+  sw_bytes(w, b, bytes);
+}
+
+static void sw_str(SetWriter * w, const char * s) {
+  size_t n = strlen(s);
+
+  sw_u(w, n, 4);
+  sw_bytes(w, s, n);
+}
+
+static uint32_t set_checksum(const uint8_t * p, size_t n) {
+  uint32_t h = 2166136261u;
+  size_t i;
+
+  for (i = 0; i < n; i++) {
+    h = (h ^ p[i]) * 16777619u;
+  }
+  return h;
+}
+
+GFNT_Result gfnt_fontset_serialize(const GFNT_FontSet * set, uint8_t * out, size_t capacity,
+    size_t * out_length, GFNT_Error * error) {
+  SetWriter w = {out, capacity, 0};
+  size_t i;
+  size_t k;
+
+  if (!set || !out_length || (!out && capacity)) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no set, or a buffer with no bytes behind it");
+  }
+  sw_bytes(&w, SET_MAGIC, 8);
+  sw_u(&w, set->face_count, 4);
+  sw_u(&w, set->alias_count, 4);
+  for (i = 0; i < set->face_count; i++) {
+    const GFNT_FontRecord * r = &set->faces[i].rec;
+    const GFNT_FontAxisRange * axes[4] = {&r->wght_axis, &r->wdth_axis, &r->slnt_axis,
+        &r->ital_axis};
+
+    sw_str(&w, r->path);
+    sw_str(&w, r->family);
+    sw_str(&w, r->style);
+    sw_u(&w, r->legacy_family ? 1 : 0, 1);
+    sw_str(&w, r->legacy_family ? r->legacy_family : "");
+    sw_u(&w, r->index, 8);
+    sw_u(&w, r->weight, 2);
+    sw_u(&w, r->width, 2);
+    sw_u(&w, (uint32_t)r->slant, 1);
+    sw_u(&w, r->flavour, 4);
+    for (k = 0; k < 4; k++) {
+      sw_u(&w, r->unicode_range[k], 4);
+    }
+    sw_u(&w, (uint32_t)r->oblique_angle, 4);
+    for (k = 0; k < 4; k++) {
+      sw_u(&w, axes[k]->present ? 1 : 0, 1);
+      sw_u(&w, (uint32_t)axes[k]->min, 4);
+      sw_u(&w, (uint32_t)axes[k]->max, 4);
+    }
+    sw_u(&w, r->file_size, 8);
+    sw_u(&w, (uint64_t)r->file_mtime_ns, 8);
+  }
+  for (i = 0; i < set->alias_count; i++) {
+    sw_str(&w, set->aliases[i].name);
+    sw_str(&w, set->aliases[i].target);
+  }
+  {
+    const uint32_t sum = (out && w.length <= capacity) ? set_checksum(out, w.length) : 0;
+
+    sw_u(&w, sum, 4);
+  }
+  *out_length = w.length;
+  if (w.length > capacity) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+        "the buffer is too small for the set");
+  }
+  return GFNT_OK;
+}
+
+typedef struct SetReader {
+  const uint8_t * p;
+  size_t n;
+  size_t at;
+  bool bad;
+} SetReader;
+
+static uint64_t sr_u(SetReader * r, size_t bytes) {
+  uint64_t v = 0;
+  size_t i;
+
+  if (r->bad || r->n - r->at < bytes) {
+    r->bad = true;
+    return 0;
+  }
+  for (i = 0; i < bytes; i++) {
+    v |= (uint64_t)r->p[r->at + i] << (8 * i);
+  }
+  r->at += bytes;
+  return v;
+}
+
+/** A string copied out; NULL (and bad) for a length past the bytes or a NUL inside. */
+static char * sr_str(SetReader * r, const GFNT_Allocator * a, bool * oom) {
+  size_t n = (size_t)sr_u(r, 4);
+  char * s;
+
+  if (r->bad || n > r->n - r->at || memchr(r->p + r->at, 0, n)) {
+    r->bad = true;
+    return NULL;
+  }
+  s = discover_dup(a, (const char *)r->p + r->at, n);
+  if (!s) {
+    *oom = true;
+    return NULL;
+  }
+  r->at += n;
+  return s;
+}
+
+GFNT_Result gfnt_fontset_deserialize(const uint8_t * data, size_t length,
+    const GFNT_Allocator * allocator, GFNT_FontSet ** out_set, GFNT_Error * error) {
+  SetReader r = {data, length, 0, false};
+  GFNT_FontSet * set;
+  size_t faces;
+  size_t aliases;
+  size_t i;
+  size_t k;
+  bool oom = false;
+  GFNT_Result result = GFNT_ERR_CORRUPT;
+
+  if (!data || !out_set) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no bytes or nowhere to put the set");
+  }
+  if (length < 8 + 4 + 4 + 4 || memcmp(data, SET_MAGIC, 7) != 0) {
+    return gfnt_error_set(error, GFNT_ERR_FORMAT, 0, 0, GFNT_GLYPH_NONE,
+        "not a serialised font set");
+  }
+  if (data[7] != SET_MAGIC[7]) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
+        "a serialised font set of another version");
+  }
+  if ((uint32_t)(data[length - 4] | (data[length - 3] << 8) | (data[length - 2] << 16)
+          | ((uint32_t)data[length - 1] << 24)) != set_checksum(data, length - 4)) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, 0, 0, GFNT_GLYPH_NONE,
+        "a serialised font set whose checksum does not match");
+  }
+  r.n = length - 4;
+  r.at = 8;
+  faces = (size_t)sr_u(&r, 4);
+  aliases = (size_t)sr_u(&r, 4);
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  set = discover_new(allocator);
+  if (!set) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE, "allocating the set");
+  }
+  for (i = 0; i < faces && !r.bad && !oom; i++) {
+    DiscoverFace f;
+    DiscoverFace * grown;
+    GFNT_FontAxisRange * axes[4];
+    uint64_t slant;
+
+    memset(&f, 0, sizeof f);
+    f.weight_stated = f.width_stated = f.slant_stated = true;
+    f.rec.path = sr_str(&r, allocator, &oom);
+    f.rec.family = oom ? NULL : sr_str(&r, allocator, &oom);
+    f.rec.style = oom ? NULL : sr_str(&r, allocator, &oom);
+    {
+      const uint64_t has_legacy = sr_u(&r, 1);
+      char * legacy = oom ? NULL : sr_str(&r, allocator, &oom);
+
+      if (has_legacy > 1) {
+        r.bad = true;
+      }
+      if (has_legacy == 1) {
+        f.rec.legacy_family = legacy;
+      } else {
+        discover_free(allocator, legacy);
+      }
+    }
+    f.rec.index = (size_t)sr_u(&r, 8);
+    f.rec.weight = (uint16_t)sr_u(&r, 2);
+    f.rec.width = (uint16_t)sr_u(&r, 2);
+    slant = sr_u(&r, 1);
+    if (slant > GFNT_SLANT_OBLIQUE) {
+      r.bad = true;
+    }
+    f.rec.slant = (GFNT_Slant)slant;
+    f.rec.flavour = (GFNT_Tag)sr_u(&r, 4);
+    for (k = 0; k < 4; k++) {
+      f.rec.unicode_range[k] = (uint32_t)sr_u(&r, 4);
+    }
+    f.rec.oblique_angle = (GFNT_F16Dot16)(int32_t)(uint32_t)sr_u(&r, 4);
+    axes[0] = &f.rec.wght_axis;
+    axes[1] = &f.rec.wdth_axis;
+    axes[2] = &f.rec.slnt_axis;
+    axes[3] = &f.rec.ital_axis;
+    for (k = 0; k < 4; k++) {
+      const uint64_t present = sr_u(&r, 1);
+
+      if (present > 1) {
+        r.bad = true;
+      }
+      axes[k]->present = present == 1;
+      axes[k]->min = (GFNT_F16Dot16)(int32_t)(uint32_t)sr_u(&r, 4);
+      axes[k]->max = (GFNT_F16Dot16)(int32_t)(uint32_t)sr_u(&r, 4);
+    }
+    f.rec.file_size = sr_u(&r, 8);
+    f.rec.file_mtime_ns = (int64_t)sr_u(&r, 8);
+    if (r.bad || oom || !f.rec.path || !f.rec.family || !f.rec.style) {
+      discover_free(allocator, (void *)f.rec.path);
+      discover_free(allocator, (void *)f.rec.family);
+      discover_free(allocator, (void *)f.rec.style);
+      discover_free(allocator, (void *)f.rec.legacy_family);
+      break;
+    }
+    grown = discover_grow(allocator, set->faces, &set->face_cap, set->face_count, sizeof *grown);
+    if (!grown) {
+      oom = true;
+      discover_free(allocator, (void *)f.rec.path);
+      discover_free(allocator, (void *)f.rec.family);
+      discover_free(allocator, (void *)f.rec.style);
+      discover_free(allocator, (void *)f.rec.legacy_family);
+      break;
+    }
+    set->faces = grown;
+    set->faces[set->face_count++] = f;
+  }
+  for (i = 0; i < aliases && !r.bad && !oom && set->face_count == faces; i++) {
+    GFNT_FontAlias* grown;
+    char * name = sr_str(&r, allocator, &oom);
+    char * target = oom ? NULL : sr_str(&r, allocator, &oom);
+
+    if (!name || !target) {
+      discover_free(allocator, name);
+      discover_free(allocator, target);
+      break;
+    }
+    grown = discover_grow(allocator, set->aliases, &set->alias_cap, set->alias_count,
+        sizeof *grown);
+    if (!grown) {
+      oom = true;
+      discover_free(allocator, name);
+      discover_free(allocator, target);
+      break;
+    }
+    set->aliases = grown;
+    set->aliases[set->alias_count].name = name;
+    set->aliases[set->alias_count].target = target;
+    set->alias_count++;
+  }
+  if (!oom && !r.bad && set->face_count == faces && set->alias_count == aliases
+      && r.at == r.n) {
+    *out_set = set;
+    return GFNT_OK;
+  }
+  result = oom ? GFNT_ERR_OOM : GFNT_ERR_CORRUPT;
+  gfnt_fontset_free(set);
+  return gfnt_error_set(error, result, 0, 0, GFNT_GLYPH_NONE,
+      oom ? "reading a font set" : "a serialised font set that cannot be read");
 }
 
 void gfnt_fontset_free(GFNT_FontSet * set) {

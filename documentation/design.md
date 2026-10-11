@@ -1649,7 +1649,16 @@ per-user fonts directory on Windows; the three `Library/Fonts` on macOS - and
 reading each file's `name` and `OS/2` (or its BDF/PCF properties) into a
 record: family, style, weight, width, slant, the Unicode ranges it claims, the
 format, the path and index. The set is an object the caller owns and can
-serialise, so that a scan of 2,000 files happens once.
+serialise, so that a scan of 2,000 files happens once: `gfnt_fontset_serialize()` writes every
+field of every record and alias (the skips say what one walk could not read, and are not kept)
+in a versioned, little-endian form that ends in a checksum, and `gfnt_fontset_deserialize()` reads
+it back trusting nothing - lengths against the bytes left, strings with a NUL in them, flags and
+enumerations out of range, trailing bytes, another version and a checksum that does not match are
+each refused. A record carries its file's size and modification time, and
+`gfnt_fontset_record_current()` says whether the file is still as it was, so a caller can rescan
+just what changed. The form is not for sharing between machines: its paths are the scanner's.
+`make fuzz-run-fontset` fuzzes the reader (the harness writes the magic and the checksum itself, which
+a fuzzer cannot) and checks that what is read is a fixed point of writing.
 
 **fontconfig is not linked and its configuration is not read**: its
 configuration is XML, the suite has no XML parser, and `cjelly`'s stated intent

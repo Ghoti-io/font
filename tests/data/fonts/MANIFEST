@@ -90,3 +90,9 @@ variable-hvar.ttf	variable-gvar.ttf's glyphs with HVAR - an advance mapping and 
 variable-stat.ttf	variable-gvar.ttf's font with a STAT version 1.2 holding every axis value format: a linked value (elidable), a plain value, a range around a nominal value, and a value on two axes at once, written by fontTools
 woff-basic.woff	basic.ttf as a WOFF 1 written by fontTools, tables zlib-compressed one at a time (some stored, because compressing did not help): the reader rebuilds the sfnt, so every answer is basic.ttf's
 woff-stored.woff	basic.ttf in a WOFF 1 whose every table is stored uncompressed, written by this generator rather than by fontTools: the compressed length equals the original length for every table, which is the arm a compressing writer rarely takes
+woff2-basic.woff2	basic.ttf as a WOFF 2 written by fontTools with its default transforms: one Brotli stream, glyf and loca transformed, the directory in tag order (so head sits between them, which the specification forbids and fontTools does anyway)
+woff2-collection.woff2	A WOFF 2 collection of two faces that share every table but name and head, with the shared glyf and loca transformed
+woff2-hmtx.woff2	basic.ttf as a WOFF 2 whose hmtx is transformed too, written by fontTools: the bearings are kept because basic.ttf's are not its glyphs' xMin
+woff2-stored.woff2	basic.ttf as a WOFF 2 with every table in its null transform - glyf and loca as version 3 - followed by a metadata block and a private block, written by this generator
+woff2-triplets-source.ttf	The font woff2-triplets.woff2 was made from, to compare it with
+woff2-triplets.woff2	A WOFF 2 from this generator's own writer: all 128 triplet classes on and off the curve, a composite glyph with instructions and a scale, explicit bounding boxes, an overlap bitmap, and an hmtx with both bearing arrays dropped; fontTools reads it back to the source font before it is written

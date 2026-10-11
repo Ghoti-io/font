@@ -396,9 +396,10 @@ endif
 endif
 INCLUDE += $(CUTIL_CFLAGS)
 
-# ghoti.io-compress, for the gzip a PCF or a PSF usually arrives in (RFC 1952)
-# and, when WOFF 1 lands, the per-table zlib of RFC 1950. Resolved exactly as
-# cutil is, including the $(BRANCH) in the name and the absence of a fallback.
+# ghoti.io-compress, for the gzip a PCF or a PSF usually arrives in (RFC 1952),
+# the per-table zlib of RFC 1950 that WOFF 1 uses, and the Brotli of RFC 7932 that
+# WOFF 2 uses. Resolved exactly as cutil is, including the $(BRANCH) in the name
+# and the absence of a fallback.
 #
 # It is the library's second dependency and the first one that is only needed by
 # some formats. It is still unconditional: a `#ifdef GFNT_HAVE_COMPRESS` would
@@ -699,7 +700,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes
+.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes check-oracle-woff2
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -981,7 +982,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes
+check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes check-oracle-woff2
 check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
@@ -1176,6 +1177,10 @@ check-oracle-strike-images: $(EXAMPLES)
 check-oracle-subset-strikes: ## Subset every font with bitmap strikes and read the pictures back through fontTools and HarfBuzz
 check-oracle-subset-strikes: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools,harfbuzz -- python3 $(ORACLE)/subset_strike_diff.py --quiet
+
+check-oracle-woff2: ## Wrap every corpus font as WOFF 2 with fontTools, unwrap it here, and compare
+check-oracle-woff2: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/woff2_diff.py --quiet
 
 check-oracle-subset-color: ## Subset every static color font and read the COLR and CPAL back through fontTools
 check-oracle-subset-color: $(EXAMPLES)

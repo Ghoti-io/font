@@ -145,6 +145,17 @@ const std::vector<Entry> & every_fixture() {
       // here they are simply two more fixtures that have to load and count.
       {"woff-basic.woff", kNumGlyphs},
       {"woff-stored.woff", kNumGlyphs},
+      // The WOFF 2 fixtures: three of basic.ttf (two from fontTools, one from the
+      // generator's own writer), the twelve-glyph font that exercises the glyf
+      // transform and the source it was made from, and a two-face collection
+      // whose first face is loaded here. Test_woff2.cpp compares each with its
+      // source.
+      {"woff2-basic.woff2", kNumGlyphs},
+      {"woff2-hmtx.woff2", kNumGlyphs},
+      {"woff2-stored.woff2", kNumGlyphs},
+      {"woff2-triplets.woff2", 12},
+      {"woff2-triplets-source.ttf", 12},
+      {"woff2-collection.woff2", kNumGlyphs},
       {"bitmap-gz.pcf.gz", 8, false},
       {"type1-gz.pfb.gz", 8},
       {"bitmap-ink.bdf", 5, false},

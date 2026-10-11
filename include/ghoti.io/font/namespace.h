@@ -154,6 +154,7 @@
 #define gfnt_face_load GHOTIIO_FONT(gfnt_face_load)
 #define gfnt_face_table_checksum GHOTIIO_FONT(gfnt_face_table_checksum)
 #define gfnt_face_table_count GHOTIIO_FONT(gfnt_face_table_count)
+#define gfnt_face_table_data GHOTIIO_FONT(gfnt_face_table_data)
 #define gfnt_face_table_range GHOTIIO_FONT(gfnt_face_table_range)
 #define gfnt_face_table_tag_at GHOTIIO_FONT(gfnt_face_table_tag_at)
 #define gfnt_error_dump GHOTIIO_FONT(gfnt_error_dump)

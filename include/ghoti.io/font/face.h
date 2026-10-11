@@ -264,6 +264,23 @@ GFNT_API GFNT_Result gfnt_face_table_range(const GFNT_Face * face,
     GFNT_Tag tag, size_t * out_offset, size_t * out_length);
 
 /**
+ * @brief The bytes of a table.
+ *
+ * What ::gfnt_face_table_range() points at, resolved: for a WOFF, WOFF 2 or
+ * gzipped face the bytes are those of the sfnt the face rebuilt, so this is the
+ * way to get a table of a wrapped font as it would be in an unwrapped one.
+ *
+ * @param face The face.
+ * @param tag The table tag.
+ * @param out_data Receives a pointer to the table, valid until the face is freed.
+ * @param out_length Receives the length, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, or ::GFNT_ERR_UNSUPPORTED if the face
+ *   has no such table.
+ */
+GFNT_API GFNT_Result gfnt_face_table_data(const GFNT_Face * face, GFNT_Tag tag,
+    const uint8_t ** out_data, size_t * out_length);
+
+/**
  * @brief Check a table's checksum, reporting both numbers.
  *
  * **Reported, never enforced.** A font with a bad checksum renders in every

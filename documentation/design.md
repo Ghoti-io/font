@@ -6,8 +6,8 @@ and the standalone bitmap formats, rasterises an outline, and shapes text throug
 `GSUB`, `GPOS`, `kern` and Apple's `morx`/`kerx`/`trak`, with a shaper for each
 script that needs one and a bidi-aware shaping call (§9; §18 is the list and says
 what is not built). Paragraph layout is built in part (§10.8), and font discovery
-lists faces and does not match them. WOFF 2, colour and the PNG strikes are not
-implemented; writing is built for the sfnt and WOFF 1 and for subsetting static TrueType fonts (§12). Layout and the script shapers
+lists faces and does not match them. The `SVG ` table is not implemented;
+writing is built for the sfnt and WOFF 1 and for subsetting static TrueType fonts (§12). Layout and the script shapers
 need the `unicode` library. Reading a file, drawing an outline and applying a
 font's lookups do not.
 
@@ -127,7 +127,7 @@ which of them this library takes, and which of those it reads today.
 | | `sbix` | **implemented** (§7.5): PNG, JPEG and TIFF pictures, `dupe` followed; shaped extents as HarfBuzz measures them (PNG only) |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |
-| | WOFF 2 | not implemented; `compress` has a full Brotli decoder now, and the glyf/loca transform is the work |
+| | WOFF 2 | **implemented** (§7.1): one Brotli stream through `compress`, `glyf`/`loca` and `hmtx` transforms undone, collections rebuilt as `ttcf`; the metadata and private blocks are range-checked and not read. Not written |
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
 | | `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
@@ -380,8 +380,42 @@ wrapper undone beside gzip's in `gfnt_face_load()`: the reserved field, the leng
 the tag order, every table's extent and each inflated length are checked, the
 rebuilt sfnt is held to the file-size limit, and the directory's checksums are
 carried over and not enforced. The metadata and private blocks are not read.
-**WOFF 2** is not here: it needs Brotli (which `compress` has since gained), and
-it transforms `glyf`/`loca` and `hmtx` in ways that are a second reader.
+**WOFF 2.** The header, the table directory (63 known tags by index, a transform
+version in the flags byte, `UIntBase128` lengths), an optional collection
+directory, and one Brotli stream holding every table, decompressed through
+`compress` under the directory's own total as the ceiling. Three tables are stored
+transformed and rebuilt: `glyf` is split into streams (contour counts, point
+counts, flags, coordinate *triplets*, composite data, boxes, instructions) that
+are put back as ordinary `glyf` entries, padded to four bytes, with the `loca`
+rebuilt from their lengths in the stated index format; `hmtx` has its side
+bearings dropped when they equal the glyphs' `xMin`, and takes them from the
+rebuilt `glyf`. **Implemented** (`src/blob/woff2.c`) as a wrapper undone beside
+WOFF 1's in `gfnt_face_load()`. A collection comes out as a `ttcf` with each
+shared table stored once, and `gfnt_face_count()` reads its face count from the
+directory without decompressing. Every directory and stream rule the specification
+makes a decoder reject is rejected (reserved fields, `UIntBase128` forms, the
+transform versions, a stream that decompresses to other than the stated total, a
+composite without its box, an empty glyph with one, a `loca` that does not fit its
+format), and every table checksum and `checkSumAdjustment` is recomputed. Four
+departures, each because real files need them: the `loca` is **not** required to
+follow `glyf` in the directory (fontTools writes the directory in tag order, which
+puts `head` between them, and browsers load those files); `glyf`'s `origLength`
+and the header's `totalSfntSize` are reference values and are ignored, as the
+specification says; a collection's `checkSumAdjustment` is left as stored (the
+specification does not say which of its fonts it sums); and the glyph-table
+header's first field, which a later revision may use as a version, is ignored.
+fontTools is the only oracle, because no HarfBuzz tool reads WOFF 2:
+`make check-oracle-woff2` has fontTools write each corpus font under 2 MB three
+ways (default transforms, those plus `hmtx`, none), unwraps each here and
+compares tables byte for byte and `glyf` glyph by glyph, against fontTools' own
+decode and against the source font. 525 sfnts are in the corpus, 510 fit under
+the cap and 1,436 files compare clean; the 15 left out are collections (fontTools
+writes none) and fonts over the cap. For thirteen fonts fontTools' decode of a
+transformed `hmtx` is shorter than the table it was given, and this library's is
+the source's byte for byte; the report says so. The fixtures
+(`tools/fixtures/woff2_fixtures.py`) cover what fontTools never writes: all 128
+triplet classes, every `255UInt16` spelling, explicit boxes, the overlap bitmap, a
+composite with instructions, a collection, and a metadata and private block.
 
 **PCF, BDF, PSF, `.hex`** are their own containers and their own glyph sources,
 read through the same reader (PCF, PSF) or the line reader (BDF, `.hex`). Each
@@ -1754,7 +1788,7 @@ callers.
 WOFF 1 (per-table zlib through `compress`, with the metadata block). BDF from
 a bitmap face, so that a fixture can be regenerated from a font this library
 subsetted. PCF and PSF writing are tools, not library (`bdftopcf` exists), and
-WOFF 2 waits on Brotli.
+WOFF 2 is read but not written: `compress` has no Brotli encoder beyond the stored kind.
 
 ### 12.5 The gate
 
@@ -2326,7 +2360,7 @@ Absent, not stubbed; each returns `ERR_UNSUPPORTED` at the point where the
 file or the request names it, and nowhere is there a function that pretends.
 
 - **The TrueType hinting interpreter and any autohinter** (M3, §8.5).
-- **WOFF 2** until `compress` has Brotli.
+- **A WOFF 2 writer**, until `compress` has a Brotli encoder worth using.
 - **The `SVG ` table** until `text` has XML, and an SVG subset after that.
 - **The rest of AAT** (`feat`, `kerx` format 3 and the like; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.
@@ -3375,8 +3409,8 @@ What that cost in findings:
 
 **Not built:**
 a `FeatureVariations` condition of format 2 (§7.7); paragraph layout, and font matching (discovery lists faces, §11); the `CFF` writer (§12); the multi-byte
-Macintosh and Microsoft `name` encodings (§7.2); `gasp`
-and WOFF 2. `maxp` has no `_dump` because nothing
+Macintosh and Microsoft `name` encodings (§7.2); `gasp`.
+`maxp` has no `_dump` because nothing
 reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is
 **still only its enum, and now deliberately rather than for want of a second
 arm**: there are two kinds of glyph data, and each has an accessor of its own -
@@ -3405,7 +3439,7 @@ an independent sampler and three big-endian targets.
 - Adobe Technical Note #5176 (The Compact Font Format), #5177 (The Type 2
   Charstring Format), #5015 (Type 1 Font Format supplement), the *Adobe Type 1
   Font Format* book; #5004 (AFM); the Adobe Glyph List and its specification.
-- WOFF File Format 1.0 (W3C Recommendation); WOFF 2.0 for what is deferred.
+- WOFF File Format 1.0 and WOFF File Format 2.0 (W3C Recommendations).
 - CSS Fonts Module Level 4 (matching); CSS Text Module Level 3 (`line-break`,
   min/max-content); CSS Inline Layout Module Level 3 (line metrics).
 - UAX #9, #14, #24, #29 and the OpenType script development specifications

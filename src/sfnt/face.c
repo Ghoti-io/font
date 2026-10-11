@@ -37,6 +37,7 @@
 #include "../bitmap/bitmap.h"
 #include "../blob/gzip.h"
 #include "../blob/woff.h"
+#include "../blob/woff2.h"
 #include "../type1/type1.h"
 #include "sfnt.h"
 
@@ -174,6 +175,11 @@ static GFNT_Result gfnt_face_count_bytes(const GFNT_Blob * blob,
   if (tag == GFNT_WOFF_SIGNATURE) {
     *out_count = 1;
     return GFNT_OK;
+  }
+  // WOFF 2 can hold a collection, and its directory says how many faces
+  // without decompressing anything.
+  if (tag == GFNT_WOFF2_SIGNATURE) {
+    return gfnt_woff2_face_count(blob, effective, out_count, error);
   }
 
   // An ordinary sfnt is one face. Whether this library can read its outlines
@@ -376,6 +382,25 @@ GFNT_Result gfnt_face_load(const GFNT_Blob * blob, size_t index,
       return result;
     }
   }
+  // WOFF 2 likewise; a collection inside it comes out as a `ttcf` and is read as
+  // one below.
+  if (gfnt_woff2_looks_like(&reader)) {
+    GFNT_Blob * rebuilt = NULL;
+
+    result = gfnt_woff2_to_sfnt(source, &effective, allocator, &rebuilt, error);
+    if (result != GFNT_OK) {
+      gfnt_blob_destroy(inflated);
+      return result;
+    }
+    gfnt_blob_destroy(inflated);
+    inflated = rebuilt;
+    source = inflated;
+    result = gfnt_reader_init_blob(&reader, source, 0, error);
+    if (result != GFNT_OK) {
+      gfnt_blob_destroy(inflated);
+      return result;
+    }
+  }
   if (gfnt_read_tag(&reader, &tag) != GFNT_OK) {
     gfnt_blob_destroy(inflated);
     return gfnt_error_set(error, GFNT_ERR_FORMAT, 0, 0, GFNT_GLYPH_NONE,
@@ -524,6 +549,32 @@ GFNT_Result gfnt_face_table_range(const GFNT_Face * face, GFNT_Tag tag,
   if (out_offset) {
     *out_offset = entry->offset;
   }
+  if (out_length) {
+    *out_length = entry->length;
+  }
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_face_table_data(const GFNT_Face * face, GFNT_Tag tag,
+    const uint8_t ** out_data, size_t * out_length) {
+  const GFNT_SfntTable * entry;
+  GFNT_Reader whole;
+  GFNT_Reader table;
+  const uint8_t * bytes = NULL;
+
+  if (!face || !out_data) {
+    return GFNT_ERR_INVALID;
+  }
+  entry = gfnt_sfnt_find(face, tag);
+  if (!entry) {
+    return GFNT_ERR_UNSUPPORTED;
+  }
+  if (gfnt_reader_init_blob(&whole, face->bytes, tag, NULL) != GFNT_OK
+      || gfnt_reader_sub(&whole, entry->offset, entry->length, &table) != GFNT_OK
+      || gfnt_read_bytes(&table, entry->length, &bytes) != GFNT_OK) {
+    return GFNT_ERR_CORRUPT;
+  }
+  *out_data = bytes;
   if (out_length) {
     *out_length = entry->length;
   }

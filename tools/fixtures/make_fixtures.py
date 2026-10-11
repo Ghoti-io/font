@@ -3501,6 +3501,36 @@ def build_woff_stored(out):
         handle.write(head + directory + body)
 
 
+def build_woff2_basic(out):
+    import woff2_fixtures
+    woff2_fixtures.build_woff2_basic(sys.modules[__name__], out)
+
+
+def build_woff2_hmtx(out):
+    import woff2_fixtures
+    woff2_fixtures.build_woff2_hmtx(sys.modules[__name__], out)
+
+
+def build_woff2_stored(out):
+    import woff2_fixtures
+    woff2_fixtures.build_woff2_stored(sys.modules[__name__], out)
+
+
+def build_woff2_triplets(out):
+    import woff2_fixtures
+    woff2_fixtures.build_woff2_triplets(sys.modules[__name__], out)
+
+
+def build_woff2_triplets_source(out):
+    import woff2_fixtures
+    woff2_fixtures.build_woff2_triplets_source(sys.modules[__name__], out)
+
+
+def build_woff2_collection(out):
+    import woff2_fixtures
+    woff2_fixtures.build_woff2_collection(sys.modules[__name__], out)
+
+
 def build_bitmap_gz_pcf(out):
     """The PCF that `bitmap.pcf` is, in the wrapper PCFs actually ship in.
 
@@ -4080,6 +4110,28 @@ FIXTURES = {
         "by this generator rather than by fontTools: the compressed length equals "
         "the original length for every table, which is the arm a compressing "
         "writer rarely takes"),
+    "woff2-basic.woff2": (build_woff2_basic,
+        "basic.ttf as a WOFF 2 written by fontTools with its default transforms: "
+        "one Brotli stream, glyf and loca transformed, the directory in tag order "
+        "(so head sits between them, which the specification forbids and fontTools "
+        "does anyway)"),
+    "woff2-hmtx.woff2": (build_woff2_hmtx,
+        "basic.ttf as a WOFF 2 whose hmtx is transformed too, written by fontTools: "
+        "the bearings are kept because basic.ttf's are not its glyphs' xMin"),
+    "woff2-stored.woff2": (build_woff2_stored,
+        "basic.ttf as a WOFF 2 with every table in its null transform - glyf and "
+        "loca as version 3 - followed by a metadata block and a private block, "
+        "written by this generator"),
+    "woff2-triplets.woff2": (build_woff2_triplets,
+        "A WOFF 2 from this generator's own writer: all 128 triplet classes on and "
+        "off the curve, a composite glyph with instructions and a scale, explicit "
+        "bounding boxes, an overlap bitmap, and an hmtx with both bearing arrays "
+        "dropped; fontTools reads it back to the source font before it is written"),
+    "woff2-triplets-source.ttf": (build_woff2_triplets_source,
+        "The font woff2-triplets.woff2 was made from, to compare it with"),
+    "woff2-collection.woff2": (build_woff2_collection,
+        "A WOFF 2 collection of two faces that share every table but name and head, "
+        "with the shared glyf and loca transformed"),
     "bitmap-gz.pcf.gz": (build_bitmap_gz_pcf,
         "The same PCF as bitmap.pcf inside gzip, which is how every PCF in the "
         "world ships: it must read to identical glyphs, because the wrapper "

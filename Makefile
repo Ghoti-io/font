@@ -700,7 +700,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real
+.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -982,7 +982,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real
+check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write
 check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
@@ -1185,6 +1185,10 @@ check-oracle-woff2: $(EXAMPLES)
 check-oracle-woff2-real: ## Read real WOFF 2 files (the W3C suite, IBM Plex, Source Code Pro) here and in fontTools
 check-oracle-woff2-real: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/woff2_real_diff.py --quiet
+
+check-oracle-woff2-write: ## Write every corpus font as WOFF 2 here and read it back here and in fontTools
+check-oracle-woff2-write: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/woff2_write_diff.py --quiet
 
 check-oracle-subset-color: ## Subset every static color font and read the COLR and CPAL back through fontTools
 check-oracle-subset-color: $(EXAMPLES)

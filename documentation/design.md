@@ -127,7 +127,7 @@ which of them this library takes, and which of those it reads today.
 | | `sbix` | **implemented** (§7.5): PNG, JPEG and TIFF pictures, `dupe` followed; shaped extents as HarfBuzz measures them (PNG only) |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |
-| | WOFF 2 | **implemented** (§7.1): one Brotli stream through `compress`, `glyf`/`loca` and `hmtx` transforms undone, collections rebuilt as `ttcf`; the metadata and private blocks are range-checked and not read. Not written |
+| | WOFF 2 | **implemented** (§7.1): one Brotli stream through `compress`, `glyf`/`loca` and `hmtx` transforms undone, collections rebuilt as `ttcf`; the metadata and private blocks are range-checked and not read. **Written** too (§12.4), one font at a time |
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
 | | `SVG `, `.dfont`, `.eot`, hinting | absent, §16 |
@@ -421,7 +421,12 @@ variable). All 146 agree with fontTools, the three collections round-trip to the
 suite's sfnt face by face, every file the suite calls valid is read, and the
 six invalid files this library refuses but fontTools reads are ones the suite
 refuses too; four more are invalid only in a metadata block, which is not read.
-The fixtures
+`make check-oracle-woff2-write` runs the other direction:
+this library writes each of 521 corpus fonts (collections as their first face) with
+`font-convert`, and fontTools and this library each read the file back and compare
+it with the font, tables byte for byte and `glyf` glyph by glyph; the output is 40%
+of the input's size, and the same fifteen fonts show fontTools' own `hmtx` decode
+losing entries while this library's matches the source. The fixtures
 (`tools/fixtures/woff2_fixtures.py`) cover what fontTools never writes: all 128
 triplet classes, every `255UInt16` spelling, explicit boxes, the overlap bitmap, a
 composite with instructions, a collection, and a metadata and private block.
@@ -1797,7 +1802,13 @@ callers.
 WOFF 1 (per-table zlib through `compress`, with the metadata block). BDF from
 a bitmap face, so that a fixture can be regenerated from a font this library
 subsetted. PCF and PSF writing are tools, not library (`bdftopcf` exists), and
-WOFF 2 is read but not written: `compress` has no Brotli encoder beyond the stored kind.
+WOFF 2 (`gfnt_write_woff2()`): the same transforms run forward - the smallest triplet
+for each point, an explicit box only where the stated one is not the points', the
+overlap bitmap when a glyph has the flag, `hmtx` without its bearings when they are
+the glyphs' `xMin`, `loca` after `glyf` - under `compress`'s Brotli encoder (LZ77 and
+Huffman; no context model or static dictionary, so about a fifth larger than the
+reference encoder's). A font whose `glyf` does not parse is stored untransformed
+(version 3), not refused. One font; no collection writer.
 
 ### 12.5 The gate
 
@@ -2369,7 +2380,7 @@ Absent, not stubbed; each returns `ERR_UNSUPPORTED` at the point where the
 file or the request names it, and nowhere is there a function that pretends.
 
 - **The TrueType hinting interpreter and any autohinter** (M3, §8.5).
-- **A WOFF 2 writer**, until `compress` has a Brotli encoder worth using.
+- **A WOFF 2 collection writer.**
 - **The `SVG ` table** until `text` has XML, and an SVG subset after that.
 - **The rest of AAT** (`feat`, `kerx` format 3 and the like; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.

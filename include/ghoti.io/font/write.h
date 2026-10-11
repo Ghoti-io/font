@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * Writing fonts: the sfnt and WOFF 1 serialisers, and the subsetter.
+ * Writing fonts: the sfnt, WOFF 1 and WOFF 2 serialisers, and the subsetter.
  *
  * Tier W (documentation/design.md sections 4 and 12). It reads through tier 0
  * and nothing above it, and it is not part of the `font.h` umbrella: a consumer
@@ -109,6 +109,39 @@ GFNT_API GFNT_Result gfnt_write_sfnt(GFNT_Tag flavour,
  *   compression library fails for a reason other than memory.
  */
 GFNT_API GFNT_Result gfnt_write_woff(GFNT_Tag flavour,
+    const GFNT_WriteTable * tables, size_t count, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
+
+/**
+ * @brief Serialise tables as a WOFF 2 file.
+ *
+ * The tables are sorted by tag, `loca` is placed after `glyf`, and the lot is one
+ * Brotli stream. For a TrueType font whose `glyf` parses, `glyf` and `loca` are
+ * stored in the transformed form (contour counts, flags, coordinate triplets,
+ * composite data, boxes and instructions in separate streams, `loca` rebuilt from
+ * the glyph lengths by the reader), and `hmtx` drops its left side bearings when
+ * they are the glyphs' `xMin`. Anything the transforms cannot take is stored as it
+ * is, so a font is never refused for being untransformable. `head` gets bit 11 of
+ * its flags, which a WOFF 2 sets to say so.
+ *
+ * The stream is compressed by `compress`'s Brotli encoder, which writes LZ77 and
+ * Huffman codes and uses neither a context model nor the static dictionary, so the
+ * file comes out about a fifth larger than the reference encoder's. It reads back
+ * with this library, fontTools and any other decoder. One font only: there is no
+ * collection writer. No metadata or private block is written. A short `loca` close
+ * to its limit is written long, since the rebuilt `glyf` pads each glyph to four
+ * bytes.
+ *
+ * @param flavour As for ::gfnt_write_sfnt().
+ * @param tables As for ::gfnt_write_sfnt().
+ * @param count As for ::gfnt_write_sfnt().
+ * @param limits As for ::gfnt_write_sfnt().
+ * @param allocator As for ::gfnt_write_sfnt().
+ * @param out_blob Receives the WOFF 2 file. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return As for ::gfnt_write_woff().
+ */
+GFNT_API GFNT_Result gfnt_write_woff2(GFNT_Tag flavour,
     const GFNT_WriteTable * tables, size_t count, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
 

@@ -15,6 +15,11 @@
     fonttools_woff2.py read <scratch> <woff2>...
     fonttools_woff2.py judge <scratch> <woff2>...
     fonttools_woff2.py roundtrip <scratch> <woff2>...
+    fonttools_woff2.py written <scratch> <font>...
+
+`written` is for WOFF 2 files this library wrote (`font-convert`): for each font,
+`<scratch>/<key>.woff2` is read by fontTools and `<scratch>/<key>.woff2.ours` holds
+what this library reads back out of it, and both are compared with the font itself.
 
 `read` and `judge` are for WOFF 2 files somebody else wrote: `read` records whether
 fontTools accepts each and, if it does, the tables it reads out; `judge` compares
@@ -264,6 +269,86 @@ def roundtrip(scratch, files):
     print(json.dumps(out))
 
 
+def same_font(label, tables, original, flavor, problems, explained=None,
+              hmtx_known=None):
+    """@p tables (tag -> bytes) are @p original's: bytes, and glyphs by place."""
+    expected = set(original.reader.tables)
+    if set(tables) != expected:
+        problems.append("%s: tables %s differ" % (label, sorted(set(tables) ^ expected)))
+        return
+    # A font whose maxp states more glyphs than its loca holds (mona.ttf) cannot be
+    # compared glyph by glyph in fontTools, and this writer stores its glyf and loca
+    # untransformed, so their bytes are compared instead.
+    order = original.getGlyphOrder()
+    consistent = len(original["glyf"].glyphs) == len(order) if "glyf" in expected \
+        else True
+    for tag in sorted(expected):
+        if tag in ("glyf", "loca") and consistent:
+            continue
+        a, b = tables[tag], original.reader[tag]
+        if tag == "head":
+            # Not the adjustment, nor bit 11 of the flags, and not the index format
+            # when the writer chose the long one for a short-`loca` font that was
+            # close to the limit: the glyph comparison below covers what it means.
+            if a[50:52] == b"\0\1" and b[50:52] == b"\0\0":
+                a = a[:50] + b[50:52] + a[52:]
+            a, b = a[:8] + a[12:], b[:8] + b[12:]
+            a = a[:12] + bytes([a[12] & ~0x08]) + a[13:]
+            b = b[:12] + bytes([b[12] & ~0x08]) + b[13:]
+        if a != b:
+            if (tag == "hmtx" and hmtx_known is not None and explained is not None
+                    and hmtx_known == b):
+                # fontTools' own decode of a transformed `hmtx` loses entries
+                # (see woff2_diff.py); the table this library reads is the
+                # source's, byte for byte.
+                explained.append(label)
+                continue
+            problems.append("%s: %s differs (%d vs %d bytes)" % (label, tag, len(a), len(b)))
+    if "glyf" in expected and consistent and len(original["glyf"].glyphs) > 0:
+        try:
+            mine = assemble(tables, flavor)
+            order_a = mine.getGlyphOrder()
+            if len(order_a) != len(order):
+                problems.append("%s: %d glyphs against %d" % (label, len(order_a), len(order)))
+                return
+            for i, name in enumerate(order_a):
+                if glyph_view(mine, name) != glyph_view(original, order[i]):
+                    problems.append("%s: glyph %d differs" % (label, i))
+                    break
+        except Exception as error:
+            problems.append("%s: cannot compare glyphs: %s" % (label, error))
+
+
+def written(scratch, fonts):
+    problems = []
+    explained = []
+    checked = 0
+    for path in fonts:
+        target = os.path.join(scratch, key(path) + ".woff2")
+        try:
+            original = TTFont(path, fontNumber=0)
+            if not os.path.exists(target):
+                problems.append("%s: nothing was written" % path)
+                continue
+            theirs = TTFont(target)
+            via_fonttools = {t: theirs.reader[t] for t in theirs.reader.tables}
+            ours_dir = target + ".ours"
+            ours = tables_of(ours_dir) if os.path.isdir(ours_dir) else None
+            if ours is None:
+                problems.append("%s: this library cannot read what it wrote" % path)
+            else:
+                same_font(path + " (read here)", ours, original,
+                          original.sfntVersion, problems)
+            same_font(path + " (read by fontTools)", via_fonttools, original,
+                      original.sfntVersion, problems, explained,
+                      ours.get("hmtx") if ours else None)
+            checked += 1
+        except Exception as why:
+            problems.append("%s: %s: %s" % (path, type(why).__name__, why))
+    print(json.dumps({"checked": checked, "problems": problems,
+                      "explained": explained}))
+
+
 def judge(scratch, files):
     """Per file: both accept and agree, both reject, or the two differ."""
     out = {}
@@ -312,5 +397,5 @@ def judge(scratch, files):
 if __name__ == "__main__":
     mode, scratch, fonts = sys.argv[1], sys.argv[2], sys.argv[3:]
     {"make": make, "compare": compare, "read": read, "judge": judge,
-     "roundtrip": roundtrip}[mode](
+     "roundtrip": roundtrip, "written": written}[mode](
         scratch, fonts)

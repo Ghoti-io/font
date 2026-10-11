@@ -52,6 +52,7 @@
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/outline.h>
+#include <ghoti.io/font/write.h>
 
 #include "../../src/blob/woff2.h"
 
@@ -126,6 +127,44 @@ std::vector<uint32_t> tags_of(const GFNT_Face * face) {
   return out;
 }
 
+
+uint32_t be16(const std::string & s, size_t at);
+
+/** The instructions of a glyph and whether its first flag says OVERLAP_SIMPLE. */
+struct GlyphExtras {
+  std::string instructions;
+  bool overlap = false;
+};
+
+std::string glyph_bytes(const GFNT_Face * face, uint32_t glyph);
+
+GlyphExtras extras_of(const GFNT_Face * face, uint32_t glyph) {
+  GlyphExtras out;
+  const std::string g = glyph_bytes(face, glyph);
+  if (g.size() < 10) return out;
+  const int contours = int16_t(be16(g, 0));
+  if (contours > 0) {
+    const size_t at = 10 + 2 * size_t(contours);
+    const size_t n = be16(g, at);
+    out.instructions = g.substr(at + 2, n);
+    out.overlap = (uint8_t(g[at + 2 + n]) & 0x40) != 0;
+  } else if (contours < 0) {
+    size_t at = 10;
+    bool more = true, instructions = false;
+    while (more && at + 4 <= g.size()) {
+      const uint32_t flags = be16(g, at);
+      at += 4 + ((flags & 1) ? 4 : 2);
+      at += (flags & 0x08) ? 2 : (flags & 0x40) ? 4 : (flags & 0x80) ? 8 : 0;
+      more = (flags & 0x20) != 0;
+      instructions |= (flags & 0x100) != 0;
+    }
+    if (instructions && at + 2 <= g.size()) {
+      out.instructions = g.substr(at + 2, be16(g, at));
+    }
+  }
+  return out;
+}
+
 /** Every outline, stated box and composite flag the same in both faces. */
 void expect_same_glyphs(const GFNT_Face * a, const GFNT_Face * b,
     const std::string & label) {
@@ -155,10 +194,22 @@ void expect_same_glyphs(const GFNT_Face * a, const GFNT_Face * b,
     }
     gfnt_outline_destroy(oa);
     gfnt_outline_destroy(ob);
+    if (gfnt_face_has_table(a, tag("glyf")) && gfnt_face_has_table(b, tag("glyf"))) {
+      // What an outline does not show: the instructions, and the overlap flag.
+      const GlyphExtras ea = extras_of(a, g);
+      const GlyphExtras eb = extras_of(b, g);
+      EXPECT_EQ(ea.instructions, eb.instructions) << label << " glyph " << g;
+      EXPECT_EQ(ea.overlap, eb.overlap) << label << " glyph " << g;
+    }
 
     GFNT_Box ba{}, bb{};
-    ASSERT_EQ(gfnt_face_glyph_stated_box(a, g, &ba, nullptr), GFNT_OK);
-    ASSERT_EQ(gfnt_face_glyph_stated_box(b, g, &bb, nullptr), GFNT_OK);
+    const GFNT_Result ra = gfnt_face_glyph_stated_box(a, g, &ba, nullptr);
+    const GFNT_Result rb = gfnt_face_glyph_stated_box(b, g, &bb, nullptr);
+    ASSERT_EQ(ra, rb) << label << " glyph " << g;
+    if (ra == GFNT_ERR_UNSUPPORTED) {
+      continue;  // a CFF font has no glyf box or composite flag to compare
+    }
+    ASSERT_EQ(ra, GFNT_OK);
     EXPECT_EQ(ba.x_min, bb.x_min) << label << " glyph " << g;
     EXPECT_EQ(ba.y_min, bb.y_min) << label << " glyph " << g;
     EXPECT_EQ(ba.x_max, bb.x_max) << label << " glyph " << g;
@@ -817,6 +868,240 @@ TEST(Woff2, AnAllocationFailureAnywhereIsReported) {
     }
     EXPECT_GT(refused, 10u) << name;
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// The writer.
+
+namespace {
+
+/** Every table of @p face, as the writer takes them. */
+struct TableSet {
+  std::vector<GFNT_WriteTable> tables;
+  explicit TableSet(const GFNT_Face * face) {
+    for (size_t i = 0; i < gfnt_face_table_count(face); ++i) {
+      GFNT_Tag t = 0;
+      const uint8_t * data = nullptr;
+      size_t length = 0;
+      EXPECT_EQ(gfnt_face_table_tag_at(face, i, &t), GFNT_OK);
+      EXPECT_EQ(gfnt_face_table_data(face, t, &data, &length), GFNT_OK);
+      tables.push_back({t, data, length});
+    }
+  }
+};
+
+/** The file @p source written as a WOFF 2. */
+std::string written(const GFNT_Face * source, GFNT_Result * result = nullptr,
+    const GFNT_Limits * limits = nullptr) {
+  TableSet set(source);
+  GFNT_Blob * out = nullptr;
+  GFNT_Result r = gfnt_write_woff2(gfnt_face_flavour(source), set.tables.data(),
+      set.tables.size(), limits, nullptr, &out, nullptr);
+  if (result) *result = r;
+  std::string bytes;
+  if (r == GFNT_OK) {
+    bytes.assign(reinterpret_cast<const char *>(gfnt_blob_data(out)),
+        gfnt_blob_size(out));
+  }
+  gfnt_blob_destroy(out);
+  return bytes;
+}
+
+/** The transform version the file's directory states for @p t, or -1. */
+int transform_of(const std::string & woff2, uint32_t t) {
+  const char known[][5] = {"cmap", "head", "hhea", "hmtx", "maxp", "name", "OS/2",
+      "post", "cvt ", "fpgm", "glyf", "loca"};
+  size_t count = be16(woff2, 12);
+  size_t at = 48;
+  for (size_t i = 0; i < count; ++i) {
+    uint8_t flags = uint8_t(woff2[at++]);
+    uint32_t entry_tag;
+    if ((flags & 0x3F) == 63) {
+      entry_tag = be32(woff2, at);
+      at += 4;
+    } else if ((flags & 0x3F) < 12) {
+      const char * k = known[flags & 0x3F];
+      entry_tag = tag(reinterpret_cast<const char (&)[5]>(*k));
+    } else {
+      entry_tag = 0;  // another known tag; none of the three asked about
+    }
+    while (uint8_t(woff2[at++]) & 0x80) {}                 // origLength
+    const int version = flags >> 6;
+    const bool transformed = (entry_tag == tag("glyf") || entry_tag == tag("loca"))
+        ? version == 0 : (entry_tag == tag("hmtx") && version == 1);
+    if (transformed) while (uint8_t(woff2[at++]) & 0x80) {}  // transformLength
+    if (entry_tag == t) return version;
+  }
+  return -1;
+}
+
+}  // namespace
+
+TEST(Woff2Writer, WhatItWritesReadsBackAsTheFontItWasGiven) {
+  for (const char * name : {"basic.ttf", "woff2-triplets-source.ttf", "cff.otf",
+                            "woff2-stored.woff2", "woff2-triplets.woff2"}) {
+    const std::string bytes = read_fixture(name);
+    Crafted source(bytes);
+    ASSERT_EQ(source.result, GFNT_OK) << name;
+    GFNT_Result result = GFNT_ERR_INTERNAL;
+    const std::string woff2 = written(source.face, &result);
+    ASSERT_EQ(result, GFNT_OK) << name;
+    ASSERT_EQ(woff2.substr(0, 4), "wOF2") << name;
+    EXPECT_EQ(woff2.size() % 4, 0u) << name;
+    EXPECT_EQ(be32(woff2, 8), woff2.size()) << "the stated length";
+    Crafted back(woff2);
+    ASSERT_EQ(back.result, GFNT_OK) << name << ": " << back.error.message;
+    expect_same_font(back.face, source.face, name);
+  }
+}
+
+TEST(Woff2Writer, ATrueTypeFontIsTransformedAndACffFontIsNot) {
+  Crafted truetype(read_fixture("woff2-triplets-source.ttf"));
+  ASSERT_EQ(truetype.result, GFNT_OK);
+  const std::string a = written(truetype.face);
+  EXPECT_EQ(transform_of(a, tag("glyf")), 0);
+  EXPECT_EQ(transform_of(a, tag("loca")), 0);
+  EXPECT_EQ(transform_of(a, tag("hmtx")), 1) << "its bearings are its xMin";
+
+  Crafted basic(read_fixture("basic.ttf"));
+  ASSERT_EQ(basic.result, GFNT_OK);
+  const std::string b = written(basic.face);
+  EXPECT_EQ(transform_of(b, tag("glyf")), 0);
+
+  Crafted cff(read_fixture("cff.otf"));
+  ASSERT_EQ(cff.result, GFNT_OK);
+  const std::string c = written(cff.face);
+  EXPECT_EQ(transform_of(c, tag("glyf")), -1);
+  EXPECT_EQ(transform_of(c, tag("hmtx")), 0);
+}
+
+TEST(Woff2Writer, TheTransformMakesTheFileSmallerThanTheSfnt) {
+  const std::string bytes = read_fixture("woff2-triplets-source.ttf");
+  Crafted source(bytes);
+  ASSERT_EQ(source.result, GFNT_OK);
+  EXPECT_LT(written(source.face).size(), bytes.size());
+}
+
+TEST(Woff2Writer, AGlyfThatDoesNotParseIsStoredAsItIs) {
+  // Cut the glyph data of the last glyph short: the font loads (glyphs are read on
+  // use) and the writer cannot transform it, so it stores glyf and loca and the
+  // file still reads back to the same bytes.
+  Crafted source(read_fixture("woff2-triplets-source.ttf"));
+  ASSERT_EQ(source.result, GFNT_OK);
+  TableSet set(source.face);
+  std::string damaged;
+  for (auto & t : set.tables) {
+    if (t.tag == tag("glyf")) {
+      damaged.assign(reinterpret_cast<const char *>(t.data), t.length);
+      damaged[0] = char(0x7F);          // glyph 0: 32,000-odd contours, cut short
+      damaged[1] = char(0x00);
+      t.data = reinterpret_cast<const uint8_t *>(damaged.data());
+    }
+  }
+  GFNT_Blob * out = nullptr;
+  ASSERT_EQ(gfnt_write_woff2(gfnt_face_flavour(source.face), set.tables.data(),
+      set.tables.size(), nullptr, nullptr, &out, nullptr), GFNT_OK);
+  const std::string woff2(reinterpret_cast<const char *>(gfnt_blob_data(out)),
+      gfnt_blob_size(out));
+  gfnt_blob_destroy(out);
+  EXPECT_EQ(transform_of(woff2, tag("glyf")), 3);
+  EXPECT_EQ(transform_of(woff2, tag("loca")), 3);
+  Crafted back(woff2);
+  ASSERT_EQ(back.result, GFNT_OK) << back.error.message;
+  EXPECT_EQ(table_of(back.face, tag("glyf")), damaged);
+}
+
+TEST(Woff2Writer, RefusesWhatItCannotWrite) {
+  Crafted source(read_fixture("basic.ttf"));
+  ASSERT_EQ(source.result, GFNT_OK);
+  TableSet set(source.face);
+  GFNT_Blob * out = nullptr;
+  EXPECT_EQ(gfnt_write_woff2(0x00010000, set.tables.data(), 0, nullptr, nullptr,
+      &out, nullptr), GFNT_ERR_INVALID) << "no tables";
+  EXPECT_EQ(gfnt_write_woff2(0x00010000, nullptr, 3, nullptr, nullptr, &out,
+      nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_write_woff2(0x00010000, set.tables.data(), set.tables.size(),
+      nullptr, nullptr, nullptr, nullptr), GFNT_ERR_INVALID);
+  {
+    auto doubled = set.tables;
+    doubled.push_back(doubled[0]);
+    EXPECT_EQ(gfnt_write_woff2(0x00010000, doubled.data(), doubled.size(), nullptr,
+        nullptr, &out, nullptr), GFNT_ERR_INVALID) << "a repeated tag";
+  }
+  {
+    auto bad = set.tables;
+    bad[0].data = nullptr;
+    EXPECT_EQ(gfnt_write_woff2(0x00010000, bad.data(), bad.size(), nullptr, nullptr,
+        &out, nullptr), GFNT_ERR_INVALID) << "bytes missing";
+  }
+  GFNT_Limits limits;
+  gfnt_limits_default(&limits);
+  limits.max_tables = 2;
+  EXPECT_EQ(gfnt_write_woff2(0x00010000, set.tables.data(), set.tables.size(),
+      &limits, nullptr, &out, nullptr), GFNT_ERR_LIMIT);
+  gfnt_limits_default(&limits);
+  limits.max_blob_bytes = 100;
+  GFNT_Result result = GFNT_OK;
+  written(source.face, &result, &limits);
+  EXPECT_EQ(result, GFNT_ERR_LIMIT);
+  EXPECT_EQ(out, nullptr);
+}
+
+TEST(Woff2Writer, AStatedBoxThatIsNotThePointsBoxIsKept) {
+  // Each of the four numbers of a stored box, made wrong in turn: the writer must
+  // state the box explicitly, and the reader must give it back.
+  Crafted source(read_fixture("woff2-triplets-source.ttf"));
+  ASSERT_EQ(source.result, GFNT_OK);
+  const std::string head = table_of(source.face, tag("head"));
+  const std::string loca = table_of(source.face, tag("loca"));
+  const bool long_format = be16(head, 50) == 1;
+  const size_t glyph3 = long_format ? be32(loca, 12) : 2 * be16(loca, 6);
+  for (int field = 0; field < 4; ++field) {
+    TableSet set(source.face);
+    std::string glyf = table_of(source.face, tag("glyf"));
+    const size_t at = glyph3 + 2 + 2 * size_t(field);
+    glyf[at + 1] = char(glyf[at + 1] + 7);
+    for (auto & t : set.tables) {
+      if (t.tag == tag("glyf")) t.data = reinterpret_cast<const uint8_t *>(glyf.data());
+    }
+    GFNT_Blob * out = nullptr;
+    ASSERT_EQ(gfnt_write_woff2(gfnt_face_flavour(source.face), set.tables.data(),
+        set.tables.size(), nullptr, nullptr, &out, nullptr), GFNT_OK);
+    const std::string woff2(reinterpret_cast<const char *>(gfnt_blob_data(out)),
+        gfnt_blob_size(out));
+    gfnt_blob_destroy(out);
+    Crafted back(woff2);
+    ASSERT_EQ(back.result, GFNT_OK) << back.error.message;
+    const std::string rebuilt = glyph_bytes(back.face, 3);
+    ASSERT_GE(rebuilt.size(), 10u);
+    for (int k = 0; k < 4; ++k) {
+      EXPECT_EQ(be16(rebuilt, 2 + 2 * size_t(k)), be16(glyf, glyph3 + 2 + 2 * size_t(k)))
+          << "field " << field << " number " << k;
+    }
+  }
+}
+
+TEST(Woff2Writer, AnAllocationFailureAnywhereIsReported) {
+  Crafted source(read_fixture("woff2-triplets-source.ttf"));
+  ASSERT_EQ(source.result, GFNT_OK);
+  TableSet set(source.face);
+  size_t refused = 0;
+  for (size_t fail_at = 0; fail_at < 80; ++fail_at) {
+    gfnttest::FailingAllocator allocator(fail_at);
+    GFNT_Blob * out = nullptr;
+    const GFNT_Result result = gfnt_write_woff2(gfnt_face_flavour(source.face),
+        set.tables.data(), set.tables.size(), nullptr, allocator.get(), &out,
+        nullptr);
+    if (result != GFNT_OK) {
+      ++refused;
+      EXPECT_EQ(result, GFNT_ERR_OOM) << "allocation " << fail_at;
+      EXPECT_EQ(out, nullptr);
+    }
+    gfnt_blob_destroy(out);
+    EXPECT_EQ(allocator.live(), 0u) << "allocation " << fail_at << " leaked";
+  }
+  EXPECT_GT(refused, 10u);
 }
 
 int main(int argc, char ** argv) {

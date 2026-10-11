@@ -254,6 +254,7 @@
 #define GFNT_WriteTable GHOTIIO_FONT(GFNT_WriteTable)
 #define gfnt_write_sfnt GHOTIIO_FONT(gfnt_write_sfnt)
 #define gfnt_write_woff GHOTIIO_FONT(gfnt_write_woff)
+#define gfnt_write_woff2 GHOTIIO_FONT(gfnt_write_woff2)
 #define GFNT_SubsetOptions GHOTIIO_FONT(GFNT_SubsetOptions)
 #define gfnt_subset_options_init GHOTIIO_FONT(gfnt_subset_options_init)
 #define gfnt_subset GHOTIIO_FONT(gfnt_subset)

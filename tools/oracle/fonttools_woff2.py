@@ -12,6 +12,14 @@
 
     fonttools_woff2.py make <scratch> <font>...
     fonttools_woff2.py compare <scratch> <font>...
+    fonttools_woff2.py read <scratch> <woff2>...
+    fonttools_woff2.py judge <scratch> <woff2>...
+    fonttools_woff2.py roundtrip <scratch> <woff2>...
+
+`read` and `judge` are for WOFF 2 files somebody else wrote: `read` records whether
+fontTools accepts each and, if it does, the tables it reads out; `judge` compares
+those with the tables `font-tables` wrote beside the file (`<file>.ours`, absent
+when this library refused it).
 
 `make` writes each font as a WOFF 2 file three ways - the default transforms
 (`glyf` and `loca`), those plus `hmtx`, and none at all - and, for each, the
@@ -187,6 +195,122 @@ def compare(scratch, fonts):
                       "explained": EXPLAINED}))
 
 
+def read(scratch, files):
+    """Whether fontTools accepts each file, and what it reads out of those it does."""
+    verdicts = {}
+    for path in files:
+        target = os.path.join(scratch, key(path) + ".ref")
+        try:
+            font = TTFont(path)
+            os.makedirs(target, exist_ok=True)
+            for tag in font.reader.tables:
+                name = "%08x" % int.from_bytes(tag.encode("latin-1").ljust(4)[:4],
+                                               "big")
+                with open(os.path.join(target, name), "wb") as handle:
+                    handle.write(font.reader[tag])
+            verdicts[path] = "accepted"
+        except Exception as why:
+            verdicts[path] = "rejected: %s: %s" % (type(why).__name__,
+                                                   str(why)[:80])
+    print(json.dumps(verdicts))
+
+
+def roundtrip(scratch, files):
+    """Files that come with the sfnt they were made from: is it what came back?"""
+    from fontTools.ttLib import TTCollection
+    out = {}
+    for path in files:
+        source = path[:-len(".woff2")] + ".ttf"
+        if not os.path.exists(source):
+            continue
+        with open(source, "rb") as handle:
+            collection = handle.read(4) == b"ttcf"
+        fonts = TTCollection(source).fonts if collection else [TTFont(source)]
+        problems = []
+        for i, font in enumerate(fonts):
+            ours_dir = "%s.ours.%d" % (os.path.join(scratch, key(path)), i)
+            if not os.path.isdir(ours_dir):
+                problems.append("face %d was not read" % i)
+                continue
+            ours = tables_of(ours_dir)
+            # A signature cannot survive the transform, and WOFF 2 drops it.
+            expected = {t for t in font.reader.tables if t != "DSIG"}
+            if set(ours) != expected:
+                problems.append("face %d tables %s" % (
+                    i, sorted(set(ours) ^ expected)))
+                continue
+            for tag in sorted(expected):
+                a, b = ours[tag], font.reader[tag]
+                if tag in ("glyf", "loca"):
+                    continue
+                if tag == "head":
+                    # Not the adjustment, nor bit 11 of the flags, which WOFF 2
+                    # sets to say the font was transformed.
+                    a, b = a[:8] + a[12:], b[:8] + b[12:]
+                    a = a[:12] + bytes([a[12] & ~0x08]) + a[13:]
+                    b = b[:12] + bytes([b[12] & ~0x08]) + b[13:]
+                if a != b:
+                    problems.append("face %d %s differs" % (i, tag))
+            if "glyf" in expected:
+                try:
+                    mine = assemble(ours, font.sfntVersion)
+                    for name in mine.getGlyphOrder():
+                        if glyph_view(mine, name) != glyph_view(font, name):
+                            problems.append("face %d glyph %s differs" % (i, name))
+                            break
+                except Exception as error:
+                    problems.append("face %d glyphs: %s" % (i, error))
+        out[path] = problems
+    print(json.dumps(out))
+
+
+def judge(scratch, files):
+    """Per file: both accept and agree, both reject, or the two differ."""
+    out = {}
+    for path in files:
+        ours_dir = os.path.join(scratch, key(path) + ".ours")
+        ref_dir = os.path.join(scratch, key(path) + ".ref")
+        ours_ok = os.path.isdir(ours_dir)
+        ref_ok = os.path.isdir(ref_dir)
+        if not ours_ok and not ref_ok:
+            out[path] = ["both-reject", ""]
+            continue
+        if ours_ok != ref_ok:
+            out[path] = ["differ", "this library %s, fontTools %s" % (
+                "accepts" if ours_ok else "rejects",
+                "accepts" if ref_ok else "rejects")]
+            continue
+        ours, ref = tables_of(ours_dir), tables_of(ref_dir)
+        if set(ours) != set(ref):
+            out[path] = ["differ", "tables %s" % sorted(set(ours) ^ set(ref))]
+            continue
+        why = ""
+        for tag in sorted(ref):
+            if tag in ("glyf", "loca"):
+                continue
+            a, b = ours[tag], ref[tag]
+            if tag == "head":
+                a, b = a[:8] + a[12:], b[:8] + b[12:]
+            if a != b:
+                why = "%s differs (%d vs %d bytes)" % (tag, len(a), len(b))
+                break
+        if not why and "glyf" in ref:
+            try:
+                flavor = "\0\1\0\0"
+                mine = assemble(ours, flavor)
+                theirs = assemble(ref, flavor)
+                for name in mine.getGlyphOrder():
+                    if glyph_view(mine, name) != glyph_view(theirs, name):
+                        why = "glyph %s differs" % name
+                        break
+            except Exception as error:
+                why = "cannot compare glyphs: %s" % error
+        out[path] = ["differ" if why else "agree", why]
+    print(json.dumps(out))
+
+
 if __name__ == "__main__":
     mode, scratch, fonts = sys.argv[1], sys.argv[2], sys.argv[3:]
-    {"make": make, "compare": compare}[mode](scratch, fonts)
+    {"make": make, "compare": compare, "read": read, "judge": judge,
+     "roundtrip": roundtrip}[mode](
+        scratch, fonts)

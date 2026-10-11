@@ -412,7 +412,16 @@ decode and against the source font. 525 sfnts are in the corpus, 510 fit under
 the cap and 1,436 files compare clean; the 15 left out are collections (fontTools
 writes none) and fonts over the cap. For thirteen fonts fontTools' decode of a
 transformed `hmtx` is shorter than the table it was given, and this library's is
-the source's byte for byte; the report says so. The fixtures
+the source's byte for byte; the report says so. `make check-oracle-woff2-real` reads files other encoders
+wrote, fetched into the oracle image by pinned hash: the W3C suite's 460 generated
+cases (valid and deliberately invalid, plus six round trips that come with their
+source sfnt, three of them collections that fontTools cannot read), and 146 web
+fonts from IBM Plex (static and variable) and Source Code Pro (TrueType, CFF and
+variable). All 146 agree with fontTools, the three collections round-trip to the
+suite's sfnt face by face, every file the suite calls valid is read, and the
+six invalid files this library refuses but fontTools reads are ones the suite
+refuses too; four more are invalid only in a metadata block, which is not read.
+The fixtures
 (`tools/fixtures/woff2_fixtures.py`) cover what fontTools never writes: all 128
 triplet classes, every `255UInt16` spelling, explicit boxes, the overlap bitmap, a
 composite with instructions, a collection, and a metadata and private block.

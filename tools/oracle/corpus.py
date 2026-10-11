@@ -58,6 +58,9 @@ LISTS = {
     "ebdt": "fonttools-corpus-ebdt",
     "variable": "fonttools-corpus-variable",
     "cff2": "fonttools-corpus-cff2",
+    # Real WOFF 2 files and the W3C suite's index pages. Not sfnts, so no other
+    # list selects them; see `fonttools-fetch-woff2`.
+    "woff2": "fonttools-corpus-woff2",
 }
 
 

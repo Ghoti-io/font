@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Fetch real WOFF 2 files into the corpus.
+
+Four sets, because they answer four different questions.
+
+  w3c-decoder, w3c-format   The W3C WOFF 2 test suite (w3c/woff2-tests), pinned to a
+                            commit. The repository holds generators, not files, so the
+                            two that need only fontTools and Brotli are run here, at
+                            build time, into the image: 164 decoder cases and 296
+                            format cases, each valid or deliberately invalid, with the
+                            suite's own verdict in its index page.
+  plex-mono                 IBM Plex Mono 2.5.0, 116 split web fonts, written by the
+                            reference woff2 encoder.
+  plex-sans-variable        IBM Plex Sans Variable 0.2.0, variable web fonts.
+  source-code-pro           Source Code Pro 2.042R-u / 1.062R-i / 1.026R-vf: TrueType,
+                            CFF and variable web fonts from Adobe's own build.
+
+Pinned the way `fonttools-fetch-bungee` is: each download's SHA-256 is checked, so a
+replaced release asset fails the build instead of changing the corpus. Nothing here is
+committed to the library (design.md section 14.5).
+
+Licences. IBM Plex and Source Code Pro are SIL OFL 1.1. The W3C test suite is under
+the W3C test-suite licence and 3-clause BSD, as its repository states; its files are
+used here only as data a differential reads, inside the image.
+"""
+
+import hashlib
+import io
+import os
+import subprocess
+import sys
+import tarfile
+import urllib.request
+import zipfile
+
+DEST = "/usr/share/fonts/woff2"
+
+W3C = ("https://github.com/w3c/woff2-tests/archive/"
+       "dd31222b7fde98552efa3b2d56fb3f4bd2554e4a.tar.gz",
+       "02d21b928bf95e4d575eba2c3a6ad67e497c50d0350972d54bace98330ba7b0c")
+
+ZIPS = {
+    "plex-mono": (
+        "https://github.com/IBM/plex/releases/download/"
+        "%40ibm%2Fplex-mono%402.5.0/ibm-plex-mono.zip",
+        "6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c"),
+    "plex-sans-variable": (
+        "https://github.com/IBM/plex/releases/download/"
+        "%40ibm%2Fplex-sans-variable%400.2.0/plex-sans-variable.zip",
+        "f83825d527be6cd39c8971c932b9bf22688a3ad3e5ac6305b6143d02f52b87b6"),
+    "source-code-pro": (
+        "https://github.com/adobe-fonts/source-code-pro/releases/download/"
+        "2.042R-u%2F1.062R-i%2F1.026R-vf/"
+        "WOFF2-source-code-pro-2.042R-u_1.062R-i_1.026Rvf.zip",
+        "2184c1f2bac48f4f7d952b0147dc0e48069fd1fb4a8c31b869b708efc978d365"),
+}
+
+
+def fetch(url, digest):
+    data = urllib.request.urlopen(url, timeout=300).read()
+    if hashlib.sha256(data).hexdigest() != digest:
+        sys.exit("fonttools-fetch-woff2: %s does not match its pin" % url)
+    return data
+
+
+def main():
+    count = 0
+    for name, (url, digest) in sorted(ZIPS.items()):
+        out = os.path.join(DEST, name)
+        os.makedirs(out, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(fetch(url, digest))) as archive:
+            for member in sorted(archive.namelist()):
+                if not member.endswith(".woff2") or member.startswith("__MACOSX"):
+                    continue
+                # Flatten, keeping the directory that tells the sets apart.
+                flat = member.replace("/", "__")
+                with open(os.path.join(out, flat), "wb") as handle:
+                    handle.write(archive.read(member))
+                count += 1
+
+    work = "/tmp/woff2-tests"
+    os.makedirs(work, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(fetch(*W3C)), mode="r:gz") as archive:
+        archive.extractall(work, filter="data")
+    repository = os.path.join(work, os.listdir(work)[0])
+    root = os.path.join(repository, "generators")
+    for generator, suite, name in (
+            ("DecoderTestCaseGenerator.py", "Decoder", "w3c-decoder"),
+            ("FormatTestCaseGenerator.py", "Format", "w3c-format")):
+        subprocess.run([sys.executable, generator], cwd=root, check=True,
+                       stdout=subprocess.DEVNULL)
+        tests = os.path.join(repository, suite, "Tests", "xhtml1")
+        out = os.path.join(DEST, name)
+        os.makedirs(out, exist_ok=True)
+        for entry in sorted(os.listdir(tests)):
+            if (entry.endswith(".woff2") or entry == "testcaseindex.xht"
+                    or (entry.endswith(".ttf") and entry.startswith("roundtrip-"))):
+                with open(os.path.join(tests, entry), "rb") as source, \
+                        open(os.path.join(out, entry), "wb") as target:
+                    target.write(source.read())
+                count += entry.endswith(".woff2")
+    print("fetched %d WOFF 2 files" % count)
+
+
+main()

@@ -1,0 +1,5 @@
+#!/bin/sh
+# The real WOFF 2 files in this image, one per line: what `fonttools-fetch-woff2` put
+# under /usr/share/fonts/woff2. Selected by the signature, not the name, so that a
+# file the W3C suite deliberately breaks is still listed, and with the suite's index pages.
+find /usr/share/fonts/woff2 -type f | sort

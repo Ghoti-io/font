@@ -186,6 +186,16 @@ COPY fonttools-fetch-bungee /usr/local/bin/
 RUN chmod +x /usr/local/bin/fonttools-fetch-bungee \
     && fonttools-fetch-bungee
 
+# Real WOFF 2 files (design.md section 7.1): the W3C suite's generated cases, and the
+# web fonts of IBM Plex and Source Code Pro as their projects ship them. Fetched into
+# the image by pinned SHA-256 like the Bungee fonts; the W3C generators run here, with
+# the fontTools and Brotli already in the image. Debian packages none. Under
+# /usr/share/fonts, where the sfnt lists walk, but by signature: a `wOF2` file is not
+# an sfnt and no list selects it.
+COPY fonttools-fetch-woff2 fonttools-corpus-woff2 /usr/local/bin/
+RUN chmod +x /usr/local/bin/fonttools-fetch-woff2 /usr/local/bin/fonttools-corpus-woff2 \
+    && fonttools-fetch-woff2
+
 # Wine puts its fonts in /usr/share/wine/fonts, which is not /usr/share/fonts, so
 # every corpus list program in this image walked past seven of the eleven EBSC
 # faces in Debian - including the sweep that found them, which is why the count

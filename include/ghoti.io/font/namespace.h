@@ -255,6 +255,8 @@
 #define gfnt_write_sfnt GHOTIIO_FONT(gfnt_write_sfnt)
 #define gfnt_write_woff GHOTIIO_FONT(gfnt_write_woff)
 #define gfnt_write_woff2 GHOTIIO_FONT(gfnt_write_woff2)
+#define gfnt_write_woff2_collection GHOTIIO_FONT(gfnt_write_woff2_collection)
+#define gfnt_write_collection GHOTIIO_FONT(gfnt_write_collection)
 #define gfnt_write_bitmap_font GHOTIIO_FONT(gfnt_write_bitmap_font)
 #define gfnt_write_cff GHOTIIO_FONT(gfnt_write_cff)
 #define gfnt_write_type1 GHOTIIO_FONT(gfnt_write_type1)

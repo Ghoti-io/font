@@ -400,7 +400,8 @@ static bool encode_glyph(const uint8_t * data, size_t length, Streams * s,
  */
 static GFNT_Result transform_glyf(const GFNT_Allocator * a, const W2Table * glyf,
     const W2Table * loca, uint32_t num_glyphs, uint32_t * index_format,
-    uint8_t ** out, size_t * out_length, int16_t ** out_xmin, bool * ok) {
+    bool allow_long, uint8_t ** out, size_t * out_length, int16_t ** out_xmin,
+    bool * ok) {
   Streams s;
   GFNT_WBuf result;
   uint8_t * bitmap = NULL;
@@ -480,6 +481,9 @@ static GFNT_Result transform_glyf(const GFNT_Allocator * a, const W2Table * glyf
   // unreadable.
   if (source_format == 0
       && (uint64_t)glyf->length + 4ull * num_glyphs + 1024u > 0x1FFFEull) {
+    if (!allow_long) {
+      goto done; // a head shared with another face cannot be told to change
+    }
     *index_format = 1;
   }
   {
@@ -536,259 +540,423 @@ done:
   return fine ? GFNT_OK : GFNT_ERR_OOM;
 }
 
-static int by_tag(const void * x, const void * y) {
-  const W2Table * a = x;
-  const W2Table * b = y;
-
-  return a->tag < b->tag ? -1 : a->tag > b->tag;
-}
-
-static W2Table * find_table(W2Table * t, size_t n, uint32_t tag) {
+static size_t uid_find(const W2Table * u, size_t n, const GFNT_WriteTable * t) {
   size_t i;
 
   for (i = 0; i < n; ++i) {
-    if (t[i].tag == tag) {
-      return &t[i];
+    if (u[i].tag == t->tag && u[i].length == t->length
+        && (t->length == 0 || memcmp(u[i].data, t->data, t->length) == 0)) {
+      return i;
     }
   }
-  return NULL;
+  return (size_t)-1;
 }
 
-GFNT_Result gfnt_write_woff2(GFNT_Tag flavour, const GFNT_WriteTable * tables,
-    size_t count, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+typedef struct W2Face {
+  uint32_t flavour;
+  size_t count;
+  size_t * uid;   ///< Unique-table ids, one per table.
+  size_t * pos;   ///< Directory positions of the same.
+} W2Face;
+
+/** The unique id of tag @p tag in @p face, or (size_t)-1. */
+static size_t face_find(const W2Table * u, const W2Face * face, uint32_t tag) {
+  size_t i;
+
+  for (i = 0; i < face->count; ++i) {
+    if (u[face->uid[i]].tag == tag) {
+      return face->uid[i];
+    }
+  }
+  return (size_t)-1;
+}
+
+static GFNT_Result write_general(const GFNT_WriteFace * in, size_t face_count,
+    bool collection, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
     GFNT_Blob ** out_blob, GFNT_Error * error) {
-  GFNT_Limits defaults;
-  W2Table * t = NULL;
-  GFNT_WBuf directory;
-  GFNT_WBuf stream;
-  GFNT_WBuf file;
-  uint8_t * glyf_bytes = NULL;
-  int16_t * xmin = NULL;
+  const size_t NONE = (size_t)-1;
+  W2Table * u = NULL;           // unique tables, by first appearance
+  size_t unique = 0;
+  size_t total_tables = 0;
+  W2Face * faces = NULL;
+  size_t * order = NULL;        // directory position -> unique id
+  size_t * position = NULL;     // unique id -> directory position
+  size_t * paired = NULL;       // glyf id -> loca id, and loca id -> glyf id
+  bool * conflict = NULL;
+  int16_t ** xmins = NULL;      // glyf id -> each glyph's xMin
+  uint32_t * glyph_counts = NULL;
+  uint32_t * formats = NULL;
+  GFNT_WBuf directory, stream, file;
   void * packed = NULL;
   size_t packed_length = 0;
   GFNT_Result result = GFNT_OK;
-  W2Table * glyf;
-  W2Table * loca;
-  W2Table * head;
-  uint32_t num_glyphs = 0;
-  uint32_t index_format = 0;
   uint32_t revision = 0;
   uint64_t sfnt_size;
-  size_t i;
+  size_t i, f, k;
 
-  if (!out_blob) {
-    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
-        "nowhere to put the font");
-  }
-  if (!limits) {
-    gfnt_limits_default(&defaults);
-    limits = &defaults;
-  }
-  if (!allocator) {
-    allocator = gfnt_allocator_default();
-  }
   gfnt_wbuf_init(&directory, allocator);
   gfnt_wbuf_init(&stream, allocator);
   gfnt_wbuf_init(&file, allocator);
-  if (!tables || count == 0 || count > limits->max_tables) {
-    return gfnt_error_set(error, count == 0 || !tables ? GFNT_ERR_INVALID
-                                                      : GFNT_ERR_LIMIT,
-        0, 0, GFNT_GLYPH_NONE, "no tables, or more than the limit allows");
+  if (!in || face_count == 0) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no tables, or no faces");
   }
-  t = allocator->calloc_fn(allocator->ctx, count, sizeof *t);
-  if (!t) {
-    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+  for (f = 0; f < face_count; ++f) {
+    if (!in[f].tables || in[f].count == 0 || in[f].count > limits->max_tables) {
+      return gfnt_error_set(error,
+          !in[f].tables || in[f].count == 0 ? GFNT_ERR_INVALID : GFNT_ERR_LIMIT, 0, 0,
+          GFNT_GLYPH_NONE, "no tables, or more than the limit allows");
+    }
+    total_tables += in[f].count;
+    for (i = 0; i < in[f].count; ++i) {
+      size_t j;
+
+      if (!in[f].tables[i].data && in[f].tables[i].length) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, in[f].tables[i].tag, 0,
+            GFNT_GLYPH_NONE, "a table with a length and no bytes");
+      }
+      for (j = 0; j < i; ++j) {
+        if (in[f].tables[j].tag == in[f].tables[i].tag) {
+          return gfnt_error_set(error, GFNT_ERR_INVALID, in[f].tables[i].tag, 0,
+              GFNT_GLYPH_NONE, "a tag appears twice in one font");
+        }
+      }
+    }
+  }
+  if (total_tables > 65535u) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+        "more tables than a WOFF 2 directory can index");
+  }
+  u = allocator->calloc_fn(allocator->ctx, total_tables, sizeof *u);
+  faces = allocator->calloc_fn(allocator->ctx, face_count, sizeof *faces);
+  order = allocator->calloc_fn(allocator->ctx, total_tables, sizeof *order);
+  position = allocator->calloc_fn(allocator->ctx, total_tables, sizeof *position);
+  paired = allocator->calloc_fn(allocator->ctx, total_tables, sizeof *paired);
+  conflict = allocator->calloc_fn(allocator->ctx, total_tables, sizeof *conflict);
+  xmins = allocator->calloc_fn(allocator->ctx, total_tables, sizeof *xmins);
+  glyph_counts = allocator->calloc_fn(allocator->ctx, total_tables,
+      sizeof *glyph_counts);
+  formats = allocator->calloc_fn(allocator->ctx, total_tables, sizeof *formats);
+  if (!u || !faces || !order || !position || !paired || !conflict || !xmins
+      || !glyph_counts || !formats) {
+    result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "allocating the table list");
+    goto done;
   }
-  for (i = 0; i < count; ++i) {
-    if (!tables[i].data && tables[i].length) {
-      result = gfnt_error_set(error, GFNT_ERR_INVALID, tables[i].tag, 0,
-          GFNT_GLYPH_NONE, "a table with a length and no bytes");
+  for (f = 0; f < face_count; ++f) {
+    faces[f].flavour = in[f].flavour;
+    faces[f].count = in[f].count;
+    faces[f].uid = allocator->calloc_fn(allocator->ctx, in[f].count, sizeof(size_t));
+    faces[f].pos = allocator->calloc_fn(allocator->ctx, in[f].count, sizeof(size_t));
+    if (!faces[f].uid || !faces[f].pos) {
+      result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "allocating the table list");
       goto done;
     }
-    t[i].tag = tables[i].tag;
-    t[i].data = tables[i].data;
-    t[i].length = tables[i].length;
-  }
-  qsort(t, count, sizeof *t, by_tag);
-  for (i = 1; i < count; ++i) {
-    if (t[i].tag == t[i - 1].tag) {
-      result = gfnt_error_set(error, GFNT_ERR_INVALID, t[i].tag, 0,
-          GFNT_GLYPH_NONE, "a tag appears twice");
-      goto done;
-    }
-  }
-  // `loca` straight after `glyf`, as the format asks of the directory.
-  glyf = find_table(t, count, TAG_GLYF);
-  loca = find_table(t, count, TAG_LOCA);
-  if (glyf && loca && loca != glyf + 1) {
-    W2Table moved = *loca;
-    size_t from = (size_t)(loca - t);
-    size_t to = (size_t)(glyf - t) + 1;
+    for (i = 0; i < in[f].count; ++i) {
+      size_t id = uid_find(u, unique, &in[f].tables[i]);
 
-    if (from > to) {
-      memmove(&t[to + 1], &t[to], (from - to) * sizeof *t);
+      if (id == NONE) {
+        id = unique++;
+        u[id].tag = in[f].tables[i].tag;
+        u[id].data = in[f].tables[i].data;
+        u[id].length = in[f].tables[i].length;
+        u[id].original = u[id].data;
+        u[id].original_length = u[id].length;
+        u[id].stream = u[id].data;
+        u[id].stream_length = u[id].length;
+      }
+      faces[f].uid[i] = id;
     }
-    else {
-      memmove(&t[from], &t[from + 1], (to - from - 1) * sizeof *t);
-      to -= 1;
-    }
-    t[to] = moved;
-    glyf = find_table(t, count, TAG_GLYF);
-    loca = find_table(t, count, TAG_LOCA);
   }
-  for (i = 0; i < count; ++i) {
-    t[i].original = t[i].data;
-    t[i].original_length = t[i].length;
-    t[i].stream = t[i].data;
-    t[i].stream_length = t[i].length;
+  for (i = 0; i < unique; ++i) {
+    paired[i] = NONE;
+    position[i] = NONE;
   }
+  // Which loca goes with which glyf. A glyf (or loca) shared by two fonts with
+  // different partners cannot be transformed, because the transform ties them.
+  for (f = 0; f < face_count; ++f) {
+    size_t g = face_find(u, &faces[f], TAG_GLYF);
+    size_t l = face_find(u, &faces[f], TAG_LOCA);
 
-  head = find_table(t, count, TAG_HEAD);
-  if (head && head->length >= 54) {
-    revision = be32(head->data + 4);
-    index_format = be16(head->data + 50) == 1 ? 1u : 0u;
-  }
-  {
-    W2Table * maxp = find_table(t, count, TAG_MAXP);
-
-    if (maxp && maxp->length >= 6) {
-      num_glyphs = be16(maxp->data + 4);
+    if (g == NONE && l == NONE) {
+      continue;
     }
+    if (g == NONE || l == NONE) {
+      if (g != NONE) conflict[g] = true;
+      if (l != NONE) conflict[l] = true;
+      continue;
+    }
+    if ((paired[g] != NONE && paired[g] != l) || (paired[l] != NONE && paired[l] != g)) {
+      conflict[g] = conflict[l] = true;
+    }
+    paired[g] = l;
+    paired[l] = g;
   }
-  if (glyf && loca && head && head->length >= 54 && num_glyphs > 0
-      && (flavour == 0x00010000u || flavour == GFNT_TAG('t', 'r', 'u', 'e'))
-      && be16(head->data + 52) == 0) {
+  // The transforms: one per glyf, from the first font that has it.
+  for (f = 0; f < face_count; ++f) {
+    size_t g = face_find(u, &faces[f], TAG_GLYF);
+    size_t head_id = face_find(u, &faces[f], TAG_HEAD);
+    size_t maxp_id = face_find(u, &faces[f], TAG_MAXP);
     bool ok = false;
+    uint32_t num_glyphs = 0;
+    uint32_t index_format = 0;
+    size_t l;
 
-    result = transform_glyf(allocator, glyf, loca, num_glyphs, &index_format,
-        &glyf_bytes, &glyf->stream_length, &xmin, &ok);
-    if (result != GFNT_OK) {
-      result = gfnt_error_set(error, GFNT_ERR_OOM, TAG_GLYF, 0, GFNT_GLYPH_NONE,
-          "transforming glyf");
-      goto done;
+    if (g == NONE || conflict[g] || u[g].transformed || xmins[g]
+        || (u[g].version == 3)) {
+      continue;
     }
-    if (ok) {
-      glyf->owned = glyf_bytes;
-      glyf->stream = glyf_bytes;
-      glyf->transformed = true;
-      glyf->version = 0;
-      loca->transformed = true;
-      loca->version = 0;
-      loca->stream = (const uint8_t *)"";
-      loca->stream_length = 0;
-      loca->original_length = ((size_t)num_glyphs + 1u) * (index_format ? 4u : 2u);
-      loca->original = NULL;
+    l = paired[g];
+    if (l == NONE || conflict[l] || head_id == NONE || maxp_id == NONE
+        || u[head_id].length < 54 || u[maxp_id].length < 6
+        || !(faces[f].flavour == 0x00010000u
+            || faces[f].flavour == GFNT_TAG('t', 'r', 'u', 'e'))
+        || be16(u[head_id].data + 52) != 0) {
+      u[g].version = 3;
+      u[l == NONE ? g : l].version = 3;
+      continue;
+    }
+    num_glyphs = be16(u[maxp_id].data + 4);
+    index_format = be16(u[head_id].data + 50) == 1 ? 1u : 0u;
+    if (num_glyphs == 0) {
+      u[g].version = 3;
+      u[l].version = 3;
+      continue;
+    }
+    {
+      uint8_t * bytes = NULL;
+      size_t length = 0;
+      int16_t * x = NULL;
+
+      result = transform_glyf(allocator, &u[g], &u[l], num_glyphs, &index_format,
+          !collection, &bytes, &length, &x, &ok);
+      if (result != GFNT_OK) {
+        result = gfnt_error_set(error, GFNT_ERR_OOM, TAG_GLYF, 0, GFNT_GLYPH_NONE,
+            "transforming glyf");
+        goto done;
+      }
+      if (ok) {
+        u[g].owned = bytes;
+        u[g].stream = bytes;
+        u[g].stream_length = length;
+        u[g].transformed = true;
+        u[g].version = 0;
+        u[l].transformed = true;
+        u[l].version = 0;
+        u[l].stream = (const uint8_t *)"";
+        u[l].stream_length = 0;
+        u[l].original = NULL;
+        u[l].original_length = ((size_t)num_glyphs + 1u) * (index_format ? 4u : 2u);
+        xmins[g] = x;
+        glyph_counts[g] = num_glyphs;
+        formats[g] = index_format;
+      }
+      else {
+        u[g].version = 3;
+        u[l].version = 3;
+      }
     }
   }
-  if (!glyf || !glyf->transformed) {
-    if (glyf) {
-      glyf->version = 3;
-    }
-    if (loca) {
-      loca->version = 3;
+  // Every glyf or loca a font has that was not transformed is stored (version 3).
+  for (i = 0; i < unique; ++i) {
+    if ((u[i].tag == TAG_GLYF || u[i].tag == TAG_LOCA) && !u[i].transformed) {
+      u[i].version = 3;
     }
   }
-  // `head`: bit 11 of the flags says the font was transformed, and the index format
-  // follows the rebuilt `loca`.
-  if (head && head->length >= 54) {
-    uint8_t * copy = allocator->calloc_fn(allocator->ctx, head->length, 1);
+  // `head`: bit 11 of the flags, and the index format a transformed glyf asked for.
+  for (i = 0; i < unique; ++i) {
+    if (u[i].tag == TAG_HEAD && u[i].length >= 54) {
+      uint8_t * copy = allocator->calloc_fn(allocator->ctx, u[i].length, 1);
+      uint32_t wanted = be16(u[i].data + 50);
 
-    if (!copy) {
-      result = gfnt_error_set(error, GFNT_ERR_OOM, TAG_HEAD, 0, GFNT_GLYPH_NONE,
-          "copying head");
-      goto done;
+      if (!copy) {
+        result = gfnt_error_set(error, GFNT_ERR_OOM, TAG_HEAD, 0, GFNT_GLYPH_NONE,
+            "copying head");
+        goto done;
+      }
+      memcpy(copy, u[i].data, u[i].length);
+      copy[16] |= 0x08;
+      for (f = 0; f < face_count; ++f) {
+        size_t g = face_find(u, &faces[f], TAG_GLYF);
+
+        if (face_find(u, &faces[f], TAG_HEAD) == i && g != NONE && xmins[g]) {
+          wanted = formats[g];
+        }
+      }
+      gfnt_write_put16(copy + 50, wanted);
+      u[i].owned = copy;
+      u[i].original = copy;
+      u[i].stream = copy;
     }
-    memcpy(copy, head->data, head->length);
-    copy[16] |= 0x08;
-    if (glyf && glyf->transformed) {
-      gfnt_write_put16(copy + 50, index_format);
-    }
-    head->owned = copy;
-    head->original = copy;
-    head->stream = copy;
   }
-  // `hmtx`, when its bearings are the glyphs' xMin.
-  if (glyf && glyf->transformed && xmin) {
-    W2Table * hmtx = find_table(t, count, TAG_HMTX);
-    W2Table * hhea = find_table(t, count, TAG_HHEA);
+  // `hmtx`, when every font that has it agrees about the glyphs and the metric count.
+  for (i = 0; i < unique; ++i) {
+    size_t g = NONE, h = NONE;
+    bool agreed = u[i].tag == TAG_HMTX;
 
-    if (hmtx && hhea && hhea->length >= 36) {
-      uint32_t metrics = be16(hhea->data + 34);
+    for (f = 0; f < face_count && agreed; ++f) {
+      size_t gg, hh;
+
+      if (face_find(u, &faces[f], TAG_HMTX) != i) {
+        continue;
+      }
+      gg = face_find(u, &faces[f], TAG_GLYF);
+      hh = face_find(u, &faces[f], TAG_HHEA);
+      if (gg == NONE || hh == NONE || !xmins[gg] || (g != NONE && g != gg)
+          || (h != NONE && h != hh)) {
+        agreed = false;
+      }
+      g = gg;
+      h = hh;
+    }
+    if (agreed && g != NONE && h != NONE && u[h].length >= 36) {
+      uint32_t metrics = be16(u[h].data + 34);
+      uint32_t num_glyphs = glyph_counts[g];
 
       if (metrics >= 1 && metrics <= num_glyphs
-          && hmtx->length == 4u * metrics + 2u * (num_glyphs - metrics)) {
+          && u[i].length == 4u * metrics + 2u * (num_glyphs - metrics)) {
         bool proportional = true;
         bool mono = true;
         uint8_t * out;
         size_t at = 1;
-        uint32_t g;
+        uint32_t n;
 
-        for (g = 0; g < num_glyphs; ++g) {
-          uint32_t lsb = g < metrics ? be16(hmtx->data + 4u * g + 2u)
-              : be16(hmtx->data + 4u * metrics + 2u * (g - metrics));
+        for (n = 0; n < num_glyphs; ++n) {
+          uint32_t lsb = n < metrics ? be16(u[i].data + 4u * n + 2u)
+              : be16(u[i].data + 4u * metrics + 2u * (n - metrics));
 
-          if (lsb != (uint16_t)xmin[g]) {
-            if (g < metrics) proportional = false;
+          if (lsb != (uint16_t)xmins[g][n]) {
+            if (n < metrics) proportional = false;
             else mono = false;
           }
         }
         if (proportional || mono) {
-          out = allocator->calloc_fn(allocator->ctx, hmtx->length + 1, 1);
+          out = allocator->calloc_fn(allocator->ctx, u[i].length + 1, 1);
           if (!out) {
             result = gfnt_error_set(error, GFNT_ERR_OOM, TAG_HMTX, 0,
                 GFNT_GLYPH_NONE, "transforming hmtx");
             goto done;
           }
           out[0] = (uint8_t)((proportional ? 1 : 0) | (mono ? 2 : 0));
-          for (g = 0; g < metrics; ++g) {
-            memcpy(out + at, hmtx->data + 4u * g, 2);
+          for (n = 0; n < metrics; ++n) {
+            memcpy(out + at, u[i].data + 4u * n, 2);
             at += 2;
           }
           if (!proportional) {
-            for (g = 0; g < metrics; ++g) {
-              memcpy(out + at, hmtx->data + 4u * g + 2u, 2);
+            for (n = 0; n < metrics; ++n) {
+              memcpy(out + at, u[i].data + 4u * n + 2u, 2);
               at += 2;
             }
           }
           if (!mono) {
-            memcpy(out + at, hmtx->data + 4u * metrics, 2u * (num_glyphs - metrics));
+            memcpy(out + at, u[i].data + 4u * metrics, 2u * (num_glyphs - metrics));
             at += 2u * (num_glyphs - metrics);
           }
-          hmtx->owned = out;
-          hmtx->stream = out;
-          hmtx->stream_length = at;
-          hmtx->transformed = true;
-          hmtx->version = 1;
+          u[i].owned = out;
+          u[i].stream = out;
+          u[i].stream_length = at;
+          u[i].transformed = true;
+          u[i].version = 1;
         }
       }
     }
   }
 
-  // The directory and the stream.
-  sfnt_size = 12u + 16u * (uint64_t)count;
-  for (i = 0; i < count; ++i) {
-    unsigned k;
-    unsigned index = 63;
-    size_t original = t[i].original_length;
+  // The directory order: by tag, each loca straight after its glyf.
+  {
+    size_t placed = 0;
+    bool * done_flag = allocator->calloc_fn(allocator->ctx, unique, sizeof *done_flag);
+    size_t * sorted = allocator->calloc_fn(allocator->ctx, unique, sizeof *sorted);
 
-    for (k = 0; k < 63; ++k) {
-      if (t[i].tag == GFNT_TAG(known_tags[k][0], known_tags[k][1],
-              known_tags[k][2], known_tags[k][3])) {
-        index = k;
+    if (!done_flag || !sorted) {
+      allocator->free_fn(allocator->ctx, done_flag);
+      allocator->free_fn(allocator->ctx, sorted);
+      result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "ordering the directory");
+      goto done;
+    }
+    for (i = 0; i < unique; ++i) {
+      sorted[i] = i;
+    }
+    for (i = 1; i < unique; ++i) { // insertion sort by tag, stable
+      size_t v = sorted[i];
+      size_t j = i;
+
+      while (j > 0 && u[sorted[j - 1]].tag > u[v].tag) {
+        sorted[j] = sorted[j - 1];
+        --j;
+      }
+      sorted[j] = v;
+    }
+    for (i = 0; i < unique; ++i) {
+      size_t id = sorted[i];
+
+      if (done_flag[id]) {
+        continue;
+      }
+      order[placed++] = id;
+      done_flag[id] = true;
+      if (u[id].tag == TAG_GLYF && paired[id] != NONE && !done_flag[paired[id]]
+          && !conflict[id]) {
+        order[placed++] = paired[id];
+        done_flag[paired[id]] = true;
+      }
+    }
+    allocator->free_fn(allocator->ctx, done_flag);
+    allocator->free_fn(allocator->ctx, sorted);
+  }
+  for (i = 0; i < unique; ++i) {
+    position[order[i]] = i;
+  }
+  for (f = 0; f < face_count; ++f) {
+    for (i = 0; i < faces[f].count; ++i) {
+      faces[f].pos[i] = position[faces[f].uid[i]];
+    }
+  }
+  {
+    size_t head_id = face_find(u, &faces[0], TAG_HEAD);
+
+    if (head_id != NONE && u[head_id].length >= 8) {
+      revision = be32(u[head_id].data + 4);
+    }
+  }
+
+  // The directory and the stream.
+  sfnt_size = 12u + 16u * (uint64_t)unique;
+  for (i = 0; i < unique; ++i) {
+    const W2Table * e = &u[order[i]];
+    unsigned index = 63;
+    unsigned n;
+
+    for (n = 0; n < 63; ++n) {
+      if (e->tag == GFNT_TAG(known_tags[n][0], known_tags[n][1], known_tags[n][2],
+              known_tags[n][3])) {
+        index = n;
         break;
       }
     }
-    gfnt_wbuf_u8(&directory, index | ((unsigned)t[i].version << 6));
+    gfnt_wbuf_u8(&directory, index | ((unsigned)e->version << 6));
     if (index == 63) {
-      gfnt_wbuf_u32(&directory, t[i].tag);
+      gfnt_wbuf_u32(&directory, e->tag);
     }
-    put_base128(&directory, (uint32_t)original);
-    if (t[i].transformed) {
-      put_base128(&directory, (uint32_t)t[i].stream_length);
+    put_base128(&directory, (uint32_t)e->original_length);
+    if (e->transformed) {
+      put_base128(&directory, (uint32_t)e->stream_length);
     }
-    gfnt_wbuf_bytes(&stream, t[i].stream, t[i].stream_length);
-    sfnt_size += pad4(original);
+    gfnt_wbuf_bytes(&stream, e->stream, e->stream_length);
+    sfnt_size += pad4(e->original_length);
+  }
+  if (collection) {
+    gfnt_wbuf_u32(&directory, 0x00010000u);
+    put_255u16(&directory, (uint32_t)face_count);
+    for (f = 0; f < face_count; ++f) {
+      put_255u16(&directory, (uint32_t)faces[f].count);
+      gfnt_wbuf_u32(&directory, faces[f].flavour);
+      for (k = 0; k < faces[f].count; ++k) {
+        put_255u16(&directory, (uint32_t)faces[f].pos[k]);
+      }
+    }
   }
   if (directory.oom || stream.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
@@ -823,9 +991,9 @@ GFNT_Result gfnt_write_woff2(GFNT_Tag flavour, const GFNT_WriteTable * tables,
       goto done;
     }
     gfnt_wbuf_u32(&file, GFNT_TAG('w', 'O', 'F', '2'));
-    gfnt_wbuf_u32(&file, flavour);
+    gfnt_wbuf_u32(&file, collection ? GFNT_TAG('t', 't', 'c', 'f') : faces[0].flavour);
     gfnt_wbuf_u32(&file, (uint32_t)total);
-    gfnt_wbuf_u16(&file, (uint32_t)count);
+    gfnt_wbuf_u16(&file, (uint32_t)unique);
     gfnt_wbuf_u16(&file, 0);
     gfnt_wbuf_u32(&file, (uint32_t)sfnt_size);
     gfnt_wbuf_u32(&file, (uint32_t)packed_length);
@@ -850,15 +1018,72 @@ done:
   if (packed) {
     gcomp_buffer_free(NULL, packed);
   }
-  if (t) {
-    for (i = 0; i < count; ++i) {
-      allocator->free_fn(allocator->ctx, t[i].owned);
+  if (u) {
+    for (i = 0; i < total_tables; ++i) {
+      allocator->free_fn(allocator->ctx, u[i].owned);
     }
   }
-  allocator->free_fn(allocator->ctx, xmin);
-  allocator->free_fn(allocator->ctx, t);
+  if (xmins) {
+    for (i = 0; i < total_tables; ++i) {
+      allocator->free_fn(allocator->ctx, xmins[i]);
+    }
+  }
+  if (faces) {
+    for (f = 0; f < face_count; ++f) {
+      allocator->free_fn(allocator->ctx, faces[f].uid);
+      allocator->free_fn(allocator->ctx, faces[f].pos);
+    }
+  }
+  allocator->free_fn(allocator->ctx, formats);
+  allocator->free_fn(allocator->ctx, glyph_counts);
+  allocator->free_fn(allocator->ctx, xmins);
+  allocator->free_fn(allocator->ctx, conflict);
+  allocator->free_fn(allocator->ctx, paired);
+  allocator->free_fn(allocator->ctx, position);
+  allocator->free_fn(allocator->ctx, order);
+  allocator->free_fn(allocator->ctx, faces);
+  allocator->free_fn(allocator->ctx, u);
   gfnt_wbuf_free(&directory);
   gfnt_wbuf_free(&stream);
   gfnt_wbuf_free(&file);
   return result;
+}
+
+GFNT_Result gfnt_write_woff2(GFNT_Tag flavour, const GFNT_WriteTable * tables,
+    size_t count, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    GFNT_Blob ** out_blob, GFNT_Error * error) {
+  GFNT_Limits defaults;
+  GFNT_WriteFace face = {flavour, tables, count};
+
+  if (!out_blob) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "nowhere to put the font");
+  }
+  if (!limits) {
+    gfnt_limits_default(&defaults);
+    limits = &defaults;
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  return write_general(&face, 1, false, limits, allocator, out_blob, error);
+}
+
+GFNT_Result gfnt_write_woff2_collection(const GFNT_WriteFace * faces,
+    size_t face_count, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    GFNT_Blob ** out_blob, GFNT_Error * error) {
+  GFNT_Limits defaults;
+
+  if (!out_blob) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "nowhere to put the font");
+  }
+  if (!limits) {
+    gfnt_limits_default(&defaults);
+    limits = &defaults;
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  return write_general(faces, face_count, true, limits, allocator, out_blob, error);
 }

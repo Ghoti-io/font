@@ -1807,7 +1807,18 @@ overlap bitmap when a glyph has the flag, `hmtx` without its bearings when they 
 the glyphs' `xMin`, `loca` after `glyf` - under `compress`'s Brotli encoder (LZ77 and
 Huffman; no context model or static dictionary, so about a fifth larger than the
 reference encoder's). A font whose `glyf` does not parse is stored untransformed
-(version 3), not refused. One font; no collection writer.
+(version 3), not refused.
+
+Collections (`gfnt_write_collection()` for a TrueType Collection,
+`gfnt_write_woff2_collection()` for WOFF 2): faces are given as table lists and a
+table with the same tag and bytes in several is stored once. A TTC changes no table,
+so fontTools reads back every table of every face byte for byte; a WOFF 2 collection
+transforms each `glyf`/`loca` pair that every face sharing it agrees on, and stores a
+pair shared with different partners untransformed rather than guess (nor does it
+switch a short `loca` to the long form, since the `head` may be shared).
+`make check-oracle-collection-write` writes the corpus's two `.ttc` files and the W3C
+suite's three collections both ways; fontTools reads the TTCs, and this library
+reads the WOFF 2 collections (fontTools reads none) against the sfnt each came from.
 
 The bitmap containers (`gfnt_write_bitmap_font()`): BDF, PCF, PSF 1 and 2 and
 GNU Unifont's `.hex`, from one strike of any face that has a one-bit strike - so it

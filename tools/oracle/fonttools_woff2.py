@@ -16,6 +16,11 @@
     fonttools_woff2.py judge <scratch> <woff2>...
     fonttools_woff2.py roundtrip <scratch> <woff2>...
     fonttools_woff2.py written <scratch> <font>...
+    fonttools_woff2.py ttc <scratch> <collection>...
+
+`ttc` is for TrueType Collections this library wrote: for each source collection,
+`<scratch>/<key>.ttc` is read by fontTools and every table of every face must be the
+source face's, byte for byte (the writer changes nothing about a table).
 
 `written` is for WOFF 2 files this library wrote (`font-convert`): for each font,
 `<scratch>/<key>.woff2` is read by fontTools and `<scratch>/<key>.woff2.ours` holds
@@ -349,6 +354,32 @@ def written(scratch, fonts):
                       "explained": explained}))
 
 
+def ttc(scratch, files):
+    from fontTools.ttLib import TTCollection
+    problems = []
+    checked = 0
+    for path in files:
+        target = os.path.join(scratch, key(path) + ".ttc")
+        try:
+            want = TTCollection(path).fonts
+            got = TTCollection(target).fonts
+            if len(want) != len(got):
+                problems.append("%s: %d faces became %d" % (path, len(want), len(got)))
+                continue
+            for i, (w, g) in enumerate(zip(want, got)):
+                if set(w.reader.tables) != set(g.reader.tables):
+                    problems.append("%s face %d: tables %s differ" % (
+                        path, i, sorted(set(w.reader.tables) ^ set(g.reader.tables))))
+                    continue
+                for tag in w.reader.tables:
+                    if w.reader[tag] != g.reader[tag]:
+                        problems.append("%s face %d: %s differs" % (path, i, tag))
+            checked += 1
+        except Exception as why:
+            problems.append("%s: %s: %s" % (path, type(why).__name__, why))
+    print(json.dumps({"checked": checked, "problems": problems}))
+
+
 def judge(scratch, files):
     """Per file: both accept and agree, both reject, or the two differ."""
     out = {}
@@ -397,5 +428,5 @@ def judge(scratch, files):
 if __name__ == "__main__":
     mode, scratch, fonts = sys.argv[1], sys.argv[2], sys.argv[3:]
     {"make": make, "compare": compare, "read": read, "judge": judge,
-     "roundtrip": roundtrip, "written": written}[mode](
+     "roundtrip": roundtrip, "written": written, "ttc": ttc}[mode](
         scratch, fonts)

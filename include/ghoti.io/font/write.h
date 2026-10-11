@@ -113,6 +113,61 @@ GFNT_API GFNT_Result gfnt_write_woff(GFNT_Tag flavour,
     const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
 
 /**
+ * One font of a collection: its flavour and its tables.
+ *
+ * As for ::GFNT_WriteTable, the bytes are borrowed for the call.
+ */
+typedef struct GFNT_WriteFace {
+  GFNT_Tag flavour;               ///< The sfnt version of this font.
+  const GFNT_WriteTable * tables; ///< Its tables, in any order.
+  size_t count;                   ///< How many.
+} GFNT_WriteFace;
+
+/**
+ * @brief Serialise several fonts as a TrueType Collection.
+ *
+ * Two tables are shared when their tag and every byte are the same, and a shared
+ * table is stored once: that is the point of a collection, and it is how fonts that
+ * differ only in `name` or weight come to cost little more than one. Each font's
+ * directory is sorted and its checksums are computed; the header is version 1.0, and
+ * each `head` keeps the `checkSumAdjustment` it was given, because the specification
+ * does not say which font of a collection that field sums.
+ *
+ * @param faces The fonts.
+ * @param face_count How many; at least one.
+ * @param limits Caps, or NULL for the defaults.
+ * @param allocator Where the blob comes from, or NULL for the default.
+ * @param out_blob Receives the collection. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return As for ::gfnt_write_sfnt().
+ */
+GFNT_API GFNT_Result gfnt_write_collection(const GFNT_WriteFace * faces,
+    size_t face_count, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    GFNT_Blob ** out_blob, GFNT_Error * error);
+
+/**
+ * @brief Serialise several fonts as a WOFF 2 collection.
+ *
+ * Shared tables are stored once, as for ::gfnt_write_collection(), and a `glyf` and
+ * `loca` pair that every font sharing it agrees on is transformed like a single
+ * font's. A font whose flavour is not TrueType, or whose pair is shared with a
+ * different partner, is stored untransformed. A short `loca` near its limit is
+ * not switched to the long form here, because its `head` may be shared; the pair
+ * is stored as it is instead.
+ *
+ * @param faces The fonts.
+ * @param face_count How many; at least one.
+ * @param limits As for ::gfnt_write_collection().
+ * @param allocator As for ::gfnt_write_collection().
+ * @param out_blob Receives the file. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return As for ::gfnt_write_woff2().
+ */
+GFNT_API GFNT_Result gfnt_write_woff2_collection(const GFNT_WriteFace * faces,
+    size_t face_count, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    GFNT_Blob ** out_blob, GFNT_Error * error);
+
+/**
  * @brief Serialise tables as a WOFF 2 file.
  *
  * The tables are sorted by tag, `loca` is placed after `glyf`, and the lot is one
@@ -127,8 +182,8 @@ GFNT_API GFNT_Result gfnt_write_woff(GFNT_Tag flavour,
  * The stream is compressed by `compress`'s Brotli encoder, which writes LZ77 and
  * Huffman codes and uses neither a context model nor the static dictionary, so the
  * file comes out about a fifth larger than the reference encoder's. It reads back
- * with this library, fontTools and any other decoder. One font only: there is no
- * collection writer. No metadata or private block is written. A short `loca` close
+ * with this library, fontTools and any other decoder. One font only; several go through
+ * ::gfnt_write_woff2_collection(). No metadata or private block is written. A short `loca` close
  * to its limit is written long, since the rebuilt `glyf` pads each glyph to four
  * bytes.
  *

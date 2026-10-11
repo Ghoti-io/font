@@ -78,6 +78,8 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
   uint32_t png_length = 0;
   const uint8_t * bytes = NULL;
   size_t consumed;
+  uint16_t fmt;
+  bool raw;
   GFNT_Result result;
 
   if (strike->bit_depth != 32) {
@@ -111,10 +113,16 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
         "a glyph this strike does not carry");
     goto done;
   }
-  if (subtable->image_format < 17 || subtable->image_format > 19) {
+  // 17 to 19 are PNG. 1, 2, 5, 6 and 7 are the pixel formats of EBDT, which at a
+  // depth of 32 are rows of premultiplied BGRA (the bit-aligned and byte-aligned
+  // forms are the same bytes when a pixel is four of them). 8 and 9 are composites,
+  // whose way of combining color pictures neither specification states.
+  fmt = subtable->image_format;
+  raw = fmt == 1 || fmt == 2 || fmt == 5 || fmt == 6 || fmt == 7;
+  if (!raw && (fmt < 17 || fmt > 19)) {
     result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_CBDT, offset,
-        glyph, "a CBDT image format that is not a PNG - this library reads 17, "
-        "18 and 19");
+        glyph, "a CBDT image format this library does not read as color - "
+        "composites (8, 9) have no stated way to combine color pictures");
     goto done;
   }
 
@@ -140,7 +148,9 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
     goto done;
   }
   memset(&metrics, 0, sizeof metrics);
-  switch (subtable->image_format) {
+  switch (fmt) {
+    case 1:
+    case 2:
     case 17:
       consumed = GFNT_CBDT_SMALL_METRICS_BYTES;
       if (gfnt_read_u8(&at, &metrics.height) != GFNT_OK
@@ -153,6 +163,8 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
         goto done;
       }
       break;
+    case 6:
+    case 7:
     case 18:
       consumed = GFNT_CBDT_BIG_METRICS_BYTES;
       if (gfnt_read_u8(&at, &metrics.height) != GFNT_OK
@@ -167,14 +179,27 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
       }
       break;
     default:
-      // Format 19: the index states the metrics for every glyph it covers, and
-      // the data is a length and a PNG. Index formats 2 and 5 are the only ones
-      // that do, which the index parse has already required.
+      // Formats 5 and 19: the index states the metrics for every glyph it covers.
+      // Index formats 2 and 5 are the only ones that do, which the index parse has
+      // already required.
       consumed = 0;
       metrics = subtable->metrics;
       break;
   }
-  if (gfnt_read_u32(&at, &png_length) != GFNT_OK) {
+  if (raw) {
+    size_t pixels;
+
+    // Four bytes a pixel and nothing else: no length, and no padding between rows.
+    if (!gcu_safe_mul_size((size_t)metrics.width * metrics.height, 4u, &pixels)
+        || (length != 0 && (consumed > length || pixels > length - consumed))
+        || gfnt_read_bytes(&at, pixels, &bytes) != GFNT_OK) {
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CBDT, offset, glyph,
+          "a CBDT glyph whose pixels run past the bytes the index gives it");
+      goto done;
+    }
+    png_length = (uint32_t)pixels;
+  }
+  else if (gfnt_read_u32(&at, &png_length) != GFNT_OK) {
     result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CBDT, offset, glyph,
         "a CBDT glyph with no dataLen");
     goto done;
@@ -182,12 +207,13 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
   // The index says how many bytes the glyph owns; the PNG must sit inside them.
   // A dataLen that reaches past would borrow the next glyph's bytes as this one's
   // picture, which is the shape of mistake that decodes into someone else's face.
-  if (length != 0 && (size_t)png_length > length - consumed - 4u) {
+  if (!raw && length != 0 && (size_t)png_length > length - consumed - 4u) {
     result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CBDT, offset, glyph,
         "a CBDT glyph whose dataLen is longer than the index gives it");
     goto done;
   }
-  if (gfnt_read_bytes(&at, png_length, &bytes) != GFNT_OK || png_length == 0) {
+  if (!raw && (gfnt_read_bytes(&at, png_length, &bytes) != GFNT_OK
+          || png_length == 0)) {
     result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CBDT, offset, glyph,
         "a CBDT picture that runs past the end of the table");
     goto done;
@@ -196,7 +222,7 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
   found_glyph->index_format = subtable->index_format;
   found_glyph->image_format = subtable->image_format;
   *out = (GFNT_GlyphImage) {
-    .format = GFNT_IMAGE_PNG,
+    .format = raw ? GFNT_IMAGE_BGRA : GFNT_IMAGE_PNG,
     .data = bytes,
     .length = png_length,
     .width = metrics.width,
@@ -294,6 +320,46 @@ GFNT_Result gfnt_face_glyph_image(const GFNT_Face * face, uint32_t glyph,
 }
 
 /**
+ * An uncompressed strike's rows of premultiplied BGRA as RGBA, same alpha convention.
+ */
+static GFNT_Result gfnt_bgra_decode(const GFNT_Face * face,
+    const GFNT_GlyphImage * image, GFNT_ColorBitmap * out, GFNT_Error * error) {
+  size_t bytes = (size_t)image->width * image->height * 4u;
+  uint8_t * rgba;
+
+  if (bytes != image->length || bytes > face->limits.max_raster_bytes) {
+    return gfnt_error_set(error, bytes != image->length ? GFNT_ERR_CORRUPT : GFNT_ERR_LIMIT,
+        GFNT_TAG_CBDT, 0, GFNT_GLYPH_NONE,
+        "a color bitmap whose pixels are not width x height x 4 bytes");
+  }
+  rgba = face->allocator->malloc_fn(face->allocator->ctx, bytes ? bytes : 1u);
+  if (!rgba) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CBDT, 0, GFNT_GLYPH_NONE,
+        "no memory for the decoded picture");
+  }
+  for (size_t i = 0; i + 3u < bytes; i += 4u) {
+    rgba[i] = image->data[i + 2u];
+    rgba[i + 1u] = image->data[i + 1u];
+    rgba[i + 2u] = image->data[i];
+    rgba[i + 3u] = image->data[i + 3u];
+  }
+  *out = (GFNT_ColorBitmap) {
+    .width = image->width,
+    .height = image->height,
+    .stride = (size_t)image->width * 4u,
+    .bearing_x = image->bearing_x,
+    .bearing_y = image->bearing_y,
+    .advance = image->advance,
+    .bits_per_channel = 8,
+    .premultiplied = true,
+    .rgba = rgba,
+    .strike = image->strike,
+    .allocator = face->allocator,
+  };
+  return GFNT_OK;
+}
+
+/**
  * Decode a picture to straight-alpha RGBA8 in memory the face's allocator owns.
  */
 static GFNT_Result gfnt_color_decode(const GFNT_Face * face,
@@ -316,6 +382,9 @@ static GFNT_Result gfnt_color_decode(const GFNT_Face * face,
   bool deep;
   size_t sample;
 
+  if (image->format == GFNT_IMAGE_BGRA) {
+    return gfnt_bgra_decode(face, image, out, error);
+  }
   gimg_limits_default(&limits);
   // The cap that bounds a decoded picture is the same one that bounds a
   // rasterized glyph: both are a buffer of pixels this library hands a caller.

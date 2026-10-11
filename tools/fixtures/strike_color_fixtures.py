@@ -595,3 +595,89 @@ def build_color_cbdt_deep(mf, out):
     mf.set_raw_table(fb, "CBLC", cblc)
     mf.set_raw_table(fb, "CBDT", bytes(cbdt))
     fb.save(out)
+
+
+BGRA_ORDER = [".notdef"] + ["b%02d" % i for i in range(1, 8)]
+
+
+def bgra_rows(glyph, width, height):
+    """Premultiplied BGRA rows: each color channel at most the alpha, as it must be."""
+    out = bytearray()
+    for y in range(height):
+        for x in range(width):
+            a = 40 + ((glyph * 29 + x * 17 + y * 11) % 216)
+            b = a * ((glyph * 3 + x) % 5) // 4
+            g = a * ((glyph + y * 2) % 5) // 4
+            r = a * ((glyph * 7 + x + y) % 5) // 4
+            out += bytes([min(b, a), min(g, a), min(r, a), a])
+    return bytes(out)
+
+
+def build_color_cbdt_bgra(mf, out):
+    """Uncompressed color strikes: premultiplied BGRA under the EBDT image formats.
+
+    A CBLC strike of 32 bits may hold any EBDT image format (the specification says
+    so), and at four bytes a pixel the bit-aligned and byte-aligned forms are the same
+    bytes. One strike at 20 ppem, 7 x 4 pixels a glyph:
+
+      glyph 1      index 1, image 1   small metrics
+      glyph 2      index 3, image 2   small metrics, 16-bit offsets
+      glyphs 3, 4  index 1, image 6   big metrics
+      glyph 5      index 1, image 7   big metrics
+      glyph 6      index 5, image 5   metrics in CBLC, one size for every glyph
+      glyph 7      index 1, image 8   a composite, which is declined
+    """
+    width, height = 7, 4
+    mapping = {0x41 + i: name for i, name in enumerate(BGRA_ORDER[1:])}
+    fb = mf.truetype("CBDT BGRA", [mf.subtable(4, 3, 1, mapping)], order=BGRA_ORDER,
+                     glyphs={name: mf.raw_glyph([]) for name in BGRA_ORDER},
+                     advances={name: 600 for name in BGRA_ORDER})
+    cbdt = bytearray(struct.pack(">I", 0x00030000))
+    bodies = []
+
+    def glyphs(first, last, fmt, index, metrics):
+        """One index-1 or index-3 subtable over [first, last] of one image format."""
+        at = len(cbdt)
+        offsets = [0]
+        for g in range(first, last + 1):
+            cbdt.extend(metrics(g) + bgra_rows(g, width, height))
+            offsets.append(len(cbdt) - at)
+        if index == 1:
+            body = struct.pack(">HHI", 1, fmt, at) + b"".join(struct.pack(">I", o) for o in offsets)
+        else:
+            body = struct.pack(">HHI", 3, fmt, at) + b"".join(struct.pack(">H", o) for o in offsets)
+            if len(offsets) % 2:
+                body += b"\x00\x00"
+        bodies.append((first, last, body))
+
+    sm = lambda g: small(height, width, g - 3, height + g, 9)
+    bg = lambda g: big(height, width, 2 - g, height + 1, 9)
+    glyphs(1, 1, 1, 1, sm)
+    glyphs(2, 2, 2, 3, sm)
+    glyphs(3, 4, 6, 1, bg)
+    glyphs(5, 5, 7, 1, bg)
+    # Index 5 over image 5: no metrics in the data, one size for every glyph.
+    at = len(cbdt)
+    cbdt += bgra_rows(6, width, height)
+    bodies.append((6, 6, struct.pack(">HHI", 5, 5, at)
+                   + struct.pack(">I", width * height * 4) + big(height, width, 1, 6, 9)
+                   + struct.pack(">I", 1) + struct.pack(">H", 6)))
+    # A composite: components after small metrics and a pad byte. Declined.
+    at = len(cbdt)
+    cbdt += small(height, width, 0, height, 9) + b"\x00" + struct.pack(">H", 0)
+    bodies.append((7, 7, struct.pack(">HHI", 1, 8, at)
+                   + struct.pack(">II", 0, len(cbdt) - at)))
+
+    array = bytearray()
+    cursor = 8 * len(bodies)
+    for first, last, body in bodies:
+        array += struct.pack(">HHI", first, last, cursor)
+        cursor += len(body)
+    region = bytes(array) + b"".join(body for _, _, body in bodies)
+    cblc = (struct.pack(">II", 0x00030000, 1)
+            + struct.pack(">IIII", 8 + 48, len(region), len(bodies), 0)
+            + line_metrics(height, -1, 10) + line_metrics(0, 0, 0)
+            + struct.pack(">HHBBBb", 1, 7, 20, 20, 32, 1) + region)
+    mf.set_raw_table(fb, "CBLC", cblc)
+    mf.set_raw_table(fb, "CBDT", bytes(cbdt))
+    fb.save(out)

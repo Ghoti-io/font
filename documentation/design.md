@@ -123,7 +123,7 @@ which of them this library takes, and which of those it reads today.
 | | `EBDT`/`EBLC`/`EBSC` strikes | **implemented** (grey depths are listed and their data declined) |
 | | `COLR` v0 + `CPAL` | **implemented** (§7.6): palettes, usability flags and labels, and the layer list of a base glyph; returned as a description, never composited |
 | | `COLR` v1 | **implemented** (§7.6) as a paint graph read in place and walked, with the variable forms and the clip list |
-| | `CBDT`/`CBLC` | **implemented** (§7.5): the strike list, a glyph's PNG bytes and metrics, and a decode to RGBA by `image`; shaped extents as HarfBuzz measures them |
+| | `CBDT`/`CBLC` | **implemented** (§7.5): the strike list, a glyph's PNG or BGRA bytes and metrics, and a decode to RGBA (8 or 16 bits) by `image`; shaped extents as HarfBuzz measures them |
 | | `sbix` | **implemented** (§7.5): PNG, JPEG and TIFF pictures, `dupe` followed; shaped extents as HarfBuzz measures them (PNG only) |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |

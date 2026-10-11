@@ -1578,6 +1578,11 @@ def build_color_cbdt_deep(out):
     strike_color_fixtures.build_color_cbdt_deep(sys.modules[__name__], out)
 
 
+def build_color_cbdt_bgra(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_cbdt_bgra(sys.modules[__name__], out)
+
+
 def build_layout_gsub_cases(out):
     import layout_fixtures
     layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
@@ -4322,6 +4327,10 @@ FIXTURES = {
         "CBDT with 16-bit PNGs written by hand (RGBA, RGB, grey, grey with alpha) and "
         "one 8-bit one in the same strike: a PNG's depth is the picture's, and the "
         "decoded samples are exactly the ones written"),
+    "color-cbdt-bgra.ttf": (build_color_cbdt_bgra,
+        "CBDT with uncompressed premultiplied BGRA pictures under EBDT image formats "
+        "1, 2, 5, 6 and 7 (and a composite, 8, which is declined), at a strike depth "
+        "of 32 and under index formats 1, 3 and 5"),
     "layout-gsub.ttf": (build_layout_gsub,
         "GSUB with one of every lookup type and format: single in both formats, "
         "multiple (including to nothing), alternate, ligature, context in "

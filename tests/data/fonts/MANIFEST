@@ -36,6 +36,7 @@ cmap-format12.ttf	cmap format 12 on (3,10) past the BMP, beside a format 4
 cmap-format6.ttf	cmap format 6 on (1,0): a trimmed array with firstCode
 cmap-symbol.ttf	cmap (3,0) symbol only: U+0041 reachable only via the 0xF0xx rule
 collection.ttc	ttcf: two faces sharing tables, with different OS/2 versions
+color-cbdt-bgra.ttf	CBDT with uncompressed premultiplied BGRA pictures under EBDT image formats 1, 2, 5, 6 and 7 (and a composite, 8, which is declined), at a strike depth of 32 and under index formats 1, 3 and 5
 color-cbdt-deep.ttf	CBDT with 16-bit PNGs written by hand (RGBA, RGB, grey, grey with alpha) and one 8-bit one in the same strike: a PNG's depth is the picture's, and the decoded samples are exactly the ones written
 color-cbdt-metrics.ttf	CBDT with two strikes (16 and 7 ppem) of 127 glyphs whose metrics sweep the byte ranges, over one-pixel pictures: the scaling of a picture's box to the em, and its rounding, are what is held (a half falls at 16 ppem in a 1000-unit em)
 color-cbdt-sizes.ttf	CBDT with four strikes - 24 by 12, 20 by 20, a second 24 by 12 and 10 by 30 ppem - over glyphs with and without outlines: which strike a size picks (the smallest at least as large as the larger ppem, else the largest, the first of equals), which ppem scales which axis, and a picture winning over an outline while a glyph the chosen strike lacks keeps its outline

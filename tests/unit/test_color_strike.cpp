@@ -611,6 +611,92 @@ TEST(ColorStrikeDeep, NarrowingTakesTheHighByteAsImageDoes) {
   EXPECT_EQ(gfnt_color_bitmap_to_8bit(&empty), GFNT_ERR_INVALID);
 }
 
+// ---- uncompressed BGRA
+
+namespace {
+
+/** tools/fixtures/strike_color_fixtures.py bgra_rows(), pixel (x, y) of glyph g: B, G, R, A. */
+void bgra_pixel(uint32_t g, uint32_t x, uint32_t y, uint8_t out[4]) {
+  const uint32_t a = 40 + ((g * 29 + x * 17 + y * 11) % 216);
+  const uint32_t b = a * ((g * 3 + x) % 5) / 4;
+  const uint32_t gr = a * ((g + y * 2) % 5) / 4;
+  const uint32_t r = a * ((g * 7 + x + y) % 5) / 4;
+  out[0] = static_cast<uint8_t>(b < a ? b : a);
+  out[1] = static_cast<uint8_t>(gr < a ? gr : a);
+  out[2] = static_cast<uint8_t>(r < a ? r : a);
+  out[3] = static_cast<uint8_t>(a);
+}
+
+}  // namespace
+
+TEST(ColorStrikeBgra, EveryRawImageFormatYieldsItsPixelsAndMetrics) {
+  Font font("color-cbdt-bgra.ttf");
+  struct Case {
+    uint32_t glyph;
+    int32_t bx, by, adv;
+  };
+  // Small metrics (glyphs 1, 2) put the pixel at (g - 3, 4 + g); big (3 to 5) at
+  // (2 - g, 5); glyph 6's are the index's: (1, 6).
+  const Case cases[] = {{1, -2, 5, 9}, {2, -1, 6, 9}, {3, -1, 5, 9}, {4, -2, 5, 9},
+      {5, -3, 5, 9}, {6, 1, 6, 9}};
+  for (const Case & c : cases) {
+    SCOPED_TRACE(c.glyph);
+    const GFNT_GlyphImage image = image_of(font, c.glyph, 0);
+    EXPECT_EQ(image.format, GFNT_IMAGE_BGRA);
+    EXPECT_EQ(image.length, 7u * 4u * 4u);
+    EXPECT_EQ(image.width, 7u);
+    EXPECT_EQ(image.height, 4u);
+    EXPECT_EQ(image.bearing_x, c.bx);
+    EXPECT_EQ(image.bearing_y, c.by);
+    EXPECT_EQ(image.origin_y, c.by - 4);
+    EXPECT_EQ(image.advance, c.adv);
+    for (uint32_t y = 0; y < 4; ++y) {
+      for (uint32_t x = 0; x < 7; ++x) {
+        uint8_t want[4];
+        bgra_pixel(c.glyph, x, y, want);
+        EXPECT_EQ(std::memcmp(image.data + (y * 7 + x) * 4, want, 4), 0) << x << "," << y;
+      }
+    }
+  }
+}
+
+TEST(ColorStrikeBgra, DecodingSwapsToRgbaAndSaysPremultiplied) {
+  Font font("color-cbdt-bgra.ttf");
+  Decoded d(font, 1, 0);
+  ASSERT_EQ(d.result, GFNT_OK);
+  EXPECT_TRUE(d.bitmap.premultiplied);
+  EXPECT_EQ(d.bitmap.bits_per_channel, 8);
+  EXPECT_EQ(d.bitmap.stride, 28u);
+  uint8_t bgra[4];
+  bgra_pixel(1, 3, 2, bgra);
+  EXPECT_PIXEL(d, 3, 2, bgra[2], bgra[1], bgra[0], bgra[3]);
+  EXPECT_EQ(d.bitmap.bearing_y, 5);
+}
+
+TEST(ColorStrikeBgra, ACompositeIsDeclinedByName) {
+  Font font("color-cbdt-bgra.ttf");
+  GFNT_GlyphImage image{};
+  GFNT_Error error;
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 7, 0, &image, &error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::strstr(error.message, "composites"), nullptr) << error.message;
+}
+
+TEST(ColorStrikeBgra, PixelsPastTheIndexAreCorrupt) {
+  Font source("color-cbdt-bgra.ttf");
+  // Glyph 1's small metrics start at CBDT byte 4; make its height 200, so that
+  // 7 x 200 x 4 bytes is far more than the index gives it.
+  Font font(with_cbdt_byte(source.bytes, 4, 200));
+  GFNT_GlyphImage image{};
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 1, 0, &image, nullptr), GFNT_ERR_CORRUPT);
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 2, 0, &image, nullptr), GFNT_OK);
+}
+
+TEST(ColorStrikeBgra, NothingHereIsMeasuredByTheShaper) {
+  // HarfBuzz reads image formats 17 and 18 only; so does the shaper's box.
+  Font font("color-cbdt-bgra.ttf");
+  EXPECT_BOX(extents(font, 1), 0, 0, 0, 0);
+}
+
 // ---- sbix
 
 TEST(SbixStrike, TheStrikeListIsInTheTablesOrder) {

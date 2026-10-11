@@ -54,9 +54,13 @@ def reference(font):
             size = strike.bitmapSizeTable
             glyphs = {}
             for name, g in cbdt.strikeData[index].items():
+                if g.getFormat() in (8, 9):
+                    # Composites have a component list and no picture; this library
+                    # declines them at a depth of 32 and so there is nothing to compare.
+                    continue
                 data = bytes(g.imageData)
-                if g.getFormat() == 19:
-                    # Image format 19 has no metrics of its own: they are the
+                if g.getFormat() in (5, 19):
+                    # Image formats 5 and 19 have no metrics of their own: they are the
                     # index subtable's, and fontTools leaves them there. A read of
                     # `metrics` on the glyph would decompile it a second time.
                     m = next(st.metrics for st in strike.indexSubTables
@@ -69,7 +73,8 @@ def reference(font):
                     bx, by, adv = m.BearingX, m.BearingY, m.Advance
                 else:
                     bx, by, adv = m.horiBearingX, m.horiBearingY, m.horiAdvance
-                glyphs[ids[name]] = ("png", data, m.width, m.height,
+                kind = "png" if g.getFormat() >= 17 else "bgra"
+                glyphs[ids[name]] = (kind, data, m.width, m.height,
                                      bx, by, adv)
             out[index] = ((size.ppemX, size.ppemY), glyphs)
     elif "sbix" in font:
@@ -164,9 +169,19 @@ def main(argv):
                      % (index, g, r["adv"], adv))
             if "dw" in r:
                 pixels += 1
-                pil = Image.open(io.BytesIO(data))
                 with open(os.path.join(folder, "%d-%d.rgba" % (index, g)), "rb") as f:
                     mine_px = f.read()
+                if fmt == "bgra":
+                    # Raw premultiplied BGRA: ours is the same pixels as RGBA, and says
+                    # so. No decoder is involved, so this is a swizzle written here.
+                    swizzled = b"".join(data[i + 2:i + 3] + data[i + 1:i + 2]
+                                        + data[i:i + 1] + data[i + 3:i + 4]
+                                        for i in range(0, len(data), 4))
+                    if mine_px != swizzled or not r["pre"] or r["bits"] != 8 \
+                            or (r["dw"], r["dh"]) != (w, h):
+                        note("strike %d glyph %d: BGRA pixels differ" % (index, g))
+                    continue
+                pil = Image.open(io.BytesIO(data))
                 if r["bits"] == 16:
                     # Pillow narrows RGB(A) and grey-alpha at 16 bits to 8 by taking
                     # the high byte, so those are compared after the same narrowing;

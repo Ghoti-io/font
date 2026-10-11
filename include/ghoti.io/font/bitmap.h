@@ -218,14 +218,20 @@ GFNT_API GFNT_Result gfnt_face_bitmap_encoding_at(const GFNT_Face * face,
 /**
  * @brief How an encoded glyph image is stored.
  *
- * `CBDT` holds PNG only. `sbix` names its format per glyph, and the three it
+ * `CBDT` holds PNG or, at a depth of 32, raw BGRA. `sbix` names its format per glyph, and the three it
  * defines for pictures are here; `dupe` (another glyph's image) is followed and
  * never surfaces, and `mask` is declined.
  */
 typedef enum {
   GFNT_IMAGE_PNG = 0,   ///< A PNG file.
   GFNT_IMAGE_JPEG,      ///< A JPEG file, which `sbix` `jpg ` names.
-  GFNT_IMAGE_TIFF       ///< A TIFF file, which `sbix` `tiff` names.
+  GFNT_IMAGE_TIFF,      ///< A TIFF file, which `sbix` `tiff` names.
+  /**
+   * Rows of premultiplied sRGB pixels, four bytes each in the order B, G, R, A, with
+   * no padding: what `CBDT` stores for image formats 1, 2, 5, 6 and 7 in a strike of
+   * 32 bits. `width` and `height` are the metrics', and `length` is `width * height * 4`.
+   */
+  GFNT_IMAGE_BGRA
 } GFNT_ImageFormat;
 
 /**

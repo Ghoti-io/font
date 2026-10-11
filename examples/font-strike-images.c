@@ -50,6 +50,8 @@ static const char * format_name(GFNT_ImageFormat format) {
       return "png";
     case GFNT_IMAGE_JPEG:
       return "jpeg";
+    case GFNT_IMAGE_BGRA:
+      return "bgra";
     default:
       return "tiff";
   }

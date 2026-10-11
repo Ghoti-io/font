@@ -34,6 +34,7 @@
 #include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/name.h>
+#include <ghoti.io/font/variation.h>
 
 #include <stdbool.h>
 #include <string.h>
@@ -724,11 +725,47 @@ static bool discover_is_bitmap_container(GFNT_Tag flavour) {
   return flavour == GFNT_FLAVOUR_PCF || flavour == GFNT_FLAVOUR_BDF;
 }
 
+/** The axes of a variable face that CSS matching ranges over, and an oblique face's lean. */
+static void discover_read_axes(const GFNT_Face * face, GFNT_FontRecord * rec) {
+  size_t axes = 0;
+  size_t i;
+  const GFNT_Post * post = NULL;
+
+  if (gfnt_face_axis_count(face, &axes, NULL) == GFNT_OK) {
+    for (i = 0; i < axes; i++) {
+      GFNT_Axis axis;
+      GFNT_FontAxisRange * range = NULL;
+
+      if (gfnt_face_axis_at(face, i, &axis, NULL) != GFNT_OK) {
+        continue;
+      }
+      if (axis.tag == GFNT_TAG('w', 'g', 'h', 't')) {
+        range = &rec->wght_axis;
+      } else if (axis.tag == GFNT_TAG('w', 'd', 't', 'h')) {
+        range = &rec->wdth_axis;
+      } else if (axis.tag == GFNT_TAG('s', 'l', 'n', 't')) {
+        range = &rec->slnt_axis;
+      } else if (axis.tag == GFNT_TAG('i', 't', 'a', 'l')) {
+        range = &rec->ital_axis;
+      }
+      if (range && !range->present) {
+        range->present = true;
+        range->min = axis.min;
+        range->max = axis.max;
+      }
+    }
+  }
+  if (gfnt_face_post(face, &post, NULL) == GFNT_OK && post && post->italic_angle != 0) {
+    rec->oblique_angle = -post->italic_angle;
+  }
+}
+
 static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
     GFNT_Face * face, GFNT_Error * error) {
   DiscoverFace built;
   DiscoverFace * grown;
   char * family = NULL;
+  char * legacy = NULL;
   char * style = NULL;
   char * full = NULL;
   char * path_copy = NULL;
@@ -741,6 +778,7 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
   built.rec.flavour = gfnt_face_flavour(face);
   built.rec.index = gfnt_face_index(face);
   built.rec.slant = GFNT_SLANT_ROMAN;
+  discover_read_axes(face, &built.rec);
 
   result = discover_choose_name(face, GFNT_NAME_TYPOGRAPHIC_FAMILY,
       GFNT_NAME_FAMILY, set->allocator, &family, error);
@@ -751,7 +789,22 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
       GFNT_NAME_SUBFAMILY, set->allocator, &style, error);
   if (result != GFNT_OK) {
     discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
     return result;
+  }
+  if (family) {
+    // A legacy family that differs from the typographic one is a second name for the face.
+    result = discover_copy_name(face, GFNT_NAME_FAMILY, set->allocator, &legacy, &found, error);
+    if (result != GFNT_OK) {
+      discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
+      discover_free(set->allocator, style);
+      return result;
+    }
+    if (legacy && (strcmp(legacy, family) == 0 || legacy[0] == '\0')) {
+      discover_free(set->allocator, legacy);
+      legacy = NULL;
+    }
   }
   if (!family) {
     family = discover_dup(set->allocator, "", 0);
@@ -761,6 +814,7 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
   }
   if (!family || !style) {
     discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
     discover_free(set->allocator, style);
     return GFNT_ERR_OOM;
   }
@@ -781,6 +835,7 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
         sizeof built.rec.unicode_range);
   } else if (result != GFNT_ERR_UNSUPPORTED) {
     discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
     discover_free(set->allocator, style);
     return result;
   }
@@ -796,6 +851,7 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
       &found, error);
   if (result != GFNT_OK) {
     discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
     discover_free(set->allocator, style);
     return result;
   }
@@ -807,11 +863,13 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
   path_copy = discover_dup_str(set->allocator, path);
   if (!path_copy) {
     discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
     discover_free(set->allocator, style);
     return GFNT_ERR_OOM;
   }
   built.rec.path = path_copy;
   built.rec.family = family;
+  built.rec.legacy_family = legacy;
   built.rec.style = style;
 
   grown = discover_grow(set->allocator, set->faces, &set->face_cap,
@@ -819,6 +877,7 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
   if (!grown) {
     discover_free(set->allocator, path_copy);
     discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
     discover_free(set->allocator, style);
     return GFNT_ERR_OOM;
   }
@@ -1338,6 +1397,7 @@ void gfnt_fontset_free(GFNT_FontSet * set) {
   for (i = 0; i < set->face_count; i++) {
     discover_free(allocator, (void *)set->faces[i].rec.path);
     discover_free(allocator, (void *)set->faces[i].rec.family);
+    discover_free(allocator, (void *)set->faces[i].rec.legacy_family);
     discover_free(allocator, (void *)set->faces[i].rec.style);
   }
   discover_free(allocator, set->faces);

@@ -27,7 +27,7 @@ This is what the library implements.
 
 **What shaping does not do**, stated rather than approximated: Apple's AAT beyond `morx`/`mort`, `kerx` (formats 0, 1, 2, 4 and 6) and `trak`, `GSUB`/`GPOS` `BASE` and `JSTF`, and a hinting device table unless the caller gives a pixel size. A mixed-direction paragraph is shaped by `gfnt_faces_shape_bidi()` (UAX #9 from the `unicode` library, one line, visual order); breaking it into lines is the caller's. A few characters in nine scripts are sorted into a different category than HarfBuzz sorts them into, and `tools/oracle/hb_diff.py` names them as a known gap.
 
-**Not built yet**, each refused with `GFNT_ERR_UNSUPPORTED` where a file or request names it: the color PNG strikes (`CBDT`/`CBLC`, `sbix`; they need a PNG decoder from `image`), the `SVG ` table, paragraph layout beyond itemisation, greedy line breaking and alignment (kashida and hyphenation are not built), font matching (discovery lists faces and does not match them), the `CFF` writer. The design document (`documentation/design.md`) §10 to §12 says what each is to be. Embedded bitmap strikes in `EBDT`/`EBLC` are read.
+**Not built yet**, each refused with `GFNT_ERR_UNSUPPORTED` where a file or request names it: the `SVG ` table, kashida and hyphenation in paragraph layout, and a fallback font provider over a scanned set (font *matching* by family, weight, width and style is built, `match.h`). The design document (`documentation/design.md`) §10 to §12 says what each is to be. Embedded bitmap strikes in `EBDT`/`EBLC` are read.
 ## Before you call it
 
 - A table this library does not parse yet comes back as `GFNT_ERR_UNSUPPORTED` and names what it could not read. An empty result is reserved for a font that states the thing is absent.
@@ -189,9 +189,9 @@ model (the file is the attacker), what is implemented, and what is not.
 The tables named above are parsed, glyphs from `glyf` and from `CFF `
 charstrings are turned into outlines, and those outlines are rasterised. Six
 containers are read: an sfnt, a collection, a bare `CFF `, a Type 1 program, and
-the four standalone bitmap formats, any of them gzipped. The sfnt bitmap
-strikes are not
-implemented; font discovery lists faces and does not match them. Writing is built (the sfnt, WOFF 1 and a TrueType subsetter). Text shaped through `GSUB` and `GPOS` is compared against HarfBuzz
+the four standalone bitmap formats, any of them gzipped. Bitmap
+strikes (`EBDT`/`EBLC`, `CBDT`/`CBLC`, `sbix`) are read; font discovery lists faces and
+`match.h` chooses among them by CSS Fonts 4 matching. Writing is built (the sfnt, WOFF 1 and 2, and a subsetter for TrueType, CFF and CFF2 outlines). Text shaped through `GSUB` and `GPOS` is compared against HarfBuzz
 (see `tools/oracle/hb_diff.py`), and `tools/oracle/typeset_compare.py` draws the
 same lines with HarfBuzz and FreeType and with this library, one above the
 other, for a person to read.

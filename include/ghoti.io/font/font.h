@@ -30,8 +30,8 @@
  * and how wide it is should not link a rasteriser. Include them by name.
  *
  * Shaping is in `shape.h`, and like `outline.h` and `raster.h` it is not included
- * here. Font discovery lists faces (`discover.h`, included by name) and does not
- * match them. Paragraph layout is not implemented. Writing is in `write.h`.
+ * here. Font discovery lists faces (`discover.h`) and CSS font matching chooses among them
+ * (`match.h`); both are included by name. Paragraph layout is not implemented. Writing is in `write.h`.
  * See documentation/design.md section 18.
  */
 

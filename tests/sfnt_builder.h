@@ -522,6 +522,7 @@ struct Os2Spec {
   uint16_t fs_type = 0;
   uint16_t fs_selection = 0;
   uint16_t weight_class = 400;
+  uint16_t width_class = 5;
   int16_t typo_ascender = 800;
   int16_t typo_descender = -200;
   int16_t typo_line_gap = 100;
@@ -537,7 +538,7 @@ inline std::vector<uint8_t> build_os2(const Os2Spec & spec = Os2Spec{}) {
   put_u16(os2, spec.version);
   put_s16(os2, 600);                 // xAvgCharWidth
   put_u16(os2, spec.weight_class);
-  put_u16(os2, 5);                   // usWidthClass
+  put_u16(os2, spec.width_class);    // usWidthClass
   put_u16(os2, spec.fs_type);
   put_s16(os2, 650);                 // ySubscriptXSize
   put_s16(os2, 600);                 // ySubscriptYSize
@@ -586,10 +587,11 @@ inline std::vector<uint8_t> build_os2(const Os2Spec & spec = Os2Spec{}) {
 }
 
 /** A `post` table: the 32-byte header, plus whatever a version adds. */
-inline std::vector<uint8_t> build_post(uint32_t version = 0x00030000) {
+inline std::vector<uint8_t> build_post(uint32_t version = 0x00030000,
+    uint32_t italic_angle = 0xFFF40000) {
   std::vector<uint8_t> post;
   put_u32(post, version);
-  put_u32(post, 0xFFF40000);         // italicAngle: -12.0
+  put_u32(post, italic_angle);       // italicAngle: -12.0 unless the test says
   put_s16(post, -75);                // underlinePosition
   put_s16(post, 50);                 // underlineThickness
   put_u32(post, 1);                  // isFixedPitch

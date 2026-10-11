@@ -1397,7 +1397,7 @@ TIER2_FORBIDDEN := font/(layout|discover|write)\.h
 TIER3_FILES := include/ghoti.io/font/layout.h src/layout/*.c src/layout/*.h
 TIER3_FORBIDDEN := font/(discover|write)\.h
 
-TIER4_FILES := include/ghoti.io/font/discover.h src/discover/*.c src/discover/*.h
+TIER4_FILES := include/ghoti.io/font/discover.h include/ghoti.io/font/match.h src/discover/*.c src/discover/*.h
 TIER4_FORBIDDEN := font/(outline|raster|shape|layout|write)\.h
 
 TIERW_FILES := include/ghoti.io/font/write.h src/write/*.c src/write/*.h

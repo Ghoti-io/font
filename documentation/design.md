@@ -1639,7 +1639,7 @@ box sharing its line.
 
 ## 11. Discovery and fallback
 
-The list is built and matching is not. The only part that touches the operating system, kept to one file per
+The list is built and so is matching; the fallback provider is not yet. The only part that touches the operating system, kept to one file per
 platform. `GFNT_FontSet` is built by scanning directories - the caller's list,
 or the platform's conventional ones: `$XDG_DATA_HOME/fonts`,
 `$XDG_DATA_DIRS/fonts`,
@@ -1659,9 +1659,21 @@ registry's font list and DirectWrite's system collection are the sources, and
 on macOS CoreText's; each is `TODO(windows)` / `TODO(macos)` per
 `CONVENTIONS.md` §11 until run there.
 
-**Matching** follows CSS Fonts level 4's algorithm: a family list is walked in
-order; within a family, width, then style, then weight, by the specification's
-distance rules; a face is selected, not synthesised. The default
+**Matching** (`match.h`, `src/discover/match.c`) follows CSS Fonts level 4 section 5.2 as written: a
+family list is walked in order; within the first family that has a face, width, then style, then
+weight narrow the set by the specification's search orders (width at or under 100% looks narrower
+first, weight has the 400-to-500 rule, style has separate italic, oblique-at-or-over-11-degrees,
+oblique-under-11 and normal orders with negative angles mirrored); a face is selected, not
+synthesised. Family names are compared by Unicode full case folding with no normalization (the
+specification's "Default Caseless Matching"), against the typographic family and the legacy one
+(name ID 1), and a name no family has is followed once through the set's alias table, which is
+where a caller maps a generic family. A variable face takes part as the range its axes cover, so a
+face whose `wght` spans 100 to 900 is every weight in between, and the match reports the value to
+set each axis to; `gfnt_fontmatch_location()` turns it into coordinates. Two readings of the
+specification are noted in the source: its fourth style step says "italic values less than 1"
+for a small oblique request, read here as "up to 1" because an italic face is 1; and a tie is the
+first face in the set. The tests are the specification's rules worked by hand, with a planted-
+defect check on each rule (`tests/unit/test_match.cpp`). The default
 `GFNT_FontProvider` over a set answers fallback by Unicode-range claim, then by
 actual `cmap` coverage, with a per-script preference list the caller can set.
 Synthetic bold and oblique are §16.

@@ -69,7 +69,7 @@
  * platforms and marked unverified; the registry, DirectWrite and CoreText
  * are not consulted.
  *
- * Matching a family list, `GFNT_FontProvider`, serialising the set, named
+ * Matching a family list is `match.h`. `GFNT_FontProvider`, serialising the set, named
  * instances and `cmap` coverage are not this header.
  */
 
@@ -77,7 +77,9 @@
 #define GHOTI_IO_GFNT_DISCOVER_H
 
 #include <ghoti.io/font/macros.h>
+#include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -107,6 +109,17 @@ typedef enum GFNT_Slant {
 } GFNT_Slant;
 
 /**
+ * @brief The values a variable face's axis covers, in the units the axis uses.
+ *
+ * `present` is false for a face that has no such axis; `min` and `max` are then zero.
+ */
+typedef struct GFNT_FontAxisRange {
+  bool present;           ///< The face has the axis.
+  GFNT_F16Dot16 min;      ///< The least value, in the axis's own units.
+  GFNT_F16Dot16 max;      ///< The most.
+} GFNT_FontAxisRange;
+
+/**
  * @brief One face found by a scan.
  *
  * Every string is owned by the set and lives until ::gfnt_fontset_free().
@@ -126,6 +139,26 @@ typedef struct GFNT_FontRecord {
   GFNT_Slant slant;             ///< Roman when the face did not state one.
   uint32_t unicode_range[4];    ///< `OS/2` ranges, or zeros.
   GFNT_Tag flavour;             ///< ::gfnt_face_flavour().
+  /**
+   * Name ID 1, when the face has a typographic family (name ID 16) that differs from it,
+   * else NULL. Matching treats it as a second name for the family, as a browser does on a
+   * machine whose fonts carry both (`Arial Black` is the legacy family of the Black face
+   * of `Arial`).
+   */
+  const char * legacy_family;
+  /**
+   * The axes of a variable face, `fvar`'s own ranges: `wght` in CSS weight, `wdth` in percent,
+   * `slnt` in degrees (negative leans right), `ital` from 0 to 1. A static face has none.
+   */
+  GFNT_FontAxisRange wght_axis;
+  GFNT_FontAxisRange wdth_axis;
+  GFNT_FontAxisRange slnt_axis;
+  GFNT_FontAxisRange ital_axis;
+  /**
+   * How far an oblique face leans, in degrees clockwise from upright (`post`'s
+   * `italicAngle`, negated), or 0 when the face does not state one.
+   */
+  GFNT_F16Dot16 oblique_angle;
 } GFNT_FontRecord;
 
 /**

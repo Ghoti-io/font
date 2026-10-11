@@ -25,7 +25,8 @@
  * advance, subroutines are flattened away, an accented character brings its parts,
  * a CID-keyed font keeps only the Font DICTs in use. `make check-oracle-subset`
  * reads the same subsets through fontTools and HarfBuzz over every CFF font in the
- * oracle image.
+ * oracle image. Then the variable fonts: CFF2's blend, the tables around it, and
+ * `gvar` and `cvar` of a TrueType one.
  */
 
 #include "test_helpers.h"
@@ -628,15 +629,149 @@ TEST(SubsetCff2, VariablePositioningKeepsItsDeviceTablesAndTheStoreTheyIndex) {
       gpos.end());
 }
 
-TEST(SubsetCff2, ATableTheSubsetterDoesNotKnowIsRefusedNotApproximated) {
-  Font source("variable-gvar.ttf");
-  Subset sub(source.face, {1});
-  EXPECT_EQ(sub.result, GFNT_ERR_UNSUPPORTED);
-}
-
 TEST(SubsetCff2, EveryAllocationFailureIsSurvived) {
   Font source("variable-cff2-hvar.otf");
   std::vector<uint32_t> glyphs = {4, 5, 7};
+  GFNT_SubsetOptions o;
+  gfnt_subset_options_init(&o);
+  o.glyphs = glyphs.data();
+  o.glyph_count = glyphs.size();
+  size_t requests = 0;
+  {
+    gfnttest::FailingAllocator counting(static_cast<size_t>(-1));
+    GFNT_Blob * out = nullptr;
+    ASSERT_EQ(gfnt_subset(source.face, &o, nullptr, counting.get(), &out, nullptr), GFNT_OK);
+    requests = counting.requests();
+    gfnt_blob_destroy(out);
+    EXPECT_EQ(counting.live(), 0u);
+  }
+  ASSERT_GT(requests, 10u);
+  for (size_t fail = 0; fail < requests; ++fail) {
+    gfnttest::FailingAllocator failing(fail);
+    GFNT_Blob * out = nullptr;
+    const GFNT_Result r = gfnt_subset(source.face, &o, nullptr, failing.get(), &out, nullptr);
+    if (r != GFNT_OK) {
+      EXPECT_EQ(r, GFNT_ERR_OOM) << "request " << fail;
+      EXPECT_EQ(out, nullptr);
+    }
+    gfnt_blob_destroy(out);
+    EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
+  }
+}
+
+// --- gvar and cvar ----------------------------------------------------------
+
+namespace {
+
+const char * const kGvarFonts[] = {"variable-gvar.ttf", "variable-hvar.ttf",
+    "variable-cvar.ttf", "variable-avar2.ttf", "variable-stat.ttf",
+    "variable-featurevars.ttf"};
+
+uint32_t be16at(const std::vector<uint8_t> & t, size_t at) {
+  return (static_cast<uint32_t>(t[at]) << 8) | t[at + 1];
+}
+
+}  // namespace
+
+TEST(SubsetGvar, EveryKeptGlyphDrawsAndAdvancesAsItDidAtEveryPlace) {
+  for (const char * name : kGvarFonts) {
+    for (bool retain : {false, true}) {
+      for (bool unhinted : {false, true}) {
+        for (std::vector<uint32_t> keep : {std::vector<uint32_t>{}, std::vector<uint32_t>{4},
+                 std::vector<uint32_t>{6}, std::vector<uint32_t>{7},
+                 std::vector<uint32_t>{3, 5}}) {
+          SCOPED_TRACE(std::string(name) + (retain ? " retained " : " renumbered ")
+              + (unhinted ? "unhinted " : "") + std::to_string(keep.size()) + " glyphs");
+          Font source(name);
+          if (keep.empty()) {
+            keep = all_glyphs(source.glyphs());
+          }
+          Subset sub(source.face, keep, retain, unhinted);
+          ASSERT_EQ(sub.result, GFNT_OK) << sub.error.message;
+          EXPECT_TRUE(has_table(sub.face, "gvar"));
+          EXPECT_TRUE(has_table(sub.face, "glyf"));
+          EXPECT_EQ(table_of(sub.face, "fvar"), table_of(source.face, "fvar"));
+          EXPECT_EQ(table_of(sub.face, "avar"), table_of(source.face, "avar"));
+          EXPECT_EQ(table_of(sub.face, "MVAR"), table_of(source.face, "MVAR"));
+          EXPECT_EQ(has_table(sub.face, "HVAR"), has_table(source.face, "HVAR"));
+          for (size_t now = 0; now < sub.map.count; ++now) {
+            const uint32_t old = sub.map.old_of_new[now];
+            if (old == 0xFFFFFFFFu) {
+              continue;
+            }
+            for (const Place & p : kPlaces) {
+              EXPECT_EQ(at_place(sub.face, static_cast<uint32_t>(now), p),
+                  at_place(source.face, old, p))
+                  << "glyph " << old << " at " << p.wght / 65536 << "," << p.wdth / 65536;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(SubsetGvar, TheGlyphsAreMovedForRealAtTheseVariationPlaces) {
+  // The control for the test above: a font whose glyphs did not vary would pass it.
+  Font source("variable-gvar.ttf");
+  bool varied = false;
+  for (uint32_t g = 0; g < source.glyphs(); ++g) {
+    varied = varied || at_place(source.face, g, kPlaces[0]) != at_place(source.face, g, kPlaces[1]);
+  }
+  EXPECT_TRUE(varied);
+}
+
+TEST(SubsetGvar, TheTableHasOneEntryForEachKeptGlyphAndNoDataForADroppedOne) {
+  Font source("variable-gvar.ttf");
+  const std::vector<uint8_t> full = table_of(source.face, "gvar");
+  Subset one(source.face, {4});
+  ASSERT_EQ(one.result, GFNT_OK);
+  const std::vector<uint8_t> small = table_of(one.face, "gvar");
+  ASSERT_GT(small.size(), 20u);
+  EXPECT_EQ(be16at(small, 12), one.map.count);
+  EXPECT_LT(small.size(), full.size());
+  // The shared tuples are kept whole.
+  EXPECT_EQ(be16at(small, 6), be16at(full, 6));
+
+  Subset retained(source.face, {4}, true);
+  ASSERT_EQ(retained.result, GFNT_OK);
+  const std::vector<uint8_t> kept = table_of(retained.face, "gvar");
+  // Ids are kept up to the highest glyph kept, and the ones between are empty.
+  EXPECT_EQ(be16at(kept, 12), 5u);
+  EXPECT_LT(kept.size(), full.size());
+}
+
+TEST(SubsetGvar, CvarGoesWithTheControlValuesItVaries) {
+  Font source("variable-cvar.ttf");
+  ASSERT_TRUE(has_table(source.face, "cvar"));
+  ASSERT_TRUE(has_table(source.face, "cvt "));
+  Subset hinted(source.face, {1, 2});
+  ASSERT_EQ(hinted.result, GFNT_OK);
+  EXPECT_EQ(table_of(hinted.face, "cvar"), table_of(source.face, "cvar"));
+  EXPECT_EQ(table_of(hinted.face, "cvt "), table_of(source.face, "cvt "));
+  Subset unhinted(source.face, {1, 2}, false, true);
+  ASSERT_EQ(unhinted.result, GFNT_OK);
+  EXPECT_FALSE(has_table(unhinted.face, "cvar"));
+  EXPECT_FALSE(has_table(unhinted.face, "cvt "));
+}
+
+TEST(SubsetGvar, ACompositeBringsItsPartsAndTheirVariations) {
+  Font source("variable-gvar.ttf");
+  // acc2 is a composite of the composite acc, which is made of dot.
+  Subset sub(source.face, {7});
+  ASSERT_EQ(sub.result, GFNT_OK);
+  EXPECT_GE(sub.map.count, 3u);
+  for (size_t now = 0; now < sub.map.count; ++now) {
+    for (const Place & p : kPlaces) {
+      EXPECT_EQ(at_place(sub.face, static_cast<uint32_t>(now), p),
+          at_place(source.face, sub.map.old_of_new[now], p));
+    }
+  }
+}
+
+TEST(SubsetGvar, EveryAllocationFailureIsSurvived) {
+  Font source("variable-hvar.ttf");
+  std::vector<uint32_t> glyphs = {4, 6};
   GFNT_SubsetOptions o;
   gfnt_subset_options_init(&o);
   o.glyphs = glyphs.data();

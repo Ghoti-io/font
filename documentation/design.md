@@ -1673,8 +1673,8 @@ produced by subsetting. It needs the reader and nothing else. **Built**
 (`write.h`, `src/write/`): the sfnt serialiser (§12.1: table ordering, padding,
 directory search fields, checksums and `head.checkSumAdjustment`; the table set
 is supplied as bytes), the WOFF 1 writer (§12.4), and a subsetter for static
-TrueType-outline fonts and for `CFF ` and `CFF2` ones (§12.3), which carries or rewrites the layout tables. Subsetting of
-`glyf` variable fonts (`gvar`), the Apple shaping tables,
+TrueType-outline fonts, variable ones included, and for `CFF ` and `CFF2` ones (§12.3), which carries or rewrites the layout tables. Subsetting of
+the Apple shaping tables,
 the BDF writer and the PDF helpers are **not** built.
 
 ### 12.1 The sfnt serialiser
@@ -1815,8 +1815,19 @@ and fontTools draws every kept glyph at the same places; Cantarell (the corpus's
 font; three more CFF2 color fonts are static) and the `variable-cff2*.otf` fixtures (HVAR, VVAR, MVAR, variable GPOS, a second ItemVariationData
 chosen by `vsindex`) are in it.
 
-Refused with `GFNT_ERR_UNSUPPORTED`: Type 1 outlines, a CFF with Type 1 charstrings, and
-`glyf` variable fonts (`gvar`). Silently not written, and stated in `write.h`: bitmap and colour
+**Variable `glyf` fonts** are subset with the same shared tables, and `gvar` is rewritten
+(`src/write/subset_gvar.c`): each kept glyph's variation data is copied as it is, since it names
+points of that glyph and shared tuples by index and no other glyph, the shared tuples are kept whole, and
+the offset array is rebuilt for the new numbering (a dropped or retained-gap glyph has none, and the
+short form is widened to the long one if the data outgrows it). A composite's component deltas move
+with the composite, so nothing in them is renumbered. `cvar` is copied when `cvt ` is, and goes
+with it under `drop_hinting`. `HVAR` and `VVAR` are rebuilt as for CFF2. `fontTools` draws every kept
+glyph at the oracle's places (decomposed, so a composite's component names do not matter) and HarfBuzz
+shapes the subsets; the variable `glyf` corpus fonts and the `variable-*.ttf` fixtures are in it.
+The item variation store is not pruned here either, and a `gvar` is not re-packed (shared point
+numbers and tuples a dropped glyph used stay).
+
+Refused with `GFNT_ERR_UNSUPPORTED`: Type 1 outlines and a CFF with Type 1 charstrings. Silently not written, and stated in `write.h`: bitmap and colour
 tables, the Apple tables (`morx`, `mort`, `kerx`, `trak`, `ankr`), `cmap`
 format 14, and the family rename the licence reading in §14.5 wants.
 

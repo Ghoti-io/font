@@ -193,6 +193,13 @@ bool gfnt_subset_ivs_extent(const uint8_t * p, size_t avail, size_t * out_length
 GFNT_Result gfnt_subset_var_metrics(const GFNT_Face * face, GFNT_Tag tag,
     const uint32_t * old_of_new, size_t new_count, GFNT_WBuf * out, GFNT_Error * error);
 
+/**
+ * `gvar` for a new numbering: each kept glyph's variation data as it is, the shared
+ * tuples whole. Appends nothing when the font has no `gvar`.
+ */
+GFNT_Result gfnt_subset_gvar(const GFNT_Face * face, const uint32_t * old_of_new,
+    size_t new_count, GFNT_WBuf * out, GFNT_Error * error);
+
 /** The bitmap strike tables of a subset, each empty (length 0) when not carried. */
 typedef struct GFNT_SubsetStrikes {
   GFNT_WBuf eblc, ebdt, cblc, cbdt, sbix;

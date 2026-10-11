@@ -133,10 +133,12 @@ def main(argv):
     fonts = corpus.fonts("sfnt")
     if limit:
         fonts = fonts[:limit]
-    # The variable CFF2 fixtures (HVAR, VVAR, MVAR, variable GPOS): few real fonts carry
+    # The variable fixtures (CFF2 and gvar; HVAR, VVAR, MVAR, variable GPOS): few real fonts carry
     # them, so the committed ones are shaped too, with a text their few characters cover.
     fixtures = sorted(glob.glob(os.path.join(ROOT, "tests", "data", "fonts",
-                                             "variable-cff2*.otf")))
+                                             "variable-cff2*.otf"))
+                      + glob.glob(os.path.join(ROOT, "tests", "data", "fonts",
+                                               "variable-*.ttf")))
     fonts = fonts + fixtures
     groups = [g for g in hb_diff.GROUPS if not g[5] and (only is None or g[0] in only)]
 

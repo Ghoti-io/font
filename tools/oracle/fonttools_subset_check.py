@@ -30,7 +30,7 @@ import json
 import sys
 
 from fontTools import subset
-from fontTools.pens.recordingPen import RecordingPen
+from fontTools.pens.recordingPen import DecomposingRecordingPen, RecordingPen
 from fontTools.ttLib import TTFont
 
 
@@ -117,7 +117,7 @@ def check(job):
     if "fvar" in original:
         # The tables that name no glyph are carried byte for byte.
         out["var_tables_differ"] = [
-            t for t in ("fvar", "avar", "STAT", "MVAR")
+            t for t in ("fvar", "avar", "STAT", "MVAR", "cvar")
             if t in original.reader.tables
             and (t not in mine.reader.tables
                  or original.reader[t] != mine.reader[t])]
@@ -135,9 +135,14 @@ def check(job):
                 for o, n in pairs:
                     if n >= len(mine_names):
                         continue
-                    pa = RecordingPen()
-                    pb = RecordingPen()
-                    go[orig_names[o]].draw(pa)
+                    # Decomposed: a composite names its components, and the subset has
+                    # its own glyph names for them.
+                    pa = DecomposingRecordingPen(go)
+                    pb = DecomposingRecordingPen(gm)
+                    try:
+                        go[orig_names[o]].draw(pa)
+                    except AttributeError:
+                        continue    # fontTools cannot vary a component placed by points
                     gm[mine_names[n]].draw(pb)
                     if pa.value != pb.value or go[orig_names[o]].width != gm[mine_names[n]].width:
                         at.append([loc, o])

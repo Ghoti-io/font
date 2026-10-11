@@ -845,7 +845,9 @@ def main():
     # fonts that have composites, ligatures and every layout lookup.
     for fixture, label in (("outline-composite.ttf", "composite"),
                         ("layout-gsub.ttf", "gsub"), ("layout-gpos.ttf", "gpos"),
-                        ("basic.ttf", "basic")):
+                        ("basic.ttf", "basic"), ("variable-gvar.ttf", "variable-gvar"),
+                        ("variable-hvar.ttf", "variable-hvar"),
+                        ("variable-cvar.ttf", "variable-cvar")):
         data = (root / "tests/data/fonts" / fixture).read_bytes()
         for options, kind in ((0x00, "renumber"), (0x01, "retain"),
                               (0x05, "retain-unhinted"), (0x43, "restricted")):

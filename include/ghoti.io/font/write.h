@@ -438,7 +438,11 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * `VVAR` are rebuilt for the new numbering (their item variation store kept whole), and
  * `GDEF`'s store is carried so that `GPOS` variation indices still resolve.
  *
- * **Not built**: Type 1 outlines, variable fonts with `gvar`, the Apple tables (`morx`, `mort`, `kerx`,
+ * **A variable `glyf` font** is subset too: `gvar` keeps each kept glyph's variation data and the
+ * shared tuples, with its offsets rebuilt, `cvar` goes with the control values it varies, and the
+ * tables above are carried or rebuilt as for `CFF2`.
+ *
+ * **Not built**: Type 1 outlines, the Apple tables (`morx`, `mort`, `kerx`,
  * `trak`, `ankr`), class-based `kern`, `cmap` format 14, and the family rename
  * the licence reading in documentation/design.md section 14.5 wants. Each is
  * refused or dropped as stated here, not approximated.

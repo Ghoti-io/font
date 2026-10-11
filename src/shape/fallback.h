@@ -65,11 +65,31 @@ bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Extents * out);
 
 /**
+ * The same, as a font drawn at @p ppem pixels per em measures it: only a color
+ * bitmap strike is chosen by size (0 for none, the largest), so this differs from
+ * ::gfnt_glyph_extents() for a font with `CBDT` and nowhere else.
+ */
+bool gfnt_glyph_extents_at(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, uint32_t ppem, GFNT_Extents * out);
+
+/**
  * The same, from the outline alone: what a glyph is when its font paints nothing
  * over it, and what a PaintGlyph clips to.
  */
 bool gfnt_glyph_plain_extents(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Extents * out);
+
+/**
+ * HarfBuzz's box for a glyph of a color bitmap font (`CBDT`): the picture's metrics,
+ * scaled from the chosen strike's pixels to the em.
+ *
+ * @param requested_ppem The size asked for, or 0 for none, which chooses the
+ *   largest strike (a shaper is run with none).
+ * @return false when the font has no `CBDT` strike carrying the glyph; the colour
+ *   paint graph or the outline then measures it.
+ */
+bool gfnt_bitmap_extents(const GFNT_Face * face, uint32_t glyph,
+    uint32_t requested_ppem, GFNT_Extents * out);
 
 /**
  * HarfBuzz's box for a glyph of a COLR version 1 font: its clip box, or what its

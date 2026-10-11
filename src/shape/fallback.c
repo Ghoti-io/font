@@ -54,8 +54,18 @@
  */
 bool gfnt_glyph_extents(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Extents * out) {
+  return gfnt_glyph_extents_at(face, glyph, variation, 0, out);
+}
+
+bool gfnt_glyph_extents_at(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, uint32_t ppem, GFNT_Extents * out) {
   bool handled = false;
 
+  // The picture, when the font has one for the glyph, comes before the paint graph
+  // and before the outline (see bitmap_extents.c).
+  if (gfnt_bitmap_extents(face, glyph, ppem, out)) {
+    return true;
+  }
   if (gfnt_color_extents(face, glyph, variation, out, &handled) && handled) {
     return true;
   }

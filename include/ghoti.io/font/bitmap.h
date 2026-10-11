@@ -31,7 +31,8 @@
  * GNU Unifont's `.hex` - and each produces a face with **one strike and no
  * outlines**.
  *
- * Inside an sfnt there can be several. `EBLC`/`EBDT` is read: a face with embedded
+ * Inside an sfnt there can be several. `EBLC`/`EBDT` is read (and `CBLC`/`CBDT`, whose
+ * pictures are ::gfnt_face_glyph_image() and ::gfnt_face_glyph_color_bitmap()): a face with embedded
  * strikes reports how many it has, at what sizes, and where each puts its
  * baseline - which is what ::gfnt_face_select_strike() needs and the first thing in
  * this library that has to **choose** between strikes rather than confirm the only
@@ -213,6 +214,117 @@ GFNT_API GFNT_Result gfnt_face_bitmap_encoding_count(const GFNT_Face * face,
 GFNT_API GFNT_Result gfnt_face_bitmap_encoding_at(const GFNT_Face * face,
     size_t index, uint32_t * out_codepoint, uint32_t * out_glyph,
     GFNT_Error * error);
+
+/**
+ * @brief How an encoded glyph image is stored.
+ *
+ * `CBDT` holds PNG only. `sbix` names its format per glyph, and the three it
+ * defines for pictures are here; `dupe` (another glyph's image) is followed and
+ * never surfaces, and `mask` is declined.
+ */
+typedef enum {
+  GFNT_IMAGE_PNG = 0,   ///< A PNG file.
+  GFNT_IMAGE_JPEG,      ///< A JPEG file, which `sbix` `jpg ` names.
+  GFNT_IMAGE_TIFF       ///< A TIFF file, which `sbix` `tiff` names.
+} GFNT_ImageFormat;
+
+/**
+ * @brief One color glyph as the font stores it: an encoded picture and where it sits.
+ *
+ * Borrowed from the face, like ::GFNT_BitmapGlyph: `data` lives as long as the
+ * face does and nothing here needs freeing. The picture is the font's own bytes,
+ * untouched, so a caller with a decoder of its own (a GPU upload path, say) can
+ * take them as they are; ::gfnt_face_glyph_color_bitmap() decodes them.
+ *
+ * Positions are in **pixels of the strike**, y up, from the pen on the baseline -
+ * the same convention ::GFNT_BitmapGlyph states. `bearing_y` is the top edge.
+ */
+typedef struct GFNT_GlyphImage {
+  GFNT_ImageFormat format; ///< What `data` is.
+  const uint8_t * data;    ///< The file, borrowed from the face.
+  size_t length;           ///< Bytes in `data`.
+  /**
+   * The picture's size as the **font** states it, or 0 when it states none.
+   *
+   * `CBDT` states it in every glyph's metrics. `sbix` does not, so for a PNG it
+   * is read from the file's header and for the other two formats it is 0, since
+   * learning it means decoding.
+   */
+  uint32_t width;
+  uint32_t height;
+  int32_t bearing_x;       ///< Left edge of the picture from the pen; may be negative.
+  int32_t bearing_y;       ///< Top edge of the picture above the baseline.
+  /**
+   * The pen movement in pixels, or -1 when the table states none.
+   *
+   * `CBDT` states one per glyph. `sbix` states none: a glyph's advance is the
+   * `hmtx` one, in font units, which a caller scales by the strike.
+   */
+  int32_t advance;
+  GFNT_Strike strike;      ///< Which strike answered.
+} GFNT_GlyphImage;
+
+/**
+ * @brief This glyph's encoded picture, from a color strike.
+ *
+ * Reads `CBDT` (image formats 17, 18 and 19) and `sbix`. Finding one glyph costs
+ * its strike's index subtables and one glyph's bytes; nothing is decoded, and no
+ * strike is read whole.
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param strike Which strike, from 0; ::gfnt_face_strike_at() says which are color
+ *   (::GFNT_GLYPH_BITMAP_PNG).
+ * @param out_image Receives the picture. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID for no face, a glyph past the count or a
+ *   strike the face does not have; ::GFNT_ERR_UNSUPPORTED for a strike that is not
+ *   a color one, for an image format this library declines, and for a glyph
+ *   **this strike does not carry** (another strike may); ::GFNT_ERR_CORRUPT for a
+ *   glyph whose bytes the font gets wrong, per glyph.
+ */
+GFNT_API GFNT_Result gfnt_face_glyph_image(const GFNT_Face * face,
+    uint32_t glyph, size_t strike, GFNT_GlyphImage * out_image,
+    GFNT_Error * error);
+
+/**
+ * @brief A color glyph decoded to pixels: 8-bit RGBA, **not** premultiplied.
+ *
+ * Straight alpha, as a PNG stores it, so that nothing is lost to rounding on the
+ * way here; a caller compositing premultiplied multiplies once. Rows run top
+ * first, `stride` bytes apart. Unlike ::GFNT_BitmapGlyph this is **owned by the
+ * caller**: decoding makes the pixels, and a face that cached every decoded glyph
+ * would hold a few hundred kilobytes for each one a program ever drew.
+ */
+typedef struct GFNT_ColorBitmap {
+  uint32_t width;          ///< Pixels across, from the decoded picture.
+  uint32_t height;         ///< Rows.
+  size_t stride;           ///< Bytes per row: `width * 4`.
+  int32_t bearing_x;       ///< As ::GFNT_GlyphImage::bearing_x.
+  int32_t bearing_y;       ///< As ::GFNT_GlyphImage::bearing_y.
+  int32_t advance;         ///< As ::GFNT_GlyphImage::advance.
+  uint8_t * rgba;          ///< `height * stride` bytes, R then G then B then A.
+  GFNT_Strike strike;      ///< Which strike answered.
+  const GFNT_Allocator * allocator; ///< What ::gfnt_color_bitmap_free() frees with.
+} GFNT_ColorBitmap;
+
+/**
+ * @brief This glyph's picture, decoded.
+ *
+ * ::gfnt_face_glyph_image() and then a decode by `image`, so the errors are that
+ * function's, plus ::GFNT_ERR_CORRUPT for a picture that does not decode,
+ * ::GFNT_ERR_LIMIT for one that would take more than
+ * ::GFNT_Limits::max_raster_bytes, and ::GFNT_ERR_OOM.
+ *
+ * @param out_bitmap Receives the glyph. Written only on success; release it with
+ *   ::gfnt_color_bitmap_free().
+ */
+GFNT_API GFNT_Result gfnt_face_glyph_color_bitmap(const GFNT_Face * face,
+    uint32_t glyph, size_t strike, GFNT_ColorBitmap * out_bitmap,
+    GFNT_Error * error);
+
+/** @brief Release a ::GFNT_ColorBitmap's pixels. Harmless on a zeroed one. */
+GFNT_API void gfnt_color_bitmap_free(GFNT_ColorBitmap * bitmap);
 
 #ifdef __cplusplus
 }

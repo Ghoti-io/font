@@ -123,7 +123,8 @@ which of them this library takes, and which of those it reads today.
 | | `EBDT`/`EBLC`/`EBSC` strikes | **implemented** (grey depths are listed and their data declined) |
 | | `COLR` v0 + `CPAL` | **implemented** (§7.6): palettes, usability flags and labels, and the layer list of a base glyph; returned as a description, never composited |
 | | `COLR` v1 | **implemented** (§7.6) as a paint graph read in place and walked, with the variable forms and the clip list |
-| | `CBDT`/`CBLC`, `sbix` | wanted, not implemented; color bitmaps need `image` |
+| | `CBDT`/`CBLC` | **implemented** (§7.5): the strike list, a glyph's PNG bytes and metrics, and a decode to RGBA by `image`; shaped extents as HarfBuzz measures them |
+| | `sbix` | wanted, not implemented |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |
 | | WOFF 2 | not implemented; `compress` has a full Brotli decoder now, and the glyf/loca transform is the work |
@@ -173,8 +174,8 @@ to keep open.
 | `cmap.h` | codepoint → glyph, all subtable formats; variation selectors; reverse lookup |
 | `name.h` | `name` records decoded to UTF-8 |
 | `glyph.h` | `GFNT_Glyph`, the tagged union; the strike-selection policy |
-| `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes. The four standalone containers are implemented; `EBDT`/`EBLC` are not |
-| `color.h` | `CPAL`, `COLR` v0 and v1 implemented (v1 as a graph, not composited); `CBDT`, `sbix` not |
+| `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes, and the color strikes' pictures (`gfnt_face_glyph_image()` for the font's bytes, `gfnt_face_glyph_color_bitmap()` for RGBA pixels). All implemented but `sbix` |
+| `color.h` | `CPAL`, `COLR` v0 and v1 implemented (v1 as a graph, not composited) |
 | `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Both producers are implemented |
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
 | `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Implemented; of the four containers that feed them, `CFF ` inside an sfnt is read |
@@ -771,13 +772,37 @@ the table" in strike 2 - and answers for 7,224 of 7,225 glyphs three times over.
 That is M11 earning its place: the alternative to a per-glyph refusal is
 declining three strikes of a font that renders everywhere, which is what the
 reference does.
-`CBLC`/`CBDT` formats 17-19 carry PNG, and `sbix` carries PNG, JPEG or TIFF
-per strike with `dupe` records; both come back as `GFNT_GLYPH_BITMAP_PNG` with
-the bytes, and the raster bridge decodes them through `image` when it is
-present and returns `ERR_UNSUPPORTED` when it is not. PCF (all the table
-types, both byte orders, the `fcp` magic), BDF (the text grammar, `ENCODING`
-`-1` glyphs, `SWIDTH`/`DWIDTH`), PSF 1 and 2 with their Unicode tables, and
-`.hex`.
+**Color strikes** (`CBLC`/`CBDT`; `sbix` is not read yet). `CBLC` is `EBLC`'s layout
+with version 3 (2 is accepted), a strike depth of 32, and image formats 17 (small
+metrics, then a length and a PNG), 18 (big metrics) and 19 (the metrics are the
+index's, which then has to be index format 2 or 5). The index, the five subtable
+formats and the rule that two equal offsets mean "not here" are `EBLC`'s code,
+parameterized by table; what differs is that a strike is **not parsed whole**. A mono
+glyph is a few bytes and a color strike is hundreds of kilobytes of PNG, so
+`gfnt_face_glyph_image()` reads the strike's index subtables, finds the one glyph and
+borrows its bytes from the face, and `gfnt_face_glyph_color_bitmap()` decodes that one
+picture through `image` (a dependency since this was written) to **straight-alpha
+RGBA8, owned by the caller**: a face that cached every decoded glyph would hold
+a few hundred kilobytes for each glyph a program ever drew. A grey PNG is widened;
+a 16-bit one is declined by name, as there is no reference for narrowing it. The
+decoded pixels are held to Pillow's on every PNG color type the encoder writes
+(`make check-oracle-strike-images`; the bytes, metrics and advances to fontTools'),
+over Noto Color Emoji's 4,082 pictures and the three color-strike fixtures.
+
+*How a shaper measures such a glyph* was found by experiment against `hb-shape
+--show-extents` (`src/shape/bitmap_extents.c`, held by `check-oracle-color-extents`).
+The picture's box **wins over the outline's and over a `COLR` paint graph's**, so a
+font with both is measured by the picture. One strike answers for every glyph,
+chosen by size alone: the larger of its two ppems, the smallest strike at least as
+large as the size asked for, else the largest, the first of equals - and a shaper
+asks for no size, which is the largest. A glyph that strike lacks is not looked up in
+another; it falls through to the paint graph or the outline. The box is the metrics
+scaled from the strike's pixels to the em, each axis by its own ppem, **rounded half
+up after the sign is applied** (so a height of -687.5 is -687). And HarfBuzz reads
+only index formats 1 and 3 under image formats 17 and 18: a glyph in any other cell
+has no box there, and none here, though `gfnt_face_glyph_image()` returns its
+picture. Neither Debian nor any package this was checked against has more than one
+`CBLC` font, so every cell but 1/17 rests on fixtures (`color-cbdt*.ttf`).
 
 ### 7.6 Color
 
@@ -3294,8 +3319,7 @@ What that cost in findings:
   `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
   which is a fact about the font rather than about the object model.
 
-**Not built:** `CBDT` and `sbix` (§7.5); colour
-(§7.6);
+**Not built:** `sbix` (§7.5);
 a `FeatureVariations` condition of format 2 (§7.7); paragraph layout, and font matching (discovery lists faces, §11); the `CFF` writer (§12); the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `gasp`
 and WOFF 2. `maxp` has no `_dump` because nothing

@@ -1543,6 +1543,21 @@ def build_color_v1_varnone(out):
     color_fixtures.build_color_v1_var(sys.modules[__name__], out, mapped="none")
 
 
+def build_color_cbdt(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_cbdt(sys.modules[__name__], out)
+
+
+def build_color_cbdt_metrics(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_cbdt_metrics(sys.modules[__name__], out)
+
+
+def build_color_cbdt_sizes(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_cbdt_sizes(sys.modules[__name__], out)
+
+
 def build_layout_gsub_cases(out):
     import layout_fixtures
     layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
@@ -4254,6 +4269,23 @@ FIXTURES = {
         "0xFFFF:0xFFFF, the map's own 'no variation', so a moved location reads "
         "the stored numbers (Google's test-glyph font leaves its fixed fields "
         "this way, and a reader that sent the entry to the store fails)"),
+    "color-cbdt.ttf": (build_color_cbdt,
+        "CBLC and CBDT: two color strikes holding PNG pictures, under index "
+        "formats 1, 2, 3, 4 and 5 and image formats 17, 18 and 19, with a glyph in "
+        "range and absent, bearings of both signs, and every PNG color type the "
+        "encoder writes (RGBA, RGB, palette with transparency, grey, grey with alpha, "
+        "one bit)"),
+    "color-cbdt-metrics.ttf": (build_color_cbdt_metrics,
+        "CBDT with two strikes (16 and 7 ppem) of 127 glyphs whose metrics sweep the "
+        "byte ranges, over one-pixel pictures: the scaling of a picture's box to the "
+        "em, and its rounding, are what is held (a half falls at 16 ppem in a "
+        "1000-unit em)"),
+    "color-cbdt-sizes.ttf": (build_color_cbdt_sizes,
+        "CBDT with four strikes - 24 by 12, 20 by 20, a second 24 by 12 and 10 by 30 "
+        "ppem - over glyphs with and without outlines: which strike a size picks "
+        "(the smallest at least as large as the larger ppem, else the largest, the "
+        "first of equals), which ppem scales which axis, and a picture winning over "
+        "an outline while a glyph the chosen strike lacks keeps its outline"),
     "layout-gsub.ttf": (build_layout_gsub,
         "GSUB with one of every lookup type and format: single in both formats, "
         "multiple (including to nothing), alternate, ligature, context in "

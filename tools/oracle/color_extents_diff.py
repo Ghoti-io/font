@@ -30,6 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import color_diff
+import strike_image_diff
 import corpus
 import oracle_env
 
@@ -58,8 +59,14 @@ for path in sys.argv[2:]:
                                    0x3164, 0xFEFF, 0xFFA0)
                           or 0x180B <= c <= 0x180F or 0xFFF0 <= c <= 0xFFF8))
     free = next(c for c in (0xE000, 0xE001, 0x10FFFD) if c not in t.getBestCmap())
+    sizes = []
+    if "CBLC" in t:
+        for strike in t["CBLC"].strikes:
+            size = strike.bitmapSizeTable
+            sizes.append(max(size.ppemX, size.ppemY))
     out[path] = {"upem": t["head"].unitsPerEm, "cps": cps + [free],
-                 "version": t["COLR"].version if "COLR" in t else None}
+                 "version": t["COLR"].version if "COLR" in t else None,
+                 "sizes": sizes}
 json.dump(out, open(sys.argv[1], "w"))
 """
 
@@ -75,7 +82,8 @@ def main(argv):
                     for n in sorted(os.listdir(color_diff.FIXTURES))
                     if n.endswith((".ttf", ".otf"))]
         fonts = [f for f in fixtures + corpus.fonts("sfnt")
-                 if color_diff.has_color_tables(f)]
+                 if color_diff.has_color_tables(f)
+                 or strike_image_diff.has_strike_tables(f)]
     os.makedirs(SCRATCH, exist_ok=True)
     script = os.path.join(SCRATCH, "dump.py")
     info = os.path.join(SCRATCH, "info.json")
@@ -107,8 +115,15 @@ def main(argv):
     if ran.returncode not in (0, 1):
         raise oracle_env.OracleUnavailable("hb-shape failed: %s" % ran.stderr[-300:])
 
-    failed = compared = 0
+    failed = compared = swept = 0
     by_version = {}
+
+    def agrees(got, want):
+        # `null` is this library saying it cannot measure the glyph, and an empty
+        # box is how hb-shape prints the same refusal, so they are one answer.
+        value = json.loads(got)
+        return value == want or (value is None and want[1:] == [0, 0, 0, 0])
+
     for number, font in enumerate(fonts):
         cps = info[font]["cps"]
         with open(os.path.join(SCRATCH, "%d.cps" % number), "rb") as handle:
@@ -124,18 +139,67 @@ def main(argv):
             continue
         shown = 0
         for cp, got, ref in zip(cps, mine, theirs):
-            compared += 1
             hb = ref[0]
+            compared += 1
             want = [hb["g"], hb["xb"], hb["yb"], hb["w"], hb["h"]]
-            if json.loads(got) != want:
+            if not agrees(got, want):
                 failed += 1
                 if shown < (50 if verbose else 1):
                     print("DIFF %s U+%04X: this library %s, HarfBuzz %s"
                           % (os.path.relpath(font, ROOT), cp, got, want))
                 shown += 1
-    print("color_extents_diff: %d fonts (COLR versions %s), %d glyph boxes, %d differing"
+
+    # A color bitmap font is measured by the strike a size picks, and a shaper is
+    # run with no size, which picks the largest; so the choice of strike is held
+    # separately, by asking both for a spread of sizes round each strike's own.
+    sweeps = []
+    for number, font in enumerate(fonts):
+        sizes = info[font]["sizes"]
+        if not sizes or info[font]["version"] is not None:
+            continue
+        for ppem in sorted({1, 4000} | {n for s in sizes for n in (s - 1, s, s + 1)
+                                        if n > 0}):
+            sweeps.append((number, font, ppem))
+    if sweeps:
+        with open(os.path.join(SCRATCH, "sweep.sh"), "w") as handle:
+            for number, font, ppem in sweeps:
+                handle.write("hb-shape --font-file='%s' --font-size=%d --font-ppem=%d "
+                             "--show-extents --no-glyph-names --output-format=json "
+                             "--text-file='%s/%d.txt' > '%s/%d-%d.hbs' 2>/dev/null\n"
+                             % (font, info[font]["upem"], ppem, SCRATCH, number,
+                                SCRATCH, number, ppem))
+        ran = subprocess.run(oracle_env.command("harfbuzz",
+            ["sh", os.path.join(SCRATCH, "sweep.sh")], scratch=SCRATCH),
+            capture_output=True, text=True)
+        if ran.returncode not in (0, 1):
+            raise oracle_env.OracleUnavailable("hb-shape failed: %s" % ran.stderr[-300:])
+        for number, font, ppem in sweeps:
+            cps = info[font]["cps"]
+            with open(os.path.join(SCRATCH, "%d.cps" % number), "rb") as handle:
+                mine = subprocess.run([DRIVER, "--ppem", str(ppem), font], stdin=handle,
+                                      capture_output=True,
+                                      text=True).stdout.split("\n")[:-1]
+            with open(os.path.join(SCRATCH, "%d-%d.hbs" % (number, ppem)),
+                      encoding="utf-8") as handle:
+                theirs = [json.loads(l) for l in handle.read().split("\n")[:-1]]
+            if len(mine) != len(cps) or len(theirs) != len(cps):
+                print("DIFF %s at %d ppem: line counts differ" % (
+                    os.path.relpath(font, ROOT), ppem))
+                failed += 1
+                continue
+            for cp, got, ref in zip(cps, mine, theirs):
+                hb = ref[0]
+                swept += 1
+                want = [hb["g"], hb["xb"], hb["yb"], hb["w"], hb["h"]]
+                if not agrees(got, want):
+                    failed += 1
+                    if failed < 10:
+                        print("DIFF %s U+%04X at %d ppem: this library %s, HarfBuzz %s"
+                              % (os.path.relpath(font, ROOT), cp, ppem, got, want))
+    print("color_extents_diff: %d fonts (COLR versions %s), %d glyph boxes, %d more "
+          "across sizes of color bitmap strikes, %d differing"
           % (len(fonts), ", ".join("%s: %d" % kv for kv in sorted(
-              by_version.items(), key=str)), compared, failed))
+              by_version.items(), key=str)), compared, swept, failed))
     return 1 if failed or not fonts else 0
 
 

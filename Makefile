@@ -429,6 +429,22 @@ endif
 endif
 INCLUDE += $(UNICODE_CFLAGS)
 
+# ghoti.io-image, for the PNG (and, in `sbix`, JPEG and TIFF) a color bitmap
+# strike stores its glyphs as: `CBDT` formats 17 to 19 and `sbix`. This library
+# reads the tables and finds a glyph's bytes; decoding them is image's work and is
+# not written a second time here. Resolved exactly as the others are, and
+# unconditional for the reason compress's comment gives. image does not depend on
+# font, so the order in suite/libraries.txt has no cycle.
+IMAGE_PC ?= ghoti.io-image$(BRANCH)
+IMAGE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(IMAGE_PC) 2>/dev/null)
+IMAGE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(IMAGE_PC) 2>/dev/null)
+ifeq ($(strip $(IMAGE_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-image was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+endif
+endif
+INCLUDE += $(IMAGE_CFLAGS)
+
 # Every dependency's link flags, in one variable, so that a link line names one
 # thing and a third dependency is one edit rather than nine. The flag stamps
 # record `$(DEP_LIBS)` for the same reason: `make check-stamps` requires every
@@ -436,7 +452,7 @@ INCLUDE += $(UNICODE_CFLAGS)
 # reached the recipes and not the stamps would leave objects scoring the previous
 # build's flags.
 
-DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS)
+DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS) $(IMAGE_LIBS)
 
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
@@ -683,7 +699,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color
+.PHONY: check-oracle-subset check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -965,7 +981,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color
+check-oracle: check-oracle-layout check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images
 check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
@@ -1152,6 +1168,10 @@ check-oracle-color: $(EXAMPLES)
 check-oracle-color-extents: ## Measure every glyph of every color font and diff against HarfBuzz
 check-oracle-color-extents: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools,harfbuzz -- python3 $(ORACLE)/color_extents_diff.py --quiet
+
+check-oracle-strike-images: ## Read every picture of every color bitmap strike and diff against fontTools and Pillow
+check-oracle-strike-images: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/strike_image_diff.py --quiet
 
 check-oracle-subset-color: ## Subset every static color font and read the COLR and CPAL back through fontTools
 check-oracle-subset-color: $(EXAMPLES)
@@ -1915,7 +1935,7 @@ LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 # What goes in the .pc Requires: field. Built from the same variables the
 # compile uses, so a dependency on another branch cannot be named one way for
 # the build and another way for consumers.
-PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC)
+PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC) $(IMAGE_PC)
 
 # Where this project's own .pc file is installed.
 PKGCONFIG_INSTALL_PATH ?= $(PC_INSTALL_PATH)

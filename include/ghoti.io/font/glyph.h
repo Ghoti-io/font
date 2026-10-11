@@ -37,7 +37,7 @@
  *
  * What is **not** here is any glyph data: the bitmap parsers arrive in phase
  * 1b and outlines in phase 1. The accessors below are honest about that in the
- * one way that matters - a face carrying `EBLC`, `CBLC` or `sbix` reports
+ * one way that matters - a face carrying `bloc` or `sbix` reports
  * ::GFNT_ERR_UNSUPPORTED rather than "no strikes", because a library that
  * answered zero would be telling a caller a bitmap font has no bitmaps.
  */
@@ -240,7 +240,7 @@ GFNT_API bool gfnt_face_has_outlines(const GFNT_Face * face);
  *   face with an `EBLC` and the `EBDT` it indexes into; 1 for a standalone bitmap
  *   container, where the file is a strike; ::GFNT_ERR_INVALID; or
  *   ::GFNT_ERR_UNSUPPORTED for a face whose strikes are in a table this library
- *   does not parse - `bloc`, `CBLC`, `sbix`, or an `EBLC` whose `EBDT` is missing
+ *   does not parse - `bloc`, `sbix`, or an `EBLC` whose `EBDT` is missing
  *   - which is not the same answer as zero, and must not be.
  */
 GFNT_API GFNT_Result gfnt_face_strike_count(const GFNT_Face * face,

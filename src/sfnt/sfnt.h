@@ -164,6 +164,8 @@ struct GFNT_Face {
   GFNT_BitmapFont bitmap;
   GFNT_Cached eblc_state;           ///< `EBLC`'s strike list, parsed on first use.
   GFNT_Eblc eblc;
+  GFNT_Cached cblc_state;           ///< `CBLC`'s strike list, parsed on first use.
+  GFNT_Eblc cblc;                   ///< The same layout as `eblc`, for color strikes.
   GFNT_Cached ebsc_state;           ///< `EBSC`'s scale records, likewise.
   GFNT_Ebsc ebsc;
   GFNT_Cached fvar_state;           ///< `fvar`'s axes and named instances.

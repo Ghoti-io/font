@@ -190,7 +190,7 @@ static GFNT_Result gfnt_ebdt_read_metrics(GFNT_Reader * reader,
  *   @p glyph - either because a sparse list omits it, or because an offset array
  *   gives it no bytes.
  */
-static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
+GFNT_Result gfnt_eblc_locate_glyph(const GFNT_Face * face,
     const GFNT_EblcSubtable * subtable, uint32_t glyph, size_t * out_offset,
     size_t * out_length, bool * out_found, GFNT_Error * error) {
   GFNT_Reader table;
@@ -200,7 +200,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
   uint32_t end = 0;
 
   *out_found = false;
-  result = gfnt_face_table_reader(face, GFNT_TAG_EBLC, &table, error);
+  result = gfnt_face_table_reader(face, subtable->index_table, &table, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -213,7 +213,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
 
       if (gfnt_reader_u32_at(&table, at, &start) != GFNT_OK
           || gfnt_reader_u32_at(&table, at + 4u, &end) != GFNT_OK) {
-        return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, at,
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, at,
             GFNT_GLYPH_NONE, "an EBLC format 1 offset past the end of the table");
       }
       break;
@@ -225,7 +225,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
 
       if (!gcu_safe_mul_size(position, subtable->image_size, &scaled)
           || scaled > UINT32_MAX) {
-        return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, 0,
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, 0,
             GFNT_GLYPH_NONE, "an EBLC format 2 glyph offset that does not fit");
       }
       start = (uint32_t)scaled;
@@ -242,7 +242,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
 
       if (gfnt_reader_u16_at(&table, at, &low) != GFNT_OK
           || gfnt_reader_u16_at(&table, at + 2u, &high) != GFNT_OK) {
-        return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, at,
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, at,
             GFNT_GLYPH_NONE, "an EBLC format 3 offset past the end of the table");
       }
       start = low;
@@ -263,7 +263,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
         uint16_t id = 0;
 
         if (gfnt_reader_u16_at(&table, at, &id) != GFNT_OK) {
-          return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, at,
+          return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, at,
               GFNT_GLYPH_NONE,
               "an EBLC format 4 glyph list past the end of the table");
         }
@@ -279,7 +279,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
 
           if (gfnt_reader_u16_at(&table, at + 2u, &here) != GFNT_OK
               || gfnt_reader_u16_at(&table, at + 6u, &next) != GFNT_OK) {
-            return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, at,
+            return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, at,
                 GFNT_GLYPH_NONE,
                 "an EBLC format 4 pair whose offset or successor is missing");
           }
@@ -311,7 +311,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
         uint16_t id = 0;
 
         if (gfnt_reader_u16_at(&table, at, &id) != GFNT_OK) {
-          return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, at,
+          return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, at,
               GFNT_GLYPH_NONE,
               "an EBLC format 5 glyph list past the end of the table");
         }
@@ -326,7 +326,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
 
           if (!gcu_safe_mul_size(middle, subtable->image_size, &scaled)
               || scaled > UINT32_MAX) {
-            return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, at,
+            return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, at,
                 GFNT_GLYPH_NONE,
                 "an EBLC format 5 glyph offset that does not fit");
           }
@@ -344,7 +344,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
   }
 
   if (end < start) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, 0,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, 0,
         GFNT_GLYPH_NONE, "an EBLC glyph whose offsets run backwards");
   }
   if (end == start && gfnt_eblc_index_has_offsets(subtable->index_format)) {
@@ -355,7 +355,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
     return GFNT_OK;
   }
   if (!gcu_safe_add_size(subtable->image_data_offset, start, out_offset)) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, 0,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, subtable->index_table, 0,
         GFNT_GLYPH_NONE, "an EBDT offset that does not fit a size_t");
   }
   *out_length = (size_t)(end - start);
@@ -364,7 +364,7 @@ static GFNT_Result gfnt_ebdt_locate(const GFNT_Face * face,
 }
 
 /** The subtable covering @p glyph, or NULL. */
-static const GFNT_EblcSubtable * gfnt_ebdt_subtable_for(
+const GFNT_EblcSubtable * gfnt_eblc_subtable_for(
     const GFNT_EblcSubtable * subtables, size_t count, uint32_t glyph) {
   for (size_t i = 0; i < count; ++i) {
     if (glyph >= subtables[i].first_glyph && glyph <= subtables[i].last_glyph) {
@@ -536,13 +536,13 @@ static GFNT_Result gfnt_ebdt_paint(const GFNT_EbdtRead * read, uint32_t glyph,
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, 0, glyph,
         "an EBDT composite whose component is outside the strike's glyph range");
   }
-  subtable = gfnt_ebdt_subtable_for(read->subtables, read->subtable_count,
+  subtable = gfnt_eblc_subtable_for(read->subtables, read->subtable_count,
       glyph);
   if (!subtable) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBDT, 0, glyph,
         "an EBDT composite whose component no index subtable covers");
   }
-  result = gfnt_ebdt_locate(read->face, subtable, glyph, &offset, &length,
+  result = gfnt_eblc_locate_glyph(read->face, subtable, glyph, &offset, &length,
       &found, error);
   if (result != GFNT_OK) {
     return result;
@@ -795,7 +795,7 @@ GFNT_Result gfnt_ebdt_read_strike(const GFNT_Face * face,
       }
       continue;
     }
-    subtable = gfnt_ebdt_subtable_for(subtables, subtable_count,
+    subtable = gfnt_eblc_subtable_for(subtables, subtable_count,
         (uint32_t)glyph);
     if (!subtable) {
       result = gfnt_bitmap_build_absent(build, error);
@@ -814,7 +814,7 @@ GFNT_Result gfnt_ebdt_read_strike(const GFNT_Face * face,
     // ::GFNT_ERR_OOM is the exception and is returned: running out of memory is
     // not a fact about the font, and a parse that swallowed it would publish a
     // strike that silently lost glyphs.
-    result = gfnt_ebdt_locate(face, subtable, (uint32_t)glyph, &offset, &length,
+    result = gfnt_eblc_locate_glyph(face, subtable, (uint32_t)glyph, &offset, &length,
         &found, &glyph_error);
     if (result == GFNT_ERR_OOM) {
       *error = glyph_error;

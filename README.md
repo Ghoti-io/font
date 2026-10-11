@@ -175,6 +175,7 @@ program that links `ghoti.io-font-0` links this too.
 - [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) — the allocator, the growable array, and the overflow-checked size arithmetic.
 - [ghoti.io-compress](https://github.com/Ghoti-io/compress) — gzip, for the `.pcf.gz` and `.psf.gz` a bitmap font usually arrives in, and zlib when WOFF 1 lands.
 - [ghoti.io-unicode](https://github.com/Ghoti-io/unicode) — what a shaper asks of a code point: its combining class, its decomposition and composition, its general category.
+- [ghoti.io-image](https://github.com/Ghoti-io/image) — the PNG decoder behind a color bitmap strike (`CBDT`): the font's picture becomes RGBA pixels.
 
 ## Documentation
 

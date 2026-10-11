@@ -143,6 +143,18 @@ GFNT_Result gfnt_face_strike_count(const GFNT_Face * face, size_t * out_count,
     return GFNT_OK;
   }
 
+  // CBLC is the same list with PNG behind it; sbix is Apple's and is next.
+  if (gfnt_face_has_cblc(face)) {
+    const GFNT_Eblc * cblc = NULL;
+    GFNT_Result result = gfnt_face_cblc(face, &cblc, error);
+
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_count = cblc->strike_count;
+    return GFNT_OK;
+  }
+
   table = gfnt_face_strike_table(face);
   if (table != 0) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, table, 0,
@@ -185,6 +197,16 @@ GFNT_Result gfnt_face_strike_at(const GFNT_Face * face, size_t index,
       return result;
     }
     *out_strike = eblc->strikes[index].strike;
+    return GFNT_OK;
+  }
+  if (index < count && gfnt_face_has_cblc(face)) {
+    const GFNT_Eblc * cblc = NULL;
+
+    result = gfnt_face_cblc(face, &cblc, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_strike = cblc->strikes[index].strike;
     return GFNT_OK;
   }
   // For every other face the count is zero, so every index is out of range -

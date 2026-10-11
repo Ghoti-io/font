@@ -23,7 +23,7 @@
  *
  * The box the shaper measures each glyph with, for `tools/oracle/color_extents_diff.py`.
  *
- * Usage: font-extents <font>
+ * Usage: font-extents [--ppem N] <font>
  *
  * Reads hexadecimal code points from standard input, one per line, and prints
  * one JSON line each: `[glyph,x_bearing,y_bearing,width,height]` in font units
@@ -33,7 +33,8 @@
  * **This reaches past the public headers on purpose.** `gfnt_glyph_extents()`
  * is the shaper's own measure, used to place a mark when no `GPOS` does, and it
  * is not part of the API; the differential holds it to HarfBuzz directly rather
- * than through the offsets it happens to produce.
+ * than through the offsets it happens to produce. With `--ppem N` it measures as a font
+ * drawn at that many pixels per em is, which is how a color strike is chosen.
  */
 
 #include <ghoti.io/font/font.h>
@@ -50,9 +51,13 @@ int main(int argc, char ** argv) {
   GFNT_Face * face = NULL;
   GFNT_Error error;
   char line[64];
+  uint32_t ppem = 0;
 
   for (int a = 1; a < argc; a++) {
-    if (argv[a][0] != '-') {
+    if (strcmp(argv[a], "--ppem") == 0 && a + 1 < argc) {
+      ppem = (uint32_t)strtoul(argv[++a], NULL, 10);
+    }
+    else if (argv[a][0] != '-') {
       path = argv[a];
     }
     else {
@@ -77,7 +82,7 @@ int main(int argc, char ** argv) {
     GFNT_Extents e;
 
     if (gfnt_face_glyph_for_codepoint(face, cp, &glyph, NULL) != GFNT_OK
-        || !gfnt_glyph_extents(face, glyph, NULL, &e)) {
+        || !gfnt_glyph_extents_at(face, glyph, NULL, ppem, &e)) {
       printf("null\n");
       continue;
     }

@@ -36,11 +36,11 @@
  * is one memo on the face and a strike's index is parsed when a glyph from that
  * strike is first wanted.
  *
- * Only `EBLC` is read. Apple's `bloc` has the same layout and `CBLC` has the
- * same layout with PNG payloads behind it, and both still report
- * ::GFNT_ERR_UNSUPPORTED - not because the list would be hard but because a
- * strike list a caller cannot then get glyphs from is a worse answer than an
- * honest refusal, and neither has a fixture yet.
+ * `EBLC` and `CBLC` are read, by this code: `CBLC` is the same layout with PNG
+ * payloads behind it, and a strike remembers which table it came from. Apple's
+ * `bloc` has the same layout too and still reports ::GFNT_ERR_UNSUPPORTED - not
+ * because the list would be hard but because a strike list a caller cannot then
+ * get glyphs from is a worse answer than an honest refusal, and it has no fixture.
  *
  * Reference: OpenType Specification 1.9, "EBLC - Embedded Bitmap Location
  * Table"; the Apple TrueType Reference Manual, "bloc".
@@ -62,6 +62,17 @@ extern "C" {
 #define GFNT_TAG_EBLC GFNT_TAG('E', 'B', 'L', 'C')
 /** @brief Where its glyphs are: `EBDT`. */
 #define GFNT_TAG_EBDT GFNT_TAG('E', 'B', 'D', 'T')
+/**
+ * @brief The color twin of `EBLC`: `CBLC`, the same layout with PNG behind it.
+ *
+ * Google's and Adobe's name for the table, with `CBDT` for the data. The index
+ * is read by the code that reads `EBLC`'s, because it is the same index; what
+ * differs is the version (3 where `EBLC` has 2), a strike depth of 32, and the
+ * image formats 17 to 19 that the data can hold.
+ */
+#define GFNT_TAG_CBLC GFNT_TAG('C', 'B', 'L', 'C')
+/** @brief Where a `CBLC`'s glyphs are: `CBDT`. */
+#define GFNT_TAG_CBDT GFNT_TAG('C', 'B', 'D', 'T')
 
 /**
  * @brief The one version the specification defines for `EBLC`, and the only one
@@ -71,6 +82,9 @@ extern "C" {
  * two tables version together in the specification.
  */
 #define GFNT_EBLC_VERSION 0x00020000u
+
+/** @brief The version `CBLC` states in the files that exist, Noto Color Emoji among them. */
+#define GFNT_CBLC_VERSION 0x00030000u
 
 /** @brief Bytes in the `EBLC` header before the first `bitmapSizeTable`. */
 #define GFNT_EBLC_HEADER_BYTES 8u
@@ -127,6 +141,8 @@ typedef struct GFNT_EblcStrike {
   uint16_t end_glyph;             ///< `endGlyphIndex`, inclusive.
   uint8_t bit_depth;              ///< 1, 2, 4, 8, or 32 for colour.
   int8_t flags;                   ///< 1 horizontal, 2 vertical, per the spec.
+  GFNT_Tag index_table;           ///< `EBLC` or `CBLC`: which table this came from.
+  GFNT_Tag data_table;            ///< `EBDT` or `CBDT`: where its glyphs are.
   GFNT_EblcLineMetrics horizontal;
   GFNT_EblcLineMetrics vertical;
 } GFNT_EblcStrike;
@@ -167,7 +183,8 @@ typedef struct GFNT_EblcSubtable {
   uint16_t first_glyph;       ///< `firstGlyphIndex`, inclusive.
   uint16_t last_glyph;        ///< `lastGlyphIndex`, inclusive.
   uint16_t index_format;      ///< 1-5.
-  uint16_t image_format;      ///< 1, 2, 5, 6, 7, or 8 and 9, the composites.
+  uint16_t image_format;      ///< 1, 2, 5, 6, 7, 8 and 9 (the composites), or 17 to 19 (PNG).
+  GFNT_Tag index_table;       ///< The strike's, copied so a lookup needs only this.
   uint32_t image_data_offset; ///< Into `EBDT`.
   size_t body_offset;         ///< Into `EBLC`, past the `indexSubHeader`.
   uint32_t image_size;        ///< Index formats 2 and 5: bytes per glyph.
@@ -237,6 +254,10 @@ GFNT_Result gfnt_eblc_read_line_metrics(GFNT_Reader * reader,
 int8_t gfnt_eblc_descent_of(const GFNT_EblcLineMetrics * metrics);
 
 /** The `EBLC` parser, for ::gfnt_table_cached(). */
+GFNT_Result gfnt_cblc_parse(const GFNT_Face * face, void * out,
+    void * context, GFNT_Error * error);
+
+/** The `EBLC` parser, for ::gfnt_table_cached(). */
 GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
     void * context,
     GFNT_Error * error);
@@ -274,6 +295,35 @@ GFNT_Result gfnt_face_eblc(const GFNT_Face * face, const GFNT_Eblc ** out_eblc,
  * whose pixels are not in the file would be a worse answer than none.
  */
 bool gfnt_face_has_eblc(const GFNT_Face * face);
+
+/**
+ * Whether the face has a `CBLC` **and** the `CBDT` behind it, as ::gfnt_face_has_eblc()
+ * asks of the other pair.
+ */
+bool gfnt_face_has_cblc(const GFNT_Face * face);
+
+/** The face's parsed `CBLC`, on first use; see ::gfnt_face_eblc(). */
+GFNT_Result gfnt_face_cblc(const GFNT_Face * face, const GFNT_Eblc ** out_cblc,
+    GFNT_Error * error);
+
+/**
+ * Where one glyph's bytes are in the data table, from its index subtable.
+ *
+ * What `ebdt.c` has always done to find a glyph, exported so that the color
+ * strikes (`cbdt.c`) do not write the index a second time.
+ *
+ * @param out_offset Receives the offset **in the data table** (`EBDT` or `CBDT`),
+ *   with the subtable's `image_data_offset` already added.
+ * @param out_length Receives the bytes the index gives the glyph.
+ * @param out_found Receives false when the strike does not carry the glyph.
+ */
+GFNT_Result gfnt_eblc_locate_glyph(const GFNT_Face * face,
+    const GFNT_EblcSubtable * subtable, uint32_t glyph, size_t * out_offset,
+    size_t * out_length, bool * out_found, GFNT_Error * error);
+
+/** The subtable covering @p glyph, or NULL. */
+const GFNT_EblcSubtable * gfnt_eblc_subtable_for(
+    const GFNT_EblcSubtable * subtables, size_t count, uint32_t glyph);
 
 /** Write an `EBLC` as text, one line per strike, for the differentials. */
 GFNT_Result gfnt_eblc_dump(const GFNT_Eblc * eblc, FILE * out);

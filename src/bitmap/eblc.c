@@ -65,7 +65,14 @@ GFNT_Result gfnt_eblc_read_line_metrics(GFNT_Reader * reader,
  * so it has no arm here: a depth this function cannot name is refused by the
  * caller rather than mapped to a plausible kind.
  */
-static bool gfnt_eblc_kind_for_depth(uint8_t depth, GFNT_GlyphKind * out_kind) {
+static bool gfnt_eblc_kind_for_depth(uint8_t depth, bool color,
+    GFNT_GlyphKind * out_kind) {
+  if (color && depth == 32) {
+    // A `CBLC` strike of 32 bits is BGRA or PNG; which one is the image format's
+    // to say, and what a caller is told is that the glyph is an encoded image.
+    *out_kind = GFNT_GLYPH_BITMAP_PNG;
+    return true;
+  }
   switch (depth) {
     case 1:
       *out_kind = GFNT_GLYPH_BITMAP_MONO;
@@ -110,8 +117,8 @@ int8_t gfnt_eblc_descent_of(const GFNT_EblcLineMetrics * metrics) {
 
 /** Parse one `bitmapSizeTable` at the reader's cursor. */
 static GFNT_Result gfnt_eblc_read_strike(const GFNT_Face * face,
-    GFNT_Reader * reader, size_t index, size_t table_length,
-    GFNT_EblcStrike * out, GFNT_Error * error) {
+    GFNT_Reader * reader, size_t index, size_t table_length, GFNT_Tag index_tag,
+    GFNT_Tag data_tag, GFNT_EblcStrike * out, GFNT_Error * error) {
   size_t offset = gfnt_reader_tell(reader);
   uint8_t ppem_x = 0;
   uint8_t ppem_y = 0;
@@ -130,32 +137,33 @@ static GFNT_Result gfnt_eblc_read_strike(const GFNT_Face * face,
       || gfnt_read_u8(reader, &ppem_y) != GFNT_OK
       || gfnt_read_u8(reader, &out->bit_depth) != GFNT_OK
       || gfnt_read_s8(reader, &out->flags) != GFNT_OK) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, offset,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, index_tag, offset,
         GFNT_GLYPH_NONE, "an EBLC bitmapSizeTable ends past the table");
   }
 
   if (ppem_x == 0 || ppem_y == 0) {
     // A strike drawn at no pixels per em describes nothing, and it would sit in
     // the list as a candidate every nearest-strike search had to consider.
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, offset,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, index_tag, offset,
         GFNT_GLYPH_NONE, "an EBLC strike states a pixel size of zero");
   }
-  if (!gfnt_eblc_kind_for_depth(out->bit_depth, &kind)) {
+  if (!gfnt_eblc_kind_for_depth(out->bit_depth,
+          index_tag == GFNT_TAG_CBLC, &kind)) {
     // 32 reaches here as well as 3 or 7: a colour strike is CBLC's, and this
     // table claiming one is not a depth this library can answer for.
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, offset,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, index_tag, offset,
         GFNT_GLYPH_NONE, "an EBLC strike states a bit depth that is not 1, 2, "
-        "4 or 8");
+        "4 or 8 (or 32 in a CBLC)");
   }
   if (out->end_glyph < out->start_glyph) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, offset,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, index_tag, offset,
         GFNT_GLYPH_NONE, "an EBLC strike's glyph range runs backwards");
   }
   if ((out->flags & (GFNT_EBLC_HORIZONTAL | GFNT_EBLC_VERTICAL)) == 0) {
     // The ascent and descent a caller reads have to come from one of the two
     // sbitLineMetrics, and a strike that claims neither direction has not said
     // which. Answering "horizontal" would be inventing the fact.
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, offset,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, index_tag, offset,
         GFNT_GLYPH_NONE, "an EBLC strike states neither horizontal nor "
         "vertical line metrics");
   }
@@ -166,11 +174,13 @@ static GFNT_Result gfnt_eblc_read_strike(const GFNT_Face * face,
   // the field. So the offset is validated here and the extent is bounded by the
   // file and by what each subtable's own format needs, where the index is read.
   if (out->index_array_offset >= table_length) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, offset,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, index_tag, offset,
         GFNT_GLYPH_NONE,
         "an EBLC strike's indexSubTableArrayOffset is past the table");
   }
 
+  out->index_table = index_tag;
+  out->data_table = data_tag;
   out->strike = (GFNT_Strike) {
     .index = index,
     .ppem_x = ppem_x,
@@ -188,12 +198,13 @@ static GFNT_Result gfnt_eblc_read_strike(const GFNT_Face * face,
   return GFNT_OK;
 }
 
-GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
-    void * context,
-    GFNT_Error * error) {
-  // There is one of this table per face, so there is nothing to select; the
-  // parameter is here because every memo parser shares one signature.
-  (void)context;
+/**
+ * Parse an index table - `EBLC` or `CBLC`, which are one layout.
+ *
+ * @param index_tag Which table to read; `data_tag` is the one it indexes into.
+ */
+static GFNT_Result gfnt_eblc_parse_table(const GFNT_Face * face, void * out,
+    GFNT_Tag index_tag, GFNT_Tag data_tag, GFNT_Error * error) {
   GFNT_Eblc * eblc = out;
   GFNT_Reader reader;
   GFNT_Result result;
@@ -204,7 +215,7 @@ GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
   // so every failure below has to leave something the face can free (tables.h).
   memset(eblc, 0, sizeof *eblc);
 
-  result = gfnt_face_table_reader(face, GFNT_TAG_EBLC, &reader, error);
+  result = gfnt_face_table_reader(face, index_tag, &reader, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -212,17 +223,21 @@ GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
 
   if (gfnt_read_u32(&reader, &eblc->version) != GFNT_OK
       || gfnt_read_u32(&reader, &count) != GFNT_OK) {
-    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, 0,
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, index_tag, 0,
         GFNT_GLYPH_NONE, "an EBLC shorter than its own header");
   }
-  if (eblc->version != GFNT_EBLC_VERSION) {
+  // `CBLC` states version 3 where `EBLC` states 2, and fontTools and FreeType
+  // both read the two tables with one layout. A `CBLC` of version 2 exists too,
+  // from the first writers, so the color table takes either.
+  if (eblc->version != GFNT_EBLC_VERSION
+      && !(index_tag == GFNT_TAG_CBLC && eblc->version == GFNT_CBLC_VERSION)) {
     // A version this library has not been written against describes strikes it
     // would be guessing at, which is UNSUPPORTED rather than corrupt.
-    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBLC, 0,
-        GFNT_GLYPH_NONE, "an EBLC version this library does not read");
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, index_tag, 0,
+        GFNT_GLYPH_NONE, "an EBLC or CBLC version this library does not read");
   }
   if (count > face->limits.max_strikes) {
-    return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_EBLC, 4,
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, index_tag, 4,
         GFNT_GLYPH_NONE, "more EBLC strikes than GFNT_Limits::max_strikes");
   }
   if (count == 0) {
@@ -249,19 +264,33 @@ GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
   if (!eblc->strikes || !eblc->strike_states || !eblc->strike_glyphs) {
     // strike_count stays zero until all three are there, so a release of this
     // half-built struct frees the arrays and walks no glyph memo.
-    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_EBLC, 0,
+    return gfnt_error_set(error, GFNT_ERR_OOM, index_tag, 0,
         GFNT_GLYPH_NONE, "no memory for the EBLC strike list");
   }
   eblc->strike_count = count;
 
   for (uint32_t i = 0; i < count; ++i) {
-    result = gfnt_eblc_read_strike(face, &reader, i, length,
-        &eblc->strikes[i], error);
+    result = gfnt_eblc_read_strike(face, &reader, i, length, index_tag,
+        data_tag, &eblc->strikes[i], error);
     if (result != GFNT_OK) {
       return result;
     }
   }
   return GFNT_OK;
+}
+
+GFNT_Result gfnt_eblc_parse(const GFNT_Face * face, void * out,
+    void * context, GFNT_Error * error) {
+  // There is one of this table per face, so there is nothing to select; the
+  // parameter is here because every memo parser shares one signature.
+  (void)context;
+  return gfnt_eblc_parse_table(face, out, GFNT_TAG_EBLC, GFNT_TAG_EBDT, error);
+}
+
+GFNT_Result gfnt_cblc_parse(const GFNT_Face * face, void * out,
+    void * context, GFNT_Error * error) {
+  (void)context;
+  return gfnt_eblc_parse_table(face, out, GFNT_TAG_CBLC, GFNT_TAG_CBDT, error);
 }
 
 void gfnt_eblc_release(const GFNT_Allocator * allocator, void * table) {
@@ -318,6 +347,37 @@ GFNT_Result gfnt_face_eblc(const GFNT_Face * face, const GFNT_Eblc ** out_eblc,
   return GFNT_OK;
 }
 
+bool gfnt_face_has_cblc(const GFNT_Face * face) {
+  if (!face) {
+    return false;
+  }
+  return gfnt_face_has_table(face, GFNT_TAG_CBLC)
+      && gfnt_face_has_table(face, GFNT_TAG_CBDT);
+}
+
+GFNT_Result gfnt_face_cblc(const GFNT_Face * face, const GFNT_Eblc ** out_cblc,
+    GFNT_Error * error) {
+  GFNT_Eblc scratch;
+  GFNT_Result result;
+
+  if (!face || !out_cblc) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "no face, or nowhere to put the table");
+  }
+  if (!gfnt_face_has_cblc(face)) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
+        "the face has no CBLC with a CBDT to go with it");
+  }
+  result = gfnt_table_cached(face, &((GFNT_Face *)face)->cblc_state,
+      &((GFNT_Face *)face)->cblc, &scratch, sizeof scratch, gfnt_cblc_parse,
+      NULL, gfnt_eblc_release, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  *out_cblc = &face->cblc;
+  return GFNT_OK;
+}
+
 /** Bytes in an `indexSubTableArray` entry: two glyph ids and an offset. */
 #define GFNT_EBLC_ARRAY_ENTRY_BYTES 8u
 
@@ -348,8 +408,12 @@ static GFNT_Result gfnt_eblc_read_big_metrics(GFNT_Reader * reader,
 }
 
 /** Whether this library reads glyph data in this image format. */
-static bool gfnt_ebdt_format_known(uint16_t format) {
+static bool gfnt_ebdt_format_known(uint16_t format, bool color) {
   switch (format) {
+    case 17: // small metrics, then a PNG
+    case 18: // big metrics, then a PNG
+    case 19: // metrics in CBLC, then a PNG
+      return color;
     case 1: // small metrics, byte-aligned
     case 2: // small metrics, bit-aligned
     case 5: // metrics in EBLC, bit-aligned
@@ -375,7 +439,7 @@ static bool gfnt_ebdt_format_known(uint16_t format) {
  * nowhere, which is a font that cannot be read rather than one that is corrupt.
  */
 static bool gfnt_ebdt_metrics_from_index(uint16_t image_format) {
-  return image_format == 5;
+  return image_format == 5 || image_format == 19;
 }
 
 GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
@@ -389,7 +453,7 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
   *out_subtables = NULL;
   *out_count = 0;
 
-  result = gfnt_face_table_reader(face, GFNT_TAG_EBLC, &table, error);
+  result = gfnt_face_table_reader(face, strike->index_table, &table, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -402,7 +466,7 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
   // well-formed strike can need, and a strike claiming more is claiming subtables
   // that cannot each cover a glyph.
   if (count > face->limits.max_glyphs) {
-    return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_EBLC, 0,
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, strike->index_table, 0,
         GFNT_GLYPH_NONE,
         "more EBLC index subtables than GFNT_Limits::max_glyphs");
   }
@@ -410,7 +474,7 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
   subtables = face->allocator->calloc_fn(face->allocator->ctx, count,
       sizeof *subtables);
   if (!subtables) {
-    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_EBLC, 0,
+    return gfnt_error_set(error, GFNT_ERR_OOM, strike->index_table, 0,
         GFNT_GLYPH_NONE, "no memory for an EBLC strike's index");
   }
 
@@ -425,7 +489,7 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
     // EBLC and not from the entry. Two bases, one of which is itself an offset.
     if (!gcu_safe_mul_size(i, GFNT_EBLC_ARRAY_ENTRY_BYTES, &array_at)
         || !gcu_safe_add_size(array_at, strike->index_array_offset, &array_at)) {
-      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, 0,
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table, 0,
           GFNT_GLYPH_NONE, "an EBLC index array that does not fit a size_t");
       goto failed;
     }
@@ -433,13 +497,13 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
         || gfnt_read_u16(&at, &entry->first_glyph) != GFNT_OK
         || gfnt_read_u16(&at, &entry->last_glyph) != GFNT_OK
         || gfnt_read_u32(&at, &additional) != GFNT_OK) {
-      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, array_at,
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table, array_at,
           GFNT_GLYPH_NONE,
           "an EBLC indexSubTableArray entry past the end of the table");
       goto failed;
     }
     if (entry->last_glyph < entry->first_glyph) {
-      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, array_at,
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table, array_at,
           GFNT_GLYPH_NONE,
           "an EBLC index subtable whose glyph range runs backwards");
       goto failed;
@@ -447,7 +511,7 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
 
     if (!gcu_safe_add_size(strike->index_array_offset, additional,
             &entry->body_offset)) {
-      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC, array_at,
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table, array_at,
           GFNT_GLYPH_NONE, "an EBLC subtable offset that does not fit a size_t");
       goto failed;
     }
@@ -455,7 +519,7 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
         || gfnt_read_u16(&at, &entry->index_format) != GFNT_OK
         || gfnt_read_u16(&at, &entry->image_format) != GFNT_OK
         || gfnt_read_u32(&at, &entry->image_data_offset) != GFNT_OK) {
-      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC,
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table,
           entry->body_offset, GFNT_GLYPH_NONE,
           "an EBLC indexSubHeader past the end of the table");
       goto failed;
@@ -463,13 +527,15 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
     entry->body_offset += GFNT_EBLC_SUBHEADER_BYTES;
 
     if (entry->index_format < 1 || entry->index_format > 5) {
-      result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBLC,
+      result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, strike->index_table,
           entry->body_offset, GFNT_GLYPH_NONE,
           "an EBLC index subtable format the specification does not define");
       goto failed;
     }
-    if (!gfnt_ebdt_format_known(entry->image_format)) {
-      result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_EBDT,
+    entry->index_table = strike->index_table;
+    if (!gfnt_ebdt_format_known(entry->image_format,
+            strike->index_table == GFNT_TAG_CBLC)) {
+      result = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, strike->data_table,
           entry->body_offset, GFNT_GLYPH_NONE,
           "an EBDT image format this library does not read - 3 and 4, which the "
           "specification itself calls obsolete");
@@ -481,7 +547,7 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
       // only formats 2 and 5 do. This pairing is the one cross-check between the
       // two tables that a font can fail while both halves look well formed on
       // their own.
-      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC,
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table,
           entry->body_offset, GFNT_GLYPH_NONE,
           "an EBDT image format 5, whose metrics are the index's, under an index "
           "format that states none");
@@ -491,7 +557,7 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
     if (gfnt_eblc_index_is_constant(entry->index_format)) {
       if (gfnt_read_u32(&at, &entry->image_size) != GFNT_OK
           || gfnt_eblc_read_big_metrics(&at, &entry->metrics) != GFNT_OK) {
-        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC,
+        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table,
             entry->body_offset, GFNT_GLYPH_NONE,
             "an EBLC index subtable too short for its constant metrics");
         goto failed;
@@ -499,13 +565,13 @@ GFNT_Result gfnt_eblc_strike_index(const GFNT_Face * face,
     }
     if (entry->index_format == 4 || entry->index_format == 5) {
       if (gfnt_read_u32(&at, &entry->sparse_count) != GFNT_OK) {
-        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_EBLC,
+        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, strike->index_table,
             entry->body_offset, GFNT_GLYPH_NONE,
             "an EBLC sparse index subtable with no glyph count");
         goto failed;
       }
       if (entry->sparse_count > face->limits.max_glyphs) {
-        result = gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_EBLC,
+        result = gfnt_error_set(error, GFNT_ERR_LIMIT, strike->index_table,
             entry->body_offset, GFNT_GLYPH_NONE,
             "an EBLC index subtable listing more glyphs than "
             "GFNT_Limits::max_glyphs");

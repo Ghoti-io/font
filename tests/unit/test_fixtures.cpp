@@ -182,6 +182,10 @@ const std::vector<Entry> & every_fixture() {
       {"cmap-symbol.ttf", kNumGlyphs},
       {"collection.ttc", kNumGlyphs},
       // The color fixtures: the five shared glyphs and three layer glyphs.
+      // The color bitmap strikes: .notdef and eleven, 127 and six glyphs.
+      {"color-cbdt-metrics.ttf", 128},
+      {"color-cbdt-sizes.ttf", 7},
+      {"color-cbdt.ttf", 12},
       {"color-cpal0.ttf", 8},
       {"color-v0.ttf", 8},
       {"color-v1-var.ttf", 9},
@@ -762,9 +766,13 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
                               GFNT_TAG('E', 'B', 'L', 'C'))
         && gfnt_face_has_table(fixture.face, GFNT_TAG('E', 'B', 'D', 'T'));
 
+    const bool has_cblc = gfnt_face_has_table(fixture.face,
+                              GFNT_TAG('C', 'B', 'L', 'C'))
+        && gfnt_face_has_table(fixture.face, GFNT_TAG('C', 'B', 'D', 'T'));
+
     if (is_strike) {
       EXPECT_EQ(strikes, 1u) << name;
-    } else if (has_eblc) {
+    } else if (has_eblc || has_cblc) {
       // Not "more than one": strike-formats.ttf has a single strike, because what
       // it varies is how that strike is *indexed*. The two EBLC fixtures split the
       // two axes - how many strikes, and how one strike is laid out - and a sweep
@@ -784,10 +792,11 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
   // Counted, because the three branches above are only worth anything if the
   // fixture set reaches all of them: a sweep over a set that had lost its
   // multi-strike font would pass every assertion and check nothing new.
-  EXPECT_EQ(with_strikes, 13u) << "ten standalone containers, strikes.ttf, "
-      "strike-formats.ttf and strike-composite.ttf";
-  EXPECT_EQ(with_many, 1u) << "strikes.ttf is the only fixture with a choice of "
-      "strike; the other two have one strike each and vary how it is laid out";
+  EXPECT_EQ(with_strikes, 16u) << "ten standalone containers, strikes.ttf, "
+      "strike-formats.ttf, strike-composite.ttf and the three color-cbdt fonts";
+  EXPECT_EQ(with_many, 4u) << "strikes.ttf and the three color-cbdt fonts have a "
+      "choice of strike; the other two EBLC fixtures have one strike each and vary "
+      "how it is laid out";
 }
 
 } // namespace

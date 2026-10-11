@@ -859,6 +859,15 @@ TEST(SbixStrike, ADupeChainIsFollowedForEightHopsAndNoFurther) {
   EXPECT_EQ(image_of(font, 280, 0).width, 6u);
 }
 
+TEST(SbixStrike, TheDrawOutlinesFlagIsTheFontsToAskFor) {
+  Font plain("color-sbix.ttf");           // flags 1
+  EXPECT_FALSE(image_of(plain, 1, 1).draw_outlines);
+  Font outlined("color-sbix-dupes.ttf");  // flags 3
+  EXPECT_TRUE(image_of(outlined, 1, 0).draw_outlines);
+  Font cbdt("color-cbdt.ttf");
+  EXPECT_FALSE(image_of(cbdt, 1, 0).draw_outlines);
+}
+
 TEST(SbixExtents, TheChainLimitIsHarfBuzzs) {
   Font font("color-sbix-dupes.ttf");
   EXPECT_BOX(extents(font, 9), 0, 400, 400, -400);   // 8 x 8 at 50 units a pixel

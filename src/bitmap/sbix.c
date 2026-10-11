@@ -49,7 +49,7 @@ bool gfnt_face_has_sbix(const GFNT_Face * face) {
 
 /** The table, its header checked: how many strikes, and the table to read them in. */
 static GFNT_Result gfnt_sbix_open(const GFNT_Face * face, GFNT_Reader * table,
-    uint32_t * out_count, GFNT_Error * error) {
+    uint32_t * out_count, uint16_t * out_flags, GFNT_Error * error) {
   GFNT_Result result = gfnt_face_table_reader(face, GFNT_TAG_SBIX, table, error);
   uint16_t version = 0;
   uint16_t flags = 0;
@@ -80,7 +80,10 @@ static GFNT_Result gfnt_sbix_open(const GFNT_Face * face, GFNT_Reader * table,
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_SBIX, 4,
         GFNT_GLYPH_NONE, "an sbix whose strike offsets run past the table");
   }
-  (void)flags;   // bit 0 is "always set" and bit 1 asks for outlines under the picture
+  // Bit 0 is "always set" and bit 1 asks for the outlines to be drawn after the picture.
+  if (out_flags) {
+    *out_flags = flags;
+  }
   return GFNT_OK;
 }
 
@@ -124,7 +127,7 @@ GFNT_Result gfnt_sbix_strike_count(const GFNT_Face * face, size_t * out_count,
     GFNT_Error * error) {
   GFNT_Reader table;
   uint32_t count = 0;
-  GFNT_Result result = gfnt_sbix_open(face, &table, &count, error);
+  GFNT_Result result = gfnt_sbix_open(face, &table, &count, NULL, error);
 
   if (result != GFNT_OK) {
     return result;
@@ -140,7 +143,7 @@ GFNT_Result gfnt_sbix_strike_at(const GFNT_Face * face, size_t index,
   size_t start = 0;
   uint16_t ppem = 0;
   uint16_t ppi = 0;
-  GFNT_Result result = gfnt_sbix_open(face, &table, &count, error);
+  GFNT_Result result = gfnt_sbix_open(face, &table, &count, NULL, error);
 
   if (result != GFNT_OK) {
     return result;
@@ -174,7 +177,7 @@ size_t gfnt_sbix_strike_for(const GFNT_Face * face, uint32_t requested) {
   size_t best = 0;
   uint32_t best_ppem = 0;
 
-  if (gfnt_sbix_open(face, &table, &count, NULL) != GFNT_OK) {
+  if (gfnt_sbix_open(face, &table, &count, NULL, NULL) != GFNT_OK) {
     return 0;
   }
   for (size_t i = 0; i < count; ++i) {
@@ -227,7 +230,8 @@ GFNT_Result gfnt_sbix_find(const GFNT_Face * face, size_t strike, uint32_t glyph
   size_t glyphs = 0;
   size_t length;
   uint32_t target = glyph;
-  GFNT_Result result = gfnt_sbix_open(face, &table, &count, error);
+  uint16_t flags = 0;
+  GFNT_Result result = gfnt_sbix_open(face, &table, &count, &flags, error);
 
   if (result != GFNT_OK) {
     return result;
@@ -312,7 +316,7 @@ GFNT_Result gfnt_sbix_find(const GFNT_Face * face, size_t strike, uint32_t glyph
     }
     if (type != GFNT_TYPE_PNG && type != GFNT_TYPE_JPEG && type != GFNT_TYPE_TIFF) {
       return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_SBIX, record, glyph,
-          "an sbix graphicType this library does not read");
+          "an sbix graphicType this library does not read (mask and pdf are declined)");
     }
     *out = (GFNT_GlyphImage) {
       .format = type == GFNT_TYPE_PNG ? GFNT_IMAGE_PNG
@@ -322,6 +326,7 @@ GFNT_Result gfnt_sbix_find(const GFNT_Face * face, size_t strike, uint32_t glyph
       .bearing_x = origin_x,
       .origin_y = origin_y,
       .advance = -1,
+      .draw_outlines = (flags & 2u) != 0,
       .strike = {
         .index = strike,
         .ppem_x = ppem,

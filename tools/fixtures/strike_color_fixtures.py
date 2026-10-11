@@ -534,7 +534,7 @@ def build_color_sbix_dupes(mf, out):
     offsets.append(head + len(body))
     strike = (struct.pack(">HH", 20, 72) + b"".join(struct.pack(">I", o) for o in offsets)
               + bytes(body))
-    mf.set_raw_table(fb, "sbix", struct.pack(">HHII", 1, 1, 1, 12) + strike)
+    mf.set_raw_table(fb, "sbix", struct.pack(">HHII", 1, 3, 1, 12) + strike)  # flags 3: draw outlines too
     fb.save(out)
 
 

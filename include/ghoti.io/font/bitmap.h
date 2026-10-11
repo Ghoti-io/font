@@ -276,6 +276,14 @@ typedef struct GFNT_GlyphImage {
    * `hmtx` one, in font units, which a caller scales by the strike.
    */
   int32_t advance;
+  /**
+   * Whether the font asks for the glyph's outline to be drawn over the picture.
+   *
+   * `sbix` flag bit 1 (`sbixDrawOutlines`): the picture is drawn first and the outline
+   * after it. False for `CBDT`, which has no such flag, and for an `sbix` that leaves
+   * the bit clear. It is the caller's to act on: this library composites nothing.
+   */
+  bool draw_outlines;
   GFNT_Strike strike;      ///< Which strike answered.
 } GFNT_GlyphImage;
 

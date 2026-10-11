@@ -2164,7 +2164,7 @@ CFF_FONT_BBOX = (0, -200, 1000, 900)
 def assemble_cff(font_name, charstrings, *, strings=(), gsubrs=(),
                  charset=None, encoding=None, privates=None, fdselect=None,
                  is_cid=False, charstring_type=None, font_matrix=None,
-                 extra_top=()):
+                 extra_top=(), fd_names=None):
     """One CFF table's bytes.
 
     `privates` is a list of `(entries, local subrs)`: one for an ordinary font,
@@ -2193,7 +2193,7 @@ def assemble_cff(font_name, charstrings, *, strings=(), gsubrs=(),
     # The Font DICTs of a CID-keyed font, each naming one Private DICT. Built
     # with placeholder offsets first, only to learn their size.
     def font_dicts(offsets):
-        return [cff_dict([((12, 38), [391 + index]),
+        return [cff_dict([((12, 38), [(fd_names[index] if fd_names else 391 + index)]),
                           (18, [cff_dict_offset(size),
                                 cff_dict_offset(offset)])])
                 for index, (size, offset) in enumerate(offsets)]
@@ -2872,6 +2872,56 @@ def build_cff_subset(out):
     fb = cff_otf("CFF subset", order, table, advances,
                  {0x20: "space", 0x41: "alpha.sub", 0x42: "beta.sub",
                   0x43: "gamma.sub"})
+    fb.save(out)
+
+
+def build_cff_names(out):
+    """A `CFF ` whose Top DICT states a FullName and a FamilyName out of its own strings.
+
+    A renamed subset has to drop the strings only those two used, and a name that
+    lingered in the String INDEX would be the reserved name the rename exists to remove.
+    The glyph names are strings too, and have to survive.
+    """
+    order = [".notdef", "one", "two"]
+    advances = {name: 600 for name in order}
+    programs = [
+        charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700, "vlineto", -500, "hlineto",
+                   "endchar"),
+        charstring(600, 100, 100, "rmoveto", 300, "hlineto", 300, "vlineto", -300, "hlineto",
+                   "endchar"),
+        charstring(600, 100, 100, "rmoveto", 200, "hlineto", 200, "vlineto", -200, "hlineto",
+                   "endchar"),
+    ]
+    charset, strings = cff_names(order)
+    full = GFNT_CFF_STANDARD_STRING_COUNT + len(strings)
+    strings = list(strings) + ["Reserved Full Name", "Reserved Family"]
+    table = assemble_cff(names("CFF names")["psName"], programs, charset=charset,
+        strings=strings, privates=[({20: 600, 21: 0}, ())],
+        extra_top=[(2, [full]), (3, [full + 1])])
+    fb = cff_otf("CFF names", order, table, advances, {0x41: "one", 0x42: "two"})
+    fb.save(out)
+
+
+def build_cff_cid_names(out):
+    """A CID-keyed font whose two Font DICTs are named by strings of their own."""
+    order = [".notdef", "one", "two"]
+    advances = {name: 600 for name in order}
+    programs = [
+        charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700, "vlineto", -500, "hlineto",
+                   "endchar"),
+        charstring(600, 100, 100, "rmoveto", 300, "hlineto", 300, "vlineto", -300, "hlineto",
+                   "endchar"),
+        charstring(600, 100, 100, "rmoveto", 200, "hlineto", 200, "vlineto", -200, "hlineto",
+                   "endchar"),
+    ]
+    # SIDs 391 and 392 are the ROS registry and ordering; the Font DICT names follow them.
+    table = assemble_cff(names("CFF cid names")["psName"], programs,
+        strings=["Ghoti", "Fixture", "Reserved Fd One", "Reserved Fd Two"],
+        charset=cff_charset_ranges([(11, 0), (22, 0)], wide=True), is_cid=True,
+        fdselect=cff_fdselect_format3([(0, 0), (1, 1)], len(order)),
+        privates=[({20: 600, 21: 0}, ()), ({20: 480, 21: 0}, ())],
+        fd_names=[393, 394])
+    fb = cff_otf("CFF cid names", order, table, advances, {})
     fb.save(out)
 
 
@@ -4523,6 +4573,12 @@ FIXTURES = {
         "CFF: an accented character (endchar with four operands) named by "
         "Standard Encoding code, a charset in format 1, a name in the font's "
         "own String INDEX, and a custom encoding with a supplement"),
+    "cff-names.otf": (build_cff_names,
+        "CFF: a Top DICT stating FullName and FamilyName as strings of its own, after "
+        "the glyph names, for the subsetter's rename"),
+    "cff-cid-names.otf": (build_cff_cid_names,
+        "CFF: CID-keyed, two Font DICTs each named by a string of its own (FontName), "
+        "for the subsetter's rename"),
     "cff-cid.otf": (build_cff_cid,
         "CFF: CID-keyed - ROS, an FDArray of two Font DICTs with different "
         "Private DICTs and different local subroutines, FDSelect format 3, and "

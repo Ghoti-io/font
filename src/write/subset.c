@@ -314,6 +314,7 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf hvar;
   GFNT_WBuf vvar;
   GFNT_WBuf gvar;
+  GFNT_WBuf name;
   GFNT_SubsetStrikes strikes;
 } GFNT_SubsetWork;
 
@@ -335,6 +336,7 @@ static void work_free(GFNT_SubsetWork * w) {
   gfnt_wbuf_free(&w->vmtx);
   gfnt_wbuf_free(&w->vorg);
   gfnt_wbuf_free(&w->gvar);
+  gfnt_wbuf_free(&w->name);
   gfnt_wbuf_free(&w->colr);
   gfnt_wbuf_free(&w->cff);
   gfnt_wbuf_free(&w->hvar);
@@ -374,6 +376,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   bool outlines;
   bool cff;
   bool cff2;
+  char * ps_name = NULL;
   bool variable;
   bool rewrite_layout;
   GFNT_Result result;
@@ -438,6 +441,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   gfnt_wbuf_init(&w.hvar, allocator);
   gfnt_wbuf_init(&w.vvar, allocator);
   gfnt_wbuf_init(&w.gvar, allocator);
+  gfnt_wbuf_init(&w.name, allocator);
   gfnt_subset_strikes_init(&w.strikes, allocator);
 
   result = gfnt_face_num_glyphs(face, &count, error);
@@ -658,9 +662,15 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     gfnt_write_put16(w.bufs[B_HEAD].data + 50, long_loca ? 1u : 0u);
   }
 
+  if (options->family_name) {
+    result = gfnt_subset_name(face, options->family_name, allocator, &ps_name, &w.name, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+  }
   if (cff) {
     result = gfnt_subset_cff(face, w.old_of_new, new_count, count, options->drop_hinting,
-        limits, allocator, &w.cff, error);
+        ps_name, limits, allocator, &w.cff, error);
     if (result != GFNT_OK) {
       goto done;
     }
@@ -826,7 +836,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.os2.oom || w.post.oom || w.bufs[B_HMTX].oom || w.bufs[B_LOCA].oom
       || w.gsub.oom || w.gpos.oom || w.gdef.oom || w.kern.oom || w.vhea.oom
-      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.cff.oom || w.hvar.oom || w.vvar.oom || w.gvar.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
+      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.cff.oom || w.hvar.oom || w.vvar.oom || w.gvar.oom || w.name.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
       || w.strikes.cblc.oom || w.strikes.cbdt.oom || w.strikes.sbix.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "building the tables");
@@ -918,7 +928,12 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     }
   }
   ADD_SRC(T_CPAL);
-  ADD_SRC(T_NAME);
+  if (w.name.length) {
+    ADD_BUF(T_NAME, w.name);
+  }
+  else {
+    ADD_SRC(T_NAME);
+  }
   ADD_SRC(T_GASP);
   if (!options->drop_hinting) {
     // cvar varies the control values, which go with them.
@@ -961,6 +976,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
 
 done:
+  allocator->free_fn(allocator->ctx, ps_name);
   work_free(&w);
   return result;
 }

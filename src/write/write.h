@@ -168,11 +168,27 @@ GFNT_Result gfnt_subset_cff_closure(const GFNT_Face * face, uint8_t * keep, size
  * @param old_of_new Per new glyph its source glyph, or 0xFFFFFFFF for a retained id with
  *   no glyph (written empty).
  * @param count The source face's glyph count.
+ * @param ps_name The name to give the font in place of its own (a `CFF ` Name INDEX), which also
+ *   drops the Top DICT's FullName and FamilyName and each Font DICT's FontName; or NULL to keep them.
  * @param out Receives the table (appended).
  */
 GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
-    size_t new_count, size_t count, bool drop_hinting, const GFNT_Limits * limits,
-    const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
+    size_t new_count, size_t count, bool drop_hinting, const char * ps_name,
+    const GFNT_Limits * limits, const GFNT_Allocator * allocator, GFNT_WBuf * out,
+    GFNT_Error * error);
+
+/**
+ * `name` for a subset renamed to @p family: every record of the source is carried except the
+ * ones that state the family, in any language - IDs 1, 3, 4, 6, 16, 18, 20, 21 and 25 - which
+ * are written again for @p family, in Windows English, with the source's style.
+ *
+ * @param family The new family name, UTF-8; not empty.
+ * @param out_ps_name Receives the PostScript name written to ID 6 (also what a `CFF ` is to be
+ *   named), allocated with @p allocator and released by the caller.
+ * @param out The table (appended).
+ */
+GFNT_Result gfnt_subset_name(const GFNT_Face * face, const char * family,
+    const GFNT_Allocator * allocator, char ** out_ps_name, GFNT_WBuf * out, GFNT_Error * error);
 
 /**
  * How long the item variation store at @p p is: its region list and every

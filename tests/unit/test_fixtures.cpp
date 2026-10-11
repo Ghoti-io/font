@@ -183,6 +183,8 @@ const std::vector<Entry> & every_fixture() {
       {"cff-arith.otf", 7},
       {"cff-cid.otf", 4},
       {"cff-cid3.otf", 4},
+      {"cff-names.otf", 3},
+      {"cff-cid-names.otf", 3},
       {"cff-subset.otf", 8},
       {"variable-cff2-hvar.otf", 10},
       {"variable-cff2-implicit.otf", 10},

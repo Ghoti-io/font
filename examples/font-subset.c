@@ -24,7 +24,7 @@
  * Write a font holding only some of another's glyphs.
  *
  * Usage: font-subset [--retain-gids] [--no-closure] [--drop-hinting] [--map FILE]
- *                    [--drop-layout] [--features liga,kern] [--woff]
+ *                    [--drop-layout] [--features liga,kern] [--woff] [--rename FAMILY]
  *                    [--unicodes U+0041,U+0042] [--glyphs 3,4] <in> <out>
  *
  * The driver `tools/oracle/subset_diff.py` runs, and a way to see what the
@@ -143,6 +143,9 @@ int main(int argc, char ** argv) {
       map_path = argv[++i];
       options.map = &map;
     }
+    else if (!strcmp(a, "--rename") && i + 1 < argc) {
+      options.family_name = argv[++i];
+    }
     else if (!strcmp(a, "--woff")) {
       woff = true;
     }
@@ -160,7 +163,7 @@ int main(int argc, char ** argv) {
     }
     else {
       fprintf(stderr, "usage: %s [--retain-gids] [--no-closure] [--drop-hinting] "
-          "[--drop-layout] [--features tags] [--map file] [--woff] [--unicodes list] "
+          "[--drop-layout] [--features tags] [--map file] [--woff] [--rename family] [--unicodes list] "
           "[--glyphs list] <in> <out>\n", argv[0]);
       return 2;
     }

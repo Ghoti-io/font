@@ -1857,9 +1857,21 @@ shapes the subsets; the variable `glyf` corpus fonts and the `variable-*.ttf` fi
 The item variation store is not pruned here either, and a `gvar` is not re-packed (shared point
 numbers and tuples a dropped glyph used stay).
 
-Refused with `GFNT_ERR_UNSUPPORTED`: Type 1 outlines and a CFF with Type 1 charstrings. Silently not written, and stated in `write.h`: bitmap and colour
-tables, the Apple tables (`morx`, `mort`, `kerx`, `trak`, `ankr`), `cmap`
-format 14, and the family rename the licence reading in §14.5 wants.
+**Renaming** (`GFNT_SubsetOptions::family_name`, `src/write/subset_name.c`) is what a font whose
+licence reserves its name needs, since a subset is a modified font. Every `name` record that states
+the family is removed in every language and platform - IDs 1, 3, 4, 6, 16, 18, 20, 21 and 25 -
+and the family, unique, full and PostScript names (and the typographic and WWS families where the
+source had them) are written for the new family in Windows English, with Macintosh Roman copies
+for an ASCII family when the source had Macintosh names. The style comes from the source; the
+copyright, licence and every other record are carried, language tags of a format 1 table
+included. A `CFF ` is named for the new PostScript name, and its Top DICT's FullName and FamilyName
+and each Font DICT's FontName are dropped along with the strings only they used. The rename is
+checked through fontTools over the corpus (`make check-oracle-subset-rename`: 525 fonts, no
+original family left in a family record, every other record unchanged).
+
+Refused with `GFNT_ERR_UNSUPPORTED`: Type 1 outlines and a CFF with Type 1 charstrings. Silently
+not written, and stated in `write.h`: the Apple tables (`morx`, `mort`, `kerx`, `trak`, `ankr`;
+HarfBuzz's subsetter drops them too), `cmap` format 14, and Apple's `kern` state table.
 
 **What a caller must request.** The closure sees tables, not text. The shaper
 sets the glyph of one character where it hides or sizes another: U+0020 for an

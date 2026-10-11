@@ -359,6 +359,19 @@ typedef struct GFNT_SubsetOptions {
   const GFNT_Tag * features;
   size_t feature_count;        ///< How many.
   /**
+   * Name the subset this family, or NULL to keep the font's own name (UTF-8, not empty).
+   *
+   * What a font whose licence reserves its name needs: the SIL Open Font License does not let a
+   * modified version, a subset included, go by the reserved name. Every `name` record that states
+   * the family (IDs 1, 3, 4, 6, 16, 18, 20, 21 and 25, in every language) is removed and the family,
+   * unique, full and PostScript names (and the typographic and WWS families where the source had
+   * them) are written for this family in Windows English, with the source's style; the copyright,
+   * licence, style and every other record are carried. A `CFF ` is named to match and its Top
+   * DICT's FullName and FamilyName are dropped with the strings only they used. Nothing else about
+   * the font changes.
+   */
+  const char * family_name;
+  /**
    * Where to put the glyph numbering, or NULL if the caller does not want it.
    * Written only on success; the caller releases it with ::gfnt_subset_map_free().
    */
@@ -442,10 +455,10 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * shared tuples, with its offsets rebuilt, `cvar` goes with the control values it varies, and the
  * tables above are carried or rebuilt as for `CFF2`.
  *
- * **Not built**: Type 1 outlines, the Apple tables (`morx`, `mort`, `kerx`,
- * `trak`, `ankr`), class-based `kern`, `cmap` format 14, and the family rename
- * the licence reading in documentation/design.md section 14.5 wants. Each is
- * refused or dropped as stated here, not approximated.
+ * **Not built**: Type 1 outlines, a CFF with Type 1 charstrings, `kern` in Apple's state-table
+ * format 1, and `cmap` format 14. The Apple shaping tables (`morx`, `mort`, `kerx`, `trak`, `ankr`)
+ * are dropped, as HarfBuzz's own subsetter drops them. Each is refused or dropped as stated
+ * here, not approximated.
  *
  * @param face The source face.
  * @param options What to keep. NULL means the defaults with nothing requested.

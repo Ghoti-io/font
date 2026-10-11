@@ -712,6 +712,7 @@ typedef struct Src {
   const GFNT_Cff2 * c2;        // NULL for a CFF
   bool cff2;
   bool fds;                    // Font DICTs: a CID-keyed CFF, or any CFF2
+  bool rename;                 // the font is being renamed: its names are not carried
   Tab tab;
   const uint8_t * top;
   size_t top_n;
@@ -1010,6 +1011,11 @@ typedef struct Plan {
 } Plan;
 
 /** Write one DICT's SID-carrying and plain operators, skipping @p skip. */
+/** The Top and Font DICT entries that name the font: FullName, FamilyName and a Font DICT's FontName. */
+static bool names_the_font(uint16_t op) {
+  return op == 2 || op == 3 || op == 0x0c26;
+}
+
 typedef bool (*SkipFn)(uint16_t op, bool drop_hint);
 
 static bool skip_top(uint16_t op, bool drop_hint) {
@@ -1064,6 +1070,10 @@ static GFNT_Result copy_dict(const Src * s, const uint8_t * d, size_t n, SkipFn 
       gfnt_wbuf_bytes(out, d + held_a, held_end - held_a);
       held = false;
     }
+    if (s->rename && names_the_font(e.op)) {
+      held = false;
+      continue;
+    }
     if (!s->cff2 && is_sid_op(e.op) && e.n >= 1) {
       if (!sid_valid(s, (uint32_t)e.v[0]) || e.v[0] < 0) {
         continue;       // a name the font does not have: left out, as the reader leaves it
@@ -1104,6 +1114,9 @@ static GFNT_Result collect_sids(const Src * s, const uint8_t * d, size_t n,
     size_t k;
     size_t take = 0;
 
+    if (s->rename && names_the_font(e.op)) {
+      continue;
+    }
     if (is_sid_op(e.op) && e.n >= 1) {
       take = 1;
     }
@@ -1382,8 +1395,8 @@ static void build_fdselect(const Src * s, const Plan * plan, const uint16_t * fd
 }
 
 GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
-    size_t new_count, size_t count, bool drop_hinting, const GFNT_Limits * limits,
-    const GFNT_Allocator * a, GFNT_WBuf * out, GFNT_Error * error) {
+    size_t new_count, size_t count, bool drop_hinting, const char * ps_name,
+    const GFNT_Limits * limits, const GFNT_Allocator * a, GFNT_WBuf * out, GFNT_Error * error) {
   Src s;
   Flat * f = NULL;
   GFNT_WBuf cs;
@@ -1423,6 +1436,7 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
   if (result != GFNT_OK) {
     goto done;
   }
+  s.rename = ps_name != NULL;
   plan.nsrc = s.fds ? s.fdarray->count : 1;
   if (plan.nsrc == 0 || plan.nsrc > 65535 || (!s.cff2 && plan.nsrc > 256)) {
     result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
@@ -1618,7 +1632,11 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
       const uint8_t * name;
       size_t name_n;
 
-      if (!index_elem(&s.tab, &s.cff->names, 0, &name, &name_n)) {
+      if (ps_name) {
+        name = (const uint8_t *)ps_name;
+        name_n = strlen(ps_name);
+      }
+      else if (!index_elem(&s.tab, &s.cff->names, 0, &name, &name_n)) {
         result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
             "a CFF with no name");
         goto done;

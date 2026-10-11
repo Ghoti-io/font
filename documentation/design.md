@@ -874,7 +874,10 @@ three producers' samples in glyf, CFF and CFF2 outlines, and a full Twemoji and 
 Emoji. The repository is Apache-2.0; its Noto fonts derive from Noto Emoji (SIL OFL
 1.1) and its Twemoji fonts from Twemoji (graphics CC-BY 4.0); the fonts carry no
 license string of their own. They live in the image and nowhere in this repository.
-Beside them the fixtures `color-v0.ttf`, `color-cpal0.ttf` and the four version 1
+Three Bungee Color fonts from djrrb/Bungee's releases (SIL OFL 1.1; `fonttools-fetch-bungee`,
+the zip and each font checked by SHA-256) add the only `sbix` font, the only `COLR` version 0
+font and a `COLR` version 1 font with an `SVG ` table. Beside them the fixtures `color-v0.ttf`,
+`color-v0-edges.ttf`, `color-cpal0.ttf` and the four version 1
 fixtures (every paint format; the variable forms over a store of weight and width
 regions, with an index map, without one, and with a map of nothing but "no
 variation") are written by fontTools' own builder. The unit tests take their expected
@@ -902,12 +905,18 @@ slot 1 wrapped to row 0 and moved a number the font fixed.
 font by its outline, and the box places a mark when no `GPOS` does
 (`gfnt_glyph_extents()`). Found by experiment against `hb-shape --show-extents` and
 held to it by `make check-oracle-color-extents`, which compares every mapped glyph of
-every color font (3,834 boxes, 0 differences): glyph 0 has no box at all; a base glyph
+every color font (8,484 boxes, 0 differences): glyph 0 has no box at all unless the font
+gives it a paint or layers; a base glyph
 with a clip box is measured by the clip box; one without by what its paint graph
 draws, the union of the clip each leaf paint sits inside (every PaintGlyph clips to its
 glyph's box carried through the transforms above it), a composite keeping both halves
-except where the mode drops one; a glyph with only version 0 layers in a version 1 table
-by the union of its layers' glyphs; a graph that names itself by nothing. The box is
+except where the mode drops one; a glyph with version 0 layers, in a version 0 table or a version 1 table that carries
+them, by the union of its layers' *drawn* boxes - the outline, composites carried
+through their transforms and left uncorrected by the header, shifted so its left edge
+sits at the `hmtx` side bearing, and an empty layer counting as a box from (-1, -1) to
+(0, 0) (two empty layers measure 1 by 1 below and left of the origin) - which a
+PaintGlyph's clip uses too; a graph that names itself by nothing. The *vertical origin*
+is not placed from this box but from the glyph's outline box. The box is
 truncated toward zero, so 868.8 high is 868 and -99.5 is -99, in `float` arithmetic
 applied factor by factor in the order HarfBuzz pushes them. Six breaks (glyph 0,
 the truncation, the atop modes, a skew's sign, the layers, the clip) are each caught.

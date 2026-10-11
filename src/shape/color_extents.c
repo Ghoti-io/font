@@ -36,8 +36,11 @@
  */
 
 #include <ghoti.io/font/color.h>
+#include <ghoti.io/font/metrics.h>
+#include <ghoti.io/font/outline.h>
 #include <stdint.h>
 #include <string.h>
+#include "../tables/tables.h"
 #include "fallback.h"
 
 #define GFNT_CEXT_DEPTH 80
@@ -124,6 +127,54 @@ static CBox box_union(CBox a, CBox b) {
   a.x1 = fmaxf_(a.x1, b.x1);
   a.y1 = fmaxf_(a.y1, b.y1);
   return a;
+}
+
+/* The box a version 0 layer's glyph contributes: its drawn outline, in float, with
+ * composites carried through their transforms - not the header's box, which HarfBuzz
+ * ignores (a header bumped by 50 units changes nothing) and which rounds a scaled
+ * component. A glyph with no outline contributes the box from (-1, -1) to (0, 0), not
+ * nothing: a glyph of two empty layers measures 1 by 1 below and left of the origin,
+ * and an empty layer beside a drawn one stretches its box to (-1, -1). */
+static bool layer_box(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, CBox * out) {
+  GFNT_Outline * outline = NULL;
+  GFNT_Box box;
+  GFNT_Result r;
+
+  if (gfnt_face_glyph_outline(face, glyph, variation, NULL, &outline, NULL) != GFNT_OK
+      && (!variation || !variation->count
+          || gfnt_face_glyph_outline(face, glyph, NULL, NULL, &outline, NULL)
+              != GFNT_OK)) {
+    return false;
+  }
+  r = gfnt_outline_control_box(outline, &box);
+  gfnt_outline_destroy(outline);
+  if (r != GFNT_OK) {
+    return false;
+  }
+  if (gfnt_box_is_empty(&box)) {
+    *out = (CBox){-1.0f, -1.0f, 0.0f, 0.0f};
+    return true;
+  }
+  *out = (CBox){(float)box.x_min / 64.0f, (float)box.y_min / 64.0f,
+      (float)box.x_max / 64.0f, (float)box.y_max / 64.0f};
+  // HarfBuzz places a `glyf` outline so that its left edge sits at the left side
+  // bearing `hmtx` states, whatever the header's xMin says: a glyph whose two
+  // disagree is drawn shifted by the difference.
+  if (gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
+      && !(variation && variation->count)) {
+    GFNT_Box stated;
+    int32_t lsb;
+
+    if (gfnt_face_glyph_stated_box(face, glyph, &stated, NULL) == GFNT_OK
+        && gfnt_face_glyph_side_bearing(face, glyph, NULL, &lsb, NULL) == GFNT_OK) {
+      float shift = (float)lsb - (float)stated.x_min / 64.0f;
+
+      out->x0 += shift;
+      out->x1 += shift;
+    }
+  }
+  return true;
 }
 
 static CBox box_intersect(CBox a, CBox b) {
@@ -304,15 +355,13 @@ static bool enter(void * user, const GFNT_ColorPaint * p, size_t depth) {
   }
   switch (p->format) {
     case GFNT_PAINT_GLYPH: {
-      GFNT_Extents e;
-      CBox box;
+      CBox b, box;
 
-      if (!gfnt_glyph_plain_extents(c->face, p->glyph, c->variation, &e)) {
+      if (!layer_box(c->face, p->glyph, c->variation, &b)) {
         c->failed = true;
         return false;
       }
-      box = transform_box(l->m, (float)e.x_bearing, (float)(e.y_bearing + e.height),
-          (float)(e.x_bearing + e.width), (float)e.y_bearing);
+      box = transform_box(l->m, b.x0, b.y0, b.x1, b.y1);
       l->clip = l->bounded ? box_intersect(l->clip, box) : box;
       l->bounded = true;
       return true;
@@ -383,18 +432,14 @@ bool gfnt_color_extents(const GFNT_Face * face, uint32_t glyph,
   GFNT_Result r;
 
   *handled = false;
-  if (gfnt_face_color_version(face, &version, NULL) != GFNT_OK || version != 1) {
+  if (gfnt_face_color_version(face, &version, NULL) != GFNT_OK || version > 1) {
     return true;
   }
   memset(out, 0, sizeof *out);
-  if (glyph == 0) {
-    // HarfBuzz measures nothing at glyph 0 of a version 1 font.
-    *handled = true;
-    return true;
-  }
-  if (gfnt_face_color_base_paint(face, glyph, &root, NULL) != GFNT_OK || !root) {
-    // A version 1 table can also carry version 0 layers for a glyph, and
-    // HarfBuzz measures those as the union of their glyphs' own boxes.
+  if (version == 0
+      || gfnt_face_color_base_paint(face, glyph, &root, NULL) != GFNT_OK || !root) {
+    // Version 0 layers, in a version 0 table or a version 1 table that carries them
+    // for a glyph, are measured as the union of their glyphs' drawn boxes.
     size_t layers = 0;
 
     if (gfnt_face_color_layer_count(face, glyph, &layers, NULL) == GFNT_OK && layers) {
@@ -402,16 +447,20 @@ bool gfnt_color_extents(const GFNT_Face * face, uint32_t glyph,
 
       for (size_t i = 0; i < layers; i++) {
         GFNT_ColorLayer layer;
-        GFNT_Extents e;
+        CBox b;
 
         if (gfnt_face_color_layer(face, glyph, i, &layer, NULL) != GFNT_OK
-            || !gfnt_glyph_plain_extents(face, layer.glyph, variation, &e)) {
+            || !layer_box(face, layer.glyph, variation, &b)) {
           return true;
         }
-        u = box_union(u, (CBox){(float)e.x_bearing, (float)(e.y_bearing + e.height),
-            (float)(e.x_bearing + e.width), (float)e.y_bearing});
+        u = box_union(u, b);
       }
       return finish(u, out, handled);
+    }
+    if (glyph == 0 && version == 1) {
+      // HarfBuzz measures nothing at glyph 0 of a version 1 font unless the font
+      // gives it a paint or layers of its own (Bungee Spice does, and is measured).
+      *handled = true;
     }
     return true;
   }

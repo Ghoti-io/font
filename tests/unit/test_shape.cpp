@@ -2310,6 +2310,21 @@ TEST(ShapeVertical, AdvancesComeFromVmtxAndTheOriginFromVorg) {
   EXPECT_EQ(g, (Glyphs{{1, 0, 0, -700, -250, -880}, {2, 1, 0, -700, -250, -760}}));
 }
 
+TEST(ShapeVertical, TheOriginOfAColorGlyphComesFromItsOutlineNotItsColorBox) {
+  // color-v0-edges.ttf: B is two empty layers, which HarfBuzz measures as a unit box at
+  // the origin, but the glyph's own outline is 0..720 high and vmtx gives a top side
+  // bearing of 30, so the pen sits 750 above it. A origin from the color box would be
+  // 30. (HarfBuzz 10.2.0; Bungee Spice, a real font, holds the same in hb_diff.)
+  Font font("color-v0-edges.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  Request request;
+  request.vertical = GFNT_DIRECTION_TTB;
+  Glyphs g;
+  ASSERT_EQ(shape(font, cps("B"), request, &g), GFNT_OK);
+  ASSERT_EQ(g.size(), 1u);
+  EXPECT_EQ(g[0].y_offset, -750);
+}
+
 TEST(ShapeVertical, AVvarMovesTheAdvanceHeightAtALocation) {
   // vmtx gives every glyph 700; the VVAR's one region, full at wght=900, adds
   // 100 to glyph 1 and takes 50 from glyph 2 (no advance mapping, so the glyph

@@ -193,6 +193,7 @@ const std::vector<Entry> & every_fixture() {
       {"color-sbix-metrics.ttf", 128},
       {"color-sbix.ttf", 10},
       {"color-cpal0.ttf", 8},
+      {"color-v0-edges.ttf", 10},
       {"color-v0.ttf", 8},
       {"color-v1-var.ttf", 9},
       {"color-v1-varmap.ttf", 9},

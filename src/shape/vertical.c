@@ -225,8 +225,11 @@ bool gfnt_vertical_origin(const GFNT_Face * face, uint32_t glyph,
     }
   }
   line = vertical_line(face, variation, &ascent);
+  // The outline's own box, not the color box ::gfnt_glyph_extents gives a color glyph:
+  // HarfBuzz places the vertical origin from the former (Bungee Spice, a COLR font with
+  // `vmtx`, is where the two parted).
   if (gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
-      && gfnt_glyph_extents(face, glyph, variation, &extents)) {
+      && gfnt_glyph_plain_extents(face, glyph, variation, &extents)) {
     GFNT_Reader vmtx;
     size_t advances;
 

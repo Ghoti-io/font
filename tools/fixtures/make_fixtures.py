@@ -1518,6 +1518,11 @@ def build_color_v0(out):
     color_fixtures.build_color_v0(sys.modules[__name__], out)
 
 
+def build_color_v0_edges(out):
+    import color_fixtures
+    color_fixtures.build_color_v0_edges(sys.modules[__name__], out)
+
+
 def build_color_cpal0(out):
     import color_fixtures
     color_fixtures.build_color_cpal0(sys.modules[__name__], out)
@@ -4276,6 +4281,11 @@ FIXTURES = {
         "palettes of three colors with every alpha, light and dark usability "
         "flags, palette labels with one missing and entry labels with one "
         "missing - written by fontTools, which is also the oracle"),
+    "color-v0-edges.ttf": (build_color_v0_edges,
+        "COLR version 0 layers HarfBuzz measures by what they draw: a drawn layer "
+        "beside an empty one, a glyph of only empty layers, a layer that is a "
+        "composite scaled by a fractional factor, and hmtx side bearings that are "
+        "not the outlines' xMin"),
     "color-cpal0.ttf": (build_color_cpal0,
         "The same COLR layers over a CPAL version 0, which has no types or "
         "labels, and two palettes that share one run of color records"),

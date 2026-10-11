@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Fetch three Bungee Color fonts into the corpus.
+
+They are the real producers the color readers lacked: an `sbix` font (Debian has
+none), a `COLR` version 0 font (the other color fonts here are all version 1) and a
+`COLR` version 1 font that also carries an `SVG ` table.
+
+  BungeeColor-Regular_sbix_MacOS.ttf  release 1.1.0   nine PNG strikes, 20 to 1024 ppem
+  BungeeTint-Regular.ttf              release v2.001  COLR v0, CPAL
+  BungeeSpice-Regular.ttf             release v2.001  COLR v1, CPAL, SVG
+
+Pinned two ways, as `fonttools-fetch-color-fonts` is: each release zip's SHA-256 is
+checked, and so is each font's, so a replaced release asset fails the build rather
+than changing the corpus. Nothing here is committed to the library (design.md
+section 14.5).
+
+Licence. djrrb/Bungee is SIL OFL 1.1 (`OFL.txt` in the repository). The 1.1.0 zip
+carries no licence file of its own. The fonts are used only as data a differential
+reads, inside the image.
+"""
+
+import hashlib
+import io
+import os
+import sys
+import urllib.request
+import zipfile
+
+BASE = "https://github.com/djrrb/Bungee/releases/download/%s/Bungee-fonts.zip"
+DEST = "/usr/share/fonts/bungee"
+
+RELEASES = {
+    "1.1.0": ("d012a9e6293201c3165feba64342d29c42bb4e67b1cc66e07509c12bab760a6f", {
+        "fonts/Bungee_Color_Fonts/BungeeColor-Regular_sbix_MacOS.ttf":
+            "12b98acc874599e4c107f687756a8c7e6ccf1da64ca2daea210dc3390f1486fc",
+    }),
+    "v2.001": ("df293931cb01e8a8737defbcee3eb853db2af67271005d65e4508d541b6f592c", {
+        "Bungee-fonts/Bungee_Color/BungeeTint-Regular.ttf":
+            "ebe2699c1507981225cfa75c601a2f66aea813e919b34ada735c676fb4b32726",
+        "Bungee-fonts/Bungee_Color/BungeeSpice-Regular.ttf":
+            "e835f9a3cf0c7ced9c34af8aaf885c7f61b16f6f867e6afa25056c0801ea4d1d",
+    }),
+}
+
+os.makedirs(DEST, exist_ok=True)
+count = 0
+for release, (zip_digest, members) in sorted(RELEASES.items()):
+    data = urllib.request.urlopen(BASE % release, timeout=300).read()
+    if hashlib.sha256(data).hexdigest() != zip_digest:
+        sys.exit("fonttools-fetch-bungee: release %s does not match its pin" % release)
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for member, digest in sorted(members.items()):
+            font = archive.read(member)
+            if hashlib.sha256(font).hexdigest() != digest:
+                sys.exit("fonttools-fetch-bungee: %s does not match its pin" % member)
+            with open(os.path.join(DEST, os.path.basename(member)), "wb") as out:
+                out.write(font)
+            count += 1
+print("fetched %d Bungee fonts" % count)

@@ -178,6 +178,14 @@ COPY fonttools-fetch-color-fonts /usr/local/bin/
 RUN chmod +x /usr/local/bin/fonttools-fetch-color-fonts \
     && fonttools-fetch-color-fonts
 
+# Three Bungee Color fonts from djrrb/Bungee's releases, each checked against its
+# SHA-256 (the script says which licence applies): the one `sbix` font, the one
+# `COLR` version 0 font, and a `COLR` version 1 font with an `SVG ` table. Debian has
+# none of them.
+COPY fonttools-fetch-bungee /usr/local/bin/
+RUN chmod +x /usr/local/bin/fonttools-fetch-bungee \
+    && fonttools-fetch-bungee
+
 # Wine puts its fonts in /usr/share/wine/fonts, which is not /usr/share/fonts, so
 # every corpus list program in this image walked past seven of the eleven EBSC
 # faces in Debian - including the sweep that found them, which is why the count

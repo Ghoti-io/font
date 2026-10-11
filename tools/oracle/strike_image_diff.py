@@ -17,9 +17,11 @@ documentation/design.md sections 7.5 and 14. For every font with a `CBLC` or an
 fontTools and the pixels to Pillow. The decoded comparison is the one between two
 independent PNG decoders: `image`'s, as this library calls it, and Pillow's.
 
-**The population is one real font and the fixtures.** Debian has one font with
-`CBLC`, Noto Color Emoji, and none with `sbix`; Apple's are not redistributable. So
-the `sbix` reader, and the PNG forms Noto does not use (grey, palette, RGB, 16-bit),
+**The population is two real fonts and the fixtures.** Debian has one font with
+`CBLC`, Noto Color Emoji, and none with `sbix`; Apple's cannot be fetched. The image
+adds Bungee Color's `sbix` build (`fonttools-fetch-bungee`, OFL): nine PNG strikes and
+2,583 pictures. The `sbix` forms it does not use (`dupe`, `jpg `, `tiff`, `mask`, `pdf `,
+the outline flag), and the PNG forms neither font uses (grey, palette, RGB, 16-bit),
 rest on fixtures that fontTools wrote, and the report says how many real fonts it
 compared.
 

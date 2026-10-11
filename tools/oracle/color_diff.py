@@ -16,11 +16,13 @@ table - the committed color fixtures, and any color font the oracle image holds 
 label, and the layers of every glyph that has any) and fontTools' own decompiler
 is asked the same, in the fonttools image. The two JSON answers must be equal.
 
-**The population is the fixtures and fifteen real fonts.** Debian has no font
+**The population is the fixtures and seventeen real fonts.** Debian has no font
 with `COLR` or `CPAL`, so the image fetches googlefonts/color-fonts at a pinned
 commit (`fonttools-fetch-color-fonts`): Google's COLR v1 test-glyph fonts, three
 producers' samples in glyf, CFF and CFF2 outlines, and a full Twemoji and Noto
-Emoji. This script scans the corpus for color tables, so a font that appears is
+Emoji; and two Bungee Color fonts from djrrb/Bungee's releases
+(`fonttools-fetch-bungee`), the only COLR version 0 font and a version 1 font that also
+carries an `SVG ` table. This script scans the corpus for color tables, so a font that appears is
 compared without an edit, and the report says how many real fonts it compared.
 
 A variable font is read at locations made from its own axes. The test-glyph font

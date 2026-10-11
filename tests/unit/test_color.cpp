@@ -759,3 +759,32 @@ TEST(ColorExtents, WithNoClipListAColorGlyphIsMeasuredByWhatItsGraphDraws) {
   EXPECT_EXTENTS(extents_of(font, kA), 0, 720, 560, -720);
   EXPECT_EXTENTS(extents_of(font, kB), -143, 376, 806, -536);
 }
+
+// COLR version 0, measured by what its layers draw. The numbers are what `hb-shape
+// --show-extents` says of color-v0-edges.ttf and color-v0.ttf (the oracle holds both
+// to it), and each pins one rule that real Bungee Color fonts showed.
+
+TEST(ColorExtents, AVersionZeroGlyphIsTheUnionOfItsLayersDrawnBoxes) {
+  // color-v0.ttf's A has layers 40..600, 80..540 and 60..620 by 0..720, and an hmtx
+  // side bearing of 0 where the outlines' xMin is 40, 80 and 60: HarfBuzz draws each
+  // shifted left to its bearing, so the union is 0..560, not 40..620.
+  Font font("color-v0.ttf");
+  EXPECT_EXTENTS(extents_of(font, kA), 0, 720, 560, -720);
+  EXPECT_EXTENTS(extents_of(font, kB), 0, 720, 460, -720);
+}
+
+TEST(ColorExtents, AnEmptyLayerReachesFromMinusOneMinusOneToTheOrigin) {
+  Font font("color-v0-edges.ttf");
+  // A drawn layer beside an empty one: the box stretches to (-1, -1). The drawn layer
+  // is A's outline (0..560 by 0..720 once shifted), and one unit more at the origin.
+  EXPECT_EXTENTS(extents_of(font, kA), -1, 720, 561, -721);
+  // Only empty layers: a unit box left of and below the origin.
+  EXPECT_EXTENTS(extents_of(font, kB), -1, 0, 1, -1);
+}
+
+TEST(ColorExtents, AScaledCompositeLayerIsMeasuredByItsDrawnPointsNotItsHeader) {
+  // space has one layer, A's outline carried through a 0.719970703125 scale and an
+  // offset of (16, 202); the corner it draws is fractional, and truncates to this.
+  Font font("color-v0-edges.ttf");
+  EXPECT_EXTENTS(extents_of(font, kSpace), 0, 720, 403, -518);
+}

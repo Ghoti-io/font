@@ -23,6 +23,9 @@ this library and, in `tools/oracle/color_diff.py`, by fontTools again.
     flags, palette labels and entry labels, colors with every alpha.
   * `color-cpal0.ttf` - the same layers over a `CPAL` version 0, which has no
     types or labels, and two palettes that share color records.
+  * `color-v0-edges.ttf` - version 0 layers whose boxes HarfBuzz measures in
+    unexpected ways: empty layers, a scaled composite, and a side bearing that is
+    not the outline's.
 """
 
 from fontTools.colorLib.builder import buildCOLR, buildCPAL
@@ -88,6 +91,52 @@ def build_color_cpal0(mf, out):
     fb = _font(mf, "Color CPAL0", [PALETTES[0], PALETTES[0]])
     mf.pin(fb)
     fb.save(out)
+
+
+def build_color_v0_edges(mf, out):
+    """COLR version 0 layers HarfBuzz measures by what they draw.
+
+    `A` is a drawn layer and an empty one, `B` has only empty layers, and `space`
+    is one layer that is a composite scaled by 0.719970703125 (a factor `glyf` stores
+    exactly, so the corner it draws is fractional and its header box is not). Every
+    glyph's left side bearing in `hmtx` is 0, which is not its outline's xMin, so each
+    layer is also drawn shifted.
+    """
+    order = ORDER + ["layer.empty", "layer.scaled"]
+    shapes = _glyphs_for(mf, ORDER)
+    shapes["layer.empty"] = TTGlyphPen(None).glyph()
+    pen = TTGlyphPen(shapes)
+    pen.addComponent("layer.a", (0.719970703125, 0, 0, 0.719970703125, 16, 202))
+    shapes["layer.scaled"] = pen.glyph()
+    advances = dict(mf.ADVANCES)
+    for name in LAYERS + ["layer.empty", "layer.scaled"]:
+        advances[name] = 600
+    fb = mf.truetype("Color v0 edges", mf.unicode_cmap(), order=order, glyphs=shapes,
+                     advances=advances)
+    glyph_map = fb.font.getReverseGlyphMap()
+    layers = {
+        "A": [("layer.a", 0), ("layer.empty", 1)],
+        "B": [("layer.empty", 0), ("layer.empty", 1)],
+        "space": [("layer.scaled", 0)],
+    }
+    fb.font["COLR"] = buildCOLR(layers, version=0, glyphMap=glyph_map)
+    fb.font["CPAL"] = buildCPAL(_floats(PALETTES[:1]), nameTable=fb.font["name"])
+    # Vertical metrics, so a test can place the vertical origin: HarfBuzz derives it
+    # from the glyph's own outline box, not from the color box above.
+    fb.setupVerticalMetrics({n: (1000, 30) for n in order})
+    fb.setupVerticalHeader(ascent=500, descent=-500)
+    mf.pin(fb)
+    fb.save(out)
+
+
+def _glyphs_for(mf, names):
+    shapes = {}
+    for name in names:
+        pen = TTGlyphPen(None)
+        source = {"layer.a": "A", "layer.b": "B", "layer.c": "ghoti.alt"}.get(name, name)
+        mf.OUTLINES[source](pen)
+        shapes[name] = pen.glyph()
+    return shapes
 
 
 # --------------------------------------------------------------- COLR version 1

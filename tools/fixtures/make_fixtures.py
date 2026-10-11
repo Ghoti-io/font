@@ -4302,7 +4302,7 @@ FIXTURES = {
         "one bit)"),
     "color-cbdt-metrics.ttf": (build_color_cbdt_metrics,
         "CBDT with two strikes (16 and 7 ppem) of 127 glyphs whose metrics sweep the "
-        "byte ranges, over one-pixel pictures: the scaling of a picture's box to the "
+        "byte ranges, over flat-color pictures of the size the metrics state: the scaling of a picture's box to the "
         "em, and its rounding, are what is held (a half falls at 16 ppem in a "
         "1000-unit em)"),
     "color-cbdt-sizes.ttf": (build_color_cbdt_sizes,

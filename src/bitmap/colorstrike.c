@@ -460,6 +460,20 @@ static GFNT_Result gfnt_color_decode(const GFNT_Face * face,
         "a glyph picture that is not grey or RGBA at 8 or 16 bits per channel");
     goto done;
   }
+  // "The individual images must have the same size as expected by the table in the
+  // bitmap metrics" (CBDT). The metrics place the picture and the picture fills the
+  // place, so a font whose two disagree has a glyph that cannot be drawn where it says;
+  // that is this glyph's fault and not the strike's. Only CBDT and an sbix PNG state a
+  // size beforehand (a JPEG or TIFF states none), and Noto Color Emoji's 4,082 pictures
+  // all agree with theirs.
+  if (image->width != 0 || image->height != 0) {
+    if (gimg_raster_width(raster) != image->width
+        || gimg_raster_height(raster) != image->height) {
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, 0, 0, GFNT_GLYPH_NONE,
+          "a glyph picture whose size is not the size its metrics state");
+      goto done;
+    }
+  }
   gray = format->channel_model == GIMG_CHANNEL_GRAY;
   deep = format->bits_per_channel[0] == 16;
   sample = deep ? 2u : 1u;

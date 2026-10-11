@@ -197,6 +197,9 @@ def main(argv):
                         same = bytes(w >> 8 for w in words) == pil.convert("RGBA").tobytes()
                 else:
                     same = mine_px == pil.convert("RGBA").tobytes()
+                if w is not None and (r["dw"], r["dh"]) != (w, h):
+                    note("strike %d glyph %d: the picture is %s and its metrics state %s"
+                         % (index, g, (r["dw"], r["dh"]), (w, h)))
                 if (r["dw"], r["dh"]) != pil.size or not same:
                     note("strike %d glyph %d: pixels differ (%s vs %s, %d bits)"
                          % (index, g, (r["dw"], r["dh"]), pil.size, r["bits"]))

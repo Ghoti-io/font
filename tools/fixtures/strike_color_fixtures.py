@@ -100,6 +100,13 @@ def big(height, width, bearing_x, bearing_y, advance):
                        0, 0, 0)
 
 
+def solid(width, height):
+    """A PNG of one color at exactly this size, for fixtures that hold the metrics."""
+    out = io.BytesIO()
+    Image.new("RGBA", (max(width, 1), max(height, 1)), (200, 40, 90, 255)).save(out, format="PNG")
+    return out.getvalue()
+
+
 KINDS = ["rgba", "rgb", "palette", "gray", "graya", "bilevel", "rgba", "rgb",
          "palette", "rgba", "gray"]
 
@@ -239,8 +246,8 @@ def build_color_cbdt_metrics(mf, out):
     Ties fall at 16 ppem in a 1000-unit em (a pixel is 62.5 units), and fractions of
     every kind at 7; the metrics here run through the signed and unsigned byte
     ranges, so the rounding is tried on the values it will meet and the ones it
-    will not. Every picture is one pixel: the metrics are what is held, and they
-    are independent of the picture they sit over.
+    will not. Every picture is a flat color of exactly the size its metrics state, which a decode
+    requires: the metrics are what is held.
     """
     mapping = {0x100 + i: name for i, name in enumerate(METRIC_ORDER[1:])}
     fb = mf.truetype("CBDT Metrics", [mf.subtable(4, 3, 1, mapping)],
@@ -253,8 +260,9 @@ def build_color_cbdt_metrics(mf, out):
         at = len(cbdt)
         offsets = [0]
         for g in range(1, 128):
-            data = picture(g, 1, 1, "rgba")
-            cbdt += (small((g * 37) % 256, g * 2, flip * (g - 64), flip * (2 * g - 128), 8)
+            height, width = (g * 37) % 250 + 1, g * 2
+            data = solid(width, height)
+            cbdt += (small(height, width, flip * (g - 64), flip * (2 * g - 128), 8)
                      + struct.pack(">I", len(data)) + data)
             offsets.append(len(cbdt) - at)
         body = struct.pack(">HHI", 1, 17, at) + b"".join(struct.pack(">I", o) for o in offsets)
@@ -280,8 +288,8 @@ SIZES_ORDER = [".notdef"] + ["s%02d" % i for i in range(1, 7)]
 def build_color_cbdt_sizes(mf, out):
     """Which strike answers, and what a glyph it lacks falls back to.
 
-    Four strikes, all index format 1 under image format 17, all of one-pixel
-    pictures (the metrics are what is held):
+    Four strikes, all index format 1 under image format 17, all of flat-color pictures of the size
+    their metrics state (the metrics are what is held):
 
       strike 0   24 x 12 ppem   glyphs 1, 2, 3, 4
       strike 1   20 x 20 ppem   glyphs 1, 2, 5 (3 and 4 are in its range, empty)
@@ -322,7 +330,7 @@ def build_color_cbdt_sizes(mf, out):
         for g in range(first, last + 1):
             if g in glyphs:
                 height, width, bx, by, adv = glyphs[g]
-                data = picture(g, 1, 1, "rgba")
+                data = solid(width, height)
                 cbdt += (small(height, width, bx, by, adv)
                          + struct.pack(">I", len(data)) + data)
             offsets.append(len(cbdt) - at)

@@ -526,6 +526,23 @@ TEST(ColorBitmapExtents, EqualStrikesGoToTheFirst) {
   EXPECT_BOX(extents(font, 3, 24), 83, 250, 167, -333);
 }
 
+TEST(ColorStrike, APictureThatIsNotTheSizeItsMetricsStateIsCorruptToDecode) {
+  Font source("color-cbdt.ttf");
+  // Glyph 1: small metrics are height, width, ...; make the width 11 where the PNG is 10.
+  Font font(with_cbdt_byte(source.bytes, kFirstGlyph + 1, 11));
+  GFNT_GlyphImage image{};
+  ASSERT_EQ(gfnt_face_glyph_image(font.face, 1, 0, &image, nullptr), GFNT_OK);
+  EXPECT_EQ(image.width, 11u);   // the font's statement, as stated
+  GFNT_ColorBitmap bitmap{};
+  GFNT_Error error;
+  EXPECT_EQ(gfnt_face_glyph_color_bitmap(font.face, 1, 0, &bitmap, &error), GFNT_ERR_CORRUPT);
+  EXPECT_NE(std::strstr(error.message, "metrics"), nullptr) << error.message;
+  EXPECT_EQ(bitmap.rgba, nullptr);
+  // Its neighbor is untouched.
+  Decoded d(font, 2, 0);
+  EXPECT_EQ(d.result, GFNT_OK);
+}
+
 // ---- 16-bit pictures
 
 namespace {

@@ -781,10 +781,21 @@ parameterized by table; what differs is that a strike is **not parsed whole**. A
 glyph is a few bytes and a color strike is hundreds of kilobytes of PNG, so
 `gfnt_face_glyph_image()` reads the strike's index subtables, finds the one glyph and
 borrows its bytes from the face, and `gfnt_face_glyph_color_bitmap()` decodes that one
-picture through `image` (a dependency since this was written) to **straight-alpha
-RGBA8, owned by the caller**: a face that cached every decoded glyph would hold
-a few hundred kilobytes for each glyph a program ever drew. A grey PNG is widened;
-a 16-bit one is declined by name, as there is no reference for narrowing it. The
+picture through `image` (a dependency since this was written) to **four channels of
+RGBA at the picture's own depth, owned by the caller**: a face that cached every decoded
+glyph would hold a few hundred kilobytes for each glyph a program ever drew. Neither spec
+limits a PNG's depth (`CBDT` allows the chunks IHDR, PLTE, tRNS, sRGB, IDAT and IEND, in
+sRGB; Apple's `sbix` says nothing), so a 16-bit PNG comes back as `uint16_t` samples and
+`gfnt_color_bitmap_to_8bit()` narrows by the high byte, which is what `image` and Pillow
+both do. A grey picture is repeated into the three colors; a PNG's alpha is straight, as
+stored. A strike of 32 bits may also hold the pixel formats of `EBDT` (1, 2, 5, 6, 7): at
+four bytes a pixel the bit-aligned and byte-aligned forms are the same bytes, the pixels are
+**premultiplied** sRGB in the order B, G, R, A (`GFNT_IMAGE_BGRA`), and a decode swaps them to
+RGBA and sets `premultiplied`. A `CBDT` picture "must have the same size as expected by the
+table in the bitmap metrics", and a decode that finds otherwise is `CORRUPT` for that glyph
+(Noto's 4,082 all agree; HarfBuzz measures from the metrics and does not check). The
+composites (8, 9) are declined by name: neither specification says how color pictures
+combine. The
 decoded pixels are held to Pillow's on every PNG color type the encoder writes
 (`make check-oracle-strike-images`; the bytes, metrics and advances to fontTools'),
 over Noto Color Emoji's 4,082 pictures and the three color-strike fixtures.

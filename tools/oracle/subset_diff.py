@@ -226,6 +226,10 @@ def main(argv):
             if r.get("different"):
                 drawn += 1
                 problems.append((name, grp, "glyphs differ: %s" % r["different"][:3]))
+            if r.get("subrs") or r.get("names_differ"):
+                drawn += 1
+                problems.append((name, grp, "CFF subset: %s subroutines left, names differ %s"
+                                 % (r.get("subrs"), r.get("names_differ"))))
             if r.get("missing"):
                 missed += 1
                 problems.append((name, grp, "fontTools keeps %s, this does not" % r["missing"][:5]))

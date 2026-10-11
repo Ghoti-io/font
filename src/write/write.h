@@ -154,6 +154,26 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
     const uint32_t * new_of_old, size_t count, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
 
+/**
+ * Add to @p keep the glyphs a kept CFF glyph builds an accented character from (`seac`,
+ * or `endchar` given four operands), until nothing is added.
+ */
+GFNT_Result gfnt_subset_cff_closure(const GFNT_Face * face, uint8_t * keep, size_t count,
+    const GFNT_Limits * limits, const GFNT_Allocator * allocator, GFNT_Error * error);
+
+/**
+ * The `CFF ` table of a subset: the kept glyphs' charstrings with their subroutines
+ * flattened, the charset, strings, Font DICTs and Private DICTs for them only.
+ *
+ * @param old_of_new Per new glyph its source glyph, or 0xFFFFFFFF for a retained id with
+ *   no glyph (written empty).
+ * @param count The source face's glyph count.
+ * @param out Receives the table (appended).
+ */
+GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
+    size_t new_count, size_t count, bool drop_hinting, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
+
 /** The bitmap strike tables of a subset, each empty (length 0) when not carried. */
 typedef struct GFNT_SubsetStrikes {
   GFNT_WBuf eblc, ebdt, cblc, cbdt, sbix;

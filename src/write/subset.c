@@ -310,6 +310,7 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf vmtx;
   GFNT_WBuf vorg;
   GFNT_WBuf colr;
+  GFNT_WBuf cff;
   GFNT_SubsetStrikes strikes;
 } GFNT_SubsetWork;
 
@@ -331,6 +332,7 @@ static void work_free(GFNT_SubsetWork * w) {
   gfnt_wbuf_free(&w->vmtx);
   gfnt_wbuf_free(&w->vorg);
   gfnt_wbuf_free(&w->colr);
+  gfnt_wbuf_free(&w->cff);
   gfnt_subset_strikes_free(&w->strikes);
   w->a->free_fn(w->a->ctx, w->shape);
   w->a->free_fn(w->a->ctx, w->gsub_active);
@@ -364,6 +366,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   uint32_t g;
   bool retain;
   bool outlines;
+  bool cff;
   bool rewrite_layout;
   GFNT_Result result;
 
@@ -391,13 +394,14 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   // A bitmap-only sfnt (a color emoji font of PNG strikes has no outlines at all) has no
   // glyf to rewrite, and is subset by its strikes alone.
   outlines = gfnt_sfnt_producer(face) == GFNT_PRODUCER_GLYF;
-  if ((!outlines && !(gfnt_sfnt_producer(face) == GFNT_PRODUCER_NONE
+  cff = gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF;
+  if ((!outlines && !cff && !(gfnt_sfnt_producer(face) == GFNT_PRODUCER_NONE
                       && (gfnt_face_has_cblc(face) || gfnt_face_has_eblc(face)
                           || gfnt_face_has_sbix(face))))
       || gfnt_face_has_table(face, GFNT_TAG('f', 'v', 'a', 'r'))
       || gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
-        "only static TrueType-outline fonts can be subset");
+        "only static fonts with TrueType or CFF outlines can be subset");
   }
   if (!gfnt_face_has_table(face, T_HEAD) || !gfnt_face_has_table(face, T_HHEA)
       || !gfnt_face_has_table(face, T_MAXP) || !gfnt_face_has_table(face, T_HMTX)
@@ -421,6 +425,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   gfnt_wbuf_init(&w.vmtx, allocator);
   gfnt_wbuf_init(&w.vorg, allocator);
   gfnt_wbuf_init(&w.colr, allocator);
+  gfnt_wbuf_init(&w.cff, allocator);
   gfnt_subset_strikes_init(&w.strikes, allocator);
 
   result = gfnt_face_num_glyphs(face, &count, error);
@@ -557,6 +562,14 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     }
   }
 
+  // A CFF glyph built as an accented character needs the two glyphs it is built from.
+  if (cff) {
+    result = gfnt_subset_cff_closure(face, w.keep, count, limits, allocator, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+  }
+
   // The numbering.
   w.old_of_new = allocator->calloc_fn(allocator->ctx, count, sizeof *w.old_of_new);
   if (!w.old_of_new) {
@@ -631,6 +644,14 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
       goto done;
     }
     gfnt_write_put16(w.bufs[B_HEAD].data + 50, long_loca ? 1u : 0u);
+  }
+
+  if (cff) {
+    result = gfnt_subset_cff(face, w.old_of_new, new_count, count, options->drop_hinting,
+        limits, allocator, &w.cff, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
   }
 
   // hmtx, hhea, maxp.
@@ -772,7 +793,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.os2.oom || w.post.oom || w.bufs[B_HMTX].oom || w.bufs[B_LOCA].oom
       || w.gsub.oom || w.gpos.oom || w.gdef.oom || w.kern.oom || w.vhea.oom
-      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
+      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.cff.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
       || w.strikes.cblc.oom || w.strikes.cbdt.oom || w.strikes.sbix.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "building the tables");
@@ -796,6 +817,9 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   if (outlines) {
     ADD_BUF(T_LOCA, w.bufs[B_LOCA]);
     ADD_BUF(T_GLYF, w.bufs[B_GLYF]);
+  }
+  if (cff) {
+    ADD_BUF(GFNT_TAG_CFF, w.cff);
   }
   if (w.os2.length) {
     ADD_BUF(T_OS2, w.os2);
@@ -860,7 +884,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
 #undef ADD_BUF
 #undef ADD_SRC
-  result = gfnt_write_sfnt(0x00010000u, tables, ntables, limits, allocator,
+  result = gfnt_write_sfnt(cff ? 0x4F54544Fu : 0x00010000u, tables, ntables, limits, allocator,
       out_blob, error);
   if (result == GFNT_OK && options->map) {
     options->map->old_of_new = allocator->calloc_fn(allocator->ctx, new_count,

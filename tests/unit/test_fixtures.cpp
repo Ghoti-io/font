@@ -182,6 +182,8 @@ const std::vector<Entry> & every_fixture() {
       // exercise is a *program*, and a program needs its own glyphs.
       {"cff-arith.otf", 7},
       {"cff-cid.otf", 4},
+      {"cff-cid3.otf", 4},
+      {"cff-subset.otf", 8},
       {"cff-curves.otf", 13},
       {"cff-hints.otf", 8},
       {"cff-seac.otf", 6},

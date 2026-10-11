@@ -30,11 +30,32 @@ import json
 import sys
 
 from fontTools import subset
+from fontTools.pens.recordingPen import RecordingPen
 from fontTools.ttLib import TTFont
+
+
+def has_glyf(font):
+    """Whether the font has TrueType outlines at all: a bitmap-only .otb states an empty glyf."""
+    return "glyf" in font and font.reader.tables["glyf"].length > 0
+
+
+def cff_outline(font, gid):
+    """A CFF glyph: its drawing and the width its charstring states (None when empty)."""
+    name = font.getGlyphOrder()[gid]
+    pen = RecordingPen()
+    string = font["CFF "].cff.topDictIndex[0].CharStrings[name]
+    string.draw(pen)
+    if not pen.value:
+        return None
+    return (pen.value, string.width)
 
 
 def outline(font, gid):
     """What a glyph draws, as something comparable; None when it draws nothing."""
+    if "CFF " in font:
+        return cff_outline(font, gid)
+    if not has_glyf(font):
+        return None         # a bitmap-only font draws nothing
     glyf = font["glyf"]
     name = font.getGlyphOrder()[gid]
     glyph = glyf[name]
@@ -45,6 +66,10 @@ def outline(font, gid):
 
 
 def nonempty(font):
+    if "CFF " in font:
+        return {i for i in range(len(font.getGlyphOrder())) if cff_outline(font, i)}
+    if not has_glyf(font):
+        return set()
     glyf = font["glyf"]
     return {i for i, n in enumerate(font.getGlyphOrder())
             if glyf[n].numberOfContours != 0}
@@ -88,6 +113,24 @@ def check(job):
         if a != b:
             different.append([gid, "differs"])
     out["different"] = different
+    if "CFF " in mine:
+        # Flattened: no subroutine anywhere. And a kept glyph keeps its name.
+        top = mine["CFF "].cff.topDictIndex[0]
+        subrs = len(mine["CFF "].cff.GlobalSubrs)
+        privates = [top.Private] if hasattr(top, "Private") else []
+        if hasattr(top, "FDArray"):
+            privates = [fd.Private for fd in top.FDArray]
+        subrs += sum(len(getattr(p, "Subrs", [])) for p in privates)
+        out["subrs"] = subrs
+        a_names = original.getGlyphOrder()
+        b_names = mine.getGlyphOrder()
+        if "map" in job:
+            pairs = job["pairs"]
+        else:
+            pairs = [[g, g] for g in job["gids"]]
+        cid = hasattr(top, "ROS")
+        out["names_differ"] = [o for o, n in pairs
+                               if not cid and n < len(b_names) and a_names[o] != b_names[n]][:5]
     # fontTools' closure for the same request.
     options = subset.Options()
     options.retain_gids = True

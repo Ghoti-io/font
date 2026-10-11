@@ -2624,6 +2624,84 @@ def build_cff_cid(out):
     fb.save(out)
 
 
+def build_cff_subset(out):
+    """Glyphs for the subsetter to keep some of: stem counts on a mask-width boundary,
+    a name in the font's own String INDEX for each of three glyphs, and a subroutine.
+
+    A subset renumbers the strings still named, so keeping only the last of three
+    custom names moves its SID; a hint mask sized by a stem count that is an exact
+    multiple of eight is where a count rounded the wrong way shows.
+    """
+    order = [".notdef", "space", "eight", "sixteen", "alpha.sub", "beta.sub",
+             "gamma.sub", "viasubr"]
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    box = (100, 100, "rmoveto", 400, "hlineto", 600, "vlineto", -400,
+           "hlineto", "endchar")
+
+    def pairs(count, start):
+        out_ = []
+        for i in range(count):
+            out_ += [start + 50 * i, 20]
+        return out_
+    subrs = [charstring(300, "hlineto", 500, "vlineto", -300, "hlineto", "return")]
+    programs = {
+        ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+            "vlineto", -500, "hlineto", "endchar"),
+        "space": charstring(300, "endchar"),
+        # Four horizontal and four vertical stems: eight, a one-byte mask.
+        "eight": charstring(600, *pairs(4, 100), "hstemhm", *pairs(4, 100),
+            "vstemhm", "hintmask", ("mask", b"\xff"), *box),
+        # Eight and eight: sixteen, a two-byte mask.
+        "sixteen": charstring(600, *pairs(8, 100), "hstemhm", *pairs(8, 100),
+            "vstemhm", "hintmask", ("mask", b"\xff\xff"), *box),
+        "alpha.sub": charstring(600, *box),
+        "beta.sub": charstring(600, 150, 150, "rmoveto", 300, "hlineto", 300,
+            "vlineto", -300, "hlineto", "endchar"),
+        "gamma.sub": charstring(600, 200, 200, "rmoveto", 200, "hlineto", 200,
+            "vlineto", -200, "hlineto", "endchar"),
+        "viasubr": charstring(600, 100, 100, "rmoveto", -107, "callsubr",
+            "endchar"),
+    }
+    charset, strings = cff_names(order)
+    table = assemble_cff(names("CFF subset")["psName"],
+        [programs[name] for name in order], charset=charset, strings=strings,
+        privates=[({20: 600, 21: 0}, subrs)])
+    fb = cff_otf("CFF subset", order, table, advances,
+                 {0x20: "space", 0x41: "alpha.sub", 0x42: "beta.sub",
+                  0x43: "gamma.sub"})
+    fb.save(out)
+
+
+def build_cff_cid3(out):
+    """A CID-keyed font of three Font DICTs, for a subset that drops the middle one.
+
+    Each DICT has its own `defaultWidthX`; a glyph that states no width takes its
+    DICT's, so a subset that renumbered the DICTs wrongly changes an advance.
+    """
+    order = [".notdef", "one", "two", "three"]
+    advances = {name: 600 for name in order}
+    programs = {
+        ".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+            "vlineto", -500, "hlineto", "endchar"),
+        "one": charstring(100, 100, "rmoveto", 300, "hlineto", 300, "vlineto",
+            -300, "hlineto", "endchar"),
+        "two": charstring(100, 100, "rmoveto", 200, "hlineto", 200, "vlineto",
+            -200, "hlineto", "endchar"),
+        "three": charstring(100, 100, "rmoveto", 100, "hlineto", 100, "vlineto",
+            -100, "hlineto", "endchar"),
+    }
+    table = assemble_cff(names("CFF cid3")["psName"],
+        [programs[name] for name in order], strings=["Ghoti", "Fixture"],
+        charset=cff_charset_ranges([(11, 0), (22, 0), (33, 0)], wide=True),
+        is_cid=True,
+        fdselect=cff_fdselect_format3([(0, 0), (1, 1), (2, 2)], len(order)),
+        privates=[({20: 600, 21: 0}, ()), ({20: 480, 21: 0}, ()),
+                  ({20: 350, 21: 0}, ())])
+    fb = cff_otf("CFF cid3", order, table, advances, {})
+    fb.save(out)
+
+
 def type1_parts():
     """Type 1 charstrings, inside a CFF that says so.
 
@@ -4227,6 +4305,14 @@ FIXTURES = {
         "count carrying the advance, a two-byte mask, stems declared inside a "
         "subroutine, an implicit vstem before hintmask, cntrmask, and a width "
         "on vstem"),
+    "cff-cid3.otf": (build_cff_cid3,
+        "CFF: CID-keyed with three Font DICTs of different defaultWidthX, the "
+        "glyphs split one to a DICT after .notdef, for a subset that drops the "
+        "middle DICT"),
+    "cff-subset.otf": (build_cff_subset,
+        "CFF: eight and sixteen stems before a hintmask (mask width on a "
+        "multiple-of-eight boundary), three glyphs named in the font's own "
+        "String INDEX, and a subroutine call, for the subsetter"),
     "cff-subrs.otf": (build_cff_subrs,
         "CFF: local and global subroutines with the bias applied, nesting, a "
         "subroutine that ends without return, defaultWidthX, a nominalWidthX "

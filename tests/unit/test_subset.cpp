@@ -920,7 +920,7 @@ TEST(Subset, DroppingHintingRemovesInstructionsFromBothKindsOfGlyph) {
 // --- what is refused --------------------------------------------------------
 
 TEST(Subset, FacesItCannotSubsetAreRefusedByName) {
-  for (const char * name : {"cff.otf", "variable-gvar.ttf", "type1.pfb", "bitmap.bdf"}) {
+  for (const char * name : {"variable-gvar.ttf", "type1.pfb", "bitmap.bdf", "variable-cff2.otf"}) {
     auto source = open_fixture(name);
     GFNT_Result r = GFNT_OK;
     EXPECT_EQ(subset_of(source->face, options_for({0x41}), &r), nullptr) << name;

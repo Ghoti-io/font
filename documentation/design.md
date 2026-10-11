@@ -1673,8 +1673,8 @@ produced by subsetting. It needs the reader and nothing else. **Built**
 (`write.h`, `src/write/`): the sfnt serialiser (§12.1: table ordering, padding,
 directory search fields, checksums and `head.checkSumAdjustment`; the table set
 is supplied as bytes), the WOFF 1 writer (§12.4), and a subsetter for static
-TrueType-outline fonts (§12.3), which carries or rewrites the layout tables. The
-`CFF` writer, subsetting of `CFF` and of variable fonts, the Apple shaping tables,
+TrueType-outline fonts and for `CFF ` ones (§12.3), which carries or rewrites the layout tables. The
+`CFF2` subsetter and subsetting of variable fonts, the Apple shaping tables,
 the BDF writer and the PDF helpers are **not** built.
 
 ### 12.1 The sfnt serialiser
@@ -1781,8 +1781,22 @@ verbatim. Without it they are **rewritten** for the new numbering
   `GFNT_ERR_UNSUPPORTED`. `GFNT_SubsetOptions::map` reports which source glyph each
   subset glyph is.
 
-Refused with `GFNT_ERR_UNSUPPORTED`: `CFF`, `CFF2` and Type 1 outlines, and
-variable fonts. Silently not written, and stated in `write.h`: bitmap and colour
+**`CFF ` outlines are subset too** (`src/write/subset_cff.c`), by writing the table afresh:
+the kept glyphs' charstrings with their subroutine calls **flattened** by an operand-holding
+evaluator (a `callsubr` takes back out the number it consumed; one whose number arithmetic
+computed is `GFNT_ERR_UNSUPPORTED`), so neither global nor local subroutines remain; a charset
+for the kept glyphs (ISOAdobe when it fits, else the smaller of formats 0, 1 and 2); a String
+INDEX of the strings still named, with SIDs renumbered; for a CID-keyed font only the Font
+DICTs a kept glyph uses, renumbered, with a new `FDSelect`; and Private DICTs without `Subrs`
+(and, with `drop_hinting`, without hint zones, with stem hints and masks removed from the
+charstrings and the advance carried on the first operator kept). An accented character
+(`endchar` with four operands) keeps the two glyphs it names. The output is an `OTTO` sfnt. With
+retained ids a dropped glyph is a lone `endchar` and keeps its name. `make check-oracle-subset`
+covers it: 36 URW CFF fonts, 281 subsets in each mode, drawing and charstring width read back
+through fontTools and shaping through HarfBuzz, 0 differences, no subroutine left, names kept.
+
+Refused with `GFNT_ERR_UNSUPPORTED`: `CFF2` and Type 1 outlines, a CFF with Type 1
+charstrings, and variable fonts. Silently not written, and stated in `write.h`: bitmap and colour
 tables, the Apple tables (`morx`, `mort`, `kerx`, `trak`, `ankr`), `cmap`
 format 14, and the family rename the licence reading in §14.5 wants.
 

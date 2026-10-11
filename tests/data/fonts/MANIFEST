@@ -25,10 +25,12 @@ bitmap.pcf	PCF: the shared design, most-significant bit and byte first, rows pad
 bitmap.psf	PSF 2: the shared design with a Unicode table in UTF-8, where one cell answers two codepoints and one carries a two-codepoint sequence that a reader must walk past rather than map
 cff-arith.otf	CFF: the arithmetic operators computing the coordinates they draw with - div, the 255 fixed-point operand, dup, exch, drop, index, put, get, eq, not, mul, add and ifelse; no random, which is refused
 cff-cid.otf	CFF: CID-keyed - ROS, an FDArray of two Font DICTs with different Private DICTs and different local subroutines, FDSelect format 3, and a charset holding CIDs rather than SIDs
+cff-cid3.otf	CFF: CID-keyed with three Font DICTs of different defaultWidthX, the glyphs split one to a DICT after .notdef, for a subset that drops the middle DICT
 cff-curves.otf	CFF: every curve operator in the form a pen never writes - three-group hvcurveto and vhcurveto with the trailing operand, hhcurveto and vvcurveto with the leading one, rcurveline, rlinecurve, and all four of flex, hflex, hflex1 and flex1 (twice, once per axis)
 cff-hints.otf	CFF: stem hints and the masks their count sizes - an odd operand count carrying the advance, a two-byte mask, stems declared inside a subroutine, an implicit vstem before hintmask, cntrmask, and a width on vstem
 cff-seac.otf	CFF: an accented character (endchar with four operands) named by Standard Encoding code, a charset in format 1, a name in the font's own String INDEX, and a custom encoding with a supplement
 cff-subrs.otf	CFF: local and global subroutines with the bias applied, nesting, a subroutine that ends without return, defaultWidthX, a nominalWidthX delta, and one glyph whose charstring advance hmtx disagrees with
+cff-subset.otf	CFF: eight and sixteen stems before a hintmask (mask width on a multiple-of-eight boundary), three glyphs named in the font's own String INDEX, and a subroutine call, for the subsetter
 cff-type1.otf	CFF with CharstringType 1: Type 1 programs - hsbw, sbw, closepath, seac with its side-bearing correction, flex and hint replacement through callothersubr and pop, div, dotsection, hstem3 and setcurrentpoint
 cff.otf	OTTO flavour: a CFF outline table, every metric table unchanged
 cmap-format0.ttf	cmap format 0 on (1,0): the 256-byte glyph array

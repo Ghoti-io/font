@@ -400,7 +400,9 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  *
  * The output is a TrueType-outline sfnt of `head`, `hhea`, `maxp`, `hmtx`,
  * `cmap` (formats 4 and 12 for the requested codepoints, in the Unicode and
- * Windows records), `loca`, `glyf`, `post` (format 3, no glyph names), and, when
+ * Windows records), `loca`, `glyf` (or, for a source with `CFF ` outlines, an `OTTO`
+ * sfnt with a rebuilt `CFF ` and neither `glyf` nor `loca`: see below), `post`
+ * (format 3, no glyph names), and, when
  * the source has them, `OS/2` (first and last character updated), `name`,
  * `gasp`, and the hinting tables. The layout tables (`GSUB`, `GPOS`, `GDEF`), the
  * legacy `kern` table and the vertical metrics (`vhea`, `vmtx`, `VORG`) are
@@ -421,7 +423,17 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * outlines, a bitmap-only one, is subset by them; a composite bitmap glyph is
  * ::GFNT_ERR_UNSUPPORTED. `EBSC` is copied. Anything else in the source is not written.
  *
- * **Not built**: `CFF`, `CFF2` and Type 1 outlines, variable fonts (`fvar`,
+ * **A `CFF ` source** is subset by rebuilding the table: the kept glyphs'
+ * charstrings with their subroutine calls flattened (no subroutine is left, so none
+ * is kept that no glyph calls), a charset naming only them, the strings still named,
+ * and only the Font DICTs of a CID-keyed font that a kept glyph uses. An accented
+ * character built by `seac` (or `endchar` with four operands) keeps the two glyphs it
+ * is built from. With ::GFNT_SubsetOptions::drop_hinting the stem hints, hint masks
+ * and the Private DICT's hint zones are removed. A subroutine number that arithmetic
+ * computed cannot be flattened and is ::GFNT_ERR_UNSUPPORTED, as is a CFF whose
+ * charstrings are Type 1.
+ *
+ * **Not built**: `CFF2` and Type 1 outlines, variable fonts (`fvar`,
  * `gvar`), the Apple tables (`morx`, `mort`, `kerx`,
  * `trak`, `ankr`), class-based `kern`, `cmap` format 14, and the family rename
  * the licence reading in documentation/design.md section 14.5 wants. Each is

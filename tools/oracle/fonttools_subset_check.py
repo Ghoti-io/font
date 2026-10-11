@@ -43,16 +43,17 @@ def cff_outline(font, gid):
     """A CFF glyph: its drawing and the width its charstring states (None when empty)."""
     name = font.getGlyphOrder()[gid]
     pen = RecordingPen()
-    string = font["CFF "].cff.topDictIndex[0].CharStrings[name]
+    table = font["CFF "] if "CFF " in font else font["CFF2"]
+    string = table.cff.topDictIndex[0].CharStrings[name]
     string.draw(pen)
     if not pen.value:
         return None
-    return (pen.value, string.width)
+    return (pen.value, getattr(string, "width", None))
 
 
 def outline(font, gid):
     """What a glyph draws, as something comparable; None when it draws nothing."""
-    if "CFF " in font:
+    if "CFF " in font or "CFF2" in font:
         return cff_outline(font, gid)
     if not has_glyf(font):
         return None         # a bitmap-only font draws nothing
@@ -66,7 +67,7 @@ def outline(font, gid):
 
 
 def nonempty(font):
-    if "CFF " in font:
+    if "CFF " in font or "CFF2" in font:
         return {i for i in range(len(font.getGlyphOrder())) if cff_outline(font, i)}
     if not has_glyf(font):
         return set()
@@ -113,10 +114,42 @@ def check(job):
         if a != b:
             different.append([gid, "differs"])
     out["different"] = different
-    if "CFF " in mine:
+    if "fvar" in original:
+        # The tables that name no glyph are carried byte for byte.
+        out["var_tables_differ"] = [
+            t for t in ("fvar", "avar", "STAT", "MVAR")
+            if t in original.reader.tables
+            and (t not in mine.reader.tables
+                 or original.reader[t] != mine.reader[t])]
+        if "map" in job:
+            pairs = job["pairs"]
+        else:
+            pairs = [[g, g] for g in job["gids"]]
+        at = []
+        for loc in job.get("locations", []):
+            try:
+                go = original.getGlyphSet(location=loc)
+                gm = mine.getGlyphSet(location=loc)
+                orig_names = original.getGlyphOrder()
+                mine_names = mine.getGlyphOrder()
+                for o, n in pairs:
+                    if n >= len(mine_names):
+                        continue
+                    pa = RecordingPen()
+                    pb = RecordingPen()
+                    go[orig_names[o]].draw(pa)
+                    gm[mine_names[n]].draw(pb)
+                    if pa.value != pb.value or go[orig_names[o]].width != gm[mine_names[n]].width:
+                        at.append([loc, o])
+                        break
+            except Exception as why:
+                at.append([loc, "%s: %s" % (type(why).__name__, why)])
+        out["at_locations"] = at[:3]
+    if "CFF " in mine or "CFF2" in mine:
         # Flattened: no subroutine anywhere. And a kept glyph keeps its name.
-        top = mine["CFF "].cff.topDictIndex[0]
-        subrs = len(mine["CFF "].cff.GlobalSubrs)
+        table = mine["CFF "] if "CFF " in mine else mine["CFF2"]
+        top = table.cff.topDictIndex[0]
+        subrs = len(table.cff.GlobalSubrs)
         privates = [top.Private] if hasattr(top, "Private") else []
         if hasattr(top, "FDArray"):
             privates = [fd.Private for fd in top.FDArray]
@@ -128,7 +161,7 @@ def check(job):
             pairs = job["pairs"]
         else:
             pairs = [[g, g] for g in job["gids"]]
-        cid = hasattr(top, "ROS")
+        cid = hasattr(top, "ROS") or "CFF2" in mine
         out["names_differ"] = [o for o, n in pairs
                                if not cid and n < len(b_names) and a_names[o] != b_names[n]][:5]
     # fontTools' closure for the same request.

@@ -433,8 +433,12 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * computed cannot be flattened and is ::GFNT_ERR_UNSUPPORTED, as is a CFF whose
  * charstrings are Type 1.
  *
- * **Not built**: `CFF2` and Type 1 outlines, variable fonts (`fvar`,
- * `gvar`), the Apple tables (`morx`, `mort`, `kerx`,
+ * **A `CFF2` source** is subset the same way, with `blend` and `vsindex` followed, and a
+ * variable font stays variable: `fvar`, `avar`, `STAT` and `MVAR` are copied, `HVAR` and
+ * `VVAR` are rebuilt for the new numbering (their item variation store kept whole), and
+ * `GDEF`'s store is carried so that `GPOS` variation indices still resolve.
+ *
+ * **Not built**: Type 1 outlines, variable fonts with `gvar`, the Apple tables (`morx`, `mort`, `kerx`,
  * `trak`, `ankr`), class-based `kern`, `cmap` format 14, and the family rename
  * the licence reading in documentation/design.md section 14.5 wants. Each is
  * refused or dropped as stated here, not approximated.

@@ -31,6 +31,7 @@
 #include "test_helpers.h"
 #include "failing_allocator.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -44,6 +45,7 @@
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/outline.h>
+#include <ghoti.io/font/variation.h>
 #include <ghoti.io/font/write.h>
 
 #include <gtest/gtest.h>
@@ -438,6 +440,227 @@ TEST(SubsetCff, EveryAllocationFailureIsSurvived) {
       gfnt_blob_destroy(out);
       EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
     }
+  }
+}
+
+// --- CFF2 and the variation tables ------------------------------------------
+
+namespace {
+
+struct Place {
+  GFNT_F16Dot16 wght;
+  GFNT_F16Dot16 wdth;
+};
+
+constexpr GFNT_F16Dot16 fx(int v) { return v * 65536; }
+
+const Place kPlaces[] = {{fx(100), fx(75)}, {fx(900), fx(125)}, {fx(700), fx(100)},
+    {fx(400), fx(125)}, {fx(900), fx(75)}, {fx(250), fx(90)}, {fx(400), fx(100)}};
+
+/** The outline and advance of a glyph at a place, flattened into numbers. */
+std::vector<int64_t> at_place(const GFNT_Face * face, uint32_t glyph, const Place & p) {
+  const GFNT_F16Dot16 user[2] = {p.wght, p.wdth};
+  GFNT_F2Dot14 norm[2] = {0, 0};
+  EXPECT_EQ(gfnt_face_normalize(face, user, 2, norm, 2, nullptr), GFNT_OK);
+  GFNT_Variation v{};
+  v.coords = norm;
+  v.count = 2;
+  std::vector<int64_t> out;
+  GFNT_Outline * outline = nullptr;
+  EXPECT_EQ(gfnt_face_glyph_outline(face, glyph, &v, nullptr, &outline, nullptr), GFNT_OK);
+  if (outline) {
+    const size_t n = gfnt_outline_point_count(outline);
+    for (size_t i = 0; i < n; ++i) {
+      GFNT_Point pt;
+      GFNT_PointTag tag;
+      EXPECT_EQ(gfnt_outline_point_at(outline, i, &pt, &tag), GFNT_OK);
+      out.push_back(pt.x);
+      out.push_back(pt.y);
+    }
+    gfnt_outline_destroy(outline);
+  }
+  int32_t advance = -1;
+  EXPECT_EQ(gfnt_face_glyph_advance(face, glyph, &v, &advance, nullptr), GFNT_OK);
+  out.push_back(advance);
+  return out;
+}
+
+std::vector<uint8_t> table_of(const GFNT_Face * face, const char * tag) {
+  const uint8_t * data = nullptr;
+  size_t length = 0;
+  if (gfnt_face_table_data(face, GFNT_TAG(tag[0], tag[1], tag[2], tag[3]), &data, &length)
+      != GFNT_OK) {
+    return {};
+  }
+  return std::vector<uint8_t>(data, data + length);
+}
+
+const char * const kVariable[] = {"variable-cff2.otf", "variable-cff2-hvar.otf",
+    "variable-cff2-implicit.otf"};
+
+}  // namespace
+
+TEST(SubsetCff2, EveryKeptGlyphDrawsAndAdvancesAsItDidAtEveryPlace) {
+  for (const char * name : kVariable) {
+    for (bool retain : {false, true}) {
+     for (bool unhinted : {false, true}) {
+      for (std::vector<uint32_t> keep : {std::vector<uint32_t>{}, std::vector<uint32_t>{4, 5},
+               std::vector<uint32_t>{7}, std::vector<uint32_t>{3, 6, 7},
+               std::vector<uint32_t>{8}, std::vector<uint32_t>{9}}) {
+        SCOPED_TRACE(std::string(name) + (retain ? " retained " : " renumbered ")
+            + (unhinted ? "unhinted " : "") + std::to_string(keep.size()) + " glyphs");
+        Font source(name);
+        if (keep.empty()) {
+          keep = all_glyphs(source.glyphs());
+        }
+        if (keep[0] >= source.glyphs()) {
+          continue;     // the fixture without the eight-stem glyph
+        }
+        Subset sub(source.face, keep, retain, unhinted);
+        ASSERT_EQ(sub.result, GFNT_OK) << sub.error.message;
+        EXPECT_TRUE(has_table(sub.face, "CFF2"));
+        EXPECT_FALSE(has_table(sub.face, "CFF "));
+        EXPECT_FALSE(has_table(sub.face, "glyf"));
+        EXPECT_EQ(table_of(sub.face, "fvar"), table_of(source.face, "fvar"));
+        EXPECT_EQ(has_table(sub.face, "HVAR"), has_table(source.face, "HVAR"));
+        EXPECT_EQ(has_table(sub.face, "VVAR"), has_table(source.face, "VVAR"));
+        EXPECT_EQ(table_of(sub.face, "MVAR"), table_of(source.face, "MVAR"));
+        ASSERT_GE(sub.map.count, keep.size() > 0 ? 2u : 1u);
+        for (size_t now = 0; now < sub.map.count; ++now) {
+          const uint32_t old = sub.map.old_of_new[now];
+          if (old == 0xFFFFFFFFu) {
+            continue;
+          }
+          for (const Place & p : kPlaces) {
+            EXPECT_EQ(at_place(sub.face, static_cast<uint32_t>(now), p),
+                at_place(source.face, old, p))
+                << "glyph " << old << " at " << p.wght / 65536 << "," << p.wdth / 65536;
+          }
+        }
+      }
+     }
+    }
+  }
+}
+
+TEST(SubsetCff2, TheItemVariationStoreIsCarriedWhole) {
+  Font source("variable-cff2-hvar.otf");
+  Subset sub(source.face, {4, 7});
+  ASSERT_EQ(sub.result, GFNT_OK);
+  for (const char * tag : {"HVAR", "VVAR"}) {
+    SCOPED_TRACE(tag);
+    const auto a = table_of(source.face, tag);
+    const auto b = table_of(sub.face, tag);
+    ASSERT_GT(a.size(), 24u);
+    ASSERT_GT(b.size(), 24u);
+    auto u32 = [](const std::vector<uint8_t> & t, size_t at) {
+      return static_cast<size_t>((t[at] << 24) | (t[at + 1] << 16) | (t[at + 2] << 8) | t[at + 3]);
+    };
+    const size_t start = u32(a, 4);
+    // The store's extent by the format's own layout: the region list, then every
+    // ItemVariationData with its rows.
+    const uint8_t * p = a.data() + start;
+    auto u16 = [&](size_t at) { return static_cast<size_t>((p[at] << 8) | p[at + 1]); };
+    auto w32 = [&](size_t at) {
+      return static_cast<size_t>((p[at] << 24) | (p[at + 1] << 16) | (p[at + 2] << 8) | p[at + 3]);
+    };
+    size_t end = w32(2) + 4 + u16(w32(2)) * u16(w32(2) + 2) * 6;
+    for (size_t d = 0; d < u16(6); ++d) {
+      const size_t at = w32(8 + 4 * d);
+      const size_t items = u16(at);
+      size_t words = u16(at + 2);
+      const size_t regions = u16(at + 4);
+      size_t row;
+      if (words & 0x8000u) {
+        words &= 0x7FFFu;
+        row = words * 4 + (regions - words) * 2;
+      }
+      else {
+        row = words * 2 + (regions - words);
+      }
+      end = std::max(end, at + 6 + 2 * regions + items * row);
+    }
+    const std::vector<uint8_t> store(a.begin() + start, a.begin() + start + end);
+    EXPECT_NE(std::search(b.begin(), b.end(), store.begin(), store.end()), b.end());
+  }
+}
+
+TEST(SubsetCff2, ARenumberedSubsetStatesTheAdvanceMapTheFontLeftToTheGlyphId) {
+  Font source("variable-cff2-implicit.otf");
+  Subset sub(source.face, {6, 2});
+  ASSERT_EQ(sub.result, GFNT_OK);
+  const auto hvar = table_of(sub.face, "HVAR");
+  ASSERT_GT(hvar.size(), 20u);
+  const uint32_t advance_map = (hvar[8] << 24) | (hvar[9] << 16) | (hvar[10] << 8) | hvar[11];
+  EXPECT_NE(advance_map, 0u) << "the glyph id no longer names the row";
+  // The rows are the source's: the advance of the glyph that was 6 differs from the one
+  // that was 2 at the heavy end, as it did.
+  EXPECT_NE(at_place(sub.face, static_cast<uint32_t>(sub.new_of(6)), kPlaces[1]).back(),
+      at_place(sub.face, static_cast<uint32_t>(sub.new_of(2)), kPlaces[1]).back());
+}
+
+TEST(SubsetCff2, VariablePositioningKeepsItsDeviceTablesAndTheStoreTheyIndex) {
+  Font source("variable-cff2-hvar.otf");
+  Subset sub(source.face, all_glyphs(source.glyphs()));
+  ASSERT_EQ(sub.result, GFNT_OK);
+  const auto gdef = table_of(sub.face, "GDEF");
+  ASSERT_GE(gdef.size(), 18u);
+  EXPECT_EQ(gdef[3], 3) << "GDEF 1.3: it carries an item variation store";
+  const uint32_t store = (gdef[14] << 24) | (gdef[15] << 16) | (gdef[16] << 8) | gdef[17];
+  EXPECT_GE(store, 18u) << "past a header that has room for the store's offset";
+  const auto src_gdef = table_of(source.face, "GDEF");
+  const uint32_t src_store = (src_gdef[14] << 24) | (src_gdef[15] << 16) | (src_gdef[16] << 8)
+      | src_gdef[17];
+  ASSERT_LT(src_store, src_gdef.size());
+  ASSERT_LT(store, gdef.size());
+  const size_t span = src_gdef.size() - src_store;
+  ASSERT_GE(gdef.size() - store, span);
+  EXPECT_TRUE(std::equal(src_gdef.begin() + src_store, src_gdef.end(), gdef.begin() + store));
+  const auto gpos = table_of(sub.face, "GPOS");
+  ASSERT_FALSE(gpos.empty());
+  // Both adjustments still carry their variation index (start, end, format 0x8000): the
+  // pair's counts its offset from its PairSet, the single's from its subtable.
+  const std::vector<uint8_t> pair_index = {0, 0, 0, 0, 0x80, 0x00};
+  const std::vector<uint8_t> single_index = {0, 0, 0, 1, 0x80, 0x00};
+  EXPECT_NE(std::search(gpos.begin(), gpos.end(), pair_index.begin(), pair_index.end()),
+      gpos.end());
+  EXPECT_NE(std::search(gpos.begin(), gpos.end(), single_index.begin(), single_index.end()),
+      gpos.end());
+}
+
+TEST(SubsetCff2, ATableTheSubsetterDoesNotKnowIsRefusedNotApproximated) {
+  Font source("variable-gvar.ttf");
+  Subset sub(source.face, {1});
+  EXPECT_EQ(sub.result, GFNT_ERR_UNSUPPORTED);
+}
+
+TEST(SubsetCff2, EveryAllocationFailureIsSurvived) {
+  Font source("variable-cff2-hvar.otf");
+  std::vector<uint32_t> glyphs = {4, 5, 7};
+  GFNT_SubsetOptions o;
+  gfnt_subset_options_init(&o);
+  o.glyphs = glyphs.data();
+  o.glyph_count = glyphs.size();
+  size_t requests = 0;
+  {
+    gfnttest::FailingAllocator counting(static_cast<size_t>(-1));
+    GFNT_Blob * out = nullptr;
+    ASSERT_EQ(gfnt_subset(source.face, &o, nullptr, counting.get(), &out, nullptr), GFNT_OK);
+    requests = counting.requests();
+    gfnt_blob_destroy(out);
+    EXPECT_EQ(counting.live(), 0u);
+  }
+  ASSERT_GT(requests, 10u);
+  for (size_t fail = 0; fail < requests; ++fail) {
+    gfnttest::FailingAllocator failing(fail);
+    GFNT_Blob * out = nullptr;
+    const GFNT_Result r = gfnt_subset(source.face, &o, nullptr, failing.get(), &out, nullptr);
+    if (r != GFNT_OK) {
+      EXPECT_EQ(r, GFNT_ERR_OOM) << "request " << fail;
+      EXPECT_EQ(out, nullptr);
+    }
+    gfnt_blob_destroy(out);
+    EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
   }
 }
 

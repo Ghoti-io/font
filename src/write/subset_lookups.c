@@ -896,12 +896,12 @@ static bool gpos_single(GFNT_RW * rw, size_t st, GFNT_WBuf * out) {
     gfnt_wbuf_u16(&o.b, 0);
     gfnt_wbuf_u16(&o.b, vf);
     if (format == 1) {
-      gfnt_rw_value(rw, &o, st + 6, vf, st);
+      gfnt_rw_value(rw, &o, st + 6, vf, st, 0);
     }
     else {
       gfnt_wbuf_u16(&o.b, (uint32_t)m);
       for (i = 0; i < m; ++i) {
-        gfnt_rw_value(rw, &o, srcs[i], vf, st);
+        gfnt_rw_value(rw, &o, srcs[i], vf, st, 0);
       }
     }
     gfnt_rw_flush_devices(rw, &o);
@@ -997,8 +997,9 @@ static bool pair_format1(GFNT_RW * rw, size_t st, GFNT_WBuf * out) {
           continue;
         }
         gfnt_wbuf_u16(&o.b, map_glyph(rw, second));
-        gfnt_rw_value(rw, &o, r + 2, vf1, st);
-        gfnt_rw_value(rw, &o, r + 2 + s1, vf2, st);
+        // A PairSet's device offsets are counted from the PairSet, not the subtable.
+        gfnt_rw_value(rw, &o, r + 2, vf1, set, at);
+        gfnt_rw_value(rw, &o, r + 2 + s1, vf2, set, at);
         ++kept;
       }
       put16_at(rw, &o.b, at, kept);
@@ -1131,8 +1132,8 @@ static bool pair_format2(GFNT_RW * rw, size_t st, GFNT_WBuf * out) {
           continue;
         }
         r = st + 16 + (c * c2n + d) * (s1 + s2);
-        gfnt_rw_value(rw, &o, r, vf1, st);
-        gfnt_rw_value(rw, &o, r + s1, vf2, st);
+        gfnt_rw_value(rw, &o, r, vf1, st, 0);
+        gfnt_rw_value(rw, &o, r + s1, vf2, st, 0);
       }
     }
     gfnt_rw_flush_devices(rw, &o);

@@ -541,7 +541,7 @@ size_t gfnt_rw_value_size(uint16_t format) {
 }
 
 void gfnt_rw_value(GFNT_RW * rw, GFNT_LOut * o, size_t source, uint16_t format,
-    size_t origin) {
+    size_t origin, size_t new_origin) {
   unsigned bit;
   size_t at = source;
 
@@ -574,6 +574,7 @@ void gfnt_rw_value(GFNT_RW * rw, GFNT_LOut * o, size_t source, uint16_t format,
     }
     o->pend[o->npend].field = o->b.length;
     o->pend[o->npend].source = origin + v;
+    o->pend[o->npend].origin = new_origin;
     ++o->npend;
     gfnt_wbuf_u16(&o->b, 0);
   }
@@ -587,7 +588,7 @@ void gfnt_rw_flush_devices(GFNT_RW * rw, GFNT_LOut * o) {
 
     gfnt_wbuf_init(&dev, o->a);
     gfnt_rw_device(rw, o->pend[i].source, &dev);
-    gfnt_lout_child16(o, o->pend[i].field, 0, &dev);
+    gfnt_lout_child16(o, o->pend[i].field, o->pend[i].origin, &dev);
     gfnt_wbuf_free(&dev);
   }
   o->npend = 0;

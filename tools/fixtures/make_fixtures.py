@@ -1334,6 +1334,115 @@ def cff2_charstrings():
     return glyphs
 
 
+def _variable_cff2_font(label):
+    glyphs = cff2_charstrings()
+    # Eight stems from one blend of sixteen values, then a hint mask of one byte: a
+    # subsetter that loses count of the blend's results sizes the mask wrongly.
+    from fontTools.misc.psCharStrings import T2CharString
+    glyphs["hint8"] = T2CharString(program=(
+        _blend([i * 10 for i in range(16)], [[1, 2, 3]] * 16)
+        + ["hstemhm", "hintmask", b"\xff", 0, 0, "rmoveto", 60, "hlineto", 60,
+           "vlineto"]))
+    # A second ItemVariationData (one region), chosen by `vsindex`: a blend's operand count
+    # depends on which data is current, and a subsetter has to follow the choice.
+    glyphs["vs1"] = T2CharString(program=(
+        [1, "vsindex", 0, 0, "rmoveto"] + _blend([100], [[30]]) + ["hlineto"]
+        + _blend([50], [[-10]]) + ["vlineto"]))
+    order = list(glyphs)
+    fb = FontBuilder(UPEM, isTTF=False)
+    fb.setupGlyphOrder(order)
+    fb.setupHorizontalMetrics({n: (600, 0) for n in order})
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, [subtable(4, 3, 1, {0x20: "space", 0x41: "sq", 0x42: "pen",
+                                      0x43: "curve", 0x44: "hv"})])
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names(label), mac=True)
+    fb.setupPost(keepGlyphNames=True)
+    fb.setupFvar([AxisDescriptor(name="Weight", tag="wght", minimum=100,
+                                 default=400, maximum=900),
+                  AxisDescriptor(name="Width", tag="wdth", minimum=75,
+                                 default=100, maximum=125)],
+                 [{"location": {"wght": 700, "wdth": 100}, "stylename": "Bold"}])
+    fb.setupCFF2(glyphs, regions=CFF2_REGIONS)
+    from fontTools.varLib import builder
+    store = fb.font["CFF2"].cff.topDictIndex[0].VarStore.otVarStore
+    store.VarData.append(builder.buildVarData([0], None))
+    store.VarDataCount = len(store.VarData)
+    return fb
+
+
+def build_variable_cff2_hvar(out, explicit=True):
+    """`variable-cff2.otf` with `HVAR`, `VVAR`, `MVAR`, and variable GPOS and GDEF.
+
+    The advance map is a permutation (glyph `i` takes row `i * 3 % count`) so that a
+    subset that renumbers the glyphs has to move its entries, and the left-bearing
+    map shares three rows among the glyphs. With `explicit` false the advance map is
+    left out, which means the glyph id is the row: the case whose ids a renumbering
+    makes wrong unless the subsetter states the map.
+    """
+    from fontTools.ttLib.tables import otTables as ot
+    from fontTools.varLib import builder
+
+    fb = _variable_cff2_font("Variable Cff2 Hvar" if explicit else "Variable Cff2 Implicit")
+    font = fb.font
+    order = font.getGlyphOrder()
+    count = len(order)
+    tags = list(MVAR_ROWS)
+    store = _var_store([
+        ([0, 1], [list(row) for row in (HVAR_ADVANCE_ROWS + [(3, -3)])[:count]]),
+        ([0, 1], [list(row) for row in HVAR_BEARING_ROWS]),
+        ([0, 1], [list(MVAR_ROWS[tag]) for tag in tags]),
+    ])
+    hvar = font["HVAR"] = newTable("HVAR")
+    table = hvar.table = ot.HVAR()
+    table.Version = 0x00010000
+    table.VarStore = store
+    table.AdvWidthMap = (builder.buildVarIdxMap(
+        [(0 << 16) | (i * 3 % count) for i in range(count)], order) if explicit else None)
+    table.LsbMap = builder.buildVarIdxMap(
+        [(1 << 16) | (i % 3) for i in range(count)], order)
+    table.RsbMap = None
+    mvar = font["MVAR"] = newTable("MVAR")
+    table = mvar.table = ot.MVAR()
+    table.Version = 0x00010000
+    table.Reserved = 0
+    table.VarStore = store
+    table.ValueRecordSize = 8
+    records = []
+    for row, tag in enumerate(tags):
+        record = ot.MetricsValueRecord()
+        record.ValueTag = tag
+        record.VarIdx = (2 << 16) | row
+        records.append(record)
+    table.ValueRecord = sorted(records, key=lambda r: r.ValueTag)
+    table.ValueRecordCount = len(records)
+    if explicit:
+        fb.setupVerticalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+        fb.setupVerticalMetrics({n: (700, 100) for n in order})
+        vvar = font["VVAR"] = newTable("VVAR")
+        table = vvar.table = ot.VVAR()
+        table.Version = 0x00010000
+        table.VarStore = store
+        table.AdvHeightMap = builder.buildVarIdxMap(
+            [(0 << 16) | ((i * 2 + 1) % count) for i in range(count)], order)
+        table.TsbMap = None
+        table.BsbMap = None
+        table.VOrgMap = builder.buildVarIdxMap(
+            [(1 << 16) | (i % 3) for i in range(count)], order)
+    if explicit:
+        # Variable positioning: kerning and a single adjustment whose values move
+        # with the weight, written as device tables that index the GDEF store.
+        from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+        addOpenTypeFeaturesFromString(font, """
+            feature kern {
+              pos sq pen (wght=100:-20 wght=400:0 wght=900:60);
+              pos curve <0 0 (wght=100:5 wght=400:0 wght=900:40) 0>;
+            } kern;
+        """)
+    pin(fb)
+    fb.save(out)
+
+
 def build_variable_cff2(out):
     """A CFF2 variable font: blends over two axes and three regions."""
     order = list(cff2_charstrings())
@@ -4395,6 +4504,13 @@ FIXTURES = {
         "variable-gvar.ttf's font with a cvt table of eight values and a cvar of "
         "four tuples: every value, a sparse list, an intermediate region and a "
         "two-axis corner, written by fontTools"),
+    "variable-cff2-hvar.otf": (build_variable_cff2_hvar,
+        "CFF2: HVAR with a permuted advance map and a shared left-bearing map, "
+        "VVAR with advance-height and vertical-origin maps, and MVAR, for the "
+        "subsetter's renumbering"),
+    "variable-cff2-implicit.otf": (lambda out: build_variable_cff2_hvar(out, False),
+        "CFF2: HVAR with no advance map (the glyph id is the row) and a shared "
+        "left-bearing map, for the subsetter's renumbering"),
     "variable-cff2.otf": (build_variable_cff2,
         "a CFF2 variable font written by fontTools: two axes, three regions "
         "(weight up, weight down, weight and width up together) and glyphs that "

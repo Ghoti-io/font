@@ -39,6 +39,7 @@ advance and offset, and fontTools must read the same outline for it.
 Usage: subset_diff.py [--fonts N] [--groups a,b] [--renumber] [--quiet]
 """
 
+import glob
 import json
 import os
 import unicodedata
@@ -62,11 +63,55 @@ AAT = ("morx", "mort", "kerx", "trak")
 def aat_tables(font):
     run = subprocess.run([DUMP, font], capture_output=True, text=True)
     return [t for t in AAT if "table '%s'" % t in run.stdout]
+FIXTURE_GROUP = ("fixture", "Latn", "latn", None, "", "", ["ABCD", "DCBA AB CD", "ABAB"])
 KEYS = ("g", "cl", "ax", "ay", "dx", "dy")
+# A variable font is also compared by the box each glyph's outline fills, which is where
+# a wrong blend shows even when the advances (HVAR) agree.
+VKEYS = KEYS + ("xb", "yb", "wb", "hb")
 
 
-def norm(run):
-    return [tuple(x.get(k) for k in KEYS) for x in run]
+def norm(run, keys=KEYS):
+    return [tuple(x.get(k) for k in keys) for x in run]
+
+
+def axes_of(font):
+    """The fvar axes of a font as (tag, min, default, max), from the library's own dump."""
+    run = subprocess.run([DUMP, font], capture_output=True, text=True)
+    out = []
+    for line in run.stdout.splitlines():
+        if line.startswith("fvar axis ") and " min " in line:
+            tag = line.split("'")[1]
+            words = line.split()
+            vals = [int(words[words.index(w) + 1]) / 65536.0 for w in ("min", "default", "max")]
+            out.append((tag, vals[0], vals[1], vals[2]))
+    return out
+
+
+def locations(axes):
+    """A handful of places in the design space: every extreme, each axis alone, the middle."""
+    if not axes:
+        return []
+    seen = []
+
+    def add(loc):
+        if loc not in seen:
+            seen.append(loc)
+    default = {t: d for t, lo, d, hi in axes}
+    add({t: lo for t, lo, d, hi in axes})
+    add({t: hi for t, lo, d, hi in axes})
+    add({t: (d + hi) / 2 if hi != d else (lo + d) / 2 for t, lo, d, hi in axes})
+    for t, lo, d, hi in axes:
+        a = dict(default)
+        a[t] = hi
+        add(a)
+        b = dict(default)
+        b[t] = lo
+        add(b)
+    return seen[:8]
+
+
+def var_string(loc):
+    return ",".join("%s=%g" % kv for kv in loc.items())
 
 
 def parse_hb(path):
@@ -88,6 +133,11 @@ def main(argv):
     fonts = corpus.fonts("sfnt")
     if limit:
         fonts = fonts[:limit]
+    # The variable CFF2 fixtures (HVAR, VVAR, MVAR, variable GPOS): few real fonts carry
+    # them, so the committed ones are shaped too, with a text their few characters cover.
+    fixtures = sorted(glob.glob(os.path.join(ROOT, "tests", "data", "fonts",
+                                             "variable-cff2*.otf")))
+    fonts = fonts + fixtures
     groups = [g for g in hb_diff.GROUPS if not g[5] and (only is None or g[0] in only)]
 
     tasks = []          # (font, group name, subset path, text file, iso, unicodes)
@@ -98,7 +148,10 @@ def main(argv):
         if aat_tables(font):
             aat.append(font)
             continue
-        for gi, group in enumerate(groups):
+        axes = axes_of(font)
+        locs = locations(axes)
+        for gi, group in enumerate([FIXTURE_GROUP] if font in fixtures else groups):
+            gi = 99 if font in fixtures else gi
             texts = group[6]
             # The shaper composes and decomposes before it looks at the font, a pair
             # at a time, so the characters it looks up include the intermediate
@@ -146,29 +199,55 @@ def main(argv):
                 with open(text, "w", encoding="utf-8") as h:
                     for t in texts:
                         h.write(t + "\n")
-            tasks.append((font, group, out, text, cps))
+            tasks.append((font, group, out, text, cps, locs))
 
     # HarfBuzz, original and subset, in one container.
     os.makedirs(os.path.join(SCRATCH, "out"), exist_ok=True)
     script = os.path.join(SCRATCH, "run.sh")
     with open(script, "w", encoding="utf-8") as h:
-        for ti, (font, group, sub, text, _cps) in enumerate(tasks):
-            for tag, path in (("o", font), ("s", sub)):
-                out = os.path.join(SCRATCH, "out", "%d%s.json" % (ti, tag))
-                parts = ["hb-shape", "--font-file=%s" % path, "--output-format=json",
-                         "--no-glyph-names"]
-                if group[1]:
-                    parts.append("--script=%s" % group[1])
-                parts.append("--text-file=%s" % text)
-                h.write(" ".join("'%s'" % p for p in parts) + " > '%s' 2>/dev/null\n" % out)
+        for ti, (font, group, sub, text, _cps, locs) in enumerate(tasks):
+            for vi, loc in enumerate([None] + locs):
+                for tag, path in (("o", font), ("s", sub)):
+                    out = os.path.join(SCRATCH, "out", "%d%s%s.json"
+                                       % (ti, tag, "" if loc is None else "_%d" % vi))
+                    parts = ["hb-shape", "--font-file=%s" % path, "--output-format=json",
+                             "--no-glyph-names"]
+                    if locs:
+                        parts.append("--show-extents")
+                    if loc:
+                        parts.append("--variations=%s" % var_string(loc))
+                    if group[1]:
+                        parts.append("--script=%s" % group[1])
+                    parts.append("--text-file=%s" % text)
+                    h.write(" ".join("'%s'" % p for p in parts)
+                            + " > '%s' 2>/dev/null\n" % out)
     argv_hb = oracle_env.command("harfbuzz", ["sh", script], scratch=SCRATCH)
     subprocess.run(argv_hb, capture_output=True, text=True)
 
     shaped = disagree = skipped = 0
+    var_shaped = var_disagree = 0
     bad = []
     jobs = []
     meta = []
-    for ti, (font, group, sub, text, cps) in enumerate(tasks):
+
+    def compare(a, b, gmap, keys):
+        """Whether two shapings agree, the subset's through the glyph map when renumbered."""
+        pairs = []
+        if gmap is None:
+            return [norm(r, keys) for r in a] == [norm(r, keys) for r in b], pairs
+        same = len(a) == len(b) and all(len(x) == len(y) for x, y in zip(a, b))
+        if same:
+            for x, y in zip(a, b):
+                for gx, gy in zip(norm(x, keys), norm(y, keys)):
+                    if gy[0] is None or gy[0] >= len(gmap) or gmap[gy[0]] != gx[0] \
+                            or gx[1:] != gy[1:]:
+                        same = False
+                    else:
+                        pairs.append([gx[0], gy[0]])
+        return same, pairs
+
+    for ti, (font, group, sub, text, cps, locs) in enumerate(tasks):
+        keys = VKEYS if locs else KEYS
         a = parse_hb(os.path.join(SCRATCH, "out", "%do.json" % ti))
         b = parse_hb(os.path.join(SCRATCH, "out", "%ds.json" % ti))
         flat = [g for run in a for g in run]
@@ -177,30 +256,31 @@ def main(argv):
             skipped += 1      # the font lacks most of this group: nothing to compare
             continue
         shaped += 1
-        pairs = []
+        gmap = None
         if renumber:
             with open(sub + ".map", encoding="utf-8") as h:
                 gmap = [None if l.strip() == "-" else int(l) for l in h]
-            same = len(a) == len(b) and all(len(x) == len(y) for x, y in zip(a, b))
-            if same:
-                for x, y in zip(a, b):
-                    for gx, gy in zip(norm(x), norm(y)):
-                        if gy[0] is None or gy[0] >= len(gmap) or gmap[gy[0]] != gx[0] \
-                                or gx[1:] != gy[1:]:
-                            same = False
-                        else:
-                            pairs.append([gx[0], gy[0]])
-            if not same:
-                disagree += 1
-                bad.append((os.path.basename(font), group[0]))
-        elif [norm(r) for r in a] != [norm(r) for r in b]:
+        same, pairs = compare(a, b, gmap, keys)
+        if not same:
             disagree += 1
             bad.append((os.path.basename(font), group[0]))
-        job = {"original": font, "subset": sub, "unicodes": cps,
-               "gids": sorted({g["g"] for g in flat})}
+        gids = {g["g"] for g in flat}
+        all_pairs = {tuple(p) for p in pairs}
+        for vi, loc in enumerate(locs, start=1):
+            av = parse_hb(os.path.join(SCRATCH, "out", "%do_%d.json" % (ti, vi)))
+            bv = parse_hb(os.path.join(SCRATCH, "out", "%ds_%d.json" % (ti, vi)))
+            var_shaped += 1
+            ok, vpairs = compare(av, bv, gmap, keys)
+            all_pairs.update(tuple(p) for p in vpairs)
+            gids.update(g["g"] for run in av for g in run)
+            if not ok:
+                var_disagree += 1
+                bad.append((os.path.basename(font), "%s @ %s" % (group[0], var_string(loc))))
+        job = {"original": font, "subset": sub, "unicodes": cps, "gids": sorted(gids),
+               "locations": locs}
         if renumber:
             job["map"] = gmap
-            job["pairs"] = pairs
+            job["pairs"] = sorted(list(p) for p in all_pairs)
         jobs.append(job)
         meta.append((os.path.basename(font), group[0]))
 
@@ -226,6 +306,10 @@ def main(argv):
             if r.get("different"):
                 drawn += 1
                 problems.append((name, grp, "glyphs differ: %s" % r["different"][:3]))
+            if r.get("at_locations") or r.get("var_tables_differ"):
+                drawn += 1
+                problems.append((name, grp, "variable: outlines/widths differ at %s; tables differ %s"
+                                 % (r.get("at_locations"), r.get("var_tables_differ"))))
             if r.get("subrs") or r.get("names_differ"):
                 drawn += 1
                 problems.append((name, grp, "CFF subset: %s subroutines left, names differ %s"
@@ -244,6 +328,9 @@ def main(argv):
     print("declined (unsupported): %d fonts; AAT shaping tables, not carried: %d fonts; "
           "refused otherwise: %d" % (len(declined), len(aat), len(refused)))
     print("HarfBuzz: %d of %d shaped differently in the subset" % (disagree, shaped))
+    if var_shaped:
+        print("HarfBuzz at %d locations of variable fonts (advances, offsets and glyph boxes): "
+              "%d differ" % (var_shaped, var_disagree))
     print("fontTools: %d did not open, %d with a glyph read differently, "
           "%d with a glyph its closure keeps and this one lacks"
           % (unopened, drawn, missed))
@@ -266,7 +353,7 @@ def main(argv):
             print("  ft  ", *item)
         for item in refused[:10]:
             print("  refused", *item)
-    return 1 if (disagree or unopened or drawn or missed or refused) else 0
+    return 1 if (disagree or var_disagree or unopened or drawn or missed or refused) else 0
 
 
 if __name__ == "__main__":

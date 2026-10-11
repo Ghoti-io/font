@@ -70,6 +70,7 @@ typedef struct GFNT_LKid {
 typedef struct GFNT_LPending {
   size_t field;   ///< Where in the buffer the offset goes.
   size_t source;  ///< Absolute offset in the source table of the device table.
+  size_t origin;  ///< In the new buffer, what the device's offset is counted from.
 } GFNT_LPending;
 
 typedef struct GFNT_LOut {
@@ -143,9 +144,11 @@ size_t gfnt_rw_value_size(uint16_t format);
  * Append a value record read from @p source, deferring its device tables.
  *
  * @param origin Where the source's device offsets are counted from.
+ * @param new_origin The same, in the buffer being written: 0 for the subtable itself, the
+ *   start of the pair set for a PairPos format 1, whose offsets are from its PairSet.
  */
 void gfnt_rw_value(GFNT_RW * rw, GFNT_LOut * o, size_t source, uint16_t format,
-    size_t origin);
+    size_t origin, size_t new_origin);
 /** Place the deferred device tables behind the buffer's content and link them. */
 void gfnt_rw_flush_devices(GFNT_RW * rw, GFNT_LOut * o);
 

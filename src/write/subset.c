@@ -311,6 +311,8 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf vorg;
   GFNT_WBuf colr;
   GFNT_WBuf cff;
+  GFNT_WBuf hvar;
+  GFNT_WBuf vvar;
   GFNT_SubsetStrikes strikes;
 } GFNT_SubsetWork;
 
@@ -333,6 +335,8 @@ static void work_free(GFNT_SubsetWork * w) {
   gfnt_wbuf_free(&w->vorg);
   gfnt_wbuf_free(&w->colr);
   gfnt_wbuf_free(&w->cff);
+  gfnt_wbuf_free(&w->hvar);
+  gfnt_wbuf_free(&w->vvar);
   gfnt_subset_strikes_free(&w->strikes);
   w->a->free_fn(w->a->ctx, w->shape);
   w->a->free_fn(w->a->ctx, w->gsub_active);
@@ -367,6 +371,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   bool retain;
   bool outlines;
   bool cff;
+  bool cff2;
   bool rewrite_layout;
   GFNT_Result result;
 
@@ -394,14 +399,15 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   // A bitmap-only sfnt (a color emoji font of PNG strikes has no outlines at all) has no
   // glyf to rewrite, and is subset by its strikes alone.
   outlines = gfnt_sfnt_producer(face) == GFNT_PRODUCER_GLYF;
-  cff = gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF;
+  cff2 = gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF2;
+  cff = cff2 || gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF;
   if ((!outlines && !cff && !(gfnt_sfnt_producer(face) == GFNT_PRODUCER_NONE
                       && (gfnt_face_has_cblc(face) || gfnt_face_has_eblc(face)
                           || gfnt_face_has_sbix(face))))
-      || gfnt_face_has_table(face, GFNT_TAG('f', 'v', 'a', 'r'))
+      || (gfnt_face_has_table(face, GFNT_TAG('f', 'v', 'a', 'r')) && !cff2)
       || gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, GFNT_GLYPH_NONE,
-        "only static fonts with TrueType or CFF outlines can be subset");
+        "only fonts with TrueType outlines, or CFF or CFF2 outlines, can be subset");
   }
   if (!gfnt_face_has_table(face, T_HEAD) || !gfnt_face_has_table(face, T_HHEA)
       || !gfnt_face_has_table(face, T_MAXP) || !gfnt_face_has_table(face, T_HMTX)
@@ -426,6 +432,8 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   gfnt_wbuf_init(&w.vorg, allocator);
   gfnt_wbuf_init(&w.colr, allocator);
   gfnt_wbuf_init(&w.cff, allocator);
+  gfnt_wbuf_init(&w.hvar, allocator);
+  gfnt_wbuf_init(&w.vvar, allocator);
   gfnt_subset_strikes_init(&w.strikes, allocator);
 
   result = gfnt_face_num_glyphs(face, &count, error);
@@ -654,6 +662,20 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     }
   }
 
+  // The variation metrics of a variable CFF2 font, for the new numbering. With the ids
+  // retained they are valid as they are and are copied below.
+  if (cff2 && !retain) {
+    result = gfnt_subset_var_metrics(face, GFNT_TAG('H', 'V', 'A', 'R'), w.old_of_new,
+        new_count, &w.hvar, error);
+    if (result == GFNT_OK) {
+      result = gfnt_subset_var_metrics(face, GFNT_TAG('V', 'V', 'A', 'R'), w.old_of_new,
+          new_count, &w.vvar, error);
+    }
+    if (result != GFNT_OK) {
+      goto done;
+    }
+  }
+
   // hmtx, hhea, maxp.
   {
     size_t nhm = hhea->number_of_h_metrics;
@@ -793,7 +815,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.os2.oom || w.post.oom || w.bufs[B_HMTX].oom || w.bufs[B_LOCA].oom
       || w.gsub.oom || w.gpos.oom || w.gdef.oom || w.kern.oom || w.vhea.oom
-      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.cff.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
+      || w.vmtx.oom || w.vorg.oom || w.colr.oom || w.cff.oom || w.hvar.oom || w.vvar.oom || w.strikes.eblc.oom || w.strikes.ebdt.oom
       || w.strikes.cblc.oom || w.strikes.cbdt.oom || w.strikes.sbix.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "building the tables");
@@ -819,7 +841,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     ADD_BUF(T_GLYF, w.bufs[B_GLYF]);
   }
   if (cff) {
-    ADD_BUF(GFNT_TAG_CFF, w.cff);
+    ADD_BUF(cff2 ? GFNT_TAG_CFF2 : GFNT_TAG_CFF, w.cff);
   }
   if (w.os2.length) {
     ADD_BUF(T_OS2, w.os2);
@@ -861,6 +883,25 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.strikes.sbix.length) {
     ADD_BUF(GFNT_TAG('s', 'b', 'i', 'x'), w.strikes.sbix);
+  }
+  if (cff2) {
+    // Variation tables that name no glyph, and the two that do (below).
+    ADD_SRC(GFNT_TAG('f', 'v', 'a', 'r'));
+    ADD_SRC(GFNT_TAG('a', 'v', 'a', 'r'));
+    ADD_SRC(GFNT_TAG('S', 'T', 'A', 'T'));
+    ADD_SRC(GFNT_TAG('M', 'V', 'A', 'R'));
+    if (retain) {
+      ADD_SRC(GFNT_TAG('H', 'V', 'A', 'R'));
+      ADD_SRC(GFNT_TAG('V', 'V', 'A', 'R'));
+    }
+    else {
+      if (w.hvar.length) {
+        ADD_BUF(GFNT_TAG('H', 'V', 'A', 'R'), w.hvar);
+      }
+      if (w.vvar.length) {
+        ADD_BUF(GFNT_TAG('V', 'V', 'A', 'R'), w.vvar);
+      }
+    }
   }
   ADD_SRC(T_CPAL);
   ADD_SRC(T_NAME);

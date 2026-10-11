@@ -39,6 +39,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../cff/cff.h"
+#include "../cff/cff2.h"
 #include "../cff/cff_strings.h"
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
@@ -125,7 +126,7 @@ static int dict_next(const uint8_t * d, size_t n, size_t * pos, DictEnt * e) {
       return -1;
     }
     c = d[p];
-    if (c <= 21) {
+    if (c <= 24) {
       e->b = p;
       if (c == 12) {
         if (p + 1 >= n) {
@@ -250,13 +251,18 @@ typedef struct Item {
 } Item;
 
 /** Write an INDEX of @p count items. */
-static void write_index(GFNT_WBuf * out, const Item * items, size_t count) {
+static void write_index_ex(GFNT_WBuf * out, const Item * items, size_t count, bool wide) {
   size_t total = 0;
   size_t off_size = 1;
   size_t i;
   size_t at = 1;
 
-  gfnt_wbuf_u16(out, (uint32_t)count);
+  if (wide) {
+    gfnt_wbuf_u32(out, (uint32_t)count);
+  }
+  else {
+    gfnt_wbuf_u16(out, (uint32_t)count);
+  }
   if (count == 0) {
     return;
   }
@@ -280,6 +286,10 @@ static void write_index(GFNT_WBuf * out, const Item * items, size_t count) {
   for (i = 0; i < count; ++i) {
     gfnt_wbuf_bytes(out, items[i].p, items[i].n);
   }
+}
+
+static void write_index(GFNT_WBuf * out, const Item * items, size_t count) {
+  write_index_ex(out, items, count, false);
 }
 
 /* ---- The flattener ------------------------------------------------------ */
@@ -309,6 +319,10 @@ typedef struct Flat {
   bool ended;
   bool seac;
   bool drop_hint;
+  bool cff2;
+  const uint8_t * vstore;   // the item variation store, for the region counts blend needs
+  size_t vstore_n;
+  uint32_t vsindex;
   uint8_t seac_codes[2];
 } Flat;
 
@@ -358,7 +372,7 @@ static GFNT_Result stem_args(Flat * f, size_t * pairs, bool * has_width) {
   size_t d = f->depth;
   bool w = f->width_kept;
 
-  if (!f->width_checked && (d & 1)) {
+  if (!f->cff2 && !f->width_checked && (d & 1)) {
     w = true;
   }
   if (d < (w ? 1u : 0u)) {
@@ -379,6 +393,26 @@ static bool droppable(const Flat * f, bool has_width) {
     }
   }
   return true;
+}
+
+/** The regions one ItemVariationData names, or -1 when the store cannot say. */
+static int64_t region_count(const uint8_t * store, size_t n, uint32_t vsindex) {
+  size_t count;
+  size_t at;
+
+  if (!store || n < 8) {
+    return -1;
+  }
+  count = ((size_t)store[6] << 8) | store[7];
+  if (vsindex >= count || 8 + 4 * (size_t)vsindex + 4 > n) {
+    return -1;
+  }
+  at = ((size_t)store[8 + 4 * vsindex] << 24) | ((size_t)store[9 + 4 * vsindex] << 16)
+      | ((size_t)store[10 + 4 * vsindex] << 8) | store[11 + 4 * vsindex];
+  if (at + 6 > n) {
+    return -1;
+  }
+  return (int64_t)(((size_t)store[at + 4] << 8) | store[at + 5]);
 }
 
 static GFNT_Result flat_run(Flat * f, const uint8_t * b, size_t n, size_t level);
@@ -551,6 +585,10 @@ static GFNT_Result flat_run(Flat * f, const uint8_t * b, size_t n, size_t level)
       case 14: {
         size_t d = f->depth;
 
+        if (f->cff2) {
+          return flat_fail(f, GFNT_ERR_CORRUPT, "endchar, which a CFF2 charstring does not have");
+        }
+
         if (d == 4 || d == 5) {
           if (!f->st[d - 2].pending || !f->st[d - 1].pending) {
             return flat_fail(f, GFNT_ERR_UNSUPPORTED,
@@ -564,6 +602,52 @@ static GFNT_Result flat_run(Flat * f, const uint8_t * b, size_t n, size_t level)
         gfnt_wbuf_u8(&f->out, 14);
         f->depth = 0;
         f->ended = true;
+        ++i;
+        break;
+      }
+      case 15: {
+        if (!f->cff2) {
+          return flat_fail(f, GFNT_ERR_CORRUPT, "vsindex, which only a CFF2 charstring has");
+        }
+        if (f->depth == 0 || !f->st[f->depth - 1].pending) {
+          return flat_fail(f, f->depth ? GFNT_ERR_UNSUPPORTED : GFNT_ERR_CORRUPT,
+              "a vsindex with no literal operand");
+        }
+        if (f->st[f->depth - 1].v < 0) {
+          return flat_fail(f, GFNT_ERR_CORRUPT, "a negative vsindex");
+        }
+        f->vsindex = (uint32_t)(f->st[f->depth - 1].v >> 16);
+        flush(f);
+        gfnt_wbuf_u8(&f->out, 15);
+        --f->depth;
+        ++i;
+        break;
+      }
+      case 16: {
+        int64_t n;
+        int64_t k;
+        size_t need;
+
+        if (!f->cff2) {
+          return flat_fail(f, GFNT_ERR_CORRUPT, "blend, which only a CFF2 charstring has");
+        }
+        if (f->depth == 0 || !f->st[f->depth - 1].pending) {
+          return flat_fail(f, f->depth ? GFNT_ERR_UNSUPPORTED : GFNT_ERR_CORRUPT,
+              "a blend whose operand count is not a literal");
+        }
+        n = f->st[f->depth - 1].v >> 16;
+        k = region_count(f->vstore, f->vstore_n, f->vsindex);
+        if (k < 0 || n < 0 || n > 513) {
+          return flat_fail(f, GFNT_ERR_CORRUPT, "a blend the variation store cannot size");
+        }
+        need = 1 + (size_t)n * (size_t)(k + 1);
+        if (f->depth < need) {
+          return flat_fail(f, GFNT_ERR_CORRUPT, "a blend with fewer operands than it counts");
+        }
+        flush(f);
+        gfnt_wbuf_u8(&f->out, 16);
+        f->depth = f->depth - need + (size_t)n;
+        mark_unknown(f, (size_t)n);
         ++i;
         break;
       }
@@ -624,15 +708,59 @@ static GFNT_Result flat_run(Flat * f, const uint8_t * b, size_t n, size_t level)
 
 typedef struct Src {
   const GFNT_Face * face;
-  const GFNT_Cff * cff;
+  const GFNT_Cff * cff;        // NULL for a CFF2
+  const GFNT_Cff2 * c2;        // NULL for a CFF
+  bool cff2;
+  bool fds;                    // Font DICTs: a CID-keyed CFF, or any CFF2
   Tab tab;
   const uint8_t * top;
   size_t top_n;
+  const GFNT_CffIndex * charstrings;
+  const GFNT_CffIndex * gsubrs;
+  const GFNT_CffIndex * fdarray;
+  size_t fdselect;
+  const uint8_t * vstore;      // the item variation store (CFF2), without its length
+  size_t vstore_n;
 } Src;
 
 static GFNT_Result src_open(const GFNT_Face * face, Src * s, GFNT_Error * error) {
-  GFNT_Result result = gfnt_face_cff(face, &s->cff, error);
+  GFNT_Result result;
 
+  memset(s, 0, sizeof *s);
+  s->face = face;
+  if (gfnt_face_has_table(face, GFNT_TAG_CFF2)) {
+    size_t head;
+    size_t top_n;
+
+    s->cff2 = true;
+    s->fds = true;
+    result = gfnt_face_cff2(face, &s->c2, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    if (!load_tab(face, GFNT_TAG_CFF2, &s->tab) || s->tab.n < 5) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF2, 0, GFNT_GLYPH_NONE,
+          "a CFF2 with no header");
+    }
+    head = s->tab.p[2];
+    top_n = ((size_t)s->tab.p[3] << 8) | s->tab.p[4];
+    if (head < 5 || head + top_n > s->tab.n) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF2, 0, GFNT_GLYPH_NONE,
+          "a CFF2 Top DICT that runs off the table");
+    }
+    s->top = s->tab.p + head;
+    s->top_n = top_n;
+    s->charstrings = &s->c2->charstrings;
+    s->gsubrs = &s->c2->gsubrs;
+    s->fdarray = &s->c2->fdarray;
+    s->fdselect = s->c2->fdselect;
+    if (s->c2->vstore && s->c2->vstore + s->c2->vstore_length <= s->tab.n) {
+      s->vstore = s->tab.p + s->c2->vstore;
+      s->vstore_n = s->c2->vstore_length;
+    }
+    return GFNT_OK;
+  }
+  result = gfnt_face_cff(face, &s->cff, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -640,7 +768,11 @@ static GFNT_Result src_open(const GFNT_Face * face, Src * s, GFNT_Error * error)
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
         "a CFF whose charstrings are Type 1 cannot be subset");
   }
-  s->face = face;
+  s->fds = s->cff->is_cid;
+  s->charstrings = &s->cff->charstrings;
+  s->gsubrs = &s->cff->gsubrs;
+  s->fdarray = &s->cff->fdarray;
+  s->fdselect = s->cff->fdselect;
   if (!load_tab(face, GFNT_TAG_CFF, &s->tab)
       || !index_elem(&s->tab, &s->cff->top_dicts, 0, &s->top, &s->top_n)) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
@@ -654,26 +786,42 @@ static GFNT_Result flatten_glyph(const Src * s, uint32_t glyph, bool drop_hint,
     const GFNT_Limits * limits, Flat * f, GFNT_Error * error) {
   const uint8_t * bytes;
   size_t length;
-  GFNT_CffPrivate priv;
+  GFNT_CffIndex subrs;
   GFNT_Result result;
 
-  if (!index_elem(&s->tab, &s->cff->charstrings, glyph, &bytes, &length)) {
+  if (!index_elem(&s->tab, s->charstrings, glyph, &bytes, &length)) {
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, glyph,
         "a glyph the CharStrings INDEX does not have");
   }
-  result = gfnt_cff_private_for_glyph(s->face, s->cff, glyph, &priv, error);
+  f->vsindex = 0;
+  if (s->cff2) {
+    GFNT_Cff2Font font;
+
+    result = gfnt_cff2_font_for_glyph(s->face, s->c2, glyph, &font, error);
+    subrs = font.subrs;
+    f->vsindex = font.vsindex;
+  }
+  else {
+    GFNT_CffPrivate priv;
+
+    result = gfnt_cff_private_for_glyph(s->face, s->cff, glyph, &priv, error);
+    subrs = priv.subrs;
+  }
   if (result != GFNT_OK) {
     return result;
   }
   f->out.length = 0;
   f->tab = &s->tab;
-  f->lsubrs = &priv.subrs;
-  f->gsubrs = &s->cff->gsubrs;
+  f->lsubrs = &subrs;
+  f->gsubrs = s->gsubrs;
+  f->cff2 = s->cff2;
+  f->vstore = s->vstore;
+  f->vstore_n = s->vstore_n;
   f->lim = limits;
   f->error = error;
   f->glyph = glyph;
   f->depth = 0;
-  f->max_stack = GFNT_CFF_DICT_MAX_OPERANDS;
+  f->max_stack = s->cff2 ? GFNT_CFF2_DICT_MAX_OPERANDS : GFNT_CFF_DICT_MAX_OPERANDS;
   f->nstems = 0;
   f->ops = 0;
   f->width_checked = false;
@@ -712,8 +860,8 @@ GFNT_Result gfnt_subset_cff_closure(const GFNT_Face * face, uint8_t * keep, size
   uint32_t g;
   GFNT_Result result = src_open(face, &s, error);
 
-  if (result != GFNT_OK) {
-    return result;
+  if (result != GFNT_OK || s.cff2) {
+    return result;      // a CFF2 charstring has no accented characters
   }
   f = allocator->calloc_fn(allocator->ctx, 1, sizeof *f);
   work = allocator->calloc_fn(allocator->ctx, count, sizeof *work);
@@ -758,9 +906,9 @@ GFNT_Result gfnt_subset_cff_closure(const GFNT_Face * face, uint8_t * keep, size
 /** Which Font DICT a glyph belongs to. */
 static size_t fd_of(const Src * s, uint32_t glyph) {
   const Tab * t = &s->tab;
-  size_t at = s->cff->fdselect;
+  size_t at = s->fdselect;
 
-  if (!s->cff->is_cid || at == 0 || at >= t->n) {
+  if (!s->fds || at == 0 || at >= t->n) {
     return 0;
   }
   if (t->p[at] == 0) {
@@ -782,6 +930,28 @@ static size_t fd_of(const Src * s, uint32_t glyph) {
       next = ((size_t)t->p[p + 3] << 8) | t->p[p + 4];
       if (glyph >= first && glyph < next) {
         return t->p[p + 2];
+      }
+    }
+  }
+  if (t->p[at] == 4 && at + 5 <= t->n) {
+    size_t ranges = ((size_t)t->p[at + 1] << 24) | ((size_t)t->p[at + 2] << 16)
+        | ((size_t)t->p[at + 3] << 8) | t->p[at + 4];
+    size_t r;
+
+    for (r = 0; r < ranges; ++r) {
+      size_t p = at + 5 + r * 6;
+      size_t first;
+      size_t next;
+
+      if (p + 10 > t->n) {
+        break;
+      }
+      first = ((size_t)t->p[p] << 24) | ((size_t)t->p[p + 1] << 16)
+          | ((size_t)t->p[p + 2] << 8) | t->p[p + 3];
+      next = ((size_t)t->p[p + 6] << 24) | ((size_t)t->p[p + 7] << 16)
+          | ((size_t)t->p[p + 8] << 8) | t->p[p + 9];
+      if (glyph >= first && glyph < next) {
+        return ((size_t)t->p[p + 4] << 8) | t->p[p + 5];
       }
     }
   }
@@ -833,9 +1003,10 @@ static bool sid_valid(const Src * s, uint32_t sid) {
 
 typedef struct Plan {
   size_t nfd;               // Font DICTs written (1 for a name-keyed font)
-  size_t fd_src[256];       // new FD -> source FD
-  uint8_t fd_new[256];      // source FD -> new FD
-  bool fd_used[256];
+  size_t nsrc;              // Font DICTs the source has
+  size_t * fd_src;          // new FD -> source FD
+  uint32_t * fd_new;        // source FD -> new FD
+  uint8_t * fd_used;
 } Plan;
 
 /** Write one DICT's SID-carrying and plain operators, skipping @p skip. */
@@ -843,7 +1014,8 @@ typedef bool (*SkipFn)(uint16_t op, bool drop_hint);
 
 static bool skip_top(uint16_t op, bool drop_hint) {
   (void)drop_hint;
-  return op == 15 || op == 16 || op == 17 || op == 18 || op == 0x0c24 || op == 0x0c25;
+  return op == 15 || op == 16 || op == 17 || op == 18 || op == 24 || op == 0x0c24
+      || op == 0x0c25;
 }
 
 static bool skip_font(uint16_t op, bool drop_hint) {
@@ -873,12 +1045,26 @@ static GFNT_Result copy_dict(const Src * s, const uint8_t * d, size_t n, SkipFn 
   size_t pos = 0;
   DictEnt e;
   int got;
+  bool held = false;      // a CFF2 blend, whose results the next operator takes
+  size_t held_a = 0;
+  size_t held_end = 0;
 
   while ((got = dict_next(d, n, &pos, &e)) == 1) {
-    if (skip(e.op, drop_hint)) {
+    if (s->cff2 && e.op == 23) {
+      held = true;
+      held_a = e.a;
+      held_end = e.end;
       continue;
     }
-    if (is_sid_op(e.op) && e.n >= 1) {
+    if (skip(e.op, drop_hint)) {
+      held = false;
+      continue;
+    }
+    if (held) {
+      gfnt_wbuf_bytes(out, d + held_a, held_end - held_a);
+      held = false;
+    }
+    if (!s->cff2 && is_sid_op(e.op) && e.n >= 1) {
       if (!sid_valid(s, (uint32_t)e.v[0]) || e.v[0] < 0) {
         continue;       // a name the font does not have: left out, as the reader leaves it
       }
@@ -886,7 +1072,7 @@ static GFNT_Result copy_dict(const Src * s, const uint8_t * d, size_t n, SkipFn 
       dput_op(out, e.op);
       continue;
     }
-    if (e.op == 0x0c1e && e.n == 3) {
+    if (!s->cff2 && e.op == 0x0c1e && e.n == 3) {
       if (e.v[0] < 0 || e.v[1] < 0 || !sid_valid(s, (uint32_t)e.v[0])
           || !sid_valid(s, (uint32_t)e.v[1])) {
         return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
@@ -962,8 +1148,8 @@ static GFNT_Result source_private(const Src * s, size_t k, const uint8_t ** font
   const uint8_t * d;
   size_t dn;
 
-  if (s->cff->is_cid) {
-    if (!index_elem(&s->tab, &s->cff->fdarray, (uint32_t)k, font, font_n)) {
+  if (s->fds) {
+    if (!index_elem(&s->tab, s->fdarray, (uint32_t)k, font, font_n)) {
       return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
           "a glyph in a Font DICT the FDArray does not have");
     }
@@ -1053,15 +1239,16 @@ static void build_charset(Charset * c, const uint32_t * v, size_t n, bool cid) {
   }
 }
 
+
 typedef struct Build {
   const Src * s;
   const SidMap * map;
   const Plan * plan;
-  bool cid;
   bool explicit_charset;
-  size_t charset_off, fdselect_off, charstrings_off, fdarray_off;
-  size_t private_off[256];
-  size_t private_size[256];
+  bool has_fdselect;
+  size_t charset_off, fdselect_off, charstrings_off, fdarray_off, vstore_off;
+  size_t * private_off;
+  size_t * private_size;
 } Build;
 
 static GFNT_Result write_top(const Build * b, GFNT_WBuf * out, GFNT_Error * error) {
@@ -1077,16 +1264,22 @@ static GFNT_Result write_top(const Build * b, GFNT_WBuf * out, GFNT_Error * erro
   }
   dput_fixed(out, (uint32_t)b->charstrings_off);
   dput_op(out, 17);
-  if (b->cid) {
+  if (b->s->fds) {
     dput_fixed(out, (uint32_t)b->fdarray_off);
     dput_op(out, 0x0c24);
-    dput_fixed(out, (uint32_t)b->fdselect_off);
-    dput_op(out, 0x0c25);
+    if (b->has_fdselect) {
+      dput_fixed(out, (uint32_t)b->fdselect_off);
+      dput_op(out, 0x0c25);
+    }
   }
   else {
     dput_fixed(out, (uint32_t)b->private_size[0]);
     dput_fixed(out, (uint32_t)b->private_off[0]);
     dput_op(out, 18);
+  }
+  if (b->s->cff2 && b->s->vstore) {
+    dput_fixed(out, (uint32_t)b->vstore_off);
+    dput_op(out, 24);
   }
   return GFNT_OK;
 }
@@ -1113,7 +1306,7 @@ static GFNT_Result write_font_dict(const Build * b, size_t k, GFNT_WBuf * out,
   return GFNT_OK;
 }
 
-/** The Font DICT INDEX of a CID-keyed font, for the offsets as they currently stand. */
+/** The Font DICT INDEX of a font that has them, for the offsets as they currently stand. */
 static GFNT_Result build_fd_index(const Build * b, Item * items, GFNT_WBuf * out,
     const GFNT_Allocator * a, GFNT_Error * error) {
   GFNT_WBuf dicts;
@@ -1133,7 +1326,7 @@ static GFNT_Result build_fd_index(const Build * b, Item * items, GFNT_WBuf * out
       items[k].p = dicts.data + consumed;
       consumed += items[k].n;
     }
-    write_index(out, items, b->plan->nfd);
+    write_index_ex(out, items, b->plan->nfd, b->s->cff2);
   }
   else if (result == GFNT_OK) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
@@ -1143,19 +1336,62 @@ static GFNT_Result build_fd_index(const Build * b, Item * items, GFNT_WBuf * out
   return result;
 }
 
+/** FDSelect for the kept glyphs, in whichever format is smallest and can say it. */
+static void build_fdselect(const Src * s, const Plan * plan, const uint16_t * fd_of_new,
+    size_t new_count, GFNT_WBuf * out) {
+  size_t ranges = 0;
+  size_t j;
+  size_t f0 = 1 + new_count;
+  size_t f3;
+
+  for (j = 0; j < new_count; ++j) {
+    if (j == 0 || fd_of_new[j] != fd_of_new[j - 1]) {
+      ++ranges;
+    }
+  }
+  f3 = 5 + 3 * ranges;
+  if (plan->nfd > 256) {
+    gfnt_wbuf_u8(out, 4);
+    gfnt_wbuf_u32(out, (uint32_t)ranges);
+    for (j = 0; j < new_count; ++j) {
+      if (j == 0 || fd_of_new[j] != fd_of_new[j - 1]) {
+        gfnt_wbuf_u32(out, (uint32_t)j);
+        gfnt_wbuf_u16(out, plan->fd_new[fd_of_new[j]]);
+      }
+    }
+    gfnt_wbuf_u32(out, (uint32_t)new_count);
+    return;
+  }
+  (void)s;
+  if (f0 <= f3) {
+    gfnt_wbuf_u8(out, 0);
+    for (j = 0; j < new_count; ++j) {
+      gfnt_wbuf_u8(out, plan->fd_new[fd_of_new[j]]);
+    }
+    return;
+  }
+  gfnt_wbuf_u8(out, 3);
+  gfnt_wbuf_u16(out, (uint32_t)ranges);
+  for (j = 0; j < new_count; ++j) {
+    if (j == 0 || fd_of_new[j] != fd_of_new[j - 1]) {
+      gfnt_wbuf_u16(out, (uint32_t)j);
+      gfnt_wbuf_u8(out, plan->fd_new[fd_of_new[j]]);
+    }
+  }
+  gfnt_wbuf_u16(out, (uint32_t)new_count);
+}
+
 GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
     size_t new_count, size_t count, bool drop_hinting, const GFNT_Limits * limits,
     const GFNT_Allocator * a, GFNT_WBuf * out, GFNT_Error * error) {
   Src s;
   Flat * f = NULL;
   GFNT_WBuf cs;
-  GFNT_WBuf fdsel;
-  GFNT_WBuf top;
-  GFNT_WBuf privates[256];
-  GFNT_WBuf name_ix, top_ix, str_ix, gsub_ix, cs_ix, fd_ix;
+  GFNT_WBuf fdsel, top, top_ix, str_ix, gsub_ix, cs_ix, fd_ix, name_ix, vstore_buf;
+  GFNT_WBuf * privates = NULL;
   size_t * cs_at = NULL;
   uint32_t * values = NULL;
-  uint8_t * fd_of_new = NULL;
+  uint16_t * fd_of_new = NULL;
   uint32_t * sids = NULL;
   size_t nsids = 0;
   size_t sid_cap = 0;
@@ -1179,9 +1415,7 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
   gfnt_wbuf_init(&gsub_ix, a);
   gfnt_wbuf_init(&cs_ix, a);
   gfnt_wbuf_init(&fd_ix, a);
-  for (k = 0; k < 256; ++k) {
-    gfnt_wbuf_init(&privates[k], a);
-  }
+  gfnt_wbuf_init(&vstore_buf, a);
   gfnt_wbuf_init(&charset.bytes, a);
   charset.format = -1;
 
@@ -1189,20 +1423,35 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
   if (result != GFNT_OK) {
     goto done;
   }
+  plan.nsrc = s.fds ? s.fdarray->count : 1;
+  if (plan.nsrc == 0 || plan.nsrc > 65535 || (!s.cff2 && plan.nsrc > 256)) {
+    result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
+        "a font with no Font DICT, or more than its format allows");
+    goto done;
+  }
   f = a->calloc_fn(a->ctx, 1, sizeof *f);
   cs_at = a->calloc_fn(a->ctx, new_count + 1, sizeof *cs_at);
   values = a->calloc_fn(a->ctx, new_count + 1, sizeof *values);
-  fd_of_new = a->calloc_fn(a->ctx, new_count + 1, 1);
+  fd_of_new = a->calloc_fn(a->ctx, new_count + 1, sizeof *fd_of_new);
   sid_cap = new_count + 600;
   sids = a->calloc_fn(a->ctx, sid_cap, sizeof *sids);
-  if (!f || !cs_at || !values || !fd_of_new || !sids) {
+  plan.fd_src = a->calloc_fn(a->ctx, plan.nsrc, sizeof *plan.fd_src);
+  plan.fd_new = a->calloc_fn(a->ctx, plan.nsrc, sizeof *plan.fd_new);
+  plan.fd_used = a->calloc_fn(a->ctx, plan.nsrc, 1);
+  privates = a->calloc_fn(a->ctx, plan.nsrc, sizeof *privates);
+  b.private_off = a->calloc_fn(a->ctx, plan.nsrc, sizeof *b.private_off);
+  b.private_size = a->calloc_fn(a->ctx, plan.nsrc, sizeof *b.private_size);
+  if (!f || !cs_at || !values || !fd_of_new || !sids || !plan.fd_src || !plan.fd_new
+      || !plan.fd_used || !privates || !b.private_off || !b.private_size) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
         "allocating the CFF subset");
     goto done;
   }
+  for (k = 0; k < plan.nsrc; ++k) {
+    gfnt_wbuf_init(&privates[k], a);
+  }
   gfnt_wbuf_init(&f->out, a);
   b.s = &s;
-  b.cid = s.cff->is_cid;
   b.map = &map;
   b.plan = &plan;
 
@@ -1215,7 +1464,9 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
 
     cs_at[j] = cs.length;
     if (g == NO_GLYPH) {
-      gfnt_wbuf_u8(&cs, 14);
+      if (!s.cff2) {
+        gfnt_wbuf_u8(&cs, 14);
+      }
       fd = fd_of(&s, 0);
     }
     else {
@@ -1231,18 +1482,18 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
           "a glyph past the face's glyph count");
       goto done;
     }
-    if (j > 0) {
+    if (j > 0 && !s.cff2) {
       result = gfnt_cff_glyph_sid(face, s.cff, named, &sid, error);
       if (result != GFNT_OK) {
         goto done;
       }
     }
     values[j] = sid;
-    if (fd >= 256) {
+    if (fd >= plan.nsrc) {
       fd = 0;
     }
-    fd_of_new[j] = (uint8_t)fd;
-    plan.fd_used[fd] = true;
+    fd_of_new[j] = (uint16_t)fd;
+    plan.fd_used[fd] = 1;
     if (cs.oom || cs.length > limits->max_blob_bytes) {
       result = gfnt_error_set(error, cs.oom ? GFNT_ERR_OOM : GFNT_ERR_LIMIT, GFNT_TAG_CFF,
           0, GFNT_GLYPH_NONE, "building the CharStrings");
@@ -1252,10 +1503,10 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
   cs_at[new_count] = cs.length;
 
   // Font DICTs: the ones still used, in their order.
-  if (b.cid) {
-    for (k = 0; k < 256; ++k) {
+  if (s.fds) {
+    for (k = 0; k < plan.nsrc; ++k) {
       if (plan.fd_used[k]) {
-        plan.fd_new[k] = (uint8_t)plan.nfd;
+        plan.fd_new[k] = (uint32_t)plan.nfd;
         plan.fd_src[plan.nfd++] = k;
       }
     }
@@ -1264,102 +1515,80 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
     plan.nfd = 1;
     plan.fd_src[0] = 0;
   }
-
-  // Strings still named.
-  result = collect_sids(&s, s.top, s.top_n, sids, &nsids, sid_cap, error);
-  for (k = 0; k < plan.nfd && result == GFNT_OK && b.cid; ++k) {
-    const uint8_t * font;
-    size_t font_n;
-    const uint8_t * priv;
-    size_t priv_n;
-
-    result = source_private(&s, plan.fd_src[k], &font, &font_n, &priv, &priv_n, error);
-    if (result == GFNT_OK) {
-      result = collect_sids(&s, font, font_n, sids, &nsids, sid_cap, error);
-    }
-  }
-  if (result != GFNT_OK) {
-    goto done;
-  }
-  if (!b.cid) {
-    for (j = 1; j < new_count; ++j) {
-      if (values[j] >= GFNT_CFF_STANDARD_STRING_COUNT) {
-        if (!sid_valid(&s, values[j])) {
-          result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, j,
-              "a charset naming a string the font does not have");
-          goto done;
-        }
-        if (nsids < sid_cap) {
-          sids[nsids++] = values[j];
-        }
-      }
-    }
-  }
-  qsort(sids, nsids, sizeof *sids, cmp_u32);
-  {
-    size_t u = 0;
-
-    for (j = 0; j < nsids; ++j) {
-      if (u == 0 || sids[u - 1] != sids[j]) {
-        sids[u++] = sids[j];
-      }
-    }
-    map.old = sids;
-    map.count = u;
-  }
-  items = a->calloc_fn(a->ctx, map.count + plan.nfd + new_count + 4, sizeof *items);
+  items = a->calloc_fn(a->ctx, plan.nfd + new_count + sid_cap + 4, sizeof *items);
   if (!items) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
         "allocating the CFF subset");
     goto done;
   }
-  for (j = 0; j < map.count; ++j) {
-    if (!index_elem(&s.tab, &s.cff->strings, map.old[j] - GFNT_CFF_STANDARD_STRING_COUNT,
-            &items[j].p, &items[j].n)) {
-      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
-          "a String INDEX element out of range");
+
+  if (!s.cff2) {
+    // Strings still named.
+    result = collect_sids(&s, s.top, s.top_n, sids, &nsids, sid_cap, error);
+    for (k = 0; k < plan.nfd && result == GFNT_OK && s.fds; ++k) {
+      const uint8_t * font;
+      size_t font_n;
+      const uint8_t * priv;
+      size_t priv_n;
+
+      result = source_private(&s, plan.fd_src[k], &font, &font_n, &priv, &priv_n, error);
+      if (result == GFNT_OK) {
+        result = collect_sids(&s, font, font_n, sids, &nsids, sid_cap, error);
+      }
+    }
+    if (result != GFNT_OK) {
       goto done;
     }
-  }
-  write_index(&str_ix, items, map.count);
-
-  // Charset.
-  if (!b.cid) {
-    for (j = 1; j < new_count; ++j) {
-      values[j] = map_sid(&map, values[j]);
-    }
-  }
-  build_charset(&charset, values, new_count, b.cid);
-  b.explicit_charset = charset.format >= 0;
-
-  // FDSelect.
-  if (b.cid) {
-    size_t ranges = 0;
-    size_t f3;
-
-    for (j = 0; j < new_count; ++j) {
-      if (j == 0 || fd_of_new[j] != fd_of_new[j - 1]) {
-        ++ranges;
-      }
-    }
-    f3 = 5 + 3 * ranges;
-    if (1 + new_count <= f3) {
-      gfnt_wbuf_u8(&fdsel, 0);
-      for (j = 0; j < new_count; ++j) {
-        gfnt_wbuf_u8(&fdsel, plan.fd_new[fd_of_new[j]]);
-      }
-    }
-    else {
-      gfnt_wbuf_u8(&fdsel, 3);
-      gfnt_wbuf_u16(&fdsel, (uint32_t)ranges);
-      for (j = 0; j < new_count; ++j) {
-        if (j == 0 || fd_of_new[j] != fd_of_new[j - 1]) {
-          gfnt_wbuf_u16(&fdsel, (uint32_t)j);
-          gfnt_wbuf_u8(&fdsel, plan.fd_new[fd_of_new[j]]);
+    if (!s.fds) {
+      for (j = 1; j < new_count; ++j) {
+        if (values[j] >= GFNT_CFF_STANDARD_STRING_COUNT) {
+          if (!sid_valid(&s, values[j])) {
+            result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, j,
+                "a charset naming a string the font does not have");
+            goto done;
+          }
+          if (nsids < sid_cap) {
+            sids[nsids++] = values[j];
+          }
         }
       }
-      gfnt_wbuf_u16(&fdsel, (uint32_t)new_count);
     }
+    qsort(sids, nsids, sizeof *sids, cmp_u32);
+    {
+      size_t u = 0;
+
+      for (j = 0; j < nsids; ++j) {
+        if (u == 0 || sids[u - 1] != sids[j]) {
+          sids[u++] = sids[j];
+        }
+      }
+      map.old = sids;
+      map.count = u;
+    }
+    for (j = 0; j < map.count; ++j) {
+      if (!index_elem(&s.tab, &s.cff->strings, map.old[j] - GFNT_CFF_STANDARD_STRING_COUNT,
+              &items[j].p, &items[j].n)) {
+        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
+            "a String INDEX element out of range");
+        goto done;
+      }
+    }
+    write_index(&str_ix, items, map.count);
+
+    // Charset.
+    if (!s.fds) {
+      for (j = 1; j < new_count; ++j) {
+        values[j] = map_sid(&map, values[j]);
+      }
+    }
+    build_charset(&charset, values, new_count, s.fds);
+    b.explicit_charset = charset.format >= 0;
+  }
+
+  // FDSelect: a CFF2 with one Font DICT states none.
+  if (s.fds && !(s.cff2 && plan.nfd == 1)) {
+    build_fdselect(&s, &plan, fd_of_new, new_count, &fdsel);
+    b.has_fdselect = true;
   }
 
   // Private DICTs.
@@ -1380,67 +1609,93 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
     b.private_size[k] = privates[k].length;
   }
 
-  // The fixed parts, to measure.
+  // The fixed parts, to measure, and then the offsets.
   {
-    const uint8_t * name;
-    size_t name_n;
     Item one;
     size_t at;
 
-    if (!index_elem(&s.tab, &s.cff->names, 0, &name, &name_n)) {
-      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
-          "a CFF with no name");
-      goto done;
+    if (!s.cff2) {
+      const uint8_t * name;
+      size_t name_n;
+
+      if (!index_elem(&s.tab, &s.cff->names, 0, &name, &name_n)) {
+        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
+            "a CFF with no name");
+        goto done;
+      }
+      one.p = name;
+      one.n = name_n;
+      write_index(&name_ix, &one, 1);
     }
-    one.p = name;
-    one.n = name_n;
-    write_index(&name_ix, &one, 1);
-    write_index(&gsub_ix, NULL, 0);
+    write_index_ex(&gsub_ix, NULL, 0, s.cff2);
     for (j = 0; j < new_count; ++j) {
       items[j].p = cs.data + cs_at[j];
       items[j].n = cs_at[j + 1] - cs_at[j];
     }
-    write_index(&cs_ix, items, new_count);
+    write_index_ex(&cs_ix, items, new_count, s.cff2);
+    if (s.cff2 && s.vstore) {
+      gfnt_wbuf_u16(&vstore_buf, (uint32_t)s.vstore_n);
+      gfnt_wbuf_bytes(&vstore_buf, s.vstore, s.vstore_n);
+    }
 
-    // Offsets, with the Top DICT's length fixed by its five-byte integers.
+    // The Top DICT's length is fixed by its five-byte integers, so a first pass with
+    // offsets of zero measures it.
     result = write_top(&b, &top, error);
     if (result != GFNT_OK) {
       goto done;
     }
-    one.p = top.data;
-    one.n = top.length;
-    write_index(&top_ix, &one, 1);
-    at = 4 + name_ix.length + top_ix.length + str_ix.length + gsub_ix.length;
+    if (s.cff2) {
+      at = 5 + top.length;
+    }
+    else {
+      one.p = top.data;
+      one.n = top.length;
+      write_index(&top_ix, &one, 1);
+      at = 4 + name_ix.length + top_ix.length + str_ix.length;
+    }
+    at += gsub_ix.length;
     b.charset_off = at;
     at += charset.bytes.length;
-    b.fdselect_off = at;
-    at += fdsel.length;
-    b.charstrings_off = at;
-    at += cs_ix.length;
+    if (s.cff2) {
+      b.charstrings_off = at;
+      at += cs_ix.length;
+      b.fdselect_off = at;
+      at += fdsel.length;
+    }
+    else {
+      b.fdselect_off = at;
+      at += fdsel.length;
+      b.charstrings_off = at;
+      at += cs_ix.length;
+    }
     b.fdarray_off = at;
-    if (b.cid) {
+    if (s.fds) {
       result = build_fd_index(&b, items, &fd_ix, a, error);
       if (result != GFNT_OK) {
         goto done;
       }
       at += fd_ix.length;
     }
+    b.vstore_off = at;
+    at += vstore_buf.length;
     for (k = 0; k < plan.nfd; ++k) {
       b.private_off[k] = at;
       at += privates[k].length;
     }
 
-    // The Top DICT again, now with true offsets (same length).
+    // Again, with the true offsets (the same length).
     top.length = 0;
     result = write_top(&b, &top, error);
     if (result != GFNT_OK) {
       goto done;
     }
-    one.p = top.data;
-    one.n = top.length;
-    top_ix.length = 0;
-    write_index(&top_ix, &one, 1);
-    if (b.cid) {
+    if (!s.cff2) {
+      one.p = top.data;
+      one.n = top.length;
+      top_ix.length = 0;
+      write_index(&top_ix, &one, 1);
+    }
+    if (s.fds) {
       fd_ix.length = 0;
       result = build_fd_index(&b, items, &fd_ix, a, error);
       if (result != GFNT_OK) {
@@ -1450,25 +1705,37 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
   }
 
   // Assemble.
-  gfnt_wbuf_u8(out, 1);
-  gfnt_wbuf_u8(out, 0);
-  gfnt_wbuf_u8(out, 4);
-  gfnt_wbuf_u8(out, 4);
-  gfnt_wbuf_bytes(out, name_ix.data, name_ix.length);
-  gfnt_wbuf_bytes(out, top_ix.data, top_ix.length);
-  gfnt_wbuf_bytes(out, str_ix.data, str_ix.length);
-  gfnt_wbuf_bytes(out, gsub_ix.data, gsub_ix.length);
-  gfnt_wbuf_bytes(out, charset.bytes.data, charset.bytes.length);
-  gfnt_wbuf_bytes(out, fdsel.data, fdsel.length);
-  gfnt_wbuf_bytes(out, cs_ix.data, cs_ix.length);
-  if (b.cid) {
+  if (s.cff2) {
+    gfnt_wbuf_u8(out, 2);
+    gfnt_wbuf_u8(out, 0);
+    gfnt_wbuf_u8(out, 5);
+    gfnt_wbuf_u16(out, (uint32_t)top.length);
+    gfnt_wbuf_bytes(out, top.data, top.length);
+    gfnt_wbuf_bytes(out, gsub_ix.data, gsub_ix.length);
+    gfnt_wbuf_bytes(out, cs_ix.data, cs_ix.length);
+    gfnt_wbuf_bytes(out, fdsel.data, fdsel.length);
+    gfnt_wbuf_bytes(out, fd_ix.data, fd_ix.length);
+    gfnt_wbuf_bytes(out, vstore_buf.data, vstore_buf.length);
+  }
+  else {
+    gfnt_wbuf_u8(out, 1);
+    gfnt_wbuf_u8(out, 0);
+    gfnt_wbuf_u8(out, 4);
+    gfnt_wbuf_u8(out, 4);
+    gfnt_wbuf_bytes(out, name_ix.data, name_ix.length);
+    gfnt_wbuf_bytes(out, top_ix.data, top_ix.length);
+    gfnt_wbuf_bytes(out, str_ix.data, str_ix.length);
+    gfnt_wbuf_bytes(out, gsub_ix.data, gsub_ix.length);
+    gfnt_wbuf_bytes(out, charset.bytes.data, charset.bytes.length);
+    gfnt_wbuf_bytes(out, fdsel.data, fdsel.length);
+    gfnt_wbuf_bytes(out, cs_ix.data, cs_ix.length);
     gfnt_wbuf_bytes(out, fd_ix.data, fd_ix.length);
   }
   for (k = 0; k < plan.nfd; ++k) {
     gfnt_wbuf_bytes(out, privates[k].data, privates[k].length);
   }
   if (out->oom || charset.bytes.oom || top.oom || top_ix.oom || str_ix.oom || fd_ix.oom
-      || fdsel.oom || cs_ix.oom || name_ix.oom || gsub_ix.oom) {
+      || fdsel.oom || cs_ix.oom || name_ix.oom || gsub_ix.oom || vstore_buf.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
         "assembling the CFF subset");
   }
@@ -1483,6 +1750,17 @@ done:
   a->free_fn(a->ctx, fd_of_new);
   a->free_fn(a->ctx, sids);
   a->free_fn(a->ctx, items);
+  a->free_fn(a->ctx, plan.fd_src);
+  a->free_fn(a->ctx, plan.fd_new);
+  a->free_fn(a->ctx, plan.fd_used);
+  a->free_fn(a->ctx, b.private_off);
+  a->free_fn(a->ctx, b.private_size);
+  if (privates) {
+    for (k = 0; k < plan.nsrc; ++k) {
+      gfnt_wbuf_free(&privates[k]);
+    }
+  }
+  a->free_fn(a->ctx, privates);
   gfnt_wbuf_free(&cs);
   gfnt_wbuf_free(&charset.bytes);
   gfnt_wbuf_free(&fdsel);
@@ -1493,8 +1771,6 @@ done:
   gfnt_wbuf_free(&gsub_ix);
   gfnt_wbuf_free(&cs_ix);
   gfnt_wbuf_free(&fd_ix);
-  for (k = 0; k < 256; ++k) {
-    gfnt_wbuf_free(&privates[k]);
-  }
+  gfnt_wbuf_free(&vstore_buf);
   return result;
 }

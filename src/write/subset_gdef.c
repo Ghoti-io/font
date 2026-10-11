@@ -25,8 +25,7 @@
  *
  * Glyph classes, attachment points, ligature carets, mark attachment classes
  * and mark glyph sets are carried for the glyphs the text can reach. The item
- * variation store (version 1.3) is not: a font that has one is variable, and
- * the subsetter does not take variable fonts.
+ * variation store (version 1.3) is carried whole.
  */
 
 #include <stdlib.h>
@@ -289,6 +288,9 @@ GFNT_Result gfnt_subset_gdef(const GFNT_Face * face, const uint8_t * shape,
   uint16_t carets;
   uint16_t marks;
   uint16_t sets = 0;
+  uint32_t var = 0;
+  const uint8_t * var_bytes = NULL;
+  size_t var_length = 0;
   size_t header;
   size_t i;
 
@@ -315,13 +317,28 @@ GFNT_Result gfnt_subset_gdef(const GFNT_Face * face, const uint8_t * shape,
   if (minor >= 2) {
     sets = gfnt_rw_u16(&rw, 12);
   }
+  if (minor >= 3) {
+    // The item variation store is carried whole: its rows are addressed by (outer, inner)
+    // from variation indices in GPOS, which this rewrite copies as they are.
+    GFNT_Reader whole = table;
+    const uint8_t * raw;
+
+    var = ((uint32_t)gfnt_rw_u16(&rw, 14) << 16) | gfnt_rw_u16(&rw, 16);
+    if (var && var < table.length && gfnt_read_bytes(&whole, table.length, &raw) == GFNT_OK
+        && gfnt_subset_ivs_extent(raw + var, table.length - var, &var_length)) {
+      var_bytes = raw + var;
+    }
+    else {
+      var = 0;
+    }
+  }
   // A GDEF this reader cannot make sense of says nothing, as HarfBuzz treats it.
-  if (rw.bad || major != 1 || (!classes && !attach && !carets && !marks && !sets)) {
+  if (rw.bad || major != 1 || (!classes && !attach && !carets && !marks && !sets && !var)) {
     return GFNT_OK;
   }
-  header = sets ? 14 : 12;
+  header = var ? 18 : sets ? 14 : 12;
   gfnt_lout_init(&o, allocator);
-  gfnt_wbuf_u32(&o.b, sets ? 0x00010002u : 0x00010000u);
+  gfnt_wbuf_u32(&o.b, var ? 0x00010003u : sets ? 0x00010002u : 0x00010000u);
   for (i = 4; i < header; i += 2) {
     gfnt_wbuf_u16(&o.b, 0);
   }
@@ -353,6 +370,9 @@ GFNT_Result gfnt_subset_gdef(const GFNT_Face * face, const uint8_t * shape,
     build_mark_sets(&rw, sets, &piece);
     gfnt_lout_child16(&o, 12, 0, &piece);
     piece.length = 0;
+  }
+  if (var_bytes && healthy(&rw)) {
+    gfnt_lout_link32(&o, 14, 0, gfnt_lout_add(&o, var_bytes, var_length));
   }
   gfnt_wbuf_free(&piece);
   if (rw.bad) {

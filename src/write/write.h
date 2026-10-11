@@ -174,6 +174,25 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
     size_t new_count, size_t count, bool drop_hinting, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
 
+/**
+ * How long the item variation store at @p p is: its region list and every
+ * ItemVariationData, whichever lies last.
+ *
+ * @return false for a store that runs off @p avail or is not format 1.
+ */
+bool gfnt_subset_ivs_extent(const uint8_t * p, size_t avail, size_t * out_length);
+
+/**
+ * `HVAR` or `VVAR` for a new numbering: the item variation store as it is, and the
+ * delta-set index maps rebuilt with one entry for each kept glyph. Appends nothing when
+ * the face has none; a table it cannot read is ::GFNT_ERR_CORRUPT.
+ *
+ * @param tag `HVAR` or `VVAR`.
+ * @param old_of_new Per new glyph its source glyph, or 0xFFFFFFFF for none.
+ */
+GFNT_Result gfnt_subset_var_metrics(const GFNT_Face * face, GFNT_Tag tag,
+    const uint32_t * old_of_new, size_t new_count, GFNT_WBuf * out, GFNT_Error * error);
+
 /** The bitmap strike tables of a subset, each empty (length 0) when not carried. */
 typedef struct GFNT_SubsetStrikes {
   GFNT_WBuf eblc, ebdt, cblc, cbdt, sbix;

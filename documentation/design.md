@@ -1673,8 +1673,8 @@ produced by subsetting. It needs the reader and nothing else. **Built**
 (`write.h`, `src/write/`): the sfnt serialiser (§12.1: table ordering, padding,
 directory search fields, checksums and `head.checkSumAdjustment`; the table set
 is supplied as bytes), the WOFF 1 writer (§12.4), and a subsetter for static
-TrueType-outline fonts and for `CFF ` ones (§12.3), which carries or rewrites the layout tables. The
-`CFF2` subsetter and subsetting of variable fonts, the Apple shaping tables,
+TrueType-outline fonts and for `CFF ` and `CFF2` ones (§12.3), which carries or rewrites the layout tables. Subsetting of
+`glyf` variable fonts (`gvar`), the Apple shaping tables,
 the BDF writer and the PDF helpers are **not** built.
 
 ### 12.1 The sfnt serialiser
@@ -1795,8 +1795,28 @@ retained ids a dropped glyph is a lone `endchar` and keeps its name. `make check
 covers it: 36 URW CFF fonts, 281 subsets in each mode, drawing and charstring width read back
 through fontTools and shaping through HarfBuzz, 0 differences, no subroutine left, names kept.
 
-Refused with `GFNT_ERR_UNSUPPORTED`: `CFF2` and Type 1 outlines, a CFF with Type 1
-charstrings, and variable fonts. Silently not written, and stated in `write.h`: bitmap and colour
+**`CFF2` is subset by the same code**, variable fonts included. The flattener also follows
+`vsindex` and `blend` (a blend's result count needs the region count of the current
+ItemVariationData, read from the store), and the writer produces the CFF2 layout: a header
+with the Top DICT inline, four-byte INDEX counts, no Name, String or charset, an `FDSelect`
+only when more than one Font DICT is left (format 0, 3 or 4, the smallest that can say it), and
+the variation store copied whole behind its length. The tables around it: `fvar`, `avar`, `STAT`
+and `MVAR` name no glyph and are copied; `HVAR` and `VVAR` keep their store and have their
+delta-set index maps rebuilt (`src/write/subset_var.c`), one entry for each kept glyph, with an
+advance map the font left to the glyph id stated, since the ids move; `GDEF` 1.3 carries its
+item variation store whole, so the variation indices in `GPOS` still point at their rows.
+Retained ids copy all of them untouched. The pair-adjustment rewrite had a bug this showed: a
+`PairPos` format 1 value record's device offset is counted from its PairSet, and the rewrite counted
+it from the subtable, which turned a variation index into a different device table (fixed). The
+store is not pruned: regions and rows no kept glyph uses stay. `make check-oracle-subset` shapes
+each variable subset with HarfBuzz at eight places in the design space (every extreme, the
+middle, each axis alone) and compares advances, offsets and the box each glyph's outline fills,
+and fontTools draws every kept glyph at the same places; Cantarell (the corpus's one variable CFF2
+font; three more CFF2 color fonts are static) and the `variable-cff2*.otf` fixtures (HVAR, VVAR, MVAR, variable GPOS, a second ItemVariationData
+chosen by `vsindex`) are in it.
+
+Refused with `GFNT_ERR_UNSUPPORTED`: Type 1 outlines, a CFF with Type 1 charstrings, and
+`glyf` variable fonts (`gvar`). Silently not written, and stated in `write.h`: bitmap and colour
 tables, the Apple tables (`morx`, `mort`, `kerx`, `trak`, `ankr`), `cmap`
 format 14, and the family rename the licence reading in §14.5 wants.
 

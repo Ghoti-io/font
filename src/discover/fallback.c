@@ -34,6 +34,7 @@
 #include "match_int.h"
 #include "os2_ranges.h"
 
+#include <ghoti.io/font/bitmap.h>
 #include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/unicode/case.h>
@@ -256,9 +257,34 @@ static const GFNT_Face * open_face(GFNT_FontFallback * f, size_t i, GFNT_Result 
   return e->face;
 }
 
+/**
+ * Whether @p face maps @p cp. A bitmap font has no .notdef: its glyph 0 is a character, so a
+ * lookup that answers 0 is ambiguous and the encoding, sorted by codepoint, is searched instead.
+ */
 static bool maps(const GFNT_Face * face, uint32_t cp) {
   uint32_t glyph = 0;
+  size_t n = 0;
+  size_t lo = 0;
 
+  if (gfnt_face_bitmap_encoding_count(face, &n, NULL) == GFNT_OK) {
+    while (lo < n) {
+      size_t mid = lo + (n - lo) / 2;
+      uint32_t at = 0;
+
+      if (gfnt_face_bitmap_encoding_at(face, mid, &at, NULL, NULL) != GFNT_OK) {
+        return false;
+      }
+      if (at == cp) {
+        return true;
+      }
+      if (at < cp) {
+        lo = mid + 1;
+      } else {
+        n = mid;
+      }
+    }
+    return false;
+  }
   return gfnt_face_glyph_for_codepoint(face, cp, &glyph, NULL) == GFNT_OK && glyph != 0;
 }
 
@@ -266,8 +292,13 @@ static bool maps(const GFNT_Face * face, uint32_t cp) {
  * Try one family: among the members that (do or do not) claim the character, the best by
  * style that really maps it.
  */
+static bool is_bitmap(const GFNT_FontRecord * r) {
+  return r->flavour == GFNT_FLAVOUR_PCF || r->flavour == GFNT_FLAVOUR_BDF
+      || r->flavour == GFNT_FLAVOUR_PSF || r->flavour == GFNT_FLAVOUR_HEX;
+}
+
 static GFNT_Result try_group(GFNT_FontFallback * f, size_t g, uint32_t cp, bool claimed,
-    const GFNT_FontQuery * wanted, const GFNT_FontRecord ** recs, size_t * idx,
+    bool bitmap, const GFNT_FontQuery * wanted, const GFNT_FontRecord ** recs, size_t * idx,
     size_t * out_index, bool * found) {
   const Group * group = &f->groups[g];
   size_t n = 0;
@@ -276,7 +307,8 @@ static GFNT_Result try_group(GFNT_FontFallback * f, size_t g, uint32_t cp, bool 
   for (i = 0; i < group->count; i++) {
     const size_t m = group->members[i];
 
-    if (claims(gfnt_fontset_at(f->set, m), cp) == claimed) {
+    if (claims(gfnt_fontset_at(f->set, m), cp) == claimed
+        && is_bitmap(gfnt_fontset_at(f->set, m)) == bitmap) {
       recs[n] = gfnt_fontset_at(f->set, m);
       idx[n] = m;
       n++;
@@ -379,10 +411,12 @@ GFNT_Result gfnt_fontfallback_face(GFNT_FontFallback * f, uint32_t cp, GFNT_Tag 
       order[norder++] = i;
     }
   }
-  // Faces that claim the character first, in every family; then, only if none does, the rest.
-  for (pass = 0; pass < 2 && !found && result == GFNT_OK; pass++) {
+  // Scalable faces that claim the character first, in every family; then scalable faces that
+  // do not; then the same two for bitmap faces, which a paragraph of outlines is a poor home for.
+  for (pass = 0; pass < 4 && !found && result == GFNT_OK; pass++) {
     for (i = 0; i < norder && !found && result == GFNT_OK; i++) {
-      result = try_group(f, order[i], cp, pass == 0, wanted, recs, idx, &found_at, &found);
+      result = try_group(f, order[i], cp, pass % 2 == 0, pass >= 2, wanted, recs, idx, &found_at,
+          &found);
     }
   }
   if (result == GFNT_OK && found) {

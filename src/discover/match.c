@@ -354,7 +354,7 @@ static int64_t clamp64(int64_t v, int64_t lo, int64_t hi) {
 /** The faces of one family name, narrowed to one; @p found is false when the family has none. */
 static GFNT_Result match_name(const GFNT_FontSet * set, const char * name,
     const GFNT_FontQuery * q, const GFNT_Allocator * allocator,
-    const GFNT_FontRecord ** recs, GFNT_FontMatch * out, bool * found) {
+    const GFNT_FontRecord ** recs, size_t * indices, GFNT_FontMatch * out, bool * found) {
   const size_t total = gfnt_fontset_count(set);
   size_t n = 0;
   size_t i;
@@ -366,6 +366,7 @@ static GFNT_Result match_name(const GFNT_FontSet * set, const char * name,
     const GFNT_FontRecord * r = gfnt_fontset_at(set, i);
 
     if (name_is(r->family, name) || name_is(r->legacy_family, name)) {
+      indices[n] = i;
       recs[n++] = r;
     }
   }
@@ -376,7 +377,7 @@ static GFNT_Result match_name(const GFNT_FontSet * set, const char * name,
   if (result != GFNT_OK) {
     return result;
   }
-  out->index = (size_t)(recs[pick] - gfnt_fontset_at(set, 0));
+  out->index = indices[pick];
   *found = true;
   return GFNT_OK;
 }
@@ -439,6 +440,7 @@ static GFNT_Result match_one(const GFNT_FontSet * set, const char * family,
     bool * found, GFNT_Error * error) {
   const size_t total = gfnt_fontset_count(set);
   const GFNT_FontRecord ** recs;
+  size_t * indices;
   GFNT_Result result;
   const char * alias = NULL;
 
@@ -447,17 +449,21 @@ static GFNT_Result match_one(const GFNT_FontSet * set, const char * family,
     return GFNT_OK;
   }
   recs = allocator->calloc_fn(allocator->ctx, total, sizeof *recs);
-  if (!recs) {
+  indices = allocator->calloc_fn(allocator->ctx, total, sizeof *indices);
+  if (!recs || !indices) {
+    allocator->free_fn(allocator->ctx, recs);
+    allocator->free_fn(allocator->ctx, indices);
     return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "allocating the faces of a family");
   }
-  result = match_name(set, family, q, allocator, recs, out, found);
+  result = match_name(set, family, q, allocator, recs, indices, out, found);
   if (result == GFNT_OK && !*found
       && gfnt_fontset_resolve_alias(set, family, &alias, NULL) == GFNT_OK
       && alias && strcmp(alias, family) != 0) {
-    result = match_name(set, alias, q, allocator, recs, out, found);
+    result = match_name(set, alias, q, allocator, recs, indices, out, found);
   }
   allocator->free_fn(allocator->ctx, recs);
+  allocator->free_fn(allocator->ctx, indices);
   if (result != GFNT_OK) {
     return gfnt_error_set(error, result, 0, 0, GFNT_GLYPH_NONE, "matching a family");
   }

@@ -204,6 +204,17 @@ public:
   void remove_file(size_t i) { unlink(files_[i].c_str()); }   // the set still lists it: no rescan
 
   /** The scanned set: scanned once, and again only if a face was added or removed since. */
+  /** Write a file of any kind (a bitmap font, say) into the directory. */
+  void add_file(const std::string & name, const std::string & bytes) {
+    const std::string path = dir_ + "/" + name;
+    FILE * f = fopen(path.c_str(), "wb");
+    ASSERT_NE(f, nullptr);
+    fwrite(bytes.data(), 1, bytes.size(), f);
+    fclose(f);
+    files_.push_back(path);
+    dirty_ = true;
+  }
+
   const GFNT_FontSet * scan(const std::vector<GFNT_FontAlias> & aliases = {}) {
     if (set_ && !dirty_ && aliases.empty()) {
       return set_;

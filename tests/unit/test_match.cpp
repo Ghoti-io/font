@@ -517,6 +517,25 @@ TEST(MatchFamily, AFaceThatTiesIsTheFirstInTheSet) {
   EXPECT_EQ(gfnt_fontset_at(f.scan(), 0)->style, chosen);
 }
 
+TEST(MatchFamily, TheIndexOfALateFaceInALargeSetIsItsOwn) {
+  // A record is embedded in a larger struct in the set, so an index worked out by pointer
+  // arithmetic drifts with the number of faces; this found it on a machine with 1,433.
+  Fonts f;
+  for (int i = 0; i < 80; ++i) {
+    Spec s;
+    s.family = "F" + std::to_string(i);
+    s.label = "L" + std::to_string(i);
+    f.add(s);
+  }
+  f.scan();
+  for (int i : {0, 1, 13, 14, 15, 40, 79}) {
+    GFNT_FontMatch m{};
+    const std::string family = "F" + std::to_string(i);
+    EXPECT_EQ(f.pick(query(family.c_str()), &m), "L" + std::to_string(i));
+    EXPECT_EQ(std::string(gfnt_fontset_at(f.scan(), m.index)->family), family);
+  }
+}
+
 TEST(MatchFamily, MatchFamilyIgnoresTheQuerysOwnList) {
   Fonts f;
   Spec a;

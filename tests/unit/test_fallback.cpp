@@ -286,6 +286,43 @@ TEST(Fallback, AFaceThatSetsNoRangeBitsClaimsEverythingAndKeepsItsPlaceInTheOrde
   EXPECT_EQ(fb.label(set, 0x3B1), "silent") << "listed first, and it claims the character too";
 }
 
+TEST(Fallback, ABitmapFaceIsALastResortEvenWhenItsFamilyIsTheWantedOne) {
+  const std::string bdf =
+      "STARTFONT 2.1\nFONT -misc-Fixed-Medium-R-Normal--8-80-75-75-C-80-ISO10646-1\n"
+      "SIZE 8 75 75\nFONTBOUNDINGBOX 8 8 0 -1\nSTARTPROPERTIES 4\nFAMILY_NAME \"Fixed\"\n"
+      "WEIGHT_NAME \"Medium\"\nFONT_ASCENT 7\nFONT_DESCENT 1\nENDPROPERTIES\nCHARS 1\n"
+      "STARTCHAR A\nENCODING 65\nSWIDTH 500 0\nDWIDTH 8 0\nBBX 8 8 0 -1\nBITMAP\n"
+      "18\n24\n42\n42\n7E\n42\n42\n00\nENDCHAR\nENDFONT\n";
+  Fonts fonts;
+  fonts.add_file("fixed.bdf", bdf);
+  fonts.add(face("Outline", "outline", {'A'}));
+  const GFNT_FontSet * set = fonts.scan();
+  bool saw_bitmap = false;
+  for (size_t i = 0; i < gfnt_fontset_count(set); ++i) {
+    saw_bitmap = saw_bitmap || gfnt_fontset_at(set, i)->flavour == GFNT_FLAVOUR_BDF;
+  }
+  ASSERT_TRUE(saw_bitmap) << "the scan lists the bitmap font";
+  Fallback fb;
+  ASSERT_EQ(fb.make(set), GFNT_OK);
+  const char * fixed[] = {"Fixed"};
+  GFNT_FontQuery wanted;
+  gfnt_fontquery_init(&wanted);
+  wanted.families = fixed;
+  wanted.family_count = 1;
+  EXPECT_EQ(fb.label(set, 'A', 0, 0, &wanted), "outline");
+  // With no outline face that maps it, the bitmap one is better than nothing.
+  Fonts only;
+  only.add_file("fixed.bdf", bdf);
+  const GFNT_FontSet * set2 = only.scan();
+  Fallback fb2;
+  ASSERT_EQ(fb2.make(set2), GFNT_OK);
+  const GFNT_Face * out = nullptr;
+  bool found = false;
+  ASSERT_EQ(gfnt_fontfallback_face(fb2.f, 'A', 0, 0, nullptr, &out, nullptr, &found, nullptr), GFNT_OK);
+  EXPECT_TRUE(found);
+  EXPECT_NE(out, nullptr);
+}
+
 TEST(Fallback, AFileThatWentAwayAfterTheScanIsSkipped) {
   Fonts fonts;
   fonts.add(face("Gone", "gone", {0x3B1}));

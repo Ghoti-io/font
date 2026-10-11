@@ -58,6 +58,7 @@ typedef struct {
   GFNT_F26Dot6 width;
   bool space;                  // hangs at the end of a line
   bool opportunity;            // a line may break after it
+  bool hyphen;                 // ... and then a hyphen is added to the line
   bool hard;                   // a line must break after it
   bool tab;                    // one tab character
 } Unit;
@@ -81,6 +82,8 @@ struct GFNT_Paragraph {
   size_t glyph_count;
   Unit * units;
   size_t unit_count;
+  GFNT_F26Dot6 * hyphen_width; // per span: the hyphen's width, or 0 when no point is in the span
+  uint32_t * hyphen_cp;        // per span: the character it is set with
   PRun fallback_metrics;       // the first span's first face, for an empty text
 };
 

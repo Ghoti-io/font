@@ -1641,12 +1641,24 @@ fallback shaping already there. The **ink box** (`GFNT_Line.ink`,
 paragraph is made and never by rasterising; a glyph with no outline (a space, a
 bitmap strike) has none.
 
-Not yet: kashida, vertical text, and a hyphenation provider.
+**Hyphenation.** `GFNT_ParagraphOptions::hyphens` is CSS's `hyphens`: by default (`MANUAL`) a soft
+hyphen (U+00AD) is a place a line may break and a line that does break there ends in a hyphen; `NONE`
+makes it no place at all; `AUTO` adds the points a caller's `GFNT_Hyphenator` names in each word of
+two or more letters (a stretch of letters and marks inside one span, with that span's language),
+asked once when the paragraph is made. The hyphen is U+2010 if the span's first face maps it and
+U+002D if not, set in that face and level; it is a run of its own (`GFNT_LineRun::hyphen`) that
+stands for no text, as the ellipsis does, and it counts in the line's width: of the places a line
+could end, the last whose text and hyphen fit is taken, and when none does the first (the
+overflow is the least). `min_content` ends a stretch at a point with its hyphen on it. A last line
+cut by `max_lines` shows the ellipsis and no hyphen. The library carries no hyphenation data
+(§10.7); the tests use a callback that names offsets.
+
+Not yet: kashida and vertical text.
 
 ### 10.7 Deliberately not here
 
 Hyphenation *data* (Liang patterns are a dictionary per language, each with its
-own licence; `GFNT_Hyphenator` is the seam), dictionary word breaking for the
+own licence; `GFNT_Hyphenator` is the seam, built), dictionary word breaking for the
 `SA` scripts (`unicode`'s seam, passed through; without a provider Thai does
 not wrap, and the header says so), Knuth-Plass optimal breaking (greedy first;
 an option later), vertical writing modes (`vhea`/`vmtx` *metrics* are read;

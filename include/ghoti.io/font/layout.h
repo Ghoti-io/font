@@ -36,8 +36,8 @@
  * uses: measuring and painting are one code path.
  *
  * **What it does not do, stated rather than approximated:** vertical text
- * (a span's face runs horizontally), hyphenation, kashida justification
- * (spaces only), ruby, and anything that must know about a non-text box on its
+ * (a span's face runs horizontally), kashida justification
+ * (spaces only), hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and anything that must know about a non-text box on its
  * line. Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
  * the text is otherwise one bidirectional paragraph, so a caller with several
  * paragraphs lays out one object per paragraph.
@@ -125,6 +125,44 @@ typedef enum GFNT_LineBreak {
   GFNT_LINE_BREAK_ANYWHERE    ///< Breaks between any two characters.
 } GFNT_LineBreak;
 
+/** @brief What hyphenation a paragraph does, after CSS `hyphens`. */
+typedef enum GFNT_Hyphens {
+  /**
+   * Only where the text says: a soft hyphen (U+00AD) is a place a line may break, and a line
+   * that does break there shows a hyphen at its end. Anywhere else a word is not split.
+   */
+  GFNT_HYPHENS_MANUAL = 0,
+  GFNT_HYPHENS_NONE,  ///< A soft hyphen is not a place to break either; it is invisible.
+  /** Soft hyphens, and the places ::GFNT_Hyphenator names in the words it is asked about. */
+  GFNT_HYPHENS_AUTO
+} GFNT_Hyphens;
+
+/**
+ * @brief Where a word may be hyphenated. The library has no hyphenation data (patterns are a
+ * dictionary per language, each with its own licence); a caller supplies the dictionary.
+ *
+ * Asked once for every word of two or more letters that holds no soft hyphen (a word is a stretch
+ * of letters and combining marks within one span), when the paragraph is made, and only for
+ * ::GFNT_HYPHENS_AUTO. A point it names is a place a line may break, with a hyphen added at the
+ * end of the line it breaks.
+ */
+typedef struct GFNT_Hyphenator {
+  void * ctx; ///< Passed to the callback untouched.
+  /**
+   * @brief Mark where a hyphen may stand in a word.
+   *
+   * @param word The word, UTF-8, not terminated.
+   * @param length Its length in bytes.
+   * @param language The span's language tag, or 0.
+   * @param allowed @p length + 1 bytes, all zero: set `allowed[k]` to 1 where a hyphen may stand
+   *   before the byte at offset @p k. Entries 0 and @p length, and any that is not on a
+   *   character boundary, are ignored.
+   * @return ::GFNT_OK, or an error, which ends ::gfnt_paragraph_create() with that error.
+   */
+  GFNT_Result (*points)(void * ctx, const char * word, size_t length, GFNT_Tag language,
+      uint8_t * allowed);
+} GFNT_Hyphenator;
+
 /**
  * @brief A source of faces for characters a span's own faces lack.
  *
@@ -166,6 +204,8 @@ typedef struct GFNT_ParagraphOptions {
    */
   GFNT_F26Dot6 tab_width;
   GFNT_FontProvider font_provider; ///< Or zeroed for none.
+  GFNT_Hyphens hyphens;            ///< What hyphenation is done.
+  GFNT_Hyphenator hyphenator;      ///< Or zeroed for none; read only for ::GFNT_HYPHENS_AUTO.
 } GFNT_ParagraphOptions;
 
 /** @brief A shaped, itemised paragraph. Opaque; free with ::gfnt_paragraph_free(). */
@@ -193,6 +233,11 @@ typedef struct GFNT_LineRun {
   size_t face_index;            ///< The face's index in the span's list.
   bool fallback;                ///< True when it is not the span's first face (M8).
   bool ellipsis;                ///< True for the truncation mark, which stands for no text.
+  /**
+   * True for the hyphen a line that breaks inside a word ends with, which stands for no text. It
+   * is U+2010 if the span's first face has it and U+002D if not, set in that face.
+   */
+  bool hyphen;
   uint8_t level;                ///< The bidirectional level; odd reads right to left.
   size_t start;                 ///< The first byte of the text it stands for.
   size_t end;                   ///< One past the last.
@@ -264,8 +309,10 @@ GFNT_API void gfnt_paragraph_free(GFNT_Paragraph * paragraph);
 /**
  * @brief Break the paragraph into lines no wider than a width, and place them.
  *
- * Lines break at UAX #14 opportunities, greedily. A line whose first unbreakable
- * stretch is wider than the width overflows rather than splitting a word.
+ * Lines break at UAX #14 opportunities, greedily, and at the hyphenation points the paragraph
+ * has (soft hyphens, and a ::GFNT_Hyphenator's), where the hyphen counts toward the width. A line
+ * whose first unbreakable stretch is wider than the width overflows rather than splitting a word
+ * where it has no point to split it at.
  * Spaces at the end of a line hang: they are placed but not counted in the
  * line's width. The paragraph is not changed and can be laid out again.
  *

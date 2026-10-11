@@ -1114,6 +1114,317 @@ TEST(LayoutHit, ALigatureIsDividedBetweenItsCharacters) {
   EXPECT_EQ(r[0].x + r[0].width, width);
 }
 
+// --- hyphenation ---------------------------------------------------------------------------
+
+/** A..F, a space, a soft hyphen and the two hyphens (glyphs 1..6, 7, 8, 9 and 10). */
+std::vector<uint32_t> latin_hyphens() {
+  return {'A', 'B', 'C', 'D', 'E', 'F', ' ', 0xAD, '-', 0x2010};
+}
+
+std::vector<uint32_t> latin_hyphen_ascii_only() {
+  return {'A', 'B', 'C', 'D', 'E', 'F', ' ', 0xAD, '-'};
+}
+
+GFNT_ParagraphOptions hyphenating(GFNT_Hyphens how) {
+  GFNT_ParagraphOptions o{};
+  o.hyphens = how;
+  return o;
+}
+
+/** Marks the byte offsets it is given, in every word it is asked about of at least four bytes. */
+struct Points {
+  std::vector<size_t> at;
+  std::vector<std::string> asked;
+  std::vector<GFNT_Tag> languages;
+  GFNT_Result result = GFNT_OK;
+};
+
+GFNT_Result mark_points(void * ctx, const char * word, size_t length, GFNT_Tag language,
+    uint8_t * allowed) {
+  Points * points = static_cast<Points *>(ctx);
+
+  points->asked.push_back(std::string(word, length));
+  points->languages.push_back(language);
+  if (points->result != GFNT_OK) {
+    return points->result;
+  }
+  for (size_t k : points->at) {
+    if (k < length) {
+      allowed[k] = 1;
+    }
+  }
+  return GFNT_OK;
+}
+
+TEST(LayoutHyphen, ALineThatBreaksAtASoftHyphenEndsInAHyphenThatTakesRoom) {
+  Font font(latin_hyphen_ascii_only());
+  Para para("ABC\xC2\xAD" "DEF", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(1300), GFNT_OK);   // "ABC" and a hyphen are 4 x 320.
+  const GFNT_Layout & l = para.layout;
+  ASSERT_EQ(l.line_count, 2u);
+  const GFNT_Line & first = l.lines[0];
+  EXPECT_EQ(first.width, 4 * kLetter) << "the soft hyphen has no width and the hyphen has one";
+  EXPECT_EQ(first.end, 5u) << "the soft hyphen is two bytes and stays on the line";
+  EXPECT_EQ(l.lines[1].start, 5u);
+  EXPECT_EQ(l.lines[1].width, 3 * kLetter);
+  ASSERT_EQ(first.run_count, 2u);
+  EXPECT_FALSE(first.runs[0].hyphen);
+  EXPECT_FALSE(first.runs[0].ellipsis);
+  EXPECT_TRUE(first.runs[1].hyphen);
+  EXPECT_EQ(first.runs[1].start, first.runs[1].end) << "it stands for no text";
+  ASSERT_EQ(first.runs[1].glyph_count, 1u);
+  EXPECT_EQ(first.runs[1].glyphs[0].glyph, 9u) << "U+002D, as the face has no U+2010";
+  EXPECT_EQ(first.runs[1].x, 3 * kLetter);
+  for (size_t i = 0; i < l.lines[1].run_count; ++i) {
+    EXPECT_FALSE(l.lines[1].runs[i].hyphen);
+  }
+}
+
+TEST(LayoutHyphen, TheHyphenIsU2010WhenTheFaceHasIt) {
+  Font font(latin_hyphens());
+  Para para("ABC\xC2\xAD" "DEF", {font.face});
+  ASSERT_EQ(para.lay(1300), GFNT_OK);
+  const GFNT_Line & first = para.layout.lines[0];
+  ASSERT_EQ(first.run_count, 2u);
+  EXPECT_EQ(first.runs[1].glyphs[0].glyph, 10u);
+}
+
+TEST(LayoutHyphen, ASoftHyphenThatIsNotBrokenAtIsInvisible) {
+  Font font(latin_hyphen_ascii_only());
+  Para para("ABC\xC2\xAD" "DEF", {font.face});
+  ASSERT_EQ(para.lay(2000), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].width, 6 * kLetter);
+  for (size_t i = 0; i < para.layout.lines[0].run_count; ++i) {
+    EXPECT_FALSE(para.layout.lines[0].runs[i].hyphen);
+  }
+}
+
+TEST(LayoutHyphen, TheHyphenCountsTowardTheWidthSoALaterPointIsNotTakenWhenItDoesNotFit) {
+  // A B (soft) C D (soft) E F: with room for 1000, "AB-" is 960 and "ABCD-" is 1600.
+  Font font(latin_hyphen_ascii_only());
+  Para para("AB\xC2\xAD" "CD\xC2\xAD" "EF", {font.face});
+  ASSERT_EQ(para.lay(1000), GFNT_OK);
+  const GFNT_Layout & l = para.layout;
+  ASSERT_EQ(l.line_count, 3u);
+  EXPECT_EQ(l.lines[0].width, 3 * kLetter);
+  EXPECT_EQ(l.lines[1].width, 3 * kLetter);
+  EXPECT_EQ(l.lines[2].width, 2 * kLetter);
+  EXPECT_TRUE(l.lines[0].runs[l.lines[0].run_count - 1].hyphen);
+  EXPECT_TRUE(l.lines[1].runs[l.lines[1].run_count - 1].hyphen);
+  EXPECT_FALSE(l.lines[2].runs[l.lines[2].run_count - 1].hyphen);
+  // Room for 960 exactly takes the hyphen; one less would still break there, as the only point.
+  ASSERT_EQ(para.lay(960), GFNT_OK);
+  EXPECT_EQ(para.layout.line_count, 3u);
+}
+
+TEST(LayoutHyphen, WhenTheHyphenWouldNotFitTheLineBreaksAtAnEarlierPlaceThatDoes) {
+  // "AB CD" soft "EF": the hyphen after "AB CD" would end at 1440 + 320, past 1500, though "AB CD"
+  // fits; so the line breaks at the space, and "CDEF" goes whole on the next.
+  Font font(latin_hyphen_ascii_only());
+  Para para("AB CD\xC2\xAD" "EF", {font.face});
+  ASSERT_EQ(para.lay(1500), GFNT_OK);
+  const GFNT_Layout & l = para.layout;
+  ASSERT_EQ(l.line_count, 2u);
+  EXPECT_FALSE(l.lines[0].runs[l.lines[0].run_count - 1].hyphen);
+  EXPECT_EQ(l.lines[1].start, 3u);
+}
+
+TEST(LayoutHyphen, HyphensNoneMakesASoftHyphenNoPlaceToBreak) {
+  Font font(latin_hyphen_ascii_only());
+  Para para("ABC\xC2\xAD" "DEF", {font.face}, hyphenating(GFNT_HYPHENS_NONE));
+  ASSERT_EQ(para.lay(1300), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].width, 6 * kLetter);
+}
+
+TEST(LayoutHyphen, AHyphenatorsPointsAreUsedOnlyWhenAsked) {
+  Font font(latin_hyphen_ascii_only());
+  Points points;
+  points.at = {2, 4};
+  GFNT_ParagraphOptions o = hyphenating(GFNT_HYPHENS_AUTO);
+  o.hyphenator.ctx = &points;
+  o.hyphenator.points = mark_points;
+  Para para("ABCDEF", {font.face}, o);
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(points.asked.size(), 1u);
+  EXPECT_EQ(points.asked[0], "ABCDEF");
+  ASSERT_EQ(para.lay(1000), GFNT_OK);
+  const GFNT_Layout & l = para.layout;
+  ASSERT_EQ(l.line_count, 3u);
+  EXPECT_EQ(l.lines[0].end, 2u);
+  EXPECT_EQ(l.lines[1].end, 4u);
+  EXPECT_TRUE(l.lines[0].runs[l.lines[0].run_count - 1].hyphen);
+  EXPECT_TRUE(l.lines[1].runs[l.lines[1].run_count - 1].hyphen);
+  // The same hyphenator under the default is not consulted, and the word does not split.
+  points.asked.clear();
+  GFNT_ParagraphOptions manual = o;
+  manual.hyphens = GFNT_HYPHENS_MANUAL;
+  Para off("ABCDEF", {font.face}, manual);
+  ASSERT_EQ(off.created, GFNT_OK);
+  EXPECT_TRUE(points.asked.empty());
+  ASSERT_EQ(off.lay(1000), GFNT_OK);
+  EXPECT_EQ(off.layout.line_count, 1u);
+}
+
+TEST(LayoutHyphen, TheHyphenatorIsAskedAboutWordsOfLettersWithTheSpansLanguageOnly) {
+  Font font(latin_hyphen_ascii_only());
+  Points points;
+  points.at = {2};
+  GFNT_ParagraphOptions o = hyphenating(GFNT_HYPHENS_AUTO);
+  o.hyphenator.ctx = &points;
+  o.hyphenator.points = mark_points;
+  GFNT_TextSpan a{}, b{};
+  const GFNT_Face * faces[1] = {font.face};
+  a.style.faces = faces;
+  a.style.face_count = 1;
+  a.style.size = kSize;
+  a.style.language = GFNT_TAG('E', 'N', 'G', ' ');
+  b = a;
+  b.style.language = GFNT_TAG('D', 'E', 'U', ' ');
+  // "ABCD" in English, "EF" and a soft-hyphened word and a one-letter word in German.
+  const std::string text = "ABCD EF A AB\xC2\xAD" "CD";
+  a.length = 4;
+  b.length = text.size() - 4;
+  Para para(text, std::vector<GFNT_TextSpan>{a, b}, o);
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(points.asked.size(), 2u) << "not the one-letter word or the one with a soft hyphen";
+  EXPECT_EQ(points.asked[0], "ABCD");
+  EXPECT_EQ(points.languages[0], a.style.language);
+  EXPECT_EQ(points.asked[1], "EF");
+  EXPECT_EQ(points.languages[1], b.style.language);
+}
+
+TEST(LayoutHyphen, AFailingHyphenatorEndsTheParagraphWithItsError) {
+  Font font(latin_hyphen_ascii_only());
+  Points points;
+  points.result = GFNT_ERR_LIMIT;
+  GFNT_ParagraphOptions o = hyphenating(GFNT_HYPHENS_AUTO);
+  o.hyphenator.ctx = &points;
+  o.hyphenator.points = mark_points;
+  Para para("ABCDEF", {font.face}, o);
+  EXPECT_EQ(para.created, GFNT_ERR_LIMIT);
+}
+
+TEST(LayoutHyphen, MinContentIsTheWidestStretchBetweenPointsHyphenIncluded) {
+  Font font(latin_hyphen_ascii_only());
+  Points points;
+  points.at = {2, 4};
+  GFNT_ParagraphOptions o = hyphenating(GFNT_HYPHENS_AUTO);
+  o.hyphenator.ctx = &points;
+  o.hyphenator.points = mark_points;
+  Para auto_para("ABCDEF", {font.face}, o);
+  Para plain("ABCDEF", {font.face});
+  GFNT_F26Dot6 narrow = 0, whole = 0;
+  ASSERT_EQ(gfnt_paragraph_min_content(auto_para.p, &narrow), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_min_content(plain.p, &whole), GFNT_OK);
+  EXPECT_EQ(narrow, 3 * kLetter) << "AB, a hyphen";
+  EXPECT_EQ(whole, 6 * kLetter);
+}
+
+TEST(LayoutHyphen, ALastLineThatTheLimitCutShowsTheMarkAndNotAHyphen) {
+  Font font({'A', 'B', 'C', 'D', 'E', 'F', ' ', 0xAD, '-', 0x2026});
+  GFNT_ParagraphOptions o = truncating(1);
+  Para para("AB\xC2\xAD" "CDEF", {font.face}, o);
+  ASSERT_EQ(para.lay(1000), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_TRUE(line.truncated);
+  for (size_t i = 0; i < line.run_count; ++i) {
+    EXPECT_FALSE(line.runs[i].hyphen);
+  }
+  EXPECT_TRUE(line.runs[line.run_count - 1].ellipsis);
+}
+
+TEST(LayoutHyphen, AHyphenatedLineIsJustifiedAsAnyOtherAndAHitOnItsHyphenLandsAtTheLineEnd) {
+  Font font(latin_hyphen_ascii_only());
+  GFNT_ParagraphOptions o = hyphenating(GFNT_HYPHENS_MANUAL);
+  o.align = GFNT_ALIGN_JUSTIFY;
+  Para para("A B CD\xC2\xAD" "EFGH", {font.face}, o);
+  ASSERT_EQ(para.lay(2000), GFNT_OK);
+  const GFNT_Layout & l = para.layout;
+  ASSERT_GE(l.line_count, 2u);
+  const GFNT_Line & first = l.lines[0];
+  ASSERT_TRUE(first.runs[first.run_count - 1].hyphen);
+  EXPECT_TRUE(first.justified);
+  EXPECT_EQ(first.width, 2000) << "the spaces took up the slack, hyphen and all";
+  GFNT_Hit hit{};
+  const GFNT_LineRun & hy = first.runs[first.run_count - 1];
+  ASSERT_EQ(gfnt_layout_hit_test(para.p, &l, hy.x + hy.advance / 2, first.top + 10, &hit), GFNT_OK);
+  EXPECT_EQ(hit.line, 0u);
+  EXPECT_EQ(hit.offset, first.end);
+  GFNT_Caret caret{};
+  ASSERT_EQ(gfnt_layout_caret(para.p, &l, first.end, GFNT_AFFINITY_UPSTREAM, &caret), GFNT_OK);
+  EXPECT_EQ(caret.line, 0u);
+  EXPECT_EQ(caret.x, hy.x) << "an upstream caret at the break stands before the hyphen";
+}
+
+TEST(LayoutHyphen, EveryAllocationFailureWhileHyphenatingIsReportedAndNothingLeaks) {
+  Font font(latin_hyphen_ascii_only());
+  const GFNT_Face * faces[1] = {font.face};
+  GFNT_TextSpan span{};
+  const std::string text = "ABCDEF AB\xC2\xAD" "CDEF ABCDEF";
+  span.length = text.size();
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  Points points;
+  points.at = {2, 4};
+  GFNT_ParagraphOptions o = hyphenating(GFNT_HYPHENS_AUTO);
+  o.hyphenator.ctx = &points;
+  o.hyphenator.points = mark_points;
+  o.align = GFNT_ALIGN_JUSTIFY;
+  size_t requests = 0;
+  {
+    gfnttest::FailingAllocator counting(static_cast<size_t>(-1));
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o,
+                  counting.get(), &p, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(p, 1000, &l, nullptr), GFNT_OK);
+    EXPECT_GT(l.line_count, 3u);
+    requests = counting.requests();
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    EXPECT_EQ(counting.live(), 0u);
+  }
+  for (size_t fail = 0; fail < requests; ++fail) {
+    gfnttest::FailingAllocator failing(fail);
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    GFNT_Result r = gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o,
+        failing.get(), &p, nullptr);
+    if (r == GFNT_OK) {
+      r = gfnt_paragraph_layout(p, 1000, &l, nullptr);
+    }
+    EXPECT_TRUE(r == GFNT_OK || r == GFNT_ERR_OOM) << "request " << fail;
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
+  }
+}
+
+TEST(LayoutHyphen, WhenNoPointHasRoomForItsHyphenTheEarliestIsTakenAndOverflows) {
+  // Two soft hyphens in a row after one letter: neither has room for a hyphen in 500, and the
+  // line is the shortest that has a place to end, so the first of them.
+  Font font(latin_hyphen_ascii_only());
+  Para para("A\xC2\xAD\xC2\xAD" "BCD", {font.face});
+  ASSERT_EQ(para.lay(500), GFNT_OK);
+  const GFNT_Layout & l = para.layout;
+  ASSERT_GE(l.line_count, 2u);
+  EXPECT_EQ(l.lines[0].end, 3u);
+  EXPECT_TRUE(l.lines[0].runs[l.lines[0].run_count - 1].hyphen);
+  EXPECT_EQ(l.lines[0].width, 2 * kLetter);
+}
+
+TEST(LayoutHyphen, AnOptionOutOfRangeIsRefused) {
+  Font font(latin_hyphen_ascii_only());
+  GFNT_ParagraphOptions o{};
+  o.hyphens = static_cast<GFNT_Hyphens>(7);
+  Para para("AB", {font.face}, o);
+  EXPECT_EQ(para.created, GFNT_ERR_INVALID);
+}
+
 }  // namespace
 
 int main(int argc, char ** argv) {

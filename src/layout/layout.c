@@ -189,6 +189,8 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
   allocator->free_fn(allocator->ctx, p->runs);
   allocator->free_fn(allocator->ctx, p->glyphs);
   allocator->free_fn(allocator->ctx, p->units);
+  allocator->free_fn(allocator->ctx, p->hyphen_width);
+  allocator->free_fn(allocator->ctx, p->hyphen_cp);
   allocator->free_fn(allocator->ctx, p);
 }
 
@@ -273,6 +275,144 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
   return GFNT_OK;
 }
 
+static bool is_word_cp(uint32_t cp) {
+  return (guni_general_category_mask(cp) & (GUNI_GC_MASK_L | GUNI_GC_MASK_M)) != 0;
+}
+
+/**
+ * Mark the places a line may break with a hyphen added: after a soft hyphen (unless hyphens are
+ * off, when a soft hyphen is no place at all), and where the hyphenator says inside a word.
+ * Then set the width and the character of the hyphen for each span that has such a place.
+ */
+static GFNT_Result mark_hyphens(GFNT_Paragraph * p, const char * text, const size_t * span_cp,
+    GFNT_Error * error) {
+  const GFNT_Allocator * a = p->allocator;
+  const GFNT_Hyphenator * hy = &p->options.hyphenator;
+  const bool automatic = p->options.hyphens == GFNT_HYPHENS_AUTO && hy->points;
+  size_t * unit_by_end = NULL;
+  uint8_t * allowed = NULL;
+  size_t allowed_cap = 0;
+  bool * wanted = NULL;
+  GFNT_Result r = GFNT_OK;
+  bool any = false;
+  size_t i;
+
+  for (i = 0; i < p->unit_count; i++) {
+    Unit * u = &p->units[i];
+
+    if (p->cps[u->cp_end - 1] != 0x00AD) {
+      continue;
+    }
+    if (p->options.hyphens == GFNT_HYPHENS_NONE) {
+      u->opportunity = false;
+    }
+    else if (!u->hard) {
+      u->opportunity = true;
+      u->hyphen = true;
+      any = true;
+    }
+  }
+  if (automatic && p->length > 1 && p->unit_count) {
+    size_t c = 0;
+    size_t sp = 0;
+
+    unit_by_end = a->calloc_fn(a->ctx, p->length + 1, sizeof *unit_by_end);
+    if (!unit_by_end) {
+      return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE, "no memory for hyphenation");
+    }
+    for (i = 0; i <= p->length; i++) {
+      unit_by_end[i] = (size_t)-1;
+    }
+    for (i = 0; i < p->unit_count; i++) {
+      unit_by_end[p->units[i].cp_end] = i;
+    }
+    while (c < p->length && r == GFNT_OK) {
+      size_t first;
+      size_t limit;
+      size_t bytes;
+      bool soft = false;
+
+      if (!is_word_cp(p->cps[c])) {
+        c++;
+        continue;
+      }
+      first = c;
+      while (sp + 1 < p->span_count && span_cp[sp + 1] <= first) {
+        sp++;
+      }
+      limit = sp + 1 < p->span_count ? span_cp[sp + 1] : p->length;
+      while (c < limit && (is_word_cp(p->cps[c]) || p->cps[c] == 0x00AD)) {
+        soft = soft || p->cps[c] == 0x00AD;
+        c++;
+      }
+      if (c - first < 2 || soft) {
+        continue;
+      }
+      bytes = p->cp_byte[c] - p->cp_byte[first];
+      if (bytes + 1 > allowed_cap) {
+        a->free_fn(a->ctx, allowed);
+        allowed_cap = bytes + 1;
+        allowed = a->calloc_fn(a->ctx, allowed_cap, 1);
+        if (!allowed) {
+          r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+              "no memory for hyphenation");
+          break;
+        }
+      }
+      else {
+        memset(allowed, 0, bytes + 1);
+      }
+      r = hy->points(hy->ctx, text + p->cp_byte[first], bytes, p->styles[sp].language, allowed);
+      if (r != GFNT_OK) {
+        break;
+      }
+      for (i = first + 1; i < c; i++) {
+        const size_t k = p->cp_byte[i] - p->cp_byte[first];
+        const size_t unit = unit_by_end[i];
+
+        if (allowed[k] && unit != (size_t)-1 && !p->units[unit].hard
+            && !p->units[unit].opportunity) {
+          p->units[unit].opportunity = true;
+          p->units[unit].hyphen = true;
+          any = true;
+        }
+      }
+    }
+  }
+  a->free_fn(a->ctx, unit_by_end);
+  a->free_fn(a->ctx, allowed);
+  if (r != GFNT_OK || !any) {
+    return r;
+  }
+  p->hyphen_width = a->calloc_fn(a->ctx, p->span_count, sizeof *p->hyphen_width);
+  p->hyphen_cp = a->calloc_fn(a->ctx, p->span_count, sizeof *p->hyphen_cp);
+  wanted = a->calloc_fn(a->ctx, p->span_count, sizeof *wanted);
+  if (!p->hyphen_width || !p->hyphen_cp || !wanted) {
+    a->free_fn(a->ctx, wanted);
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE, "no memory for hyphenation");
+  }
+  for (i = 0; i < p->unit_count; i++) {
+    if (p->units[i].hyphen) {
+      wanted[p->runs[p->units[i].run].span] = true;
+    }
+  }
+  for (i = 0; i < p->span_count && r == GFNT_OK; i++) {
+    PGlyph g[ELL_GLYPHS];
+    size_t count = 0;
+    GFNT_F26Dot6 width = 0;
+    PRun run;
+
+    if (!wanted[i]) {
+      continue;
+    }
+    p->hyphen_cp[i] = face_maps(p->styles[i].faces[0], 0x2010) ? 0x2010 : 0x2D;
+    r = shape_string(p, i, &p->hyphen_cp[i], 1, g, &count, &width, &run, error);
+    p->hyphen_width[i] = width;
+  }
+  a->free_fn(a->ctx, wanted);
+  return r;
+}
+
 GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     const GFNT_TextSpan * spans, size_t span_count,
     const GFNT_ParagraphOptions * options, const GFNT_Allocator * allocator,
@@ -303,7 +443,8 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   }
   if ((unsigned)options->direction > GFNT_BIDI_AUTO
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
-      || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE) {
+      || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
+      || (unsigned)options->hyphens > GFNT_HYPHENS_AUTO) {
     return GFNT_ERR_INVALID;
   }
   {
@@ -685,6 +826,10 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           && !(last == 0x0D && u->cp_end < n && cps[u->cp_end] == 0x0A);
     }
   }
+  r = mark_hyphens(p, text, span_cp, error);
+  if (r != GFNT_OK) {
+    goto done;
+  }
   if (p->tab_width < 0) {
     if (options->tab_width > 0) {
       p->tab_width = options->tab_width;
@@ -735,12 +880,16 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
   for (size_t j = 0; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
 
+    GFNT_F26Dot6 shown;
+
     total += eff_width(p, u, total);
     if (!u->space) {
       fit = total;
     }
-    if (fit > widest) {
-      widest = fit;
+    // A stretch that ends at a hyphenation point ends in the hyphen.
+    shown = fit + (u->hyphen && u->opportunity ? p->hyphen_width[p->runs[u->run].span] : 0);
+    if (shown > widest) {
+      widest = shown;
     }
     if (u->hard || u->opportunity) {
       total = fit = 0;
@@ -793,27 +942,37 @@ typedef struct {
   uint8_t level;
   bool hang;
   bool ellipsis;
+  bool hyphen;
   size_t g_lo, g_hi;
   size_t b_lo, b_hi;   // the bytes of text it stands for
   GFNT_F26Dot6 advance;
 } Slice;
 
-/** Cut a line [ua, ub) of units into line starts. Returns how many lines. */
+/**
+ * Cut the units into lines. Fills @p starts with where each line begins and @p hyphened with
+ * whether it ends at a hyphenation point, so that a hyphen is added. Returns how many lines.
+ *
+ * @p cand_at and @p cand_fit are scratch for the places a line could break so far, each as many
+ * as there are units.
+ */
 static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
-    size_t * starts) {
+    size_t * starts, bool * hyphened, size_t * cand_at, GFNT_F26Dot6 * cand_fit) {
   size_t lines = 0;
   size_t i = 0;
 
   if (p->unit_count == 0) {
     starts[0] = 0;
+    hyphened[0] = false;
     return 1;
   }
   while (i < p->unit_count) {
     GFNT_F26Dot6 total = 0, fit = 0;
-    size_t cand = (size_t)-1;
+    size_t cands = 0;
     size_t end = p->unit_count;
+    bool hyphen = false;
     bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
 
+    hyphened[lines] = false;
     starts[lines++] = i;
     for (size_t j = i; j < p->unit_count; j++) {
       const Unit * u = &p->units[j];
@@ -826,22 +985,41 @@ static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
         end = j + 1;
         break;
       }
-      if (bounded && fit > width && cand != (size_t)-1) {
-        end = cand + 1;
+      if (bounded && fit > width && cands) {
+        // Over the width: break at the last place where what stays, and the hyphen if that place
+        // wants one, fit; failing that at the first place, which overflows the least.
+        size_t k = cands;
+
+        while (k > 0) {
+          const Unit * c = &p->units[cand_at[k - 1]];
+
+          if (!c->hyphen
+              || cand_fit[k - 1] + p->hyphen_width[p->runs[c->run].span] <= width) {
+            break;
+          }
+          k--;
+        }
+        k = k ? k - 1 : 0;
+        end = cand_at[k] + 1;
+        hyphen = p->units[cand_at[k]].hyphen;
         break;
       }
       if (u->opportunity && j + 1 < p->unit_count) {
         if (bounded && fit > width) {
           end = j + 1;
+          hyphen = u->hyphen;
           break;
         }
-        cand = j;
+        cand_at[cands] = j;
+        cand_fit[cands++] = fit;
       }
     }
+    hyphened[lines - 1] = hyphen;
     i = end;
   }
   // A text ending in a newline has an empty last line.
   if (p->units[p->unit_count - 1].hard) {
+    hyphened[lines] = false;
     starts[lines++] = p->unit_count;
   }
   return lines;
@@ -909,6 +1087,9 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   uint8_t * slice_levels = NULL;
   GFNT_F26Dot6 * ew = NULL;       // each unit's width in its line, tabs resolved
   GFNT_F26Dot6 * tabadv = NULL;   // a tab glyph's advance, by glyph index
+  bool * hyphened = NULL;         // whether each line ends at a hyphenation point
+  size_t * cand_at = NULL;        // scratch for break_lines
+  GFNT_F26Dot6 * cand_fit = NULL;
   GFNT_Rect ink_all = {0, 0, 0, 0};
   GFNT_Line * lines = NULL;
   uint8_t * storage = NULL;
@@ -933,12 +1114,16 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   slice_levels = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, 1);
   ew = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *ew);
   tabadv = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, sizeof *tabadv);
-  if (!starts || !slices || !order || !slice_levels || !ew || !tabadv) {
+  hyphened = allocator->calloc_fn(allocator->ctx, p->unit_count + 2, sizeof *hyphened);
+  cand_at = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *cand_at);
+  cand_fit = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *cand_fit);
+  if (!starts || !slices || !order || !slice_levels || !ew || !tabadv || !hyphened || !cand_at
+      || !cand_fit) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the layout");
     goto done;
   }
-  line_count = break_lines(p, width, starts);
+  line_count = break_lines(p, width, starts, hyphened, cand_at, cand_fit);
   starts[line_count] = p->unit_count;
   total_lines = line_count;
   if (p->options.max_lines && line_count > p->options.max_lines) {
@@ -973,6 +1158,11 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     GFNT_F26Dot6 ell_w = 0, natural = 0, extra = 0, extra_rem = 0;
     size_t expanded = 0;
     PRun ell_run;
+    PGlyph hy_g[ELL_GLYPHS];
+    size_t hy_n = 0;
+    GFNT_F26Dot6 hy_w = 0;
+    PRun hy_run;
+    bool hy_line = false;
     bool trunc_line = false;
     bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
 
@@ -993,6 +1183,19 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     }
     for (size_t j = ua; j < hang_from; j++) {
       natural += ew[j];
+    }
+    if (hyphened[li] && ub > ua) {
+      // The line ends inside a word: a hyphen follows its last letter, and takes room.
+      const PRun * last = &p->runs[p->units[ub - 1].run];
+
+      r = shape_string(p, last->span, &p->hyphen_cp[last->span], 1, hy_g, &hy_n, &hy_w,
+          &hy_run, error);
+      if (r != GFNT_OK) {
+        goto done;
+      }
+      hy_run.level = last->level;
+      hy_line = true;
+      natural += hy_w;
     }
     if (p->options.max_lines && p->ell_count && li + 1 == line_count
         && (more || (bounded && natural > width))) {
@@ -1020,6 +1223,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       }
       hang_from = ub;
       trunc_line = true;
+      hy_line = false;   // the mark takes the hyphen's place
       any_truncated = true;
     }
     if (more && li + 1 == line_count) {
@@ -1057,6 +1261,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
         s->pr = pr;
         s->src = p->glyphs;
         s->ellipsis = false;
+        s->hyphen = false;
         s->level = level;
         s->hang = hang;
         s->g_lo = u->g_lo;
@@ -1070,6 +1275,24 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       if (u->g_lo < s->g_lo) s->g_lo = u->g_lo;
       if (u->g_hi > s->g_hi) s->g_hi = u->g_hi;
     }
+    if (hy_line) {
+      const size_t at = p->cp_byte[p->units[ub - 1].cp_end];
+      Slice * s = &slices[ns++];
+
+      for (size_t g = 0; g < hy_n; g++) {
+        hy_g[g].cluster = (uint32_t)at;
+      }
+      s->pr = &hy_run;
+      s->src = hy_g;
+      s->ellipsis = false;
+      s->hyphen = true;
+      s->level = hy_run.level;
+      s->hang = false;
+      s->g_lo = 0;
+      s->g_hi = hy_n;
+      s->b_lo = s->b_hi = at;
+      s->advance = 0;
+    }
     if (trunc_line) {
       size_t at = ub > ua ? p->cp_byte[p->units[ub - 1].cp_end]
                           : (ua < p->unit_count ? p->cp_byte[p->units[ua].cp_start]
@@ -1082,6 +1305,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       s->pr = &ell_run;
       s->src = ell_g;
       s->ellipsis = true;
+      s->hyphen = false;
       s->level = p->para_level;
       s->hang = false;
       s->g_lo = 0;
@@ -1128,6 +1352,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       lr->face_index = pr->face_index;
       lr->fallback = pr->face_index != 0;
       lr->ellipsis = s->ellipsis;
+      lr->hyphen = s->hyphen;
       lr->level = s->level;
       lr->glyphs = &placed[glyph_used];
       lr->glyph_count = s->g_hi - s->g_lo;
@@ -1264,6 +1489,9 @@ done:
   allocator->free_fn(allocator->ctx, slice_levels);
   allocator->free_fn(allocator->ctx, ew);
   allocator->free_fn(allocator->ctx, tabadv);
+  allocator->free_fn(allocator->ctx, hyphened);
+  allocator->free_fn(allocator->ctx, cand_at);
+  allocator->free_fn(allocator->ctx, cand_fit);
   allocator->free_fn(allocator->ctx, lines);
   allocator->free_fn(allocator->ctx, storage);
   return r;

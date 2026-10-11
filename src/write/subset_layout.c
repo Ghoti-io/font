@@ -238,11 +238,26 @@ static void build_feature_list(GFNT_RW * rw, size_t list, const GFNT_Tag * featu
 
 /* --- feature variations -------------------------------------------------- */
 
-/** A condition table. Formats 1 and 2 are all there are to a font without axes' worth of structure. */
-static void build_condition(GFNT_RW * rw, size_t cond, GFNT_WBuf * out) {
+/** How deep a condition may nest; a table is free to point a condition at itself. */
+#define MAX_CONDITION_DEPTH 16
+
+static uint32_t rw_u24(GFNT_RW * rw, size_t at) {
+  return ((uint32_t)gfnt_rw_u16(rw, at) << 8) | (gfnt_rw_u16(rw, at + 1) & 0xFFu);
+}
+
+/**
+ * A condition table. None of its formats names a glyph, so each is copied; the and, or and
+ * not forms (3 to 5) hold 24-bit offsets to conditions inside them, which are rebuilt after
+ * the header so that the offsets are stated again.
+ */
+static void build_condition(GFNT_RW * rw, size_t cond, unsigned depth, GFNT_WBuf * out) {
   uint16_t format = gfnt_rw_u16(rw, cond);
 
   if (rw->bad) {
+    return;
+  }
+  if (depth > MAX_CONDITION_DEPTH) {
+    rw->bad = true;
     return;
   }
   if (format == 1) {
@@ -255,6 +270,47 @@ static void build_condition(GFNT_RW * rw, size_t cond, GFNT_WBuf * out) {
     gfnt_wbuf_u16(out, 2);
     gfnt_wbuf_u16(out, gfnt_rw_u16(rw, cond + 2));
     gfnt_wbuf_u32(out, gfnt_rw_u32(rw, cond + 4));
+  }
+  else if (format == 3 || format == 4 || format == 5) {
+    // And, or: a count then that many offsets. Not: one offset.
+    size_t n = format == 5 ? 1 : (gfnt_rw_u16(rw, cond + 1) & 0xFFu);
+    size_t first = format == 5 ? cond + 2 : cond + 3;
+    size_t header = (format == 5 ? 2 : 3) + 3 * n;
+    GFNT_WBuf body;
+    size_t i;
+
+    if (rw->bad) {
+      return;
+    }
+    gfnt_wbuf_init(&body, rw->a);
+    gfnt_wbuf_u16(out, format);
+    if (format != 5) {
+      gfnt_wbuf_u8(out, (uint32_t)n);
+    }
+    for (i = 0; i < n && healthy(rw); ++i) {
+      GFNT_WBuf child;
+      size_t at = header + body.length;
+
+      gfnt_wbuf_init(&child, rw->a);
+      build_condition(rw, cond + rw_u24(rw, first + 3 * i), depth + 1, &child);
+      absorb(rw, &child);
+      if (at > 0xFFFFFFu) {
+        rw->overflow = true;
+      }
+      gfnt_wbuf_u8(out, (uint32_t)(at >> 16));
+      gfnt_wbuf_u16(out, (uint32_t)(at & 0xFFFFu));
+      if (healthy(rw)) {
+        gfnt_wbuf_bytes(&body, child.data, child.length);
+      }
+      gfnt_wbuf_free(&child);
+    }
+    if (body.oom) {
+      rw->oom = true;
+    }
+    if (healthy(rw)) {
+      gfnt_wbuf_bytes(out, body.data, body.length);
+    }
+    gfnt_wbuf_free(&body);
   }
   else {
     rw->unsupported = true;
@@ -278,7 +334,7 @@ static void build_condition_set(GFNT_RW * rw, size_t set, GFNT_WBuf * out) {
     GFNT_WBuf cb;
 
     gfnt_wbuf_init(&cb, rw->a);
-    build_condition(rw, set + gfnt_rw_u32(rw, set + 2 + 4 * (size_t)i), &cb);
+    build_condition(rw, set + gfnt_rw_u32(rw, set + 2 + 4 * (size_t)i), 0, &cb);
     absorb(rw, &cb);
     if (healthy(rw) && !rw->unsupported) {
       gfnt_lout_link32(&o, 2 + 4 * (size_t)i, 0, gfnt_lout_add(&o, cb.data, cb.length));

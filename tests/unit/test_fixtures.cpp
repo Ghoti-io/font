@@ -186,6 +186,7 @@ const std::vector<Entry> & every_fixture() {
       {"cff-subset.otf", 8},
       {"variable-cff2-hvar.otf", 10},
       {"variable-cff2-implicit.otf", 10},
+      {"cff2-fds.otf", 300},
       {"cff-curves.otf", 13},
       {"cff-hints.otf", 8},
       {"cff-seac.otf", 6},
@@ -252,6 +253,7 @@ const std::vector<Entry> & every_fixture() {
       {"variable-cvar.ttf", 9},
       {"variable-cff2.otf", 8},
       {"variable-featurevars.ttf", 9},
+      {"variable-featurevars-nested.ttf", 9},
       // The layout fixtures: thirty-nine glyphs (a-z, three alternates, four
       // ligatures, o_o, three marks) and eighteen (sixteen glyphs after .notdef
       // and space), and the text files naming the runs each is shaped on.

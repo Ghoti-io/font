@@ -1246,6 +1246,65 @@ def build_variable_featurevars(out):
     fb.save(out)
 
 
+def build_variable_featurevars_nested(out):
+    """`variable-featurevars.ttf` with conditions in formats 3, 4 and 5: and, or, not.
+
+    Every format-1 condition of the original three records is replaced by a tree, so a
+    subsetter that copied only the plain axis range would drop or refuse the rest. The
+    trees (on normalised coordinates):
+
+      * record 1, bar -> dot:   wght in [0.5, 1] AND NOT wdth in [-1, -0.5]
+      * record 2, tri -> ring:  wght in [-1, -0.5] OR (wdth in [0.25, 1] AND NOT
+                                wght in [0.25, 1])
+      * record 3, bar -> acc and tri -> acc2:  NOT wdth in [-0.5, 1]
+    """
+    from fontTools.ttLib.tables import otTables as ot
+    from fontTools.varLib.featureVars import addFeatureVariations
+
+    fb = _variable_font("Variable FeatureVariations Nested")
+    addFeatureVariations(fb.font, [
+        ([{"wght": (0.5, 1.0)}], {"bar": "dot"}),
+        ([{"wght": (-1.0, -0.5), "wdth": (0.25, 1.0)}], {"tri": "ring"}),
+        ([{"wdth": (-1.0, -0.5)}], {"bar": "acc", "tri": "acc2"}),
+    ], featureTag="rvrn")
+
+    def axis(index, low, high):
+        c = ot.ConditionTable()
+        c.Format = 1
+        c.AxisIndex = index
+        c.FilterRangeMinValue = low
+        c.FilterRangeMaxValue = high
+        return c
+
+    def group(fmt, *parts):
+        c = ot.ConditionTable()
+        c.Format = fmt
+        c.ConditionCount = len(parts)
+        c.ConditionTable = list(parts)
+        return c
+
+    def negate(part):
+        c = ot.ConditionTable()
+        c.Format = 5
+        c.ConditionTable = part
+        return c
+
+    wght, wdth = 0, 1
+    trees = [
+        group(3, axis(wght, 0.5, 1.0), negate(axis(wdth, -1.0, -0.5))),
+        group(4, axis(wght, -1.0, -0.5),
+              group(3, axis(wdth, 0.25, 1.0), negate(axis(wght, 0.25, 1.0)))),
+        negate(axis(wdth, -0.5, 1.0)),
+    ]
+    records = fb.font["GSUB"].table.FeatureVariations.FeatureVariationRecord
+    assert len(records) >= len(trees)
+    for record, tree in zip(records, trees):
+        record.ConditionSet.ConditionTable = [tree]
+        record.ConditionSet.ConditionCount = 1
+    pin(fb)
+    fb.save(out)
+
+
 def build_variable_cvar(out):
     """`variable-gvar.ttf`'s font with a `cvt ` and a `cvar` that moves it."""
     from array import array
@@ -1460,6 +1519,40 @@ def build_variable_cff2(out):
                                  default=100, maximum=125)],
                  [{"location": {"wght": 700, "wdth": 100}, "stylename": "Bold"}])
     fb.setupCFF2(cff2_charstrings(), regions=CFF2_REGIONS)
+    pin(fb)
+    fb.save(out)
+
+
+def build_cff2_fds(out):
+    """A CFF2 font of 300 Font DICTs, one glyph in each, so `FDSelect` needs format 4.
+
+    Formats 0 and 3 name a Font DICT in one byte; past 256 only format 4 can. Each
+    DICT's Private holds a different `StdHW` (the DICT's number plus one), so a
+    subset that renumbered the DICTs or the glyphs against them wrongly is visible
+    as a glyph whose hint zone belongs to another.
+    """
+    from fontTools.cffLib import FDSelect
+    from fontTools.misc.psCharStrings import T2CharString
+    count = 300
+    order = [".notdef"] + ["g%03d" % i for i in range(1, count)]
+    glyphs = {}
+    for i, name in enumerate(order):
+        glyphs[name] = T2CharString(program=[
+            10 + i % 50, 10, "rmoveto", 40 + i % 7, "hlineto", 40, "vlineto"])
+    fb = FontBuilder(UPEM, isTTF=False)
+    fb.setupGlyphOrder(order)
+    fb.setupHorizontalMetrics({n: (600, 0) for n in order})
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, [subtable(4, 3, 1, {0x41 + i: order[1 + i] for i in range(26)})])
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names("Cff2 Fds"), mac=True)
+    fb.setupPost(keepGlyphNames=True)
+    fb.setupCFF2(glyphs, fdArrayList=[{"StdHW": 20 + i} for i in range(count)])
+    top = fb.font["CFF2"].cff.topDictIndex[0]
+    select = FDSelect(format=4)
+    select.gidArray = list(range(count))
+    top.FDSelect = select
+    top.CharStrings.fdSelect = select
     pin(fb)
     fb.save(out)
 
@@ -4500,6 +4593,9 @@ FIXTURES = {
         "variable-gvar.ttf's font with a GSUB 1.1 whose FeatureVariations has "
         "three records: one condition, two that must both hold, and a "
         "substitution of two glyphs; written by fontTools"),
+    "variable-featurevars-nested.ttf": (build_variable_featurevars_nested,
+        "variable-featurevars.ttf's font with its FeatureVariations conditions in "
+        "formats 3, 4 and 5 (and, or, not), nested, for the subsetter's rewrite"),
     "variable-cvar.ttf": (build_variable_cvar,
         "variable-gvar.ttf's font with a cvt table of eight values and a cvar of "
         "four tuples: every value, a sparse list, an intermediate region and a "
@@ -4508,6 +4604,9 @@ FIXTURES = {
         "CFF2: HVAR with a permuted advance map and a shared left-bearing map, "
         "VVAR with advance-height and vertical-origin maps, and MVAR, for the "
         "subsetter's renumbering"),
+    "cff2-fds.otf": (build_cff2_fds,
+        "CFF2: 300 Font DICTs, one glyph in each, each with its own StdHW, so "
+        "FDSelect is in format 4 (formats 0 and 3 cannot name past 256)"),
     "variable-cff2-implicit.otf": (lambda out: build_variable_cff2_hvar(out, False),
         "CFF2: HVAR with no advance map (the glyph id is the row) and a shared "
         "left-bearing map, for the subsetter's renumbering"),

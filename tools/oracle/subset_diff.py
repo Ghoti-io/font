@@ -137,6 +137,7 @@ def main(argv):
     # them, so the committed ones are shaped too, with a text their few characters cover.
     fixtures = sorted(glob.glob(os.path.join(ROOT, "tests", "data", "fonts",
                                              "variable-cff2*.otf"))
+                      + [os.path.join(ROOT, "tests", "data", "fonts", "cff2-fds.otf")]
                       + glob.glob(os.path.join(ROOT, "tests", "data", "fonts",
                                                "variable-*.ttf")))
     fonts = fonts + fixtures

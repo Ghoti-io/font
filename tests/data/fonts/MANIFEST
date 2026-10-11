@@ -33,6 +33,7 @@ cff-subrs.otf	CFF: local and global subroutines with the bias applied, nesting, 
 cff-subset.otf	CFF: eight and sixteen stems before a hintmask (mask width on a multiple-of-eight boundary), three glyphs named in the font's own String INDEX, and a subroutine call, for the subsetter
 cff-type1.otf	CFF with CharstringType 1: Type 1 programs - hsbw, sbw, closepath, seac with its side-bearing correction, flex and hint replacement through callothersubr and pop, div, dotsection, hstem3 and setcurrentpoint
 cff.otf	OTTO flavour: a CFF outline table, every metric table unchanged
+cff2-fds.otf	CFF2: 300 Font DICTs, one glyph in each, each with its own StdHW, so FDSelect is in format 4 (formats 0 and 3 cannot name past 256)
 cmap-format0.ttf	cmap format 0 on (1,0): the 256-byte glyph array
 cmap-format12.ttf	cmap format 12 on (3,10) past the BMP, beside a format 4
 cmap-format6.ttf	cmap format 6 on (1,0): a trimmed array with firstCode
@@ -87,6 +88,7 @@ variable-cff2-hvar.otf	CFF2: HVAR with a permuted advance map and a shared left-
 variable-cff2-implicit.otf	CFF2: HVAR with no advance map (the glyph id is the row) and a shared left-bearing map, for the subsetter's renumbering
 variable-cff2.otf	a CFF2 variable font written by fontTools: two axes, three regions (weight up, weight down, weight and width up together) and glyphs that blend one value, several at once, a curve with a fractional delta, an hvcurveto, and a hintmask
 variable-cvar.ttf	variable-gvar.ttf's font with a cvt table of eight values and a cvar of four tuples: every value, a sparse list, an intermediate region and a two-axis corner, written by fontTools
+variable-featurevars-nested.ttf	variable-featurevars.ttf's font with its FeatureVariations conditions in formats 3, 4 and 5 (and, or, not), nested, for the subsetter's rewrite
 variable-featurevars.shape	The runs variable-featurevars.ttf is shaped on, each at a location in its design space: one per FeatureVariations record, the order they are tried in, and either side of a condition's edge
 variable-featurevars.ttf	variable-gvar.ttf's font with a GSUB 1.1 whose FeatureVariations has three records: one condition, two that must both hold, and a substitution of two glyphs; written by fontTools
 variable-gvar.ttf	fvar, avar and gvar written by fontTools: two axes (one hidden), three named instances (one with a PostScript name), a bent avar on one axis and an identity map on the other; and in gvar a single named point, an inferred run between two corners, named points in two contours of one glyph, an intermediate region, a two-axis corner, shared and embedded peaks, a composite whose component offsets move (one placed by matching points, whose delta is ignored), a composite of a composite, and a glyph with no contours that varies only in its phantom points

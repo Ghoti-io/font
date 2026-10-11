@@ -1774,9 +1774,10 @@ verbatim. Without it they are **rewritten** for the new numbering
   split cannot shrink (a context of format 3, whose size does not depend on its
   glyphs) is `GFNT_ERR_LIMIT`.
 - `GDEF` keeps its classes, attachment points, ligature carets, mark attachment
-  classes and mark glyph sets for reachable glyphs. `FeatureVariations` (condition
-  formats 1 and 2) is carried, its lookup indices renumbered; another condition
-  format is `GFNT_ERR_UNSUPPORTED`. `kern` is carried in format 0 and the
+  classes and mark glyph sets for reachable glyphs. `FeatureVariations` (every condition
+  format: an axis range, a varied value, and, or and not, nested to sixteen deep) is carried, its
+  lookup indices renumbered; a condition of a format the specification does not define is
+  `GFNT_ERR_UNSUPPORTED`. `kern` is carried in format 0 and the
   class-based format 2, Microsoft or Apple header; another format is
   `GFNT_ERR_UNSUPPORTED`. `GFNT_SubsetOptions::map` reports which source glyph each
   subset glyph is.
@@ -1799,7 +1800,8 @@ through fontTools and shaping through HarfBuzz, 0 differences, no subroutine lef
 `vsindex` and `blend` (a blend's result count needs the region count of the current
 ItemVariationData, read from the store), and the writer produces the CFF2 layout: a header
 with the Top DICT inline, four-byte INDEX counts, no Name, String or charset, an `FDSelect`
-only when more than one Font DICT is left (format 0, 3 or 4, the smallest that can say it), and
+only when more than one Font DICT is left (format 0, 3 or 4, the smallest that can say it; format 4 is the only one past 256 Font DICTs, and `cff2-fds.otf`
+holds 300 of them), and
 the variation store copied whole behind its length. The tables around it: `fvar`, `avar`, `STAT`
 and `MVAR` name no glyph and are copied; `HVAR` and `VVAR` keep their store and have their
 delta-set index maps rebuilt (`src/write/subset_var.c`), one entry for each kept glyph, with an

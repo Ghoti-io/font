@@ -48,7 +48,12 @@ def cff_outline(font, gid):
     string.draw(pen)
     if not pen.value:
         return None
-    return (pen.value, getattr(string, "width", None))
+    # The hint zones of the Private DICT its Font DICT chose: a renumbered Font DICT
+    # that handed a glyph another one's shows here and nowhere in the drawing.
+    private = getattr(string, "private", None)
+    zones = tuple(repr(getattr(private, key, None))
+                  for key in ("StdHW", "StdVW", "BlueValues"))
+    return (pen.value, getattr(string, "width", None), zones)
 
 
 def outline(font, gid):

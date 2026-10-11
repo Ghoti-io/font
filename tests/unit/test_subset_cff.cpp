@@ -33,6 +33,7 @@
 #include "failing_allocator.h"
 
 #include <algorithm>
+#include <set>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -63,6 +64,9 @@ struct Font {
     bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     open();
   }
+  explicit Font(std::vector<uint8_t> b) : bytes(std::move(b)) {
+    open();
+  }
   void open() {
     ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_BORROWED,
                   nullptr, nullptr, &blob, nullptr), GFNT_OK);
@@ -90,9 +94,11 @@ struct Subset {
   size_t size = 0;
 
   Subset(const GFNT_Face * source, std::vector<uint32_t> glyphs, bool retain = false,
-      bool drop_hinting = false) {
+      bool drop_hinting = false, std::vector<uint32_t> characters = {}) {
     GFNT_SubsetOptions o;
     gfnt_subset_options_init(&o);
+    o.codepoints = characters.data();
+    o.codepoint_count = characters.size();
     o.glyphs = glyphs.data();
     o.glyph_count = glyphs.size();
     o.retain_gids = retain;
@@ -797,6 +803,255 @@ TEST(SubsetGvar, EveryAllocationFailureIsSurvived) {
     gfnt_blob_destroy(out);
     EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
   }
+}
+
+// --- FDSelect format 4 ------------------------------------------------------
+
+namespace {
+
+/** A DICT read into (operator, operands); an operator 12 x is 1200 + x. */
+std::vector<std::pair<int, std::vector<long>>> read_dict(const uint8_t * p, size_t n) {
+  std::vector<std::pair<int, std::vector<long>>> out;
+  std::vector<long> args;
+  size_t i = 0;
+  while (i < n) {
+    const int b = p[i];
+    if (b <= 21) {
+      int op = b;
+      ++i;
+      if (b == 12) {
+        op = 1200 + p[i++];
+      }
+      out.push_back({op, args});
+      args.clear();
+    }
+    else if (b == 28) {
+      args.push_back(static_cast<int16_t>((p[i + 1] << 8) | p[i + 2]));
+      i += 3;
+    }
+    else if (b == 29) {
+      args.push_back(static_cast<int32_t>((static_cast<uint32_t>(p[i + 1]) << 24)
+          | (p[i + 2] << 16) | (p[i + 3] << 8) | p[i + 4]));
+      i += 5;
+    }
+    else if (b == 30) {
+      ++i;
+      while (i < n && (p[i] & 0x0F) != 0x0F && (p[i] >> 4) != 0x0F) {
+        ++i;
+      }
+      ++i;
+      args.push_back(0);
+    }
+    else if (b >= 32 && b <= 246) {
+      args.push_back(b - 139);
+      ++i;
+    }
+    else if (b >= 247 && b <= 250) {
+      args.push_back((b - 247) * 256 + p[i + 1] + 108);
+      i += 2;
+    }
+    else if (b >= 251 && b <= 254) {
+      args.push_back(-(b - 251) * 256 - p[i + 1] - 108);
+      i += 2;
+    }
+    else {
+      ++i;
+    }
+  }
+  return out;
+}
+
+long operand_of(const std::vector<std::pair<int, std::vector<long>>> & d, int op, size_t at = 0) {
+  for (const auto & e : d) {
+    if (e.first == op && at < e.second.size()) {
+      return e.second[at];
+    }
+  }
+  return -1;
+}
+
+struct FdView {
+  int select_format = -1;
+  bool sentinel_ok = true;                  ///< the range list ends with the glyph count
+  std::vector<int> font_dicts_of_glyph;     ///< the Font DICT each glyph names
+  std::vector<long> std_hw;                 ///< per Font DICT, its Private's StdHW
+};
+
+FdView fd_view(const std::vector<uint8_t> & t) {
+  FdView v;
+  const uint32_t top_len = (t[3] << 8) | t[4];
+  const auto top = read_dict(t.data() + t[2], top_len);
+  const long charstrings = operand_of(top, 17);
+  const long fd_array = operand_of(top, 1236);
+  const long fd_select = operand_of(top, 1237);
+  auto count32 = [&](long at) {
+    return (static_cast<uint32_t>(t[at]) << 24) | (t[at + 1] << 16) | (t[at + 2] << 8) | t[at + 3];
+  };
+  const uint32_t glyphs = count32(charstrings);
+  // The Font DICT index.
+  const uint32_t n = count32(fd_array);
+  const int off_size = t[fd_array + 4];
+  auto off = [&](uint32_t k) {
+    uint32_t o = 0;
+    for (int j = 0; j < off_size; ++j) {
+      o = (o << 8) | t[fd_array + 5 + k * off_size + j];
+    }
+    return o;
+  };
+  const long data = fd_array + 5 + (n + 1) * off_size - 1;
+  for (uint32_t k = 0; k < n; ++k) {
+    const auto fd = read_dict(t.data() + data + off(k), off(k + 1) - off(k));
+    const long size = operand_of(fd, 18, 0);
+    const long where = operand_of(fd, 18, 1);
+    const auto priv = read_dict(t.data() + where, size);
+    v.std_hw.push_back(operand_of(priv, 10));     // StdHW
+  }
+  // FDSelect.
+  v.select_format = fd_select > 0 ? t[fd_select] : -1;
+  v.font_dicts_of_glyph.assign(glyphs, 0);
+  if (v.select_format == 0) {
+    for (uint32_t g = 0; g < glyphs; ++g) {
+      v.font_dicts_of_glyph[g] = t[fd_select + 1 + g];
+    }
+  }
+  else if (v.select_format == 3 || v.select_format == 4) {
+    const bool wide = v.select_format == 4;
+    size_t at = fd_select + 1;
+    const uint32_t ranges = wide ? count32(at) : ((t[at] << 8) | t[at + 1]);
+    at += wide ? 4 : 2;
+    const size_t step = wide ? 6 : 3;
+    for (uint32_t r = 0; r < ranges; ++r) {
+      const size_t e = at + r * step;
+      const uint32_t first = wide ? count32(e) : ((t[e] << 8) | t[e + 1]);
+      const int fd = wide ? ((t[e + 4] << 8) | t[e + 5]) : t[e + 2];
+      const size_t n2 = at + (r + 1) * step;
+      const uint32_t next = wide ? count32(n2) : ((t[n2] << 8) | t[n2 + 1]);
+      for (uint32_t g = first; g < next && g < glyphs; ++g) {
+        v.font_dicts_of_glyph[g] = fd;
+      }
+    }
+    const size_t end = at + static_cast<size_t>(ranges) * step;
+    v.sentinel_ok = (wide ? count32(end) : ((t[end] << 8) | t[end + 1])) == glyphs;
+  }
+  return v;
+}
+
+}  // namespace
+
+TEST(SubsetCff2, MoreThan256FontDictsNeedFdSelectFormat4AndKeepEachGlyphsPrivate) {
+  Font source("cff2-fds.otf");
+  ASSERT_EQ(source.glyphs(), 300u);
+  const FdView whole = fd_view(table_of(source.face, "CFF2"));
+  ASSERT_EQ(whole.select_format, 4);
+  ASSERT_EQ(whole.std_hw.size(), 300u);
+
+  for (bool retain : {false, true}) {
+    // Every glyph, then enough to need format 4 after pruning, then too few to.
+    std::vector<std::vector<uint32_t>> sets = {all_glyphs(300), all_glyphs(280), all_glyphs(257),
+        all_glyphs(256), {7, 259, 299}, {0, 255, 256, 257}};
+    for (const auto & keep : sets) {
+      SCOPED_TRACE(std::string(retain ? "retained " : "renumbered ") + std::to_string(keep.size()));
+      Subset sub(source.face, keep, retain);
+      ASSERT_EQ(sub.result, GFNT_OK) << sub.error.message;
+      const FdView v = fd_view(table_of(sub.face, "CFF2"));
+      // Format 4 only where a Font DICT past 255 is still named; the smaller forms otherwise.
+      size_t kept_fds = v.std_hw.size();
+      EXPECT_TRUE(v.sentinel_ok);
+      EXPECT_EQ(v.select_format == 4, kept_fds > 256) << "format " << v.select_format;
+      for (size_t now = 0; now < sub.map.count; ++now) {
+        const uint32_t old = sub.map.old_of_new[now];
+        if (old == 0xFFFFFFFFu) {
+          continue;
+        }
+        ASSERT_LT(static_cast<size_t>(v.font_dicts_of_glyph[now]), v.std_hw.size());
+        ASSERT_EQ(whole.std_hw[old], 20 + static_cast<long>(old));    // the control: a real value
+        EXPECT_EQ(v.std_hw[v.font_dicts_of_glyph[now]], whole.std_hw[old])
+            << "glyph " << old << " now " << now;
+      }
+    }
+  }
+}
+
+TEST(SubsetCff2, ASubsetOfFontDictsPastTheByteRangeRenumbersThemIntoIt) {
+  Font source("cff2-fds.otf");
+  Subset sub(source.face, {299, 270});
+  ASSERT_EQ(sub.result, GFNT_OK);
+  const FdView v = fd_view(table_of(sub.face, "CFF2"));
+  EXPECT_EQ(v.std_hw.size(), 3u);      // .notdef's Font DICT, and the two named
+  EXPECT_NE(v.select_format, 4);
+  EXPECT_EQ(v.std_hw[v.font_dicts_of_glyph[sub.new_of(299)]], 20 + 299);
+  EXPECT_EQ(v.std_hw[v.font_dicts_of_glyph[sub.new_of(270)]], 20 + 270);
+}
+
+// --- FeatureVariations conditions -------------------------------------------
+
+#include <ghoti.io/font/shape.h>
+
+namespace {
+
+/** "AB" shaped at a place, as (source glyph, advance) pairs. */
+std::vector<std::pair<uint32_t, int>> shaped_at(const GFNT_Face * face, const GFNT_SubsetMap * map,
+    GFNT_F16Dot16 wght, GFNT_F16Dot16 wdth) {
+  const GFNT_F16Dot16 user[2] = {wght, wdth};
+  GFNT_F2Dot14 norm[2] = {0, 0};
+  EXPECT_EQ(gfnt_face_normalize(face, user, 2, norm, 2, nullptr), GFNT_OK);
+  GFNT_Variation v{norm, 2, GFNT_DELTA_ROUND_HALF_UP};
+  GFNT_ShapeOptions options{};
+  options.variation = &v;
+  const uint32_t text[2] = {0x41, 0x42};
+  GFNT_ShapedRun run{};
+  std::vector<std::pair<uint32_t, int>> out;
+  EXPECT_EQ(gfnt_face_shape(face, text, 2, &options, nullptr, &run, nullptr), GFNT_OK);
+  for (size_t i = 0; i < run.count; ++i) {
+    const uint32_t g = run.glyphs[i].glyph;
+    out.push_back({map ? map->old_of_new[g] : g, run.glyphs[i].x_advance});
+  }
+  gfnt_shaped_run_free(&run);
+  return out;
+}
+
+}  // namespace
+
+TEST(SubsetFeatureVariations, AndOrAndNotConditionsHoldAtTheSamePlacesAfterTheRewrite) {
+  for (const char * name : {"variable-featurevars.ttf", "variable-featurevars-nested.ttf"}) {
+    Font source(name);
+    for (bool retain : {false, true}) {
+      Subset sub(source.face, {}, retain, false, {0x41, 0x42});
+      ASSERT_EQ(sub.result, GFNT_OK) << name << ": " << sub.error.message;
+      std::set<std::vector<std::pair<uint32_t, int>>> distinct;
+      for (int wght : {100, 250, 400, 560, 575, 700, 900}) {
+        for (int wdth : {75, 90, 100, 112, 125}) {
+          SCOPED_TRACE(std::string(name) + (retain ? " retained " : " renumbered ")
+              + std::to_string(wght) + "," + std::to_string(wdth));
+          const auto want = shaped_at(source.face, nullptr, fx(wght), fx(wdth));
+          EXPECT_EQ(shaped_at(sub.face, &sub.map, fx(wght), fx(wdth)), want);
+          distinct.insert(want);
+        }
+      }
+      // The control: the conditions do something here, or equal answers prove nothing.
+      EXPECT_GE(distinct.size(), 3u) << name;
+    }
+  }
+}
+
+TEST(SubsetFeatureVariations, ATreeThatPointsAtItselfIsRefusedNotFollowedForever) {
+  Font source("variable-featurevars-nested.ttf");
+  // Find the first format 3 condition (an AND) and make its first offset point to itself:
+  // the offset 3 bytes in is relative to the condition, so zero is the condition itself.
+  std::vector<uint8_t> bytes = source.bytes;
+  bool patched = false;
+  for (size_t i = 0; i + 8 < bytes.size() && !patched; ++i) {
+    // format 3, two conditions, then Offset24 values 0x000008 / 0x00000C seen in the fixture.
+    if (bytes[i] == 0 && bytes[i + 1] == 3 && bytes[i + 2] == 2 && bytes[i + 3] == 0
+        && bytes[i + 4] == 0 && bytes[i + 5] > 0) {
+      bytes[i + 3] = bytes[i + 4] = bytes[i + 5] = 0;
+      patched = true;
+    }
+  }
+  ASSERT_TRUE(patched);
+  Font mutated(std::move(bytes));
+  Subset sub(mutated.face, {}, false, false, {0x41, 0x42});
+  EXPECT_NE(sub.result, GFNT_OK);
 }
 
 int main(int argc, char ** argv) {

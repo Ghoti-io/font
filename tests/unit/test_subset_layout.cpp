@@ -378,9 +378,9 @@ TEST(SubsetLayout, FeatureVariationsAreCarriedWithTheirLookupsRenumbered) {
   expect_same(src, sub, {kFirstChar}, "glyph 1 under the variation");
 }
 
-TEST(SubsetLayout, AConditionOfAnotherFormatIsRefusedAndDropLayoutSubsetsAnyway) {
+TEST(SubsetLayout, AConditionOfAnUnknownFormatIsRefusedAndDropLayoutSubsetsAnyway) {
   std::vector<uint8_t> weird;
-  put_u16(weird, 3);     // a conjunction, which this does not rewrite
+  put_u16(weird, 6);     // a format the specification does not define
   weird.push_back(0);
   Font src;
   const auto gsub = layout_table({{"ccmp", {0}}},

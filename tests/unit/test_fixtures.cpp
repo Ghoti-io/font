@@ -186,6 +186,9 @@ const std::vector<Entry> & every_fixture() {
       {"color-cbdt-metrics.ttf", 128},
       {"color-cbdt-sizes.ttf", 7},
       {"color-cbdt.ttf", 12},
+      {"color-sbix-dupes.ttf", 300},
+      {"color-sbix-metrics.ttf", 128},
+      {"color-sbix.ttf", 10},
       {"color-cpal0.ttf", 8},
       {"color-v0.ttf", 8},
       {"color-v1-var.ttf", 9},
@@ -770,9 +773,12 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
                               GFNT_TAG('C', 'B', 'L', 'C'))
         && gfnt_face_has_table(fixture.face, GFNT_TAG('C', 'B', 'D', 'T'));
 
+    const bool has_sbix = gfnt_face_has_table(fixture.face,
+                              GFNT_TAG('s', 'b', 'i', 'x'));
+
     if (is_strike) {
       EXPECT_EQ(strikes, 1u) << name;
-    } else if (has_eblc || has_cblc) {
+    } else if (has_eblc || has_cblc || has_sbix) {
       // Not "more than one": strike-formats.ttf has a single strike, because what
       // it varies is how that strike is *indexed*. The two EBLC fixtures split the
       // two axes - how many strikes, and how one strike is laid out - and a sweep
@@ -792,9 +798,9 @@ TEST(Fixtures, EveryFixturesStrikeCountIsTheOneItsContainerImplies) {
   // Counted, because the three branches above are only worth anything if the
   // fixture set reaches all of them: a sweep over a set that had lost its
   // multi-strike font would pass every assertion and check nothing new.
-  EXPECT_EQ(with_strikes, 16u) << "ten standalone containers, strikes.ttf, "
-      "strike-formats.ttf, strike-composite.ttf and the three color-cbdt fonts";
-  EXPECT_EQ(with_many, 4u) << "strikes.ttf and the three color-cbdt fonts have a "
+  EXPECT_EQ(with_strikes, 19u) << "ten standalone containers, strikes.ttf, "
+      "strike-formats.ttf, strike-composite.ttf the three color-cbdt fonts and the three sbix ones";
+  EXPECT_EQ(with_many, 6u) << "strikes.ttf, the three color-cbdt fonts and the two sbix fonts have a "
       "choice of strike; the other two EBLC fixtures have one strike each and vary "
       "how it is laid out";
 }

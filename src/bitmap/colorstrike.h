@@ -59,6 +59,15 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
     GFNT_Error * error);
 
 /**
+ * Whether a strike of @p ppem beats the best so far, @p best, for a size asked for.
+ *
+ * The smallest strike at least as large as @p requested, else the largest, and on
+ * equal sizes the earlier: so a strike replaces the best only when strictly better.
+ * @p requested of 0 asks for no size, which is the largest.
+ */
+bool gfnt_strike_better(uint32_t requested, uint32_t ppem, uint32_t best);
+
+/**
  * Which strike HarfBuzz would draw from at a size: see `bitmap_extents.c`.
  *
  * @param requested The size, or 0 for none (the largest strike answers).

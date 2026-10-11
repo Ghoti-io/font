@@ -43,6 +43,7 @@
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/macros.h>
 #include "../bitmap/bitmap.h"
+#include "../bitmap/sbix.h"
 #include "../sfnt/sfnt.h"
 
 /**
@@ -143,7 +144,7 @@ GFNT_Result gfnt_face_strike_count(const GFNT_Face * face, size_t * out_count,
     return GFNT_OK;
   }
 
-  // CBLC is the same list with PNG behind it; sbix is Apple's and is next.
+  // CBLC is the same list with PNG behind it; sbix is Apple's.
   if (gfnt_face_has_cblc(face)) {
     const GFNT_Eblc * cblc = NULL;
     GFNT_Result result = gfnt_face_cblc(face, &cblc, error);
@@ -153,6 +154,10 @@ GFNT_Result gfnt_face_strike_count(const GFNT_Face * face, size_t * out_count,
     }
     *out_count = cblc->strike_count;
     return GFNT_OK;
+  }
+
+  if (gfnt_face_has_sbix(face)) {
+    return gfnt_sbix_strike_count(face, out_count, error);
   }
 
   table = gfnt_face_strike_table(face);
@@ -208,6 +213,9 @@ GFNT_Result gfnt_face_strike_at(const GFNT_Face * face, size_t index,
     }
     *out_strike = cblc->strikes[index].strike;
     return GFNT_OK;
+  }
+  if (index < count && gfnt_face_has_sbix(face)) {
+    return gfnt_sbix_strike_at(face, index, out_strike, error);
   }
   // For every other face the count is zero, so every index is out of range -
   // which is the same answer a real index past the end of a real strike list

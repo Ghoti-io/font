@@ -526,6 +526,158 @@ TEST(ColorBitmapExtents, EqualStrikesGoToTheFirst) {
   EXPECT_BOX(extents(font, 3, 24), 83, 250, 167, -333);
 }
 
+// ---- sbix
+
+TEST(SbixStrike, TheStrikeListIsInTheTablesOrder) {
+  Font font("color-sbix.ttf");
+  size_t count = 0;
+  ASSERT_EQ(gfnt_face_strike_count(font.face, &count, nullptr), GFNT_OK);
+  ASSERT_EQ(count, 2u);
+  GFNT_Strike a{}, b{};
+  ASSERT_EQ(gfnt_face_strike_at(font.face, 0, &a, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_strike_at(font.face, 1, &b, nullptr), GFNT_OK);
+  EXPECT_EQ(a.ppem_x, 40u);   // 40 is first in the file, so it is strike 0
+  EXPECT_EQ(b.ppem_y, 20u);
+  EXPECT_EQ(a.kind, GFNT_GLYPH_BITMAP_PNG);
+  EXPECT_EQ(a.bit_depth, 32);
+  EXPECT_EQ(gfnt_face_strike_at(font.face, 2, &a, nullptr), GFNT_ERR_INVALID);
+}
+
+TEST(SbixStrike, APictureComesWithItsOriginAndNoAdvance) {
+  Font font("color-sbix.ttf");
+  const GFNT_GlyphImage g1 = image_of(font, 1, 1);   // 10 x 12 at origin (1, -2)
+  EXPECT_EQ(g1.format, GFNT_IMAGE_PNG);
+  EXPECT_TRUE(is_png(g1));
+  EXPECT_EQ(g1.width, 10u);
+  EXPECT_EQ(g1.height, 12u);
+  EXPECT_EQ(g1.bearing_x, 1);
+  EXPECT_EQ(g1.origin_y, -2);
+  EXPECT_EQ(g1.bearing_y, 10);   // the bottom edge plus the height
+  EXPECT_EQ(g1.advance, -1);
+  const GFNT_GlyphImage big = image_of(font, 1, 0);   // the same glyph at 40 ppem
+  EXPECT_EQ(big.width, 20u);
+  EXPECT_EQ(big.origin_y, -4);
+}
+
+TEST(SbixStrike, ADupeIsFollowedToThePictureItNames) {
+  Font font("color-sbix.ttf");
+  const GFNT_GlyphImage g1 = image_of(font, 1, 1);
+  for (uint32_t glyph : {3u, 4u}) {   // 3 dupes 1; 4 dupes 3
+    const GFNT_GlyphImage d = image_of(font, glyph, 1);
+    ASSERT_EQ(d.length, g1.length) << glyph;
+    EXPECT_EQ(d.data, g1.data) << glyph;   // the same bytes, not a copy
+    EXPECT_EQ(d.origin_y, -2);
+  }
+  // In the large strike glyph 3 dupes glyph 2, not 1: the same record, another picture.
+  EXPECT_EQ(image_of(font, 3, 0).data, image_of(font, 2, 0).data);
+}
+
+TEST(SbixStrike, JpegAndTiffAreReturnedUnmeasuredAndDecode) {
+  Font font("color-sbix.ttf");
+  const GFNT_GlyphImage jpeg = image_of(font, 5, 1);
+  EXPECT_EQ(jpeg.format, GFNT_IMAGE_JPEG);
+  EXPECT_EQ(jpeg.width, 0u);   // not stated until decoded
+  EXPECT_EQ(jpeg.height, 0u);
+  EXPECT_EQ(image_of(font, 6, 1).format, GFNT_IMAGE_TIFF);
+
+  Decoded j(font, 5, 1);
+  ASSERT_EQ(j.result, GFNT_OK);
+  EXPECT_EQ(j.bitmap.width, 16u);
+  EXPECT_EQ(j.bitmap.height, 16u);
+  EXPECT_EQ(j.bitmap.bearing_y, 20);   // origin 4 plus the decoded height
+  Decoded t(font, 6, 1);
+  ASSERT_EQ(t.result, GFNT_OK);
+  EXPECT_EQ(t.bitmap.width, 8u);
+  EXPECT_EQ(t.bitmap.height, 6u);
+  EXPECT_EQ(t.bitmap.bearing_y, 8);
+  EXPECT_PIXEL(t, 0, 0, 0, 0, 99, 100);
+  EXPECT_PIXEL(t, 1, 0, 31, 0, 99, 255);
+}
+
+TEST(SbixStrike, WhatIsNotThereOrNotReadIsRefusedByName) {
+  Font font("color-sbix.ttf");
+  GFNT_GlyphImage image{};
+  GFNT_Error error;
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 8, 1, &image, &error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::strstr(error.message, "does not carry"), nullptr) << error.message;
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 7, 1, &image, &error), GFNT_ERR_UNSUPPORTED);
+  EXPECT_NE(std::strstr(error.message, "graphicType"), nullptr) << error.message;
+  // A dupe of itself is a cycle, bounded at eight hops.
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 9, 1, &image, &error), GFNT_ERR_CORRUPT);
+  // The large strike does not carry glyph 5.
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 5, 0, &image, nullptr), GFNT_ERR_UNSUPPORTED);
+}
+
+TEST(SbixStrike, NoByteOfTheTableCrashesAReader) {
+  Font source("color-sbix.ttf");
+  size_t at = 0, length = 0;
+  ASSERT_TRUE(table_range(source.bytes, "sbix", &at, &length));
+  size_t tried = 0;
+  for (size_t k = 0; k < length; ++k) {
+    for (uint8_t value : {uint8_t{0x00}, uint8_t{0xFF}}) {
+      std::vector<uint8_t> bytes = source.bytes;
+      bytes[at + k] = value;
+      GFNT_Blob * blob = nullptr;
+      GFNT_Face * face = nullptr;
+      ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_BORROWED,
+                    nullptr, nullptr, &blob, nullptr), GFNT_OK);
+      if (gfnt_face_load(blob, 0, nullptr, nullptr, &face, nullptr) == GFNT_OK) {
+        size_t strikes = 0;
+        if (gfnt_face_strike_count(face, &strikes, nullptr) == GFNT_OK) {
+          for (size_t s = 0; s < strikes; ++s) {
+            for (uint32_t g = 0; g < 10; ++g) {
+              GFNT_ColorBitmap bitmap{};
+              (void)gfnt_face_glyph_color_bitmap(face, g, s, &bitmap, nullptr);
+              gfnt_color_bitmap_free(&bitmap);
+              GFNT_Extents e;
+              (void)gfnt_glyph_extents_at(face, g, nullptr, 20, &e);
+            }
+          }
+        }
+        gfnt_face_free(face);
+      }
+      gfnt_blob_destroy(blob);
+      ++tried;
+    }
+  }
+  EXPECT_GT(tried, 1000u);
+}
+
+TEST(SbixExtents, ThePictureIsMeasuredByItsHeaderAndOrigin) {
+  Font font("color-sbix.ttf");
+  // No size: the 40 ppem strike, 25 units a pixel. Glyph 1 is 20 x 24 at origin (2, -4):
+  // the top edge is -4 + 24 = 20 pixels up.
+  EXPECT_BOX(extents(font, 1), 50, 500, 500, -600);
+  EXPECT_BOX(extents(font, 2), -150, 400, 400, -400);
+  EXPECT_BOX(extents(font, 3), -150, 400, 400, -400);   // a dupe of glyph 2 here
+  // 20 ppem, 50 a pixel: glyph 1 is 10 x 12 at (1, -2), and a chain of dupes reaches it.
+  EXPECT_BOX(extents(font, 1, 20), 50, 500, 500, -600);
+  EXPECT_BOX(extents(font, 4, 20), 50, 500, 500, -600);
+  // A JPEG, a TIFF, a mask, a hole and a cycle have no box.
+  for (uint32_t g : {5u, 6u, 7u, 8u, 9u}) {
+    { SCOPED_TRACE(g); EXPECT_BOX(extents(font, g, 20), 0, 0, 0, 0); }
+  }
+}
+
+TEST(SbixStrike, ADupeChainIsFollowedForEightHopsAndNoFurther) {
+  Font font("color-sbix-dupes.ttf");
+  const GFNT_GlyphImage picture = image_of(font, 1, 0);
+  EXPECT_EQ(image_of(font, 9, 0).data, picture.data);   // eight hops
+  GFNT_GlyphImage image{};
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 10, 0, &image, nullptr), GFNT_ERR_CORRUPT);
+  EXPECT_EQ(gfnt_face_glyph_image(font.face, 20, 0, &image, nullptr), GFNT_ERR_CORRUPT);
+  // 280 dupes 270: an id that does not fit a byte.
+  EXPECT_EQ(image_of(font, 280, 0).data, image_of(font, 270, 0).data);
+  EXPECT_EQ(image_of(font, 280, 0).width, 6u);
+}
+
+TEST(SbixExtents, TheChainLimitIsHarfBuzzs) {
+  Font font("color-sbix-dupes.ttf");
+  EXPECT_BOX(extents(font, 9), 0, 400, 400, -400);   // 8 x 8 at 50 units a pixel
+  EXPECT_BOX(extents(font, 10), 0, 0, 0, 0);
+  EXPECT_BOX(extents(font, 280), 150, 300, 300, -250);   // 6 x 5 at (3, 1): top is 6
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -64,6 +64,8 @@ for path in sys.argv[2:]:
         for strike in t["CBLC"].strikes:
             size = strike.bitmapSizeTable
             sizes.append(max(size.ppemX, size.ppemY))
+    if "sbix" in t:
+        sizes.extend(strike.ppem for strike in t["sbix"].strikes.values())
     out[path] = {"upem": t["head"].unitsPerEm, "cps": cps + [free],
                  "version": t["COLR"].version if "COLR" in t else None,
                  "sizes": sizes}

@@ -253,7 +253,16 @@ typedef struct GFNT_GlyphImage {
   uint32_t width;
   uint32_t height;
   int32_t bearing_x;       ///< Left edge of the picture from the pen; may be negative.
-  int32_t bearing_y;       ///< Top edge of the picture above the baseline.
+  int32_t bearing_y;       ///< Top edge of the picture above the baseline; see `origin_y`.
+  /**
+   * The bottom edge of the picture above the baseline.
+   *
+   * `sbix` states this one (its origin offset) and not the top, so `bearing_y` is
+   * `origin_y + height` and is only the top when `height` is not 0 - a JPEG or TIFF
+   * does not say how tall it is until it is decoded. `CBDT` states the top, and
+   * `origin_y` is `bearing_y - height`.
+   */
+  int32_t origin_y;
   /**
    * The pen movement in pixels, or -1 when the table states none.
    *
@@ -267,8 +276,9 @@ typedef struct GFNT_GlyphImage {
 /**
  * @brief This glyph's encoded picture, from a color strike.
  *
- * Reads `CBDT` (image formats 17, 18 and 19) and `sbix`. Finding one glyph costs
- * its strike's index subtables and one glyph's bytes; nothing is decoded, and no
+ * Reads `CBDT` (image formats 17, 18 and 19) and `sbix`, following an `sbix` `dupe` to
+ * the picture it names (eight hops at most). Finding one glyph costs its strike's index
+ * subtables and one glyph's bytes; nothing is decoded, and no
  * strike is read whole.
  *
  * @param face The face.

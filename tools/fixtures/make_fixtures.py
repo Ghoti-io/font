@@ -1558,6 +1558,21 @@ def build_color_cbdt_sizes(out):
     strike_color_fixtures.build_color_cbdt_sizes(sys.modules[__name__], out)
 
 
+def build_color_sbix(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_sbix(sys.modules[__name__], out)
+
+
+def build_color_sbix_metrics(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_sbix_metrics(sys.modules[__name__], out)
+
+
+def build_color_sbix_dupes(out):
+    import strike_color_fixtures
+    strike_color_fixtures.build_color_sbix_dupes(sys.modules[__name__], out)
+
+
 def build_layout_gsub_cases(out):
     import layout_fixtures
     layout_fixtures.build_layout_gsub_cases(sys.modules[__name__], out)
@@ -4286,6 +4301,18 @@ FIXTURES = {
         "(the smallest at least as large as the larger ppem, else the largest, the "
         "first of equals), which ppem scales which axis, and a picture winning over "
         "an outline while a glyph the chosen strike lacks keeps its outline"),
+    "color-sbix.ttf": (build_color_sbix,
+        "sbix: two strikes (40 then 20 ppem) of PNG, JPEG and TIFF pictures, a dupe "
+        "of a picture, a dupe of a dupe, a dupe of itself, a mask record, and a glyph "
+        "with no bytes; the same glyph is a different picture in each strike"),
+    "color-sbix-metrics.ttf": (build_color_sbix_metrics,
+        "sbix with two strikes (16 and 7 ppem) of 127 PNGs whose widths, heights and "
+        "origin offsets sweep a range: the scaling of a picture's box to the em and its "
+        "rounding are what is held"),
+    "color-sbix-dupes.ttf": (build_color_sbix_dupes,
+        "sbix with a chain of dupe records twelve long (HarfBuzz follows eight hops), "
+        "a dupe of itself, and a dupe whose target id is above 255, so it needs both "
+        "bytes of the glyph id"),
     "layout-gsub.ttf": (build_layout_gsub,
         "GSUB with one of every lookup type and format: single in both formats, "
         "multiple (including to nothing), alternate, ligature, context in "

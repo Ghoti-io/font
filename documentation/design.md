@@ -124,7 +124,7 @@ which of them this library takes, and which of those it reads today.
 | | `COLR` v0 + `CPAL` | **implemented** (§7.6): palettes, usability flags and labels, and the layer list of a base glyph; returned as a description, never composited |
 | | `COLR` v1 | **implemented** (§7.6) as a paint graph read in place and walked, with the variable forms and the clip list |
 | | `CBDT`/`CBLC` | **implemented** (§7.5): the strike list, a glyph's PNG bytes and metrics, and a decode to RGBA by `image`; shaped extents as HarfBuzz measures them |
-| | `sbix` | wanted, not implemented |
+| | `sbix` | **implemented** (§7.5): PNG, JPEG and TIFF pictures, `dupe` followed; shaped extents as HarfBuzz measures them (PNG only) |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |
 | | WOFF 2 | not implemented; `compress` has a full Brotli decoder now, and the glyf/loca transform is the work |
@@ -174,7 +174,7 @@ to keep open.
 | `cmap.h` | codepoint → glyph, all subtable formats; variation selectors; reverse lookup |
 | `name.h` | `name` records decoded to UTF-8 |
 | `glyph.h` | `GFNT_Glyph`, the tagged union; the strike-selection policy |
-| `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes, and the color strikes' pictures (`gfnt_face_glyph_image()` for the font's bytes, `gfnt_face_glyph_color_bitmap()` for RGBA pixels). All implemented but `sbix` |
+| `bitmap.h` | `EBDT`/`EBLC`, PCF, BDF, PSF, `.hex` strikes, and the color strikes' pictures (`gfnt_face_glyph_image()` for the font's bytes, `gfnt_face_glyph_color_bitmap()` for RGBA pixels). All implemented |
 | `color.h` | `CPAL`, `COLR` v0 and v1 implemented (v1 as a graph, not composited) |
 | `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Both producers are implemented |
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
@@ -772,7 +772,7 @@ the table" in strike 2 - and answers for 7,224 of 7,225 glyphs three times over.
 That is M11 earning its place: the alternative to a per-glyph refusal is
 declining three strikes of a font that renders everywhere, which is what the
 reference does.
-**Color strikes** (`CBLC`/`CBDT`; `sbix` is not read yet). `CBLC` is `EBLC`'s layout
+**Color strikes** (`CBLC`/`CBDT`, and `sbix` below). `CBLC` is `EBLC`'s layout
 with version 3 (2 is accepted), a strike depth of 32, and image formats 17 (small
 metrics, then a length and a PNG), 18 (big metrics) and 19 (the metrics are the
 index's, which then has to be index format 2 or 5). The index, the five subtable
@@ -789,10 +789,27 @@ decoded pixels are held to Pillow's on every PNG color type the encoder writes
 (`make check-oracle-strike-images`; the bytes, metrics and advances to fontTools'),
 over Noto Color Emoji's 4,082 pictures and the three color-strike fixtures.
 
+`sbix` is Apple's: a header, a pixel size and a resolution per strike (the resolution
+is read by nothing, HarfBuzz's included), and per glyph an offset to a record of an
+origin, a four-letter type and the picture. `png `, `jpg ` and `tiff` are returned (the
+last two decode through `image`); `dupe` names another glyph whose picture to use and
+is followed for **eight hops**, so a chain's ninth link and a cycle are refused; `mask`
+and any other type are declined by name; a glyph of no bytes, or of the eight-byte
+header alone, is one the strike does not carry. `sbix` states the picture's **bottom**
+edge (`origin_y`), not the top, and not its size, which a PNG's header states and a
+JPEG's or TIFF's does not until decoded; `bearing_y` is the sum when the height is
+known, and a decoded `GFNT_ColorBitmap` always has it. It states no advance (`-1`) and no
+line metrics (zero). There is no real `sbix` font in the oracle image or in any package
+checked, and Apple's are not redistributable, so the reader rests on three fixtures:
+fontTools reads the same pictures and origins, Pillow decodes the same pixels (PNG, JPEG
+and TIFF alike, bit for bit), and `hb-shape` measures the same boxes.
+
 *How a shaper measures such a glyph* was found by experiment against `hb-shape
 --show-extents` (`src/shape/bitmap_extents.c`, held by `check-oracle-color-extents`).
 The picture's box **wins over the outline's and over a `COLR` paint graph's**, so a
-font with both is measured by the picture. One strike answers for every glyph,
+font with both is measured by the picture, and `sbix` wins over `CBDT`. `sbix` is
+scaled by its strike's one ppem and read from the PNG's header (JPEG and TIFF have no
+box). One strike answers for every glyph,
 chosen by size alone: the larger of its two ppems, the smallest strike at least as
 large as the size asked for, else the largest, the first of equals - and a shaper
 asks for no size, which is the largest. A glyph that strike lacks is not looked up in
@@ -3319,7 +3336,7 @@ What that cost in findings:
   `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
   which is a fact about the font rather than about the object model.
 
-**Not built:** `sbix` (§7.5);
+**Not built:**
 a `FeatureVariations` condition of format 2 (§7.7); paragraph layout, and font matching (discovery lists faces, §11); the `CFF` writer (§12); the multi-byte
 Macintosh and Microsoft `name` encodings (§7.2); `gasp`
 and WOFF 2. `maxp` has no `_dump` because nothing

@@ -46,6 +46,7 @@
 #include "../sfnt/sfnt.h"
 #include "colorstrike.h"
 #include "eblc.h"
+#include "sbix.h"
 
 /** `CBDT`'s version: 3.0 in the files that exist, 2.0 from the first writers. */
 #define GFNT_CBDT_VERSION_2 0x00020000u
@@ -202,6 +203,7 @@ GFNT_Result gfnt_cbdt_find(const GFNT_Face * face,
     .height = metrics.height,
     .bearing_x = metrics.bearing_x,
     .bearing_y = metrics.bearing_y,
+    .origin_y = metrics.bearing_y - (int32_t)metrics.height,
     .advance = metrics.advance,
     .strike = strike->strike,
   };
@@ -213,13 +215,17 @@ done:
 }
 
 /* The rule is HarfBuzz's, found by experiment: bitmap_extents.c has the findings. */
+bool gfnt_strike_better(uint32_t requested, uint32_t ppem, uint32_t best) {
+  if (requested == 0) {
+    requested = UINT32_MAX;
+  }
+  return (requested <= ppem && ppem < best) || (requested > best && ppem > best);
+}
+
 size_t gfnt_bitmap_strike_for(const GFNT_Eblc * cblc, uint32_t requested) {
   size_t best = 0;
   uint32_t best_ppem;
 
-  if (requested == 0) {
-    requested = UINT32_MAX;
-  }
   best_ppem = cblc->strikes[0].strike.ppem_x > cblc->strikes[0].strike.ppem_y
       ? cblc->strikes[0].strike.ppem_x : cblc->strikes[0].strike.ppem_y;
   for (size_t i = 1; i < cblc->strike_count; ++i) {
@@ -227,8 +233,7 @@ size_t gfnt_bitmap_strike_for(const GFNT_Eblc * cblc, uint32_t requested) {
     uint32_t ppem = strike->ppem_x > strike->ppem_y ? strike->ppem_x
                                                     : strike->ppem_y;
 
-    if ((requested <= ppem && ppem < best_ppem)
-        || (requested > best_ppem && ppem > best_ppem)) {
+    if (gfnt_strike_better(requested, ppem, best_ppem)) {
       best = i;
       best_ppem = ppem;
     }
@@ -265,6 +270,10 @@ GFNT_Result gfnt_face_glyph_image(const GFNT_Face * face, uint32_t glyph,
   }
   // The strike list is one table's: EBLC's when the face has one, else CBLC's
   // (glyph.c's order), so the index means the same thing here as there.
+  if (!gfnt_face_has_eblc(face) && !gfnt_face_has_cblc(face)
+      && gfnt_face_has_sbix(face)) {
+    return gfnt_sbix_find(face, strike, glyph, out_image, error);
+  }
   if (!gfnt_face_has_eblc(face) && gfnt_face_has_cblc(face)) {
     const GFNT_Eblc * cblc = NULL;
     GFNT_CbdtGlyph found;
@@ -423,7 +432,7 @@ static GFNT_Result gfnt_color_decode(const GFNT_Face * face,
     .height = height,
     .stride = (size_t)width * 4u,
     .bearing_x = image->bearing_x,
-    .bearing_y = image->bearing_y,
+    .bearing_y = image->origin_y + (int32_t)height,
     .advance = image->advance,
     .rgba = rgba,
     .strike = image->strike,

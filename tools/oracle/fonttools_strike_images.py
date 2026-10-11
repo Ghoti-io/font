@@ -87,7 +87,9 @@ def reference(font):
                                      bytes(target.imageData), None, None,
                                      target.originOffsetX, target.originOffsetY,
                                      None)
-            out[index] = ((strike.ppem, strike.ppem), glyphs)
+            # fontTools lists sbix strikes by size, not in file order, so they are
+            # keyed by size and matched to this library's by it.
+            out[strike.ppem] = ((strike.ppem, strike.ppem), glyphs)
     return out
 
 
@@ -111,18 +113,26 @@ def main(argv):
         if len(diffs) < 20:
             diffs.append(text)
 
-    if set(strikes) != set(want):
+    keyed = {}
+    for index, s in strikes.items():
+        keyed[index if "CBLC" in font else s["ppem_x"]] = index
+    if set(keyed) != set(want):
         note("color strikes: this library %s, fontTools %s"
-             % (sorted(strikes), sorted(want)))
-    for index in sorted(set(strikes) & set(want)):
-        (ppem, theirs) = want[index]
+             % (sorted(keyed), sorted(want)))
+    for key in sorted(set(keyed) & set(want)):
+        index = keyed[key]
+        (ppem, theirs) = want[key]
         if (strikes[index]["ppem_x"], strikes[index]["ppem_y"]) != ppem:
             note("strike %d: ppem %s vs %s" % (index, (strikes[index]["ppem_x"],
                  strikes[index]["ppem_y"]), ppem))
         mine = {g: r for g, r in ours.get(index, {}).items() if not r.get("absent")}
+        # A glyph this library declines (a mask record, a dupe chain that never ends)
+        # is one fontTools has no picture for either; one it declines that fontTools
+        # has a picture for is a difference.
         errors = {g: r for g, r in mine.items() if "error" in r}
-        for g, r in sorted(errors.items())[:3]:
-            note("strike %d glyph %d: %s" % (index, g, r["error"]))
+        for g, r in sorted(errors.items()):
+            if g in theirs:
+                note("strike %d glyph %d: %s" % (index, g, r["error"]))
         present = {g for g, r in mine.items() if "error" not in r}
         if present != set(theirs) - set(errors):
             only_mine = sorted(present - set(theirs))[:5]
@@ -139,9 +149,12 @@ def main(argv):
                 note("strike %d glyph %d: bytes or format differ (%s %d vs %s %d)"
                      % (index, g, r["format"], len(got), fmt, len(data)))
                 continue
-            if (r["bx"], r["by"]) != (bx, by):
+            # CBDT states the top edge and sbix the bottom; `oy` is the bottom for both.
+            sbix = "sbix" in font
+            ours_y = r["oy"] if sbix else r["by"]
+            if (r["bx"], ours_y) != (bx, by):
                 note("strike %d glyph %d: bearing %s vs %s"
-                     % (index, g, (r["bx"], r["by"]), (bx, by)))
+                     % (index, g, (r["bx"], ours_y), (bx, by)))
             if w is not None and (r["w"], r["h"]) != (w, h):
                 note("strike %d glyph %d: size %s vs %s"
                      % (index, g, (r["w"], r["h"]), (w, h)))

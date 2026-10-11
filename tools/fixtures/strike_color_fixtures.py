@@ -341,3 +341,189 @@ def build_color_cbdt_sizes(mf, out):
     mf.set_raw_table(fb, "CBDT", bytes(cbdt))
     fb.save(out)
 
+
+SBIX_ORDER = [".notdef"] + ["x%02d" % i for i in range(1, 10)]
+
+
+def jpeg_picture(width, height):
+    """A small JPEG: Pillow's encoder at quality 90, 4:4:4, so the chroma is not
+    resampled and two decoders have less room to differ."""
+    image = Image.new("RGB", (width, height))
+    for y in range(height):
+        for x in range(width):
+            image.putpixel((x, y), ((x * 255) // max(1, width - 1),
+                                    (y * 255) // max(1, height - 1), 128))
+    out = io.BytesIO()
+    image.save(out, format="JPEG", quality=90, subsampling=0)
+    return out.getvalue()
+
+
+def tiff_picture(width, height):
+    """An uncompressed RGBA TIFF."""
+    image = Image.new("RGBA", (width, height))
+    for y in range(height):
+        for x in range(width):
+            image.putpixel((x, y), ((x * 31) % 256, (y * 47) % 256, 99,
+                                    255 if (x + y) % 4 else 100))
+    out = io.BytesIO()
+    image.save(out, format="TIFF", compression=None)
+    return out.getvalue()
+
+
+def sbix_glyph(kind, origin_x, origin_y, payload):
+    return struct.pack(">hh4s", origin_x, origin_y, kind) + payload
+
+
+def build_color_sbix(mf, out):
+    """Apple's `sbix`: strikes of pictures, three formats, `dupe` and a hole.
+
+    Two strikes, in the order 40 then 20 ppem (so an index is not a sorted
+    position), over nine glyphs:
+
+      glyph 1   png    RGBA, origin (1, -2)
+      glyph 2   png    RGB, origin (-3, 0)
+      glyph 3   dupe   of glyph 1
+      glyph 4   dupe   of glyph 3: a chain, which must end at the picture
+      glyph 5   jpg    a JPEG, decoded by image's JPEG codec
+      glyph 6   tiff   an uncompressed RGBA TIFF
+      glyph 7   mask   a format this library declines by name
+      glyph 8   (none) no bytes: the strike does not carry it
+      glyph 9   dupe   of itself: a cycle, which is refused and does not hang
+
+    The 40 ppem strike has bigger pictures for glyphs 1 and 2 and a `dupe` at glyph
+    3 of glyph 2, so the same record means a different picture in each strike.
+    """
+    mapping = {0x41 + i: name for i, name in enumerate(SBIX_ORDER[1:])}
+    fb = mf.truetype("Sbix", [mf.subtable(4, 3, 1, mapping)], order=SBIX_ORDER,
+                     glyphs={name: mf.raw_glyph([]) for name in SBIX_ORDER},
+                     advances={name: 600 for name in SBIX_ORDER})
+    count = len(SBIX_ORDER)
+
+    def strike(ppem, ppi, glyphs):
+        """The strike's bytes: ppem, ppi, then count + 1 offsets, then the glyphs."""
+        head = 4 + 4 * (count + 1)
+        body = bytearray()
+        offsets = []
+        for g in range(count):
+            offsets.append(head + len(body))
+            if g in glyphs:
+                body += glyphs[g]
+        offsets.append(head + len(body))
+        return (struct.pack(">HH", ppem, ppi)
+                + b"".join(struct.pack(">I", o) for o in offsets) + bytes(body))
+
+    def dupe(target):
+        return sbix_glyph(b"dupe", 0, 0, struct.pack(">H", target))
+
+    small = {
+        1: sbix_glyph(b"png ", 1, -2, picture(1, 10, 12, "rgba")),
+        2: sbix_glyph(b"png ", -3, 0, picture(2, 8, 8, "rgb")),
+        3: dupe(1),
+        4: dupe(3),
+        5: sbix_glyph(b"jpg ", 0, 4, jpeg_picture(16, 16)),
+        6: sbix_glyph(b"tiff", 2, 2, tiff_picture(8, 6)),
+        7: sbix_glyph(b"mask", 0, 0, b"\x01\x02\x03\x04"),
+        9: dupe(9),
+    }
+    large = {
+        1: sbix_glyph(b"png ", 2, -4, picture(1, 20, 24, "rgba")),
+        2: sbix_glyph(b"png ", -6, 0, picture(2, 16, 16, "rgb")),
+        3: dupe(2),
+    }
+    strikes = [strike(40, 72, large), strike(20, 72, small)]
+    head = 8 + 4 * len(strikes)
+    offsets = []
+    body = b""
+    for s in strikes:
+        offsets.append(head + len(body))
+        body += s
+    table = (struct.pack(">HHI", 1, 1, len(strikes))
+             + b"".join(struct.pack(">I", o) for o in offsets) + body)
+    mf.set_raw_table(fb, "sbix", table)
+    fb.save(out)
+
+
+SBIX_METRICS_ORDER = [".notdef"] + ["n%03d" % i for i in range(1, 128)]
+
+
+def solid_png(width, height):
+    """A PNG of one color: its size is what is held, and it compresses to nothing."""
+    out = io.BytesIO()
+    Image.new("RGBA", (width, height), (200, 40, 90, 255)).save(out, format="PNG")
+    return out.getvalue()
+
+
+def build_color_sbix_metrics(mf, out):
+    """Two `sbix` strikes (16 and 7 ppem) whose pictures and origins sweep a range.
+
+    A glyph's box is the PNG's size and the record's origin scaled from the strike's
+    pixels to the em, and the scaling rounds, with halves at 16 ppem in a 1000-unit
+    em. Widths run 1 to 127, heights are scattered, origins run through both signs, and
+    nothing is large enough to overflow the 16 bits HarfBuzz keeps a box in.
+    """
+    mapping = {0x100 + i: name for i, name in enumerate(SBIX_METRICS_ORDER[1:])}
+    fb = mf.truetype("Sbix Metrics", [mf.subtable(4, 3, 1, mapping)],
+                     order=SBIX_METRICS_ORDER,
+                     glyphs={name: mf.raw_glyph([]) for name in SBIX_METRICS_ORDER},
+                     advances={name: 600 for name in SBIX_METRICS_ORDER})
+    count = len(SBIX_METRICS_ORDER)
+    strikes = []
+    for ppem, flip in ((16, 1), (7, -1)):
+        glyphs = {g: sbix_glyph(b"png ", flip * (g - 64), flip * (g - 64),
+                                solid_png(g, (g * 37) % 100 + 1))
+                  for g in range(1, 128)}
+        head = 4 + 4 * (count + 1)
+        body = bytearray()
+        offsets = []
+        for g in range(count):
+            offsets.append(head + len(body))
+            if g in glyphs:
+                body += glyphs[g]
+        offsets.append(head + len(body))
+        strikes.append(struct.pack(">HH", ppem, 72)
+                       + b"".join(struct.pack(">I", o) for o in offsets) + bytes(body))
+    head = 8 + 4 * len(strikes)
+    offsets = []
+    body = b""
+    for s in strikes:
+        offsets.append(head + len(body))
+        body += s
+    mf.set_raw_table(fb, "sbix", struct.pack(">HHI", 1, 1, len(strikes))
+                     + b"".join(struct.pack(">I", o) for o in offsets) + body)
+    fb.save(out)
+
+
+DUPE_ORDER = [".notdef"] + ["d%03d" % i for i in range(1, 300)]
+
+
+def build_color_sbix_dupes(mf, out):
+    """`sbix` dupe chains, and a dupe whose target needs both bytes of its glyph id.
+
+    Glyph 1 is a picture and glyph k of 2 to 12 is a dupe of k - 1, so glyph 9 is
+    eight hops from the picture and glyph 10 is nine: HarfBuzz follows eight and
+    reads the ninth as empty. Glyph 270 is a picture and glyph 280 a dupe of it, an
+    id above 255. Glyph 20 dupes itself.
+    """
+    mapping = {0x100 + i: name for i, name in enumerate(DUPE_ORDER[1:])}
+    fb = mf.truetype("Sbix Dupes", [mf.subtable(4, 3, 1, mapping)], order=DUPE_ORDER,
+                     glyphs={name: mf.raw_glyph([]) for name in DUPE_ORDER},
+                     advances={name: 600 for name in DUPE_ORDER})
+    count = len(DUPE_ORDER)
+    glyphs = {1: sbix_glyph(b"png ", 0, 0, solid_png(8, 8)),
+              270: sbix_glyph(b"png ", 3, 1, solid_png(6, 5)),
+              280: sbix_glyph(b"dupe", 0, 0, struct.pack(">H", 270)),
+              20: sbix_glyph(b"dupe", 0, 0, struct.pack(">H", 20))}
+    for k in range(2, 13):
+        glyphs[k] = sbix_glyph(b"dupe", 0, 0, struct.pack(">H", k - 1))
+    head = 4 + 4 * (count + 1)
+    body = bytearray()
+    offsets = []
+    for g in range(count):
+        offsets.append(head + len(body))
+        if g in glyphs:
+            body += glyphs[g]
+    offsets.append(head + len(body))
+    strike = (struct.pack(">HH", 20, 72) + b"".join(struct.pack(">I", o) for o in offsets)
+              + bytes(body))
+    mf.set_raw_table(fb, "sbix", struct.pack(">HHII", 1, 1, 1, 12) + strike)
+    fb.save(out)

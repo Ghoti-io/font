@@ -31,7 +31,7 @@
  * rows top first with no padding). Prints one JSON line per glyph:
  *
  *   {"strike":0,"glyph":5,"format":"png","length":799,"w":136,"h":128,
- *    "bx":0,"by":101,"adv":136}
+ *    "bx":0,"by":101,"oy":-27,"adv":136}
  *
  * or `{"strike":0,"glyph":5,"absent":true}` for a glyph the strike does not carry,
  * or `{"strike":0,"glyph":5,"error":"..."}` for any other refusal. The first line
@@ -172,9 +172,10 @@ int main(int argc, char ** argv) {
       }
       printf("{\"strike\":%zu,\"glyph\":%zu,\"format\":\"%s\",\"length\":%zu,"
              "\"w\":%" PRIu32 ",\"h\":%" PRIu32 ",\"bx\":%" PRId32
-             ",\"by\":%" PRId32 ",\"adv\":%" PRId32,
+             ",\"by\":%" PRId32 ",\"oy\":%" PRId32 ",\"adv\":%" PRId32,
           s, g, format_name(image.format), image.length, image.width,
-          image.height, image.bearing_x, image.bearing_y, image.advance);
+          image.height, image.bearing_x, image.bearing_y, image.origin_y,
+          image.advance);
       if (write_file(dir, s, (uint32_t)g, "img", image.data, image.length)) {
         status = 1;
       }

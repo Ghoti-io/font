@@ -195,6 +195,13 @@ def _script_words(prefix, seed, count=10):
     import random
     import unicodedata
     rng = random.Random(seed)
+    if prefix == "LATIN MARKS":
+        # A letter and two combining marks, every pair of the combining diacritics.
+        marks = [chr(c) for c in range(0x300, 0x370)]
+        if os.environ.get("HB_DIFF_PAIRS"):
+            return [b + m + n for b in "aeuAEUo\u00e6\u00f8" for m in marks for n in marks]
+        return [rng.choice("aeuAEUo") + "".join(rng.choice(marks) for _ in range(rng.randint(1, 3)))
+                for _ in range(count)]
     cps = [c for c in range(0x80, 0x110000)
            if unicodedata.name(chr(c), "").startswith(prefix + " ")]
     letters = [chr(c) for c in cps if unicodedata.category(chr(c)) in ("Lo", "Lm", "Ll", "Lu")]
@@ -270,6 +277,7 @@ NAMED_SCRIPTS = [
     ("arabic names", "Arab", "arab", "ARABIC"), ("hebrew names", "Hebr", "hebr", "HEBREW"),
     ("syriac names", "Syrc", "syrc", "SYRIAC"), ("thaana names", "Thaa", "thaa", "THAANA"),
     ("thai names", "Thai", "thai", "THAI"), ("lao names", "Laoo", "lao ", "LAO"),
+    ("latin marks", "Latn", "latn", "LATIN MARKS"),
     ("greek names", "Grek", "grek", "GREEK"), ("cyrillic names", "Cyrl", "cyrl", "CYRILLIC"),
 ]
 

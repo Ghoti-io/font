@@ -700,6 +700,12 @@ GFNT_Result gfnt_plan_build(const GFNT_Face * face,
   // Whether marks are put where they go by the fallback is still the script's own
   // say with a morx (Arabic and Hebrew do it, Thai and the Indic scripts do not).
   plan->fallback_marks = plan->shaper->fallback_position;
+  // N'Ko is shaped as Arabic, and its marks are left where the font puts them: HarfBuzz sets
+  // them by the fallback for every other script of the Arabic shaper, and for this one never,
+  // in a font with no mark positioning (found by shaping the same text under each script tag).
+  if (plan->shaper == &gfnt_shaper_arabic && plan->script == GFNT_TAG('n', 'k', 'o', ' ')) {
+    plan->fallback_marks = false;
+  }
   if (gfnt_morx_present(face, plan->vertical)) {
     // Marks of a script that had a shaper of its own are classed but not zeroed.
     plan->no_zero_marks = plan->shaper != &gfnt_shaper_default;

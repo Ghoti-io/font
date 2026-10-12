@@ -2075,6 +2075,47 @@ TEST(ShapeArabic, AZeroWidthNonJoinerStopsTheJoin) {
   EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 2);
 }
 
+TEST(ShapeArabic, FormatCharactersTheDataListsAsNonJoiningBreakTheJoinAndTheRestAreSkipped) {
+  Font font(beh_font());
+  Request request;
+  request.script = "arab";
+  request.rtl = true;
+  // Found by shaping each format character between two letters under HarfBuzz: these split
+  // the word into two isolated letters.
+  const uint32_t breaking[] = {0x600, 0x605, 0x6DD, 0x890, 0x891, 0x8E2, 0x180E, 0x2066, 0x2069};
+  for (uint32_t u : breaking) {
+    Glyphs g;
+    ASSERT_EQ(shape(font, V{0x628, u, 0x628}, request, &g), GFNT_OK);
+    std::vector<uint32_t> out = ids(g);
+    EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 2) << std::hex << u;
+  }
+  // The word joiner, the soft hyphen and the bidi marks are transparent: initial and final.
+  const uint32_t skipped[] = {0x2060, 0xAD, 0x200E, 0x061C};
+  for (uint32_t u : skipped) {
+    Glyphs g;
+    ASSERT_EQ(shape(font, V{0x628, u, 0x628}, request, &g), GFNT_OK);
+    std::vector<uint32_t> out = ids(g);
+    EXPECT_EQ(std::count(out.begin(), out.end(), 5u), 0) << std::hex << u;
+    EXPECT_EQ(std::count(out.begin(), out.end(), 6u), 1) << std::hex << u;
+    EXPECT_EQ(std::count(out.begin(), out.end(), 7u), 1) << std::hex << u;
+  }
+}
+
+TEST(Shape, TheShorthandFormatControlsAreNotIgnorableAndAreDrawnAsNotdef) {
+  Font font(beh_font());
+  Request request;
+  request.script = "arab";
+  request.rtl = true;
+  // HarfBuzz keeps U+1BCA0 to U+1BCA3 (unlike every other default-ignorable format character)
+  // and draws the ones the font lacks as glyph 0.
+  for (uint32_t u = 0x1BCA0; u <= 0x1BCA3; ++u) {
+    Glyphs g;
+    ASSERT_EQ(shape(font, V{0x628, u, 0x628}, request, &g), GFNT_OK);
+    std::vector<uint32_t> out = ids(g);
+    EXPECT_EQ(std::count(out.begin(), out.end(), 0u), 1) << std::hex << u;
+  }
+}
+
 static const std::vector<uint8_t> k_medi_alternates = {
        0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x24, 0x00, 0x32, 0x00, 0x02,
        0x44, 0x46, 0x4C, 0x54, 0x00, 0x0E, 0x61, 0x72, 0x61, 0x62, 0x00, 0x0E,

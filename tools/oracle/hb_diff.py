@@ -151,6 +151,42 @@ SYRIAC = [
     "\u0712\u0710\u0718\u0720 \u0720\u0710\u0718",
     "\u0710\u0723\u0718\u072a\u071d\u0710\u0711\u0308 \u0715\u0714\u0715",
 ]
+def _words(ranges, seed, count=8):
+    """Deterministic words of a joining script: letters drawn from the ranges, with a join
+    control, a mark and a space here and there, so that every form of every letter that joins
+    is likely to be set (initial, medial, final, isolated) and the joiners are exercised."""
+    import random
+    import unicodedata
+    rng = random.Random(seed)
+    letters = [chr(c) for lo, hi in ranges for c in range(lo, hi + 1)
+               if unicodedata.category(chr(c)) in ("Lo", "Ll", "Lu", "Lm")]
+    marks = [chr(c) for lo, hi in ranges for c in range(lo, hi + 1)
+             if unicodedata.category(chr(c)) in ("Mn", "Me")]
+    out = []
+    for _ in range(count):
+        word = ""
+        for _ in range(rng.randint(2, 6)):
+            word += rng.choice(letters)
+            if marks and rng.random() < 0.15:
+                word += rng.choice(marks)
+            if rng.random() < 0.07:
+                word += rng.choice(["\u200d", "\u200c"])
+        out.append(word)
+    out.append(" ".join(out[:3]))
+    return out
+
+
+NKO = _words([(0x7ca, 0x7ea), (0x7eb, 0x7f5), (0x7fa, 0x7fa)], 1)
+MANDAIC = _words([(0x840, 0x858), (0x859, 0x85b)], 2)
+MONGOLIAN = _words([(0x1820, 0x1878), (0x180b, 0x180d), (0x1885, 0x1886)], 3) + [
+    "\u182e\u1820\u1828\u180b\u1820", "\u1820\u180e\u1820", "\u1832\u1823\u1829\u182d\u1823\u182f"]
+ADLAM = _words([(0x1e900, 0x1e943), (0x1e944, 0x1e94a)], 4)
+ROHINGYA = _words([(0x10d00, 0x10d23), (0x10d24, 0x10d27)], 5)
+MANICHAEAN = _words([(0x10ac0, 0x10ae4), (0x10ae5, 0x10ae6)], 6)
+PSALTER = _words([(0x10b80, 0x10b91)], 7)
+SOGDIAN = _words([(0x10f30, 0x10f45), (0x10f46, 0x10f50)], 8)
+PHAGSPA = _words([(0xa840, 0xa873)], 9)
+
 THAANA = [
     "\u078b\u07a8\u0788\u07ac\u0780\u07a8 \u0784\u07a6\u0790\u07b0",
     "\u0780\u07a8\u0783\u07a6\u078e\u07a6\u0782\u07b0 \u0787\u07a6\u0787\u07a8",
@@ -223,6 +259,15 @@ GROUPS = [
     ("arabic -liga", "Arab", "arab", None, "", "-liga,-rlig,-calt", ARABIC, "", 0x627),
     ("hebrew", "Hebr", "hebr", None, "", "", HEBREW, "", 0x5d0),
     ("syriac", "Syrc", "syrc", None, "", "", SYRIAC, "", 0x710),
+    ("nko", "Nkoo", "nko ", None, "", "", NKO, "", 0x7ca),
+    ("mandaic", "Mand", "mand", None, "", "", MANDAIC, "", 0x840),
+    ("mongolian", "Mong", "mong", None, "", "", MONGOLIAN, "", 0x1820),
+    ("adlam", "Adlm", "adlm", None, "", "", ADLAM, "", 0x1e900),
+    ("hanifi rohingya", "Rohg", "rohg", None, "", "", ROHINGYA, "", 0x10d00),
+    ("manichaean", "Mani", "mani", None, "", "", MANICHAEAN, "", 0x10ac0),
+    ("psalter pahlavi", "Phlp", "phlp", None, "", "", PSALTER, "", 0x10b80),
+    ("sogdian", "Sogd", "sogd", None, "", "", SOGDIAN, "", 0x10f30),
+    ("phags-pa", "Phag", "phag", None, "", "", PHAGSPA, "", 0xa840),
     ("thaana", "Thaa", "thaa", None, "", "", THAANA, "", 0x780),
     ("thai", "Thai", "thai", None, "", "", THAI, "", 0xe01),
     ("lao", "Laoo", "lao ", None, "", "", LAO, "", 0xe81),

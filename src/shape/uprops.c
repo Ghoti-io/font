@@ -29,7 +29,9 @@
 
 /**
  * Unicode's Default_Ignorable_Code_Point, less the four Hangul fillers (U+115F,
- * U+1160, U+3164, U+FFA0), which HarfBuzz draws with the font's own glyphs.
+ * U+1160, U+3164, U+FFA0), which HarfBuzz draws with the font's own glyphs, and less the
+ * four shorthand format controls U+1BCA0 to U+1BCA3, which it draws as .notdef (found by
+ * shaping each between two letters).
  */
 bool gfnt_u_default_ignorable(uint32_t u) {
   if (u < 0xAD) {
@@ -41,7 +43,7 @@ bool gfnt_u_default_ignorable(uint32_t u) {
       || (u >= 0x202A && u <= 0x202E) || (u >= 0x2060 && u <= 0x206F)
       || (u >= 0xFE00 && u <= 0xFE0F) || u == 0xFEFF
       || (u >= 0xFFF0 && u <= 0xFFF8)
-      || (u >= 0x1BCA0 && u <= 0x1BCA3) || (u >= 0x1D173 && u <= 0x1D17A)
+      || (u >= 0x1D173 && u <= 0x1D17A)
       || (u >= 0xE0000 && u <= 0xE0FFF);
 }
 

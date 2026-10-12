@@ -193,6 +193,17 @@ static void gfnt_arabic_data_destroy(void * data,
   allocator->free_fn(allocator->ctx, data);
 }
 
+/**
+ * The format characters ArabicShaping.txt lists as non-joining (type U) one by one: the
+ * prepended concatenation marks U+0600 to U+0605, U+06DD, U+0890, U+0891, U+08E2, U+110BD and
+ * U+110CD, the Mongolian vowel separator, and the four bidi isolate controls. Found by shaping each format character between
+ * two letters under HarfBuzz: these break the join and the rest are skipped.
+ */
+static bool gfnt_arabic_listed_non_joining(uint32_t u) {
+  return (u >= 0x600 && u <= 0x605) || u == 0x6DD || u == 0x890 || u == 0x891 || u == 0x8E2
+      || u == 0x180E || u == 0x110BD || u == 0x110CD || (u >= 0x2066 && u <= 0x2069);
+}
+
 /** A letter's column in the state machine; GFNT_JT_T for one that is skipped. */
 static unsigned gfnt_arabic_joining(const GFNT_LInfo * info) {
   uint32_t u = info->unicode;
@@ -204,8 +215,10 @@ static unsigned gfnt_arabic_joining(const GFNT_LInfo * info) {
           || info->gc == GUNI_GC_ENCLOSING_MARK
           || info->gc == GUNI_GC_FORMAT)) {
     // Not listed: a mark or a format character is transparent by default, except
-    // the two that are listed (ZWJ joins, ZWNJ does not).
-    if (u != 0x200C && u != 0x200D) {
+    // the two that are listed (ZWJ joins, ZWNJ does not) and the format characters the data
+    // lists as non-joining (the prepended number signs, the Mongolian vowel separator): the
+    // data cannot tell a listed "U" from an absent one, so they are named here.
+    if (u != 0x200C && u != 0x200D && !gfnt_arabic_listed_non_joining(u)) {
       return GFNT_JT_T;
     }
   }

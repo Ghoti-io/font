@@ -2002,7 +2002,9 @@ shapes the subsets; the variable `glyf` corpus fonts and the `variable-*.ttf` fi
 `HVAR`/`VVAR` and `GDEF` stores are pruned as above; a `gvar` is not re-packed (shared point
 numbers and tuples a dropped glyph used stay).
 
-**`MATH`** (`src/write/subset_math.c`) is carried. A kept glyph that has a construction brings every
+**`MATH` reading** (`src/math/math.c`, `math.h`): each call reads the header and the one record asked for, from the table, with no parsed copy. Values are in font units; a `Device` table whose format is `0x8000` (a variation index) is resolved through `GDEF`'s item variation store at the given location, and a hinting device table (a pixel size) is ignored. Whatever the table leaves to the typesetter is not decided here: a glyph with no italics correction reports `present` false, and a kern is handed over as its heights and values (the boundary rule for a height equal to a correction height is the caller's, since no oracle here demonstrates it). `check-oracle-math` compares 18,086 facts over nine fonts with fontTools.
+
+**`MATH` subsetting** (`src/write/subset_math.c`) is carried. A kept glyph that has a construction brings every
 size it grows to and every piece of its assembly, over both directions and until no glyph is added; those
 glyphs are then closed over `GSUB` again, and over composites and color, in the same loop, so a component
 of a kept glyph brings its own sizes too (fontTools' closure does not: this keeps ten more glyphs than it

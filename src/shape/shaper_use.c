@@ -150,6 +150,22 @@ static uint8_t use_category(uint32_t u) {
   if (u == 0x11302 || u == 0x11303 || u == 0xAAB4 || u == 0x114C1) {
     return UC_VMABV; // Grantha anusvara and visarga, Tai Viet mai thung, Tirhuta sign visarga.
   }
+  // The Tibetan signs HarfBuzz sorts differently from the Unicode data, found by shaping every
+  // pair of the script's characters against it: the visarga takes marks as a letter does, the
+  // sign rdel dkar gsum is written before the letter, and the astrological marks are consonant
+  // modifiers that vowel signs may follow.
+  if (u == 0x111C4 || u == 0x111DC) {
+    return UC_O;     // Sharada om and headstroke: letters in the data, set apart by HarfBuzz.
+  }
+  if (u == 0x0F7F) {
+    return UC_B;
+  }
+  if (u == 0x0F3F) {
+    return UC_VPRE;
+  }
+  if (u == 0x0F7E || u == 0x0F82 || u == 0x0F83 || u == 0x0F86 || u == 0x0F87) {
+    return UC_FMABV;
+  }
   if ((u >= 0x180B && u <= 0x180F)) {
     return UC_N;     // The Mongolian free variation selectors.
   }
@@ -734,6 +750,7 @@ static bool use_post_base(uint8_t category) {
     case UC_FABV: case UC_FBLW: case UC_FPST: case UC_MABV: case UC_MBLW:
     case UC_MPST: case UC_MPRE: case UC_VABV: case UC_VBLW: case UC_VPST:
     case UC_VPRE: case UC_VMABV: case UC_VMBLW: case UC_VMPST: case UC_VMPRE:
+    case UC_FMABV: case UC_FMBLW: case UC_FMPST:
       return true;
     default:
       return false;

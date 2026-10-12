@@ -290,6 +290,9 @@ static void indic_set_properties(GFNT_LInfo * info) {
     default:
       break;
   }
+  if (u >= 0xA8F2 && u <= 0xA8F7) {
+    cat = IC_SYMBOL;   // The spacing candrabindu and its kin: signs, not bases.
+  }
   if (u == 0x0A51) {
     cat = IC_M;   // The Gurmukhi udaat: a vowel sign in HarfBuzz's table.
   }

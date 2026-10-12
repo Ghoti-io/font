@@ -204,6 +204,11 @@ def _script_words(prefix, seed, count=10):
     digits = [chr(c) for c in cps if unicodedata.category(chr(c)) == "Nd"]
     if not letters:
         return []
+    if os.environ.get("HB_DIFF_PAIRS"):
+        # Every ordered pair of the script's characters: where the two engines' grammars part.
+        everyone = [chr(c) for c in cps if unicodedata.category(chr(c))
+                    in ("Lo", "Lm", "Ll", "Lu", "Mc", "Mn", "Me", "Nd")]
+        return [a + b for a in everyone for b in everyone]
     out = []
     for _ in range(count):
         word = ""
@@ -350,7 +355,9 @@ GROUPS = [
 ]
 
 for _i, (_name, _iso, _ot, _prefix) in enumerate(NAMED_SCRIPTS):
-    _texts = _script_words(_prefix, 100 + _i)
+    # HB_DIFF_SEED moves every generated word list, for a wider sweep than the gate's fixed one.
+    _texts = _script_words(_prefix, 100 + _i + 1000 * int(os.environ.get("HB_DIFF_SEED", "0")),
+        int(os.environ.get("HB_DIFF_WORDS", "10")))
     if _texts:
         GROUPS.append((_name, _iso, _ot, None, "", "", _texts, "",
                       next(ord(c) for t in _texts for c in t if c.isalpha())))

@@ -2200,6 +2200,36 @@ TEST(ShapeThai, LaoMaiKonGoesAfterTheNikhahitOfASaraAmToo) {
   EXPECT_EQ(ids(g), (V{2, 4, 3, 5}));
 }
 
+TEST(ShapeUniversal, SignsHarfBuzzSortsDifferentlyFromTheDataAreSortedAsItDoes) {
+  // Each case was found by shaping every pair of the script's characters against HarfBuzz.
+  Glyphs g;
+  Request request;
+  {
+    // The Devanagari spacing candrabindu is a sign: it stands alone with no circle and a vowel
+    // sign after it has no base, so it takes one.
+    Font font(small_font({}, 8, {{0xA8F2, 2}, {0x946, 3}, {0x25CC, 5}}));
+    request.script = "deva";
+    ASSERT_EQ(shape(font, V{0xA8F2}, request, &g), GFNT_OK);
+    EXPECT_EQ(ids(g), (V{2}));
+    ASSERT_EQ(shape(font, V{0xA8F2, 0x946}, request, &g), GFNT_OK);
+    EXPECT_EQ(ids(g), (V{2, 5, 3}));
+  }
+  {
+    // The Tibetan visarga takes a vowel sign as a letter does, with no circle.
+    Font font(small_font({}, 8, {{0xF7F, 2}, {0xF71, 3}, {0x25CC, 5}}));
+    request.script = "tibt";
+    ASSERT_EQ(shape(font, V{0xF7F, 0xF71}, request, &g), GFNT_OK);
+    EXPECT_EQ(ids(g), (V{2, 3}));
+  }
+  {
+    // A Takri independent vowel does not take the dependent vowel signs that would remake it.
+    Font font(small_font({}, 8, {{0x25CC, 5}}));
+    request.script = "takr";
+    ASSERT_EQ(shape(font, V{0x11680, 0x116AD}, request, &g), GFNT_OK);
+    EXPECT_EQ(ids(g), (V{0, 5, 0}));
+  }
+}
+
 TEST(ShapeUniversal, ALoneRephaIsBrokenAndALoneStackerIsNot) {
   // Masaram Gondi REPHA (a repha) and Zanabazar CLUSTER-INITIAL RA (a stacker), against a font
   // whose cmap holds only the dotted circle 5 and the space 6 (the characters are outside the

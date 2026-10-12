@@ -150,11 +150,11 @@ TEST(Layout, ALineOfLettersIsPlacedFromTheLeftOnTheBaseline) {
   const GFNT_Layout & l = para.layout;
   ASSERT_EQ(l.line_count, 1u);
   const GFNT_Line & line = l.lines[0];
-  EXPECT_EQ(line.width, 3 * kLetter);
+  EXPECT_EQ(line.extent, 3 * kLetter);
   EXPECT_EQ(line.ascent, 512);
   EXPECT_EQ(line.descent, 128);
   EXPECT_EQ(line.baseline, 512);
-  EXPECT_EQ(line.height, 640);
+  EXPECT_EQ(line.box.height, 640);
   EXPECT_EQ(l.height, 640);
   EXPECT_EQ(l.width, 3 * kLetter);
   EXPECT_EQ(line.start, 0u);
@@ -184,8 +184,8 @@ TEST(Layout, LinesBreakAfterSpacesAndTheSpacesHang) {
   for (size_t i = 0; i < 3; ++i) {
     EXPECT_EQ(l.lines[i].start, starts[i]) << i;
     EXPECT_EQ(l.lines[i].end, ends[i]) << i;
-    EXPECT_EQ(l.lines[i].width, 2 * kLetter) << i;
-    EXPECT_EQ(l.lines[i].top, static_cast<GFNT_F26Dot6>(i) * 640) << i;
+    EXPECT_EQ(l.lines[i].extent, 2 * kLetter) << i;
+    EXPECT_EQ(l.lines[i].box.y, static_cast<GFNT_F26Dot6>(i) * 640) << i;
   }
   EXPECT_EQ(l.height, 3 * 640);
   EXPECT_EQ(l.width, 900);
@@ -196,7 +196,7 @@ TEST(Layout, AWordWiderThanTheLineOverflowsRatherThanSplits) {
   Para para("ABCDEF", {font.face});
   ASSERT_EQ(para.lay(500), GFNT_OK);
   ASSERT_EQ(para.layout.line_count, 1u);
-  EXPECT_EQ(para.layout.lines[0].width, 6 * kLetter);
+  EXPECT_EQ(para.layout.lines[0].extent, 6 * kLetter);
 }
 
 TEST(Layout, AWordTooWideIsBrokenAtTheNextOpportunity) {
@@ -205,8 +205,8 @@ TEST(Layout, AWordTooWideIsBrokenAtTheNextOpportunity) {
   ASSERT_EQ(para.lay(500), GFNT_OK);
   ASSERT_EQ(para.layout.line_count, 2u);
   EXPECT_EQ(para.layout.lines[0].end, 7u);
-  EXPECT_EQ(para.layout.lines[0].width, 6 * kLetter);
-  EXPECT_EQ(para.layout.lines[1].width, 2 * kLetter);
+  EXPECT_EQ(para.layout.lines[0].extent, 6 * kLetter);
+  EXPECT_EQ(para.layout.lines[1].extent, 2 * kLetter);
 }
 
 TEST(Layout, ANewlineEndsALineAndATrailingOneStartsAnEmptyLine) {
@@ -216,12 +216,12 @@ TEST(Layout, ANewlineEndsALineAndATrailingOneStartsAnEmptyLine) {
   const GFNT_Layout & l = para.layout;
   ASSERT_EQ(l.line_count, 3u);
   EXPECT_EQ(l.lines[0].end, 3u);
-  EXPECT_EQ(l.lines[0].width, 2 * kLetter);
+  EXPECT_EQ(l.lines[0].extent, 2 * kLetter);
   EXPECT_EQ(l.lines[1].start, 3u);
-  EXPECT_EQ(l.lines[1].width, kLetter);
+  EXPECT_EQ(l.lines[1].extent, kLetter);
   EXPECT_EQ(l.lines[2].start, 5u);
   EXPECT_EQ(l.lines[2].run_count, 0u);
-  EXPECT_EQ(l.lines[2].height, 640);
+  EXPECT_EQ(l.lines[2].box.height, 640);
   EXPECT_EQ(l.height, 3 * 640);
 }
 
@@ -232,7 +232,7 @@ TEST(Layout, AnEmptyParagraphIsOneLineOfTheFirstFacesHeight) {
   ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
   ASSERT_EQ(para.layout.line_count, 1u);
   EXPECT_EQ(para.layout.lines[0].run_count, 0u);
-  EXPECT_EQ(para.layout.lines[0].height, 640);
+  EXPECT_EQ(para.layout.lines[0].box.height, 640);
 }
 
 TEST(Layout, ALineIsAlignedInTheWidthItWasLaidOutTo) {
@@ -246,8 +246,8 @@ TEST(Layout, ALineIsAlignedInTheWidthItWasLaidOutTo) {
     Para para("AB", {font.face}, o);
     ASSERT_EQ(para.lay(1000), GFNT_OK);
     const GFNT_Line & line = para.layout.lines[0];
-    EXPECT_EQ(line.x, c.x) << c.align;
-    EXPECT_EQ(line.runs[0].x, c.x) << c.align;
+    EXPECT_EQ(line.offset, c.x) << c.align;
+    EXPECT_EQ(line.runs[0].pos, c.x) << c.align;
     EXPECT_EQ(line.runs[0].glyphs[0].pen_x, c.x) << c.align;
     EXPECT_EQ(line.runs[0].glyphs[1].pen_x, c.x + kLetter) << c.align;
   }
@@ -269,7 +269,7 @@ TEST(Layout, ARightToLeftParagraphIsInVisualOrderAndStartsOnTheRight) {
   EXPECT_EQ(run.glyphs[0].cluster, 2u);
   EXPECT_EQ(run.glyphs[1].cluster, 0u);
   // START in a right-to-left paragraph is the right edge.
-  EXPECT_EQ(line.x, 1000 - 2 * kLetter);
+  EXPECT_EQ(line.offset, 1000 - 2 * kLetter);
   EXPECT_EQ(run.glyphs[0].pen_x, 1000 - 2 * kLetter);
 }
 
@@ -294,7 +294,7 @@ TEST(Layout, MixedTextIsReorderedByLevelRuns) {
   // Runs tile the line without a gap.
   GFNT_F26Dot6 at = 0;
   for (size_t i = 0; i < line.run_count; ++i) {
-    EXPECT_EQ(line.runs[i].x, at) << i;
+    EXPECT_EQ(line.runs[i].pos, at) << i;
     at += line.runs[i].advance;
   }
   EXPECT_EQ(at, 4 * kLetter + 2 * kSpace);
@@ -317,7 +317,7 @@ TEST(Layout, ALineTakesTheTallestSpansMetrics) {
   const GFNT_Line & line = para.layout.lines[0];
   EXPECT_EQ(line.ascent, 1024);
   EXPECT_EQ(line.descent, 256);
-  EXPECT_EQ(line.width, 2 * 320 + 2 * 640);
+  EXPECT_EQ(line.extent, 2 * 320 + 2 * 640);
   ASSERT_EQ(line.run_count, 2u);
   EXPECT_EQ(line.runs[0].span, 0u);
   EXPECT_EQ(line.runs[1].span, 1u);
@@ -338,7 +338,7 @@ TEST(Layout, ACharacterTheFirstFaceLacksComesFromTheNextAndIsFlagged) {
   EXPECT_EQ(line.runs[1].face, second.face);
   EXPECT_TRUE(line.runs[1].fallback);
   EXPECT_EQ(line.runs[1].face_index, 1u);
-  EXPECT_EQ(line.runs[1].x, kLetter);
+  EXPECT_EQ(line.runs[1].pos, kLetter);
   EXPECT_EQ(line.runs[1].start, 1u);
   EXPECT_EQ(line.runs[1].end, 2u);
 }
@@ -467,14 +467,14 @@ TEST(LayoutContent, NoLineIsWiderThanTheMaxOrNarrowerThanItsMinimumAllows) {
   for (GFNT_F26Dot6 width = 0; width <= max + 200; width += 37) {
     ASSERT_EQ(para.lay(width), GFNT_OK);
     for (size_t i = 0; i < para.layout.line_count; ++i) {
-      const GFNT_F26Dot6 w = para.layout.lines[i].width;
+      const GFNT_F26Dot6 w = para.layout.lines[i].extent;
       EXPECT_LE(w, std::max(width, min)) << "width " << width << " line " << i;
       EXPECT_LE(w, max) << "width " << width;
     }
   }
   ASSERT_EQ(para.lay(min), GFNT_OK);
   for (size_t i = 0; i < para.layout.line_count; ++i) {
-    EXPECT_LE(para.layout.lines[i].width, min);
+    EXPECT_LE(para.layout.lines[i].extent, min);
   }
   ASSERT_EQ(para.lay(max), GFNT_OK);
   EXPECT_EQ(para.layout.line_count, 2u);
@@ -547,8 +547,8 @@ TEST(LayoutCaret, ASoftBreakHasTwoPlacesAndTheAffinityChoosesOne) {
       GFNT_OK);
   EXPECT_EQ(c.line, 1u);
   EXPECT_EQ(c.x, 0);
-  EXPECT_EQ(c.top, 640);
-  EXPECT_EQ(c.height, 640);
+  EXPECT_EQ(c.y, 640);
+  EXPECT_EQ(c.length, 640);
   ASSERT_EQ(gfnt_layout_caret(para.p, &para.layout, 3, GFNT_AFFINITY_UPSTREAM, &c),
       GFNT_OK);
   EXPECT_EQ(c.line, 0u);
@@ -575,7 +575,7 @@ TEST(LayoutCaret, AnEmptyParagraphHasACaretAtItsAlignedStart) {
   ASSERT_EQ(gfnt_layout_caret(para.p, &para.layout, 0, GFNT_AFFINITY_DOWNSTREAM, &c),
       GFNT_OK);
   EXPECT_EQ(c.line, 0u);
-  EXPECT_EQ(c.height, 640);
+  EXPECT_EQ(c.length, 640);
 }
 
 TEST(LayoutHit, RightToLeftTextIsHitFromTheRight) {
@@ -672,8 +672,8 @@ TEST(LayoutJustify, SpacesGrowSoAFullLineFillsTheWidth) {
   ASSERT_EQ(para.layout.line_count, 2u);
   const GFNT_Line & l0 = para.layout.lines[0];
   EXPECT_TRUE(l0.justified);
-  EXPECT_EQ(l0.width, 1500);
-  EXPECT_EQ(l0.x, 0);
+  EXPECT_EQ(l0.extent, 1500);
+  EXPECT_EQ(l0.offset, 0);
   const GFNT_LineRun & run = l0.runs[0];
   ASSERT_GE(run.glyph_count, 5u);
   EXPECT_EQ(run.glyphs[2].advance, kSpace + 60);    // the one space that counts
@@ -681,7 +681,7 @@ TEST(LayoutJustify, SpacesGrowSoAFullLineFillsTheWidth) {
   EXPECT_EQ(run.glyphs[5].advance, kSpace);         // the hanging one is left
   const GFNT_Line & l1 = para.layout.lines[1];
   EXPECT_FALSE(l1.justified);
-  EXPECT_EQ(l1.width, 2 * kLetter);
+  EXPECT_EQ(l1.extent, 2 * kLetter);
 }
 
 TEST(LayoutJustify, ALineEndingInANewlineOrWithNoSpaceIsLeftAlone) {
@@ -691,7 +691,7 @@ TEST(LayoutJustify, ALineEndingInANewlineOrWithNoSpaceIsLeftAlone) {
   Para hard("AB CD\nEF", {font.face}, o);
   ASSERT_EQ(hard.lay(1500), GFNT_OK);
   EXPECT_FALSE(hard.layout.lines[0].justified);
-  EXPECT_EQ(hard.layout.lines[0].width, 2 * 640 + kSpace);
+  EXPECT_EQ(hard.layout.lines[0].extent, 2 * 640 + kSpace);
   Para word("ABCD EF", {font.face}, o);
   ASSERT_EQ(word.lay(1400), GFNT_OK);
   ASSERT_EQ(word.layout.line_count, 2u);
@@ -710,7 +710,7 @@ TEST(LayoutJustify, TheRemainderIsSharedOutOneUnitAtATime) {
   ASSERT_EQ(para.lay(1441), GFNT_OK);
   const GFNT_Line & l = para.layout.lines[0];
   EXPECT_TRUE(l.justified);
-  EXPECT_EQ(l.width, 1441);   // 161 over two spaces: 81 and 80
+  EXPECT_EQ(l.extent, 1441);   // 161 over two spaces: 81 and 80
   EXPECT_EQ(l.runs[0].glyphs[1].advance, kSpace + 81);
   EXPECT_EQ(l.runs[0].glyphs[3].advance, kSpace + 80);
 }
@@ -737,12 +737,12 @@ TEST(LayoutTruncate, TheLastLineIsCutToMakeRoomForTheMark) {
   const GFNT_Line & line = l.lines[0];
   EXPECT_TRUE(line.truncated);
   // Room for 580 beside a 320 mark: one letter, then the mark.
-  EXPECT_EQ(line.width, 2 * kLetter);
+  EXPECT_EQ(line.extent, 2 * kLetter);
   EXPECT_EQ(line.end, 1u);
   ASSERT_EQ(line.run_count, 2u);
   EXPECT_FALSE(line.runs[0].ellipsis);
   EXPECT_TRUE(line.runs[1].ellipsis);
-  EXPECT_EQ(line.runs[1].x, kLetter);
+  EXPECT_EQ(line.runs[1].pos, kLetter);
   EXPECT_EQ(line.runs[1].glyph_count, 1u);
   EXPECT_EQ(line.runs[1].glyphs[0].glyph, 8u);
   EXPECT_EQ(line.runs[1].start, line.runs[1].end);
@@ -770,7 +770,7 @@ TEST(LayoutTruncate, AWordTooWideForItsLineIsCutToo) {
   const GFNT_Line & line = para.layout.lines[0];
   EXPECT_TRUE(line.truncated);
   EXPECT_EQ(line.end, 2u);               // 680 of room: two letters
-  EXPECT_EQ(line.width, 3 * kLetter);
+  EXPECT_EQ(line.extent, 3 * kLetter);
 }
 
 TEST(LayoutTruncate, WithoutAMarkTheLinesAreSimplyCut) {
@@ -781,7 +781,7 @@ TEST(LayoutTruncate, WithoutAMarkTheLinesAreSimplyCut) {
   EXPECT_TRUE(para.layout.truncated);
   EXPECT_FALSE(para.layout.lines[0].truncated);
   EXPECT_EQ(para.layout.lines[0].run_count, 2u);   // the word and its hanging space
-  EXPECT_EQ(para.layout.lines[0].width, 2 * kLetter);
+  EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter);
 }
 
 TEST(LayoutTruncate, TheMarkOfARightToLeftParagraphIsOnTheLeft) {
@@ -796,7 +796,7 @@ TEST(LayoutTruncate, TheMarkOfARightToLeftParagraphIsOnTheLeft) {
   ASSERT_TRUE(line.truncated);
   ASSERT_GE(line.run_count, 2u);
   EXPECT_TRUE(line.runs[0].ellipsis);
-  EXPECT_EQ(line.runs[0].x, line.x);
+  EXPECT_EQ(line.runs[0].pos, line.offset);
 }
 
 TEST(LayoutTruncate, EveryAllocationFailureWhileJustifyingAndTruncatingIsReported) {
@@ -861,11 +861,11 @@ TEST(LayoutSpacing, EachCharacterIsFollowedByTheExtraSpace) {
   const GFNT_LineRun & run = para.layout.lines[0].runs[0];
   EXPECT_EQ(run.glyphs[1].pen_x, kLetter + 64);
   EXPECT_EQ(run.glyphs[2].pen_x, 2 * (kLetter + 64));
-  EXPECT_EQ(para.layout.lines[0].width, 3 * (kLetter + 64));
+  EXPECT_EQ(para.layout.lines[0].extent, 3 * (kLetter + 64));
   span.style.letter_spacing = -32;
   Para tight("ABC", {span});
   ASSERT_EQ(tight.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
-  EXPECT_EQ(tight.layout.lines[0].width, 3 * (kLetter - 32));
+  EXPECT_EQ(tight.layout.lines[0].extent, 3 * (kLetter - 32));
 }
 
 TEST(LayoutSpacing, ItCountsInTheLineBreakingToo) {
@@ -910,7 +910,7 @@ TEST(LayoutTabs, TheDefaultStopIsEightSpacesAndALineBreaksAfterATab) {
   Para wrap("AB\tCD", {font.face}, o);
   ASSERT_EQ(wrap.lay(700), GFNT_OK);
   ASSERT_EQ(wrap.layout.line_count, 2u);
-  EXPECT_EQ(wrap.layout.lines[0].width, 1000);
+  EXPECT_EQ(wrap.layout.lines[0].extent, 1000);
   EXPECT_EQ(wrap.layout.lines[1].start, 3u);
 }
 
@@ -1164,10 +1164,10 @@ TEST(LayoutHyphen, ALineThatBreaksAtASoftHyphenEndsInAHyphenThatTakesRoom) {
   const GFNT_Layout & l = para.layout;
   ASSERT_EQ(l.line_count, 2u);
   const GFNT_Line & first = l.lines[0];
-  EXPECT_EQ(first.width, 4 * kLetter) << "the soft hyphen has no width and the hyphen has one";
+  EXPECT_EQ(first.extent, 4 * kLetter) << "the soft hyphen has no width and the hyphen has one";
   EXPECT_EQ(first.end, 5u) << "the soft hyphen is two bytes and stays on the line";
   EXPECT_EQ(l.lines[1].start, 5u);
-  EXPECT_EQ(l.lines[1].width, 3 * kLetter);
+  EXPECT_EQ(l.lines[1].extent, 3 * kLetter);
   ASSERT_EQ(first.run_count, 2u);
   EXPECT_FALSE(first.runs[0].hyphen);
   EXPECT_FALSE(first.runs[0].ellipsis);
@@ -1175,7 +1175,7 @@ TEST(LayoutHyphen, ALineThatBreaksAtASoftHyphenEndsInAHyphenThatTakesRoom) {
   EXPECT_EQ(first.runs[1].start, first.runs[1].end) << "it stands for no text";
   ASSERT_EQ(first.runs[1].glyph_count, 1u);
   EXPECT_EQ(first.runs[1].glyphs[0].glyph, 9u) << "U+002D, as the face has no U+2010";
-  EXPECT_EQ(first.runs[1].x, 3 * kLetter);
+  EXPECT_EQ(first.runs[1].pos, 3 * kLetter);
   for (size_t i = 0; i < l.lines[1].run_count; ++i) {
     EXPECT_FALSE(l.lines[1].runs[i].hyphen);
   }
@@ -1195,7 +1195,7 @@ TEST(LayoutHyphen, ASoftHyphenThatIsNotBrokenAtIsInvisible) {
   Para para("ABC\xC2\xAD" "DEF", {font.face});
   ASSERT_EQ(para.lay(2000), GFNT_OK);
   ASSERT_EQ(para.layout.line_count, 1u);
-  EXPECT_EQ(para.layout.lines[0].width, 6 * kLetter);
+  EXPECT_EQ(para.layout.lines[0].extent, 6 * kLetter);
   for (size_t i = 0; i < para.layout.lines[0].run_count; ++i) {
     EXPECT_FALSE(para.layout.lines[0].runs[i].hyphen);
   }
@@ -1208,9 +1208,9 @@ TEST(LayoutHyphen, TheHyphenCountsTowardTheWidthSoALaterPointIsNotTakenWhenItDoe
   ASSERT_EQ(para.lay(1000), GFNT_OK);
   const GFNT_Layout & l = para.layout;
   ASSERT_EQ(l.line_count, 3u);
-  EXPECT_EQ(l.lines[0].width, 3 * kLetter);
-  EXPECT_EQ(l.lines[1].width, 3 * kLetter);
-  EXPECT_EQ(l.lines[2].width, 2 * kLetter);
+  EXPECT_EQ(l.lines[0].extent, 3 * kLetter);
+  EXPECT_EQ(l.lines[1].extent, 3 * kLetter);
+  EXPECT_EQ(l.lines[2].extent, 2 * kLetter);
   EXPECT_TRUE(l.lines[0].runs[l.lines[0].run_count - 1].hyphen);
   EXPECT_TRUE(l.lines[1].runs[l.lines[1].run_count - 1].hyphen);
   EXPECT_FALSE(l.lines[2].runs[l.lines[2].run_count - 1].hyphen);
@@ -1236,7 +1236,7 @@ TEST(LayoutHyphen, HyphensNoneMakesASoftHyphenNoPlaceToBreak) {
   Para para("ABC\xC2\xAD" "DEF", {font.face}, hyphenating(GFNT_HYPHENS_NONE));
   ASSERT_EQ(para.lay(1300), GFNT_OK);
   ASSERT_EQ(para.layout.line_count, 1u);
-  EXPECT_EQ(para.layout.lines[0].width, 6 * kLetter);
+  EXPECT_EQ(para.layout.lines[0].extent, 6 * kLetter);
 }
 
 TEST(LayoutHyphen, AHyphenatorsPointsAreUsedOnlyWhenAsked) {
@@ -1347,16 +1347,16 @@ TEST(LayoutHyphen, AHyphenatedLineIsJustifiedAsAnyOtherAndAHitOnItsHyphenLandsAt
   const GFNT_Line & first = l.lines[0];
   ASSERT_TRUE(first.runs[first.run_count - 1].hyphen);
   EXPECT_TRUE(first.justified);
-  EXPECT_EQ(first.width, 2000) << "the spaces took up the slack, hyphen and all";
+  EXPECT_EQ(first.extent, 2000) << "the spaces took up the slack, hyphen and all";
   GFNT_Hit hit{};
   const GFNT_LineRun & hy = first.runs[first.run_count - 1];
-  ASSERT_EQ(gfnt_layout_hit_test(para.p, &l, hy.x + hy.advance / 2, first.top + 10, &hit), GFNT_OK);
+  ASSERT_EQ(gfnt_layout_hit_test(para.p, &l, hy.pos + hy.advance / 2, first.box.y + 10, &hit), GFNT_OK);
   EXPECT_EQ(hit.line, 0u);
   EXPECT_EQ(hit.offset, first.end);
   GFNT_Caret caret{};
   ASSERT_EQ(gfnt_layout_caret(para.p, &l, first.end, GFNT_AFFINITY_UPSTREAM, &caret), GFNT_OK);
   EXPECT_EQ(caret.line, 0u);
-  EXPECT_EQ(caret.x, hy.x) << "an upstream caret at the break stands before the hyphen";
+  EXPECT_EQ(caret.x, hy.pos) << "an upstream caret at the break stands before the hyphen";
 }
 
 TEST(LayoutHyphen, EveryAllocationFailureWhileHyphenatingIsReportedAndNothingLeaks) {
@@ -1414,7 +1414,7 @@ TEST(LayoutHyphen, WhenNoPointHasRoomForItsHyphenTheEarliestIsTakenAndOverflows)
   ASSERT_GE(l.line_count, 2u);
   EXPECT_EQ(l.lines[0].end, 3u);
   EXPECT_TRUE(l.lines[0].runs[l.lines[0].run_count - 1].hyphen);
-  EXPECT_EQ(l.lines[0].width, 2 * kLetter);
+  EXPECT_EQ(l.lines[0].extent, 2 * kLetter);
 }
 
 TEST(LayoutHyphen, AnOptionOutOfRangeIsRefused) {

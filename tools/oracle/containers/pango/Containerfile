@@ -1,0 +1,22 @@
+# The Pango oracle: what Pango (the layout engine behind GTK and most desktop text) does with a
+# paragraph, vertical gravity included, read back as the extents of every cluster.
+#
+# Built here and pinned like the others: the base by digest and the packages by full apt
+# version, with the run-time version check in oracle_env.py as the real guarantee. Pango is
+# driven from Python through its GObject typelib. It finds fonts through fontconfig, which a
+# probe points at the corpus directory with a generated FONTCONFIG_FILE, so no font in the image
+# or on the host is ever used by accident (none is installed).
+FROM docker.io/library/debian@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
+
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+      python3-gi=3.50.0-4+b1 \
+      gir1.2-pango-1.0=1.56.3-1 \
+      libpango-1.0-0=1.56.3-1 \
+      fontconfig \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pango-version /usr/local/bin/
+RUN chmod +x /usr/local/bin/pango-version

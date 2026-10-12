@@ -24,7 +24,9 @@
  * Lay a paragraph out and print the result as JSON, for the differential.
  *
  * Usage: font-layout [--size PIXELS] [--bidi ltr|rtl|auto]
- *                    [--align start|end|left|right|center] [--face N] <font>
+ *                    [--align start|end|left|right|center|justify] [--face N]
+ *                    [--mode horizontal|vertical-rl|vertical-lr|sideways-rl|sideways-lr]
+ *                    [--orient mixed|upright|sideways] <font>
  *
  * Reads one request per line from standard input: `<width>\t<hex>`, where the
  * width is in 26.6 pixels or `u` for unbounded and the text is the hex of its
@@ -36,7 +38,10 @@
  *              "runs":[{"l":LEVEL,"g":[[glyph,cluster,pen_x,advance,x,y],...]}]}],
  *    "carets":[[offset,x_down,line_down,x_up,line_up]...],
  *    "hits":[[offset,hit_offset,hit_affinity,x_of_that_caret]...],
- *    "rects":[[x,y,w,h]...]}
+ *    "rects":[[x,y,w,h]...],
+ *    "chars":[[x,y,w,h]...]}   (the rectangle of each code point, in text order)
+ *
+ * Each line also carries "box":[x,y,w,h], its line box.
  *
  * The carets, hits and rects are there so the differential can check that the
  * hit-testing functions agree with one another and with the glyphs.
@@ -46,6 +51,7 @@
 
 #include <ghoti.io/font/font.h>
 #include <ghoti.io/font/layout.h>
+#include <ghoti.io/font/outline.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,20 +100,49 @@ static int answer(const GFNT_Face * face, const char * text, size_t length,
   for (size_t i = 0; i < l.line_count; i++) {
     const GFNT_Line * line = &l.lines[i];
 
-    printf("%s{\"s\":%zu,\"e\":%zu,\"x\":%d,\"w\":%d,\"t\":%d,\"hh\":%d,\"ink\":",
-        i ? "," : "", line->start, line->end, line->x, line->width, line->top,
-        line->height);
+    printf("%s{\"s\":%zu,\"e\":%zu,\"x\":%d,\"w\":%d,\"t\":%d,\"hh\":%d,\"box\":",
+        i ? "," : "", line->start, line->end, line->offset, line->extent, line->box.y,
+        line->box.height);
+    print_rect(line->box);
+    printf(",\"ink\":");
     print_rect(line->ink);
     printf(",\"runs\":[");
     for (size_t k = 0; k < line->run_count; k++) {
       const GFNT_LineRun * run = &line->runs[k];
 
-      printf("%s{\"l\":%u,\"g\":[", k ? "," : "", run->level);
+      printf("%s{\"l\":%u,\"o\":%d,\"g\":[", k ? "," : "", run->level,
+          (int)run->orientation);
       for (size_t g = 0; g < run->glyph_count; g++) {
         const GFNT_PlacedGlyph * pg = &run->glyphs[g];
 
         printf("%s[%u,%u,%d,%d,%d,%d]", g ? "," : "", pg->glyph, pg->cluster,
             pg->pen_x, pg->advance, pg->x, pg->y);
+      }
+      // The outline box of each glyph in font units, and the units per em, so that a reader
+      // can place the ink: the box is "null" for a glyph with none.
+      printf("],\"py\":[");
+      for (size_t g = 0; g < run->glyph_count; g++) {
+        printf("%s%d", g ? "," : "", run->glyphs[g].pen_y);
+      }
+      printf("],\"b\":[");
+      for (size_t g = 0; g < run->glyph_count; g++) {
+        GFNT_Outline * outline = NULL;
+        GFNT_Box box;
+
+        printf("%s", g ? "," : "");
+        if (gfnt_face_glyph_outline(run->face, run->glyphs[g].glyph, NULL, NULL, &outline, NULL)
+                == GFNT_OK) {
+          if (gfnt_outline_bounds(outline, &box) == GFNT_OK && !gfnt_box_is_empty(&box)) {
+            printf("[%d,%d,%d,%d]", box.x_min, box.y_min, box.x_max, box.y_max);
+          }
+          else {
+            printf("null");
+          }
+          gfnt_outline_destroy(outline);
+        }
+        else {
+          printf("null");
+        }
       }
       printf("]}");
     }
@@ -138,7 +173,8 @@ static int answer(const GFNT_Face * face, const char * text, size_t length,
       GFNT_Caret back;
 
       if (gfnt_layout_caret(p, &l, off, GFNT_AFFINITY_DOWNSTREAM, &down) != GFNT_OK
-          || gfnt_layout_hit_test(p, &l, down.x, down.top + 1, &hit) != GFNT_OK
+          || gfnt_layout_hit_test(p, &l, down.horizontal ? down.x + 1 : down.x,
+              down.horizontal ? down.y : down.y + 1, &hit) != GFNT_OK
           || gfnt_layout_caret(p, &l, hit.offset, hit.affinity, &back) != GFNT_OK) {
         continue;
       }
@@ -161,6 +197,21 @@ static int answer(const GFNT_Face * face, const char * text, size_t length,
       }
     }
     free(rects);
+  }
+  printf("],\"chars\":[");
+  for (size_t at = 0, first = 1; at < length;) {
+    size_t used = 1;
+    GFNT_Rect r1 = {0, 0, 0, 0};
+    size_t got = 0;
+
+    while (at + used < length && ((unsigned char)text[at + used] & 0xC0) == 0x80) {
+      used++;
+    }
+    gfnt_layout_range_rects(p, &l, at, at + used, &r1, 1, &got);
+    printf("%s", first ? "" : ",");
+    first = 0;
+    print_rect(got ? r1 : (GFNT_Rect){0, 0, 0, 0});
+    at += used;
   }
   printf("]}\n");
   gfnt_layout_free(&l);
@@ -200,7 +251,23 @@ int main(int argc, char ** argv) {
       options.align = strcmp(v, "end") == 0 ? GFNT_ALIGN_END
           : strcmp(v, "left") == 0 ? GFNT_ALIGN_LEFT
           : strcmp(v, "right") == 0 ? GFNT_ALIGN_RIGHT
+          : strcmp(v, "justify") == 0 ? GFNT_ALIGN_JUSTIFY
           : strcmp(v, "center") == 0 ? GFNT_ALIGN_CENTER : GFNT_ALIGN_START;
+    }
+    else if (strcmp(argv[a], "--mode") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+
+      options.writing_mode = strcmp(v, "vertical-rl") == 0 ? GFNT_WRITING_VERTICAL_RL
+          : strcmp(v, "vertical-lr") == 0 ? GFNT_WRITING_VERTICAL_LR
+          : strcmp(v, "sideways-rl") == 0 ? GFNT_WRITING_SIDEWAYS_RL
+          : strcmp(v, "sideways-lr") == 0 ? GFNT_WRITING_SIDEWAYS_LR
+          : GFNT_WRITING_HORIZONTAL_TB;
+    }
+    else if (strcmp(argv[a], "--orient") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+
+      options.text_orientation = strcmp(v, "upright") == 0 ? GFNT_ORIENT_UPRIGHT
+          : strcmp(v, "sideways") == 0 ? GFNT_ORIENT_SIDEWAYS : GFNT_ORIENT_MIXED;
     }
     else if (argv[a][0] != '-') {
       path = argv[a];

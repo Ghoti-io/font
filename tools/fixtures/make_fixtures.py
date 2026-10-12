@@ -344,6 +344,111 @@ def unicode_cmap():
     ]
 
 
+VERTICAL_ASCENT = 880
+VERTICAL_DESCENT = -120
+
+# name -> (character, horizontal advance, vertical advance, the glyph's box)
+# The boxes are L shapes inside the box given, so a turned glyph is not the same picture as an
+# upright one.
+VERTICAL_GLYPHS = [
+    ("ji", 0x65E5, 1000, 1000, (60, -60, 940, 840)),
+    ("hon", 0x672C, 1000, 1000, (60, -60, 940, 840)),
+    ("go", 0x8A9E, 1000, 1000, (60, -60, 940, 840)),
+    ("a.kana", 0x3042, 1000, 1000, (80, -40, 920, 820)),
+    ("comma", 0x3001, 1000, 1000, (50, -30, 250, 150)),
+    ("period", 0x3002, 1000, 1000, (50, -30, 250, 250)),
+    ("kakko", 0x300C, 1000, 1000, (550, 400, 900, 800)),
+    ("kakko.close", 0x300D, 1000, 1000, (100, -20, 450, 380)),
+    ("chouon", 0x30FC, 1000, 1000, (0, 300, 1000, 380)),
+    ("emdash", 0x2014, 1000, 1000, (0, 300, 1000, 360)),
+    ("ellipsis", 0x2026, 1000, 1000, (100, 0, 900, 100)),
+    ("A", 0x41, 700, 900, (40, 0, 660, 700)),
+    ("B", 0x42, 650, 900, (60, 0, 600, 700)),
+    ("C", 0x43, 620, 900, (40, 0, 580, 700)),
+    ("a", 0x61, 500, 800, (40, 0, 460, 520)),
+    ("b", 0x62, 540, 800, (60, 0, 500, 720)),
+    ("c", 0x63, 480, 800, (40, 0, 440, 520)),
+    ("d0", 0x30, 560, 800, (40, 0, 520, 700)),
+    ("d1", 0x31, 560, 800, (100, 0, 460, 700)),
+    ("d2", 0x32, 560, 800, (40, 0, 520, 700)),
+    ("d4", 0x34, 560, 800, (40, 0, 520, 700)),
+    ("space", 0x20, 250, 500, None),
+    ("hyphen", 0x2D, 330, 600, (40, 220, 290, 300)),
+    ("parenleft", 0x28, 330, 700, (100, -120, 300, 760)),
+    ("parenright", 0x29, 330, 700, (30, -120, 230, 760)),
+]
+
+# The glyphs a `vert` lookup swaps in: the vertical forms of the punctuation.
+VERTICAL_ALTERNATES = {
+    "comma": ("comma.vert", (600, 500, 800, 700)),
+    "period": ("period.vert", (600, 500, 800, 800)),
+    "kakko": ("kakko.vert", (300, 520, 900, 800)),
+    "kakko.close": ("kakko.close.vert", (100, 60, 700, 360)),
+    "chouon": ("chouon.vert", (460, 0, 540, 1000)),
+    "emdash": ("emdash.vert", (460, 0, 520, 1000)),
+}
+
+
+def build_vertical_text(out):
+    """A small font with vertical metrics, vertical forms, and every orientation class.
+
+    Ideographs and kana (upright), CJK punctuation with `vert` forms (Tu or Tr by UAX #50),
+    Latin letters, digits, brackets (sideways), and an em dash and an ellipsis. `vhea` and
+    `vmtx` give each its vertical advance, and the horizontal and vertical metrics differ
+    everywhere so that the wrong one cannot be mistaken for the right one. Boxes, not shapes:
+    what matters is where a glyph's ink is, not what it looks like.
+    """
+    order = [".notdef"] + [g[0] for g in VERTICAL_GLYPHS] \
+        + [alt for alt, _ in VERTICAL_ALTERNATES.values()]
+    glyphs = {}
+    hmetrics = {}
+    vmetrics = {}
+    pen = TTGlyphPen(None)
+    pen.moveTo((60, 0)); pen.lineTo((60, 700)); pen.lineTo((460, 700)); pen.lineTo((460, 0))
+    pen.closePath()
+    glyphs[".notdef"] = pen.glyph()
+    hmetrics[".notdef"] = (600, 60)
+    vmetrics[".notdef"] = (1000, VERTICAL_ASCENT - 700)
+
+    def draw(box):
+        pen = TTGlyphPen(None)
+        if box:
+            x0, y0, x1, y1 = box
+            pen.moveTo((x0, y0)); pen.lineTo((x0, y1)); pen.lineTo((x1, y1))
+            pen.lineTo((x1, y0)); pen.closePath()
+        return pen.glyph()
+
+    for name, _, h_adv, v_adv, box in VERTICAL_GLYPHS:
+        glyphs[name] = draw(box)
+        hmetrics[name] = (h_adv, box[0] if box else 0)
+        vmetrics[name] = (v_adv, VERTICAL_ASCENT - (box[3] if box else 0))
+    for base, (alt, box) in VERTICAL_ALTERNATES.items():
+        glyphs[alt] = draw(box)
+        hmetrics[alt] = (hmetrics[base][0], box[0])
+        vmetrics[alt] = (vmetrics[base][0], VERTICAL_ASCENT - box[3])
+    fb = FontBuilder(UPEM, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics(hmetrics)
+    fb.setupHorizontalHeader(ascent=VERTICAL_ASCENT, descent=VERTICAL_DESCENT, lineGap=0)
+    fb.setupVerticalMetrics(vmetrics)
+    fb.setupVerticalHeader(ascent=500, descent=-500, lineGap=0)
+    set_cmap(fb, [subtable(4, 3, 1, {g[1]: g[0] for g in VERTICAL_GLYPHS}),
+                  subtable(4, 0, 3, {g[1]: g[0] for g in VERTICAL_GLYPHS})])
+    fields = dict(OS2_FIELDS)
+    fields.update(sTypoAscender=VERTICAL_ASCENT, sTypoDescender=VERTICAL_DESCENT,
+                  sTypoLineGap=0, usWinAscent=VERTICAL_ASCENT, usWinDescent=-VERTICAL_DESCENT)
+    fb.setupOS2(version=4, achVendID=VENDOR, **fields)
+    fb.setupNameTable(names("Vertical Text"), mac=True)
+    fb.setupPost(keepGlyphNames=True)
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    subs = "\n".join("  sub %s by %s;" % (base, alt)
+                     for base, (alt, _) in VERTICAL_ALTERNATES.items())
+    addOpenTypeFeaturesFromString(fb.font, "feature vert {\n%s\n} vert;" % subs)
+    pin(fb)
+    fb.save(out)
+
+
 def build_basic(out):
     """Everything ordinary, and the baseline every other fixture varies from."""
     fb = truetype("Basic", unicode_cmap())
@@ -4617,6 +4722,10 @@ FIXTURES = {
         "CFF: local and global subroutines with the bias applied, nesting, a "
         "subroutine that ends without return, defaultWidthX, a nominalWidthX "
         "delta, and one glyph whose charstring advance hmtx disagrees with"),
+    "vertical-text.ttf": (build_vertical_text,
+        "TrueType: vhea and vmtx with vertical advances unlike the horizontal ones, a vert "
+        "feature giving CJK punctuation vertical forms, ideographs and kana, Latin letters, "
+        "digits and brackets, for vertical paragraph layout"),
     "cff-repeats.otf": (build_cff_repeats,
         "CFF: twelve glyphs sharing two path fragments, six hinted glyphs sharing "
         "stems, masks and fragments, a long run of one stroke, and one glyph "

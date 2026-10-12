@@ -1653,7 +1653,28 @@ overflow is the least). `min_content` ends a stretch at a point with its hyphen 
 cut by `max_lines` shows the ellipsis and no hyphen. The library carries no hyphenation data
 (§10.7); the tests use a callback that names offsets.
 
-Not yet: kashida and vertical text.
+**Vertical text** (`GFNT_ParagraphOptions::writing_mode` and `text_orientation`, CSS Writing
+Modes; the design notes and measurements are in `notes/font/VERTICAL.md`). The coordinates stay
+physical: lines are columns that stack from the right (`VERTICAL_RL`, `SIDEWAYS_RL`) or the left
+(`VERTICAL_LR`), the room given to `gfnt_paragraph_layout()` is a height, and a line reports its
+`box`, where its text begins (`offset`) and how long it is (`extent`). Each run says how its
+glyphs sit (`GFNT_Orientation`): upright runs are shaped top to bottom, on the font's vertical
+advances and vertical forms (`vert`), and a glyph is centred on the column's axis by the shaper's
+own vertical origin; turned runs are shaped as a row, take horizontal advances, and have their
+glyphs drawn turned a quarter clockwise about the placed origin, the alphabetic baseline lying
+half of (ascent - descent) before the axis so the em box is centred on it. `MIXED` orients each
+character by UAX #50 (`Tr` upright only when the face has a vertical form for it) and lets marks,
+joiners and variation selectors follow their base; a run is a stretch of one script, one bidi level
+and one orientation. A column is as thick as its thickest box, every box being centred on the same
+axis. `SIDEWAYS_LR` (text reads upward, columns stack from the left, glyphs turned the other way)
+is `SIDEWAYS_RL` turned half a turn about the paragraph box, and hit testing turns the point back.
+Breaking, hanging, hyphenation, tabs, truncation and the bidirectional algorithm are the
+horizontal rules along the other axis. A caret is a horizontal bar, and a range's rectangles are
+as thick as the column. `make check-oracle-css` holds the layout to Chromium (the `chrome` image,
+CSS Writing Modes): the rectangle of every character in 22 cases, and the ink of 40 glyphs read
+from a screenshot, agree to 0.05 and 1.6 pixels; a wrong orientation or direction fails both.
+
+Not yet: kashida, justification between ideographs (Chromium does it, in both axes), and ruby.
 
 ### 10.7 Deliberately not here
 
@@ -2584,8 +2605,7 @@ file or the request names it, and nowhere is there a function that pretends.
 - **The rest of AAT** (`feat`, `kerx` format 3 and the like; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.
 - **Synthetic bold and oblique**, LCD filtering, stem darkening.
-- **Hyphenation data**, **`SA` dictionaries**, **Knuth-Plass**, vertical layout,
-  ruby.
+- **Hyphenation data**, **`SA` dictionaries**, **Knuth-Plass**, ruby.
 - **Predefined CJK CMaps** for PDF.
 - **Font *rendering* of colour**: `COLR` v1 is returned as a paint graph, not
   composited.

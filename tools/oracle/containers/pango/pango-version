@@ -1,0 +1,7 @@
+#!/bin/sh
+# What oracle_env.py's probe runs: the version of the library the driver imports.
+python3 -c "
+import gi
+gi.require_version('Pango', '1.0')
+from gi.repository import Pango
+print('Pango ' + Pango.version_string())"

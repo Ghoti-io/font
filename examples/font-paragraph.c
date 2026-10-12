@@ -154,7 +154,7 @@ int main(int argc, char ** argv) {
       }
     }
     printf("line %zu: bytes %zu..%zu, x %.2f, width %.2f%s\n", i, line->start, line->end,
-        line->x / 64.0, line->width / 64.0, line->justified ? ", justified" : "");
+        line->offset / 64.0, line->extent / 64.0, line->justified ? ", justified" : "");
   }
   {
     FILE * out = fopen(out_path, "wb");

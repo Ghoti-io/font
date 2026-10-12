@@ -1,0 +1,26 @@
+# The Chromium oracle: what CSS Writing Modes, CSS Text and the browsers' line breaking
+# and justification do to a paragraph, read back as the rectangle of every character.
+#
+# Built here, like the other images, so what is pinned is everything the build reads: the base
+# by digest (the same one the HarfBuzz and FreeType images use, so the three share its layers)
+# and Debian's chromium by full apt version. The run-time version check in oracle_env.py is
+# the real guarantee. The apt pin will eventually fail to resolve when the archive moves past
+# it; that is the intended failure: a newer Chromium is new answers, and a new answer that
+# disagrees is a finding to triage rather than a regression to fix.
+#
+# No fonts are installed (no Recommends), so a page can only draw with the font it names in an
+# @font-face from the mounted corpus, and a probe that forgets to name one fails loudly on a
+# missing glyph instead of quietly using whatever the host happens to have. Run headless, with
+# the sandbox off (there is no user namespace to build one in under --network none) and a
+# profile directory in the writable scratch.
+FROM docker.io/library/debian@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
+
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+      chromium=154.0.8037.92-1~deb13u1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY chrome-version /usr/local/bin/
+RUN chmod +x /usr/local/bin/chrome-version

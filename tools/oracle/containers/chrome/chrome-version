@@ -1,0 +1,3 @@
+#!/bin/sh
+# What oracle_env.py's probe runs: the version of the browser binary that will answer.
+chromium --version | sed -n 's/^Chromium \([0-9.]*\).*$/Chrome \1/p' | head -1

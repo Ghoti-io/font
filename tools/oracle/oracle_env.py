@@ -89,6 +89,10 @@ PROBE = {
     # The image is `libs/unicode`'s, and its probe is the compiled icu-version
     # that image carries; see tools/oracle/icu_layout.cpp for what is asked of it.
     "icu": (["icu-version"], "ICU "),
+    # The browser's probe is `chromium --version` read in the image, for the same reason as the
+    # others: the binary that answers is the claim, not the package that was asked for.
+    "chrome": (["chrome-version"], "Chrome "),
+    "pango": (["pango-version"], "Pango "),
 }
 
 _pins = None

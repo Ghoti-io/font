@@ -24,7 +24,11 @@
  * Hit testing, carets and selection rectangles.
  *
  * Everything is built from the *boxes* of a line: one per grapheme, in visual
- * order, with the bytes it stands for and the x range it covers. A cluster of
+ * order, with the bytes it stands for and the range it covers along the line.
+ * In vertical text the line is a column and the range is a span of y; for
+ * sideways-lr, whose lines read upward, the boxes are worked out in the frame
+ * of sideways-rl (coordinates measured from the bottom) and turned back at the
+ * edges. A cluster of
  * several graphemes (a ligature) is divided at the font's `GDEF` ligature
  * carets when it has one per component and evenly otherwise. A newline is not a
  * box, so nothing lands after it.
@@ -37,9 +41,22 @@
 
 typedef struct {
   size_t lo, hi;        // bytes
-  GFNT_F26Dot6 x0, x1;  // x0 <= x1
+  GFNT_F26Dot6 x0, x1;  // along the line, in the frame where it reads toward larger values; x0 <= x1
   bool rtl;
 } Box;
+
+static bool is_vertical(const GFNT_Layout * l) {
+  return l->writing_mode != GFNT_WRITING_HORIZONTAL_TB;
+}
+
+static bool is_flipped(const GFNT_Layout * l) {
+  return l->writing_mode == GFNT_WRITING_SIDEWAYS_LR;
+}
+
+/** A coordinate along the line, turned to the frame the boxes are in (and back: it is its own inverse). */
+static GFNT_F26Dot6 canon(const GFNT_Layout * l, GFNT_F26Dot6 c) {
+  return is_flipped(l) ? l->height - c : c;
+}
 
 static bool is_newline(uint32_t cp) {
   return cp == 0x0A || cp == 0x0B || cp == 0x0C || cp == 0x0D || cp == 0x85
@@ -81,10 +98,10 @@ static GFNT_F26Dot6 mul_div(GFNT_F26Dot6 a, size_t num, size_t den) {
  * Append the boxes of one glyph group (glyphs [g0, g1) of a run, one cluster)
  * covering the bytes [lo, hi). Returns the new count.
  */
-static size_t add_group(const GFNT_Paragraph * p, const GFNT_LineRun * run,
-    size_t g0, size_t g1, size_t lo, size_t hi, Box * boxes, size_t n) {
+static size_t add_group(const GFNT_Paragraph * p, const GFNT_Layout * layout,
+    const GFNT_LineRun * run, size_t g0, size_t g1, size_t lo, size_t hi, Box * boxes, size_t n) {
   const GFNT_PlacedGlyph * first = &run->glyphs[g0];
-  GFNT_F26Dot6 x0 = first->pen_x, x1 = x0;
+  GFNT_F26Dot6 x0 = canon(layout, is_vertical(layout) ? first->pen_y : first->pen_x), x1 = x0;
   bool rtl = (run->level & 1) != 0;
   size_t c0 = cp_of_byte(p, lo), c1 = cp_of_byte(p, hi);
   size_t graphemes = 0;
@@ -121,7 +138,7 @@ static size_t add_group(const GFNT_Paragraph * p, const GFNT_LineRun * run,
     int32_t carets[64];
     size_t have = 0;
 
-    if (g1 - g0 == 1) {
+    if (g1 - g0 == 1 && run->orientation != GFNT_ORIENT_RUN_UPRIGHT) {
       const GFNT_TextStyle * style = &p->styles[run->span];
       uint16_t upem = 0;
 
@@ -133,7 +150,7 @@ static size_t add_group(const GFNT_Paragraph * p, const GFNT_LineRun * run,
             + upem / 2) / upem);
 
         for (size_t i = 0; i < have; i++) {
-          edge[i + 1] = first->pen_x + gfnt_units_to_pixels(carets[i], scale);
+          edge[i + 1] = x0 + gfnt_units_to_pixels(carets[i], scale);
         }
       }
       else {
@@ -160,8 +177,8 @@ static size_t add_group(const GFNT_Paragraph * p, const GFNT_LineRun * run,
 }
 
 /** The boxes of a line, in visual order. Free with the paragraph's allocator. */
-static GFNT_Result line_boxes(const GFNT_Paragraph * p, const GFNT_Line * line,
-    Box ** out, size_t * count) {
+static GFNT_Result line_boxes(const GFNT_Paragraph * p, const GFNT_Layout * layout,
+    const GFNT_Line * line, Box ** out, size_t * count) {
   const GFNT_Allocator * allocator = p->allocator;
   Box * boxes = allocator->calloc_fn(allocator->ctx, p->length + 2, sizeof *boxes);
   size_t n = 0;
@@ -190,7 +207,7 @@ static GFNT_Result line_boxes(const GFNT_Paragraph * p, const GFNT_Line * line,
         hi = e < run->glyph_count ? run->glyphs[e].cluster : run->end;
       }
       if (hi > lo) {
-        n = add_group(p, run, g, e, lo, hi, boxes, n);
+        n = add_group(p, layout, run, g, e, lo, hi, boxes, n);
       }
       g = e;
     }
@@ -215,10 +232,24 @@ GFNT_Result gfnt_layout_hit_test(const GFNT_Paragraph * p, const GFNT_Layout * l
   if (!valid(p, l) || !out) {
     return GFNT_ERR_INVALID;
   }
-  while (li + 1 < l->line_count && y >= l->lines[li].top + l->lines[li].height) {
-    li++;
+  if (!is_vertical(l)) {
+    while (li + 1 < l->line_count && y >= l->lines[li].box.y + l->lines[li].box.height) {
+      li++;
+    }
   }
-  r = line_boxes(p, &l->lines[li], &boxes, &n);
+  else if (l->writing_mode == GFNT_WRITING_VERTICAL_RL
+      || l->writing_mode == GFNT_WRITING_SIDEWAYS_RL) {
+    // Columns read from the right: the next one is further left.
+    while (li + 1 < l->line_count && x < l->lines[li].box.x) {
+      li++;
+    }
+  }
+  else {
+    while (li + 1 < l->line_count && x >= l->lines[li].box.x + l->lines[li].box.width) {
+      li++;
+    }
+  }
+  r = line_boxes(p, l, &l->lines[li], &boxes, &n);
   if (r != GFNT_OK) {
     return r;
   }
@@ -229,6 +260,7 @@ GFNT_Result gfnt_layout_hit_test(const GFNT_Paragraph * p, const GFNT_Layout * l
     size_t pick = n;
     bool leading;
 
+    x = canon(l, is_vertical(l) ? y : x);
     for (size_t i = 0; i < n; i++) {
       if (x < boxes[i].x1) {
         pick = i;
@@ -296,15 +328,21 @@ GFNT_Result gfnt_layout_caret(const GFNT_Paragraph * p, const GFNT_Layout * l,
   if (li == (size_t)-1) {
     li = l->line_count - 1;   // the end of the text
   }
-  r = line_boxes(p, &l->lines[li], &boxes, &n);
+  r = line_boxes(p, l, &l->lines[li], &boxes, &n);
   if (r != GFNT_OK) {
     return r;
   }
   caret.line = li;
-  caret.top = l->lines[li].top;
-  caret.height = l->lines[li].height;
-  caret.x = l->lines[li].x;
+  caret.horizontal = is_vertical(l);
   {
+    GFNT_F26Dot6 along;   // in the boxes' frame
+
+    along = is_flipped(l) ? l->height - l->lines[li].offset - l->lines[li].extent
+                          : l->lines[li].offset;
+    caret.length = caret.horizontal ? l->lines[li].box.width : l->lines[li].box.height;
+    caret.x = l->lines[li].box.x;
+    caret.y = l->lines[li].box.y;
+    {
     const Box * after = NULL, * before = NULL;
 
     for (size_t i = 0; i < n; i++) {
@@ -316,13 +354,21 @@ GFNT_Result gfnt_layout_caret(const GFNT_Paragraph * p, const GFNT_Layout * l,
       }
     }
     if (affinity == GFNT_AFFINITY_UPSTREAM && before) {
-      caret.x = before->rtl ? before->x0 : before->x1;
+      along = before->rtl ? before->x0 : before->x1;
     }
     else if (after) {
-      caret.x = after->rtl ? after->x1 : after->x0;
+      along = after->rtl ? after->x1 : after->x0;
     }
     else if (before) {
-      caret.x = before->rtl ? before->x0 : before->x1;
+      along = before->rtl ? before->x0 : before->x1;
+    }
+    along = canon(l, along);
+    if (caret.horizontal) {
+      caret.y = along;
+    }
+    else {
+      caret.x = along;
+    }
     }
   }
   p->allocator->free_fn(p->allocator->ctx, boxes);
@@ -343,13 +389,13 @@ GFNT_Result gfnt_layout_range_rects(const GFNT_Paragraph * p,
     Box * boxes = NULL;
     size_t n = 0;
     bool open = false;
-    GFNT_Rect cur = {0, 0, 0, 0};
+    GFNT_Rect cur = {0, 0, 0, 0};   // x and width: the span along the line, in the boxes' frame
     GFNT_Result r;
 
     if (line->end <= start || line->start >= end) {
       continue;
     }
-    r = line_boxes(p, line, &boxes, &n);
+    r = line_boxes(p, l, line, &boxes, &n);
     if (r != GFNT_OK) {
       return r;
     }
@@ -357,21 +403,31 @@ GFNT_Result gfnt_layout_range_rects(const GFNT_Paragraph * p,
       bool in = i < n && boxes[i].lo < end && boxes[i].hi > start;
 
       if (in && open && boxes[i].x0 == cur.x + cur.width) {
-        cur.width = boxes[i].x1 - cur.x;
+        cur.width = boxes[i].x1 - cur.x;   // along the line, in the boxes' frame for now
         continue;
       }
       if (open) {
+        GFNT_Rect rect = cur;
+
+        if (is_vertical(l)) {
+          rect.x = line->box.x;
+          rect.y = is_flipped(l) ? l->height - (cur.x + cur.width) : cur.x;
+          rect.width = line->box.width;
+          rect.height = cur.width;
+        }
+        else {
+          rect.y = line->box.y;
+          rect.height = line->box.height;
+        }
         if (out && total < capacity) {
-          out[total] = cur;
+          out[total] = rect;
         }
         total++;
         open = false;
       }
       if (in) {
         cur.x = boxes[i].x0;
-        cur.y = line->top;
         cur.width = boxes[i].x1 - boxes[i].x0;
-        cur.height = line->height;
         open = true;
       }
     }

@@ -47,6 +47,7 @@ typedef struct {
   size_t span;
   size_t face_index;
   uint8_t level;
+  uint8_t orient;                      // a GFNT_Orientation: how its glyphs sit
   GFNT_F26Dot6 ascent, descent, gap;   // positive, 26.6
 } PRun;
 
@@ -72,6 +73,8 @@ struct GFNT_Paragraph {
   GFNT_TextStyle * styles;     // one per span, copied
   size_t span_count;
   uint8_t para_level;
+  GFNT_WritingMode mode;
+  bool vertical;               // lines are columns
   uint32_t ell[8];             // the truncation mark
   size_t ell_count;
   GFNT_FontProvider provider;

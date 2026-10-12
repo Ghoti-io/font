@@ -69,3 +69,13 @@ harfbuzz	localhost/ghoti-font-oracle-harfbuzz:10.2.0	HarfBuzz 10.2.0	What a stri
 # pixel. What remains unread by any second reader is nothing in this population -
 # which is a sentence that could not be written before that image existed.
 icu	localhost/ghoti-unicode-oracle-icu:78.3	ICU 78.3	The second opinion on text for paragraph layout: the bidirectional levels and visual order of a line (UAX #9), where a line may and must break (UAX #14) and each character's script - the image libs/unicode builds, named here so this library does not build a second one
+
+# Chromium, built here, headless. What CSS does to a paragraph: writing modes and text orientation,
+# line breaking, justification, alignment, read back as the rectangle of every character. It has
+# no fonts of its own; a probe names the corpus font in an @font-face, so the browser can only
+# draw with the bytes this library reads.
+chrome	localhost/ghoti-font-oracle-chrome:154.0.8037.92	Chrome 154.0.8037.92	CSS Writing Modes, CSS Text: where lines break, how they stack, how a character sits in vertical text, and how a line is justified - the primary reference for vertical paragraph layout
+
+# Pango, built here, driven from Python. What the desktop's layout engine does, vertical gravity
+# included; the second opinion where CSS and users' experience of Pango may differ.
+pango	localhost/ghoti-font-oracle-pango:1.56.3	Pango 1.56.3	Paragraph layout as GTK sets it: line breaking, alignment, and vertical gravity with its hints - the second reference for vertical text

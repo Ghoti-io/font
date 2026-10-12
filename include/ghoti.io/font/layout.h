@@ -35,8 +35,12 @@
  * paragraph's box, and a glyph's pen position is the same number the painter
  * uses: measuring and painting are one code path.
  *
- * **What it does not do, stated rather than approximated:** vertical text
- * (a span's face runs horizontally), kashida justification
+ * **Vertical text** follows CSS Writing Modes (::GFNT_WritingMode, ::GFNT_TextOrientation): the
+ * coordinates stay physical, lines are columns, and the width given to
+ * ::gfnt_paragraph_layout() is the room *along* the lines, a height. A run says how its glyphs
+ * sit (::GFNT_Orientation); a turned run's glyphs are drawn turned about their origin.
+ *
+ * **What it does not do, stated rather than approximated:** kashida justification
  * (spaces only), hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and anything that must know about a non-text box on its
  * line. Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
  * the text is otherwise one bidirectional paragraph, so a caller with several
@@ -63,6 +67,40 @@ extern "C" {
 
 /** @brief A width that never wraps: the text breaks only at newline characters. */
 #define GFNT_LAYOUT_UNBOUNDED INT32_MAX
+
+/** @brief Which way lines run and stack, after CSS `writing-mode`. */
+typedef enum GFNT_WritingMode {
+  GFNT_WRITING_HORIZONTAL_TB = 0, ///< Lines run left to right (or right to left), stack downward.
+  GFNT_WRITING_VERTICAL_RL,       ///< Lines run downward and stack from the right to the left.
+  GFNT_WRITING_VERTICAL_LR,       ///< Lines run downward and stack from the left to the right.
+  /** As ::GFNT_WRITING_VERTICAL_RL with every character turned a quarter clockwise. */
+  GFNT_WRITING_SIDEWAYS_RL,
+  /**
+   * Lines run upward (text begins at the bottom edge) and stack from the left to the right, every
+   * character turned a quarter counterclockwise: ::GFNT_WRITING_SIDEWAYS_RL turned half a turn.
+   */
+  GFNT_WRITING_SIDEWAYS_LR
+} GFNT_WritingMode;
+
+/** @brief How characters sit in vertical text, after CSS `text-orientation`. */
+typedef enum GFNT_TextOrientation {
+  /**
+   * Each character by UAX #50 `Vertical_Orientation`: upright for the ideographs and
+   * kana and their punctuation, sideways for the rest (Latin, digits, Hebrew, Arabic...). A
+   * character that has a vertical form in the font (`vert`) is upright if the font has it.
+   */
+  GFNT_ORIENT_MIXED = 0,
+  GFNT_ORIENT_UPRIGHT,  ///< Every character upright, Latin included, on vertical advances.
+  GFNT_ORIENT_SIDEWAYS  ///< Every character sideways, as ::GFNT_WRITING_SIDEWAYS_RL.
+} GFNT_TextOrientation;
+
+/** @brief How a run's glyphs sit relative to the page. */
+typedef enum GFNT_Orientation {
+  GFNT_ORIENT_RUN_HORIZONTAL = 0, ///< Drawn as they are, along a horizontal line.
+  GFNT_ORIENT_RUN_UPRIGHT,        ///< Drawn as they are, along a vertical line (vertical advances).
+  GFNT_ORIENT_RUN_CW,             ///< Drawn turned a quarter clockwise about their origin.
+  GFNT_ORIENT_RUN_CCW             ///< Drawn turned a quarter counterclockwise about their origin.
+} GFNT_Orientation;
 
 /** @brief A rectangle in the paragraph's coordinates, 26.6 pixels, y down. */
 typedef struct GFNT_Rect {
@@ -206,6 +244,9 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_FontProvider font_provider; ///< Or zeroed for none.
   GFNT_Hyphens hyphens;            ///< What hyphenation is done.
   GFNT_Hyphenator hyphenator;      ///< Or zeroed for none; read only for ::GFNT_HYPHENS_AUTO.
+  GFNT_WritingMode writing_mode;   ///< Which way lines run and stack.
+  /** How characters sit in a vertical mode; ignored for ::GFNT_WRITING_HORIZONTAL_TB. */
+  GFNT_TextOrientation text_orientation;
 } GFNT_ParagraphOptions;
 
 /** @brief A shaped, itemised paragraph. Opaque; free with ::gfnt_paragraph_free(). */
@@ -214,16 +255,18 @@ typedef struct GFNT_Paragraph GFNT_Paragraph;
 /**
  * @brief One glyph, placed.
  *
- * @p x and @p y are where to draw the glyph's origin; the pen is at @p pen_x
- * and moves @p advance after it (the difference is the shaper's offset).
+ * @p x and @p y are where to draw the glyph's origin (turned about it, for a turned run); the
+ * pen is at (@p pen_x, @p pen_y) and moves @p advance after it along the line (the difference is
+ * the shaper's offset and, in vertical text, the centring on the line's axis).
  */
 typedef struct GFNT_PlacedGlyph {
   uint32_t glyph;        ///< The glyph ID in the run's face.
   uint32_t cluster;      ///< The byte offset in the text of the first character it stands for.
-  GFNT_F26Dot6 pen_x;    ///< The pen position before the glyph.
+  GFNT_F26Dot6 pen_x;    ///< The pen position before the glyph: along a horizontal line, else on its axis.
+  GFNT_F26Dot6 pen_y;    ///< The pen position's y: the baseline for a horizontal line, the place along a vertical one.
   GFNT_F26Dot6 x;        ///< The glyph origin's x.
   GFNT_F26Dot6 y;        ///< The glyph origin's y; the line's baseline when the font has no offset.
-  GFNT_F26Dot6 advance;  ///< How far the pen moves; negative never, except for a kern.
+  GFNT_F26Dot6 advance;  ///< How far the pen moves along the line (right, or down); negative never, except a kern.
 } GFNT_PlacedGlyph;
 
 /** @brief Glyphs of one face, one style and one direction, side by side on a line. */
@@ -239,38 +282,70 @@ typedef struct GFNT_LineRun {
    */
   bool hyphen;
   uint8_t level;                ///< The bidirectional level; odd reads right to left.
+  GFNT_Orientation orientation; ///< How its glyphs sit; horizontal in a horizontal paragraph.
   size_t start;                 ///< The first byte of the text it stands for.
   size_t end;                   ///< One past the last.
-  const GFNT_PlacedGlyph * glyphs; ///< In visual order, left to right.
+  const GFNT_PlacedGlyph * glyphs; ///< In visual order along the line (see ::GFNT_Line::runs).
   size_t glyph_count;           ///< How many.
-  GFNT_F26Dot6 x;               ///< The left edge of the run's advance, in the paragraph.
-  GFNT_F26Dot6 advance;         ///< The run's width.
+  /**
+   * Where the run's advance begins along the line, in the paragraph: its left edge, or in
+   * vertical text its top edge (the edge with the smaller coordinate, whichever way the line
+   * reads).
+   */
+  GFNT_F26Dot6 pos;
+  GFNT_F26Dot6 advance;         ///< The run's length along the line: its width, or its height.
 } GFNT_LineRun;
 
-/** @brief One line of a laid-out paragraph. */
+/**
+ * @brief One line of a laid-out paragraph: a row, or in vertical text a column.
+ *
+ * Positions are physical. "Along the line" is x for a row and y for a column; the line box is
+ * the rectangle of the line's whole thickness, which is as long as the paragraph is.
+ */
 typedef struct GFNT_Line {
   size_t start;           ///< The first byte of the text on it.
   size_t end;             ///< One past the last, including a newline that ended it.
-  const GFNT_LineRun * runs; ///< In visual order.
+  /**
+   * In visual order from the side the line begins on: left to right in a row, top to bottom in a
+   * column (bottom to top for ::GFNT_WRITING_SIDEWAYS_LR, whose lines read upward).
+   */
+  const GFNT_LineRun * runs;
   size_t run_count;       ///< How many.
-  GFNT_F26Dot6 x;         ///< The left edge of the line's text, after alignment.
-  GFNT_F26Dot6 width;     ///< The text's width, not counting spaces that hang off the end.
-  GFNT_F26Dot6 top;       ///< The top of the line box.
-  GFNT_F26Dot6 baseline;  ///< The baseline's y.
-  GFNT_F26Dot6 ascent;    ///< Above the baseline: the greatest of its runs' faces.
+  /**
+   * Where the line's text begins along the line (its left edge, or its top edge), after
+   * alignment.
+   */
+  GFNT_F26Dot6 offset;
+  GFNT_F26Dot6 extent;    ///< The text's length along the line, not counting spaces that hang off the end.
+  GFNT_Rect box;          ///< The line box.
+  /**
+   * The baseline: the y of the alphabetic baseline of a row; the x of the central axis of a
+   * column, on which its upright glyphs are centred.
+   */
+  GFNT_F26Dot6 baseline;
+  /**
+   * Above the baseline, the greatest of its runs' faces; in a column half the thickness, on
+   * either side of the central axis.
+   */
+  GFNT_F26Dot6 ascent;
   GFNT_F26Dot6 descent;   ///< Below it, positive.
-  GFNT_F26Dot6 height;    ///< The line box: ascent, descent and the greatest line gap.
   bool truncated;         ///< True when text was cut from its end and a mark may follow.
-  bool justified;         ///< True when its spaces were widened to fill the width.
+  bool justified;         ///< True when its spaces were widened to fill the room.
   GFNT_Rect ink;          ///< The box of the glyphs' outlines; all zero for a line with no ink.
 } GFNT_Line;
 
 /** @brief A paragraph laid out at one width. Free with ::gfnt_layout_free(). */
 typedef struct GFNT_Layout {
-  GFNT_Line * lines;     ///< The lines, top to bottom.
+  GFNT_Line * lines;     ///< The lines in reading order: top to bottom, or by writing mode.
   size_t line_count;     ///< How many; at least one.
-  GFNT_F26Dot6 width;    ///< The width laid out to, or the widest line when unbounded.
-  GFNT_F26Dot6 height;   ///< The typographic box's height: the lines stacked.
+  GFNT_WritingMode writing_mode; ///< What the paragraph was made with.
+  /**
+   * The typographic box. For a row layout the width is the room laid out to (or the widest line
+   * when unbounded) and the height the lines stacked. For a column layout the height is the room
+   * (or the longest line) and the width the columns side by side.
+   */
+  GFNT_F26Dot6 width;
+  GFNT_F26Dot6 height;
   bool truncated;        ///< True when text was dropped by the line limit or the width.
   /**
    * The ink box: the union of the lines' ink, from the glyphs' outline bounds at
@@ -316,7 +391,8 @@ GFNT_API void gfnt_paragraph_free(GFNT_Paragraph * paragraph);
  * Spaces at the end of a line hang: they are placed but not counted in the
  * line's width. The paragraph is not changed and can be laid out again.
  *
- * @param width The line width in 26.6 pixels, or ::GFNT_LAYOUT_UNBOUNDED.
+ * @param width The room along the lines in 26.6 pixels (their width; their height in vertical
+ *   text), or ::GFNT_LAYOUT_UNBOUNDED.
  * @param out Receives the layout; written only on success.
  * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_OOM.
  */
@@ -366,12 +442,18 @@ typedef struct GFNT_Hit {
   GFNT_Affinity affinity; ///< The caret's side, so ::gfnt_layout_caret() returns the point.
 } GFNT_Hit;
 
-/** @brief Where a caret is drawn: a vertical bar of the line's height. */
+/**
+ * @brief Where a caret is drawn: a bar across the line's thickness.
+ *
+ * In a row it is a vertical bar at @p x from @p y down @p length; in a column it is a horizontal
+ * bar at @p y from @p x across @p length.
+ */
 typedef struct GFNT_Caret {
   size_t line;          ///< The line.
-  GFNT_F26Dot6 x;       ///< The bar's x.
-  GFNT_F26Dot6 top;     ///< The line's top.
-  GFNT_F26Dot6 height;  ///< The line's height.
+  GFNT_F26Dot6 x;       ///< The bar's x (its left end, for a horizontal bar).
+  GFNT_F26Dot6 y;       ///< The bar's y (its top end, for a vertical bar).
+  GFNT_F26Dot6 length;  ///< The line's thickness.
+  bool horizontal;      ///< True in a column layout.
 } GFNT_Caret;
 
 /**
@@ -409,7 +491,7 @@ GFNT_API GFNT_Result gfnt_layout_caret(const GFNT_Paragraph * paragraph,
  *
  * One range gives several rectangles when it spans lines, and also when
  * right-to-left text puts part of it on one side of a left-to-right run and part
- * on the other. Rectangles that touch are merged. Each is as tall as its line.
+ * on the other. Rectangles that touch are merged. Each is as thick as its line.
  *
  * @param start The first byte of the range.
  * @param end One past the last; a range with @p end not after @p start is empty.

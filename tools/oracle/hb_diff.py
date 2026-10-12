@@ -266,6 +266,11 @@ NAMED_SCRIPTS = [
     ("zanabazar square", "Zanb", "zanb", "ZANABAZAR SQUARE"), ("ahom", "Ahom", "ahom", "AHOM"),
     ("dogra", "Dogr", "dogr", "DOGRA"), ("wancho", "Wcho", "wcho", "WANCHO"),
     ("marchen", "Marc", "marc", "MARCHEN"),
+    # The scripts that have corpus strings of their own too, for the pair sweeps.
+    ("arabic names", "Arab", "arab", "ARABIC"), ("hebrew names", "Hebr", "hebr", "HEBREW"),
+    ("syriac names", "Syrc", "syrc", "SYRIAC"), ("thaana names", "Thaa", "thaa", "THAANA"),
+    ("thai names", "Thai", "thai", "THAI"), ("lao names", "Laoo", "lao ", "LAO"),
+    ("greek names", "Grek", "grek", "GREEK"), ("cyrillic names", "Cyrl", "cyrl", "CYRILLIC"),
 ]
 
 THAANA = [

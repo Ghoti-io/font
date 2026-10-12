@@ -710,8 +710,8 @@ GFNT_Result gfnt_cff_subroutinize(const GFNT_Allocator * a, const uint8_t * cs,
   c.barrier = intern(&c, (const uint8_t *)"", 0, true);
   for (g = 0; g < glyphs && !c.oom; ++g) {
     flat_total += cs_at[g + 1] - cs_at[g];
-    if (!tokenize(&c, cs + cs_at[g], cs_at[g + 1] - cs_at[g], masks + mask_at[g],
-            mask_at[g + 1] - mask_at[g])) {
+    if (!tokenize(&c, cs + cs_at[g], cs_at[g + 1] - cs_at[g],
+            masks ? masks + mask_at[g] : NULL, mask_at[g + 1] - mask_at[g])) {
       if (!c.oom) {
         goto done;   // not understood: leave the charstrings as they are
       }

@@ -1663,7 +1663,9 @@ advances and vertical forms (`vert`), and a glyph is centred on the column's axi
 own vertical origin; turned runs are shaped as a row, take horizontal advances, and have their
 glyphs drawn turned a quarter clockwise about the placed origin, the alphabetic baseline lying
 half of (ascent - descent) before the axis so the em box is centred on it. `MIXED` orients each
-character by UAX #50 (`Tr` upright only when the face has a vertical form for it) and lets marks,
+character by UAX #50 (`Tr` upright only when the face has a vertical form for it; `MIXED_PANGO` instead
+turns every `Tr` character and the few others Pango sets differently, 0 disagreements with Pango 1.56 over the
+54,174 non-mark BMP characters alone and between ideographs, `make check-oracle-orientation`) and lets marks,
 joiners and variation selectors follow their base; a run is a stretch of one script, one bidi level
 and one orientation. A column is as thick as its thickest box, every box being centred on the same
 axis. `SIDEWAYS_LR` (text reads upward, columns stack from the left, glyphs turned the other way)

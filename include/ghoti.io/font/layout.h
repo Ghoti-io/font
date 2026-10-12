@@ -91,7 +91,18 @@ typedef enum GFNT_TextOrientation {
    */
   GFNT_ORIENT_MIXED = 0,
   GFNT_ORIENT_UPRIGHT,  ///< Every character upright, Latin included, on vertical advances.
-  GFNT_ORIENT_SIDEWAYS  ///< Every character sideways, as ::GFNT_WRITING_SIDEWAYS_RL.
+  GFNT_ORIENT_SIDEWAYS, ///< Every character sideways, as ::GFNT_WRITING_SIDEWAYS_RL.
+  /**
+   * As ::GFNT_ORIENT_MIXED, but as Pango's "natural" gravity sets text where the two differ
+   * (measured over the whole Basic Multilingual Plane, `tools/oracle/orientation_survey.py`):
+   * a character UAX #50 calls transformed-rotated (`Tr`: the CJK brackets, fullwidth
+   * parentheses, colon, semicolon and the like) is turned even when the face has a vertical
+   * form for it, where CSS sets it upright if the face has one; U+2B97, U+2E50 and U+2E51 are
+   * turned where UAX #50 sets them upright; a few emoji-like symbols (U+261D, U+2795 to
+   * U+2797, U+27B0, U+27BF) are set the way the character before them is, and U+0D4E is
+   * upright. Elsewhere the two agree.
+   */
+  GFNT_ORIENT_MIXED_PANGO
 } GFNT_TextOrientation;
 
 /** @brief How a run's glyphs sit relative to the page. */

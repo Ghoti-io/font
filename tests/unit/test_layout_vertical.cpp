@@ -273,6 +273,29 @@ TEST(LayoutVertical, ATransformedRotatedCharacterWithoutAVerticalFormIsTurned) {
   EXPECT_EQ(line.runs[1].glyph_count, 2u) << "and the dash, which has one but follows it";
 }
 
+TEST(LayoutVertical, PangoTurnsTheBracketsCssSetsUprightWhenTheFontHasAVerticalForm) {
+  Font font;
+  // U+300C has a vertical form in this font. CSS sets it upright; Pango's gravity turns it.
+  const std::string text = std::string(kJi) + "\xE3\x80\x8C" + kHon;
+  Para css(font, text, GFNT_WRITING_VERTICAL_RL);
+  ASSERT_EQ(css.lay(px(600)), GFNT_OK);
+  ASSERT_EQ(css.layout.lines[0].run_count, 1u);
+  EXPECT_EQ(css.layout.lines[0].runs[0].orientation, GFNT_ORIENT_RUN_UPRIGHT);
+  Para pango(font, text, GFNT_WRITING_VERTICAL_RL, GFNT_ORIENT_MIXED_PANGO);
+  ASSERT_EQ(pango.lay(px(600)), GFNT_OK);
+  const GFNT_Line & line = pango.layout.lines[0];
+  ASSERT_EQ(line.run_count, 3u);
+  EXPECT_EQ(line.runs[0].orientation, GFNT_ORIENT_RUN_UPRIGHT);
+  EXPECT_EQ(line.runs[1].orientation, GFNT_ORIENT_RUN_CW);
+  EXPECT_EQ(line.runs[2].orientation, GFNT_ORIENT_RUN_UPRIGHT);
+  // The ideographic full stop is upright in both.
+  Para stop(font, std::string(kJi) + "\xE3\x80\x82", GFNT_WRITING_VERTICAL_RL,
+      GFNT_ORIENT_MIXED_PANGO);
+  ASSERT_EQ(stop.lay(px(600)), GFNT_OK);
+  ASSERT_EQ(stop.layout.lines[0].run_count, 1u);
+  EXPECT_EQ(stop.layout.lines[0].runs[0].orientation, GFNT_ORIENT_RUN_UPRIGHT);
+}
+
 TEST(LayoutVertical, HorizontalMetricsAreNotTheVerticalOnes) {
   Font font;
   Para sideways(font, "AB", GFNT_WRITING_VERTICAL_RL);

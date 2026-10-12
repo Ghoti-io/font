@@ -26,7 +26,7 @@
  * Usage: font-layout [--size PIXELS] [--bidi ltr|rtl|auto]
  *                    [--align start|end|left|right|center|justify] [--face N]
  *                    [--mode horizontal|vertical-rl|vertical-lr|sideways-rl|sideways-lr]
- *                    [--orient mixed|upright|sideways]
+ *                    [--orient mixed|mixed-pango|upright|sideways]
  *                    [--justify auto|inter-word|inter-character|none] <font>
  *
  * Reads one request per line from standard input: `<width>\t<hex>`, where the
@@ -275,7 +275,8 @@ int main(int argc, char ** argv) {
       const char * v = argv[++a];
 
       options.text_orientation = strcmp(v, "upright") == 0 ? GFNT_ORIENT_UPRIGHT
-          : strcmp(v, "sideways") == 0 ? GFNT_ORIENT_SIDEWAYS : GFNT_ORIENT_MIXED;
+          : strcmp(v, "sideways") == 0 ? GFNT_ORIENT_SIDEWAYS
+          : strcmp(v, "mixed-pango") == 0 ? GFNT_ORIENT_MIXED_PANGO : GFNT_ORIENT_MIXED;
     }
     else if (argv[a][0] != '-') {
       path = argv[a];

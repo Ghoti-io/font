@@ -496,6 +496,18 @@ static uint8_t char_orientation(const GFNT_Paragraph * p, const GFNT_TextStyle *
   if (p->options.text_orientation == GFNT_ORIENT_UPRIGHT) {
     return ORI_UPRIGHT;
   }
+  if (p->options.text_orientation == GFNT_ORIENT_MIXED_PANGO) {
+    // Pango's natural gravity: UAX #50 with every transformed-rotated character turned whether
+    // or not the face has a vertical form for it, three symbols turned that UAX #50 sets
+    // upright, and one letter set upright that it turns.
+    if (cp == 0x0D4E) {
+      return ORI_UPRIGHT;
+    }
+    if (cp == 0x2B97 || cp == 0x2E50 || cp == 0x2E51
+        || guni_vertical_orientation(cp) == GUNI_VO_TRANSFORMED_ROTATED) {
+      return ORI_SIDEWAYS;
+    }
+  }
   switch (guni_vertical_orientation(cp)) {
     case GUNI_VO_UPRIGHT:
     case GUNI_VO_TRANSFORMED_UPRIGHT:
@@ -550,7 +562,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->hyphens > GFNT_HYPHENS_AUTO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
       || (unsigned)options->writing_mode > GFNT_WRITING_SIDEWAYS_LR
-      || (unsigned)options->text_orientation > GFNT_ORIENT_SIDEWAYS) {
+      || (unsigned)options->text_orientation > GFNT_ORIENT_MIXED_PANGO) {
     return GFNT_ERR_INVALID;
   }
   {
@@ -700,6 +712,12 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         }
         if (i > 0 && inherits_orientation(cps[i])) {
           ori[i] = ori[i - 1];
+        }
+        else if (options->text_orientation == GFNT_ORIENT_MIXED_PANGO
+            && (cps[i] == 0x261D || (cps[i] >= 0x2795 && cps[i] <= 0x2797) || cps[i] == 0x27B0
+                || cps[i] == 0x27BF)) {
+          // Pango sets these emoji-like symbols with the text they follow.
+          ori[i] = i > 0 ? ori[i - 1] : ORI_SIDEWAYS;
         }
         else {
           ori[i] = char_orientation(p, &spans[sp].style, cps[i]);

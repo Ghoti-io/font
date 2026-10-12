@@ -470,6 +470,108 @@ def build_vertical_text(out):
     fb.save(out)
 
 
+# Arabic letters of the kashida fixture: (name, code point, joins both ways, body height).
+ARABIC_LETTERS = [
+    ("beh", 0x0628, True, 300), ("teh", 0x062A, True, 340), ("hah", 0x062D, True, 380),
+    ("seen", 0x0633, True, 260), ("sad", 0x0635, True, 420), ("ain", 0x0639, True, 460),
+    ("kaf", 0x0643, True, 600), ("lam", 0x0644, True, 640), ("meem", 0x0645, True, 280),
+    ("noon", 0x0646, True, 320), ("heh", 0x0647, True, 360), ("yeh", 0x064A, True, 400),
+    ("alef", 0x0627, False, 620), ("dal", 0x062F, False, 300), ("reh", 0x0631, False, 240),
+    ("waw", 0x0648, False, 340), ("teh.marbuta", 0x0629, False, 380),
+    ("zhe", 0x0698, False, 260),
+]
+ARABIC_ADV = 340          # every letter, every form
+ARABIC_TATWEEL = 240
+
+
+def build_arabic_join(out):
+    """A small Arabic font whose glyphs show how they join, for kashida justification.
+
+    Every letter is a box on a baseline bar; a form that joins carries the bar out to the edge
+    it joins on, so a word reads as one connected stroke and a tatweel (a bare bar the full
+    width of its advance) extends it seamlessly. Forms come from isol/init/medi/fina, and
+    lam + alef form a ligature in rlig, as in every Arabic font, and beh + noon one of the
+    font's own that no rule of joining predicts. Boxes, not letters.
+    """
+    glyphs, hmetrics = {}, {}
+    cmap = {0x20: "space", 0x41: "A", 0x640: "tatweel", 0x64E: "fatha"}
+    order = [".notdef", "space", "A", "tatweel", "fatha"]
+
+    def box(*rects):
+        pen = TTGlyphPen(None)
+        for x0, y0, x1, y1 in rects:
+            pen.moveTo((x0, y0)); pen.lineTo((x0, y1)); pen.lineTo((x1, y1))
+            pen.lineTo((x1, y0)); pen.closePath()
+        return pen.glyph()
+
+    def add(name, adv, *rects):
+        order.append(name) if name not in order else None
+        glyphs[name] = box(*rects)
+        hmetrics[name] = (adv, rects[0][0] if rects else 0)
+
+    add(".notdef", 600, (60, 0, 460, 700))
+    add("space", 300)
+    add("A", 640, (40, 0, 600, 700))
+    add("tatweel", ARABIC_TATWEEL, (0, 0, ARABIC_TATWEEL, 80))
+    add("fatha", 0, (-200, 500, -80, 560))
+    forms = {}
+    for name, cp, dual, h in ARABIC_LETTERS:
+        body = (40, 0, 300, h)
+        right = (300, 0, ARABIC_ADV, 80)        # a join to the previous letter (on the right)
+        left = (0, 0, 40, 80)                   # a join to the next letter (on the left)
+        cmap[cp] = name
+        add(name, ARABIC_ADV, body)
+        add(name + ".fina", ARABIC_ADV, body, right)
+        if dual:
+            add(name + ".init", ARABIC_ADV, body, left)
+            add(name + ".medi", ARABIC_ADV, body, left, right)
+        forms[name] = dual
+    # lam + alef: one glyph, wider than a letter
+    lam_h, alef_h = 640, 620
+    add("lam_alef", 2 * ARABIC_ADV - 60, (40, 0, 300, lam_h), (340, 0, 560, alef_h))
+    add("lam_alef.fina", 2 * ARABIC_ADV - 60, (40, 0, 300, lam_h), (340, 0, 560, alef_h),
+        (560, 0, 2 * ARABIC_ADV - 60, 80))
+    # beh + noon: a ligature of the font's own, which a stretch must not try to cut
+    add("beh_noon", 2 * ARABIC_ADV - 60, (40, 0, 300, 300), (340, 0, 560, 320))
+    # tatweel + a final heh: a ligature a tatweel put in front of a heh would make, so that
+    # stretching there would change the letters beside it
+    add("tatweel_heh", ARABIC_ADV + ARABIC_TATWEEL, (0, 0, ARABIC_TATWEEL, 80),
+        (ARABIC_TATWEEL + 40, 0, ARABIC_TATWEEL + 300, 360), (ARABIC_TATWEEL + 300, 0, ARABIC_ADV + ARABIC_TATWEEL, 80))
+    fb = FontBuilder(UPEM, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics(hmetrics)
+    fb.setupHorizontalHeader(ascent=800, descent=-200, lineGap=0)
+    set_cmap(fb, [subtable(4, 3, 1, cmap), subtable(4, 0, 3, cmap)])
+    fields = dict(OS2_FIELDS)
+    fields.update(sTypoAscender=800, sTypoDescender=-200, sTypoLineGap=0,
+                  usWinAscent=800, usWinDescent=200)
+    fb.setupOS2(version=4, achVendID=VENDOR, **fields)
+    fb.setupNameTable(names("Arabic Join"), mac=True)
+    fb.setupPost(keepGlyphNames=True)
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+
+    def feature(tag, suffix, only_dual):
+        lines = ["  sub %s by %s.%s;" % (n, n, suffix) for n, d in forms.items()
+                 if d or not only_dual]
+        return "feature %s {\n%s\n} %s;\n" % (tag, "\n".join(lines), tag)
+    fea = "languagesystem DFLT dflt;\nlanguagesystem arab dflt;\n"
+    fea += feature("init", "init", True) + feature("medi", "medi", True)
+    fea += feature("fina", "fina", False)
+    fea += ("feature rlig {\n  sub lam.init alef.fina by lam_alef;\n"
+            "  sub lam.medi alef.fina by lam_alef.fina;\n"
+            "  sub beh.init noon.fina by beh_noon;\n"
+            "  sub tatweel heh.fina by tatweel_heh;\n} rlig;\n")
+    marks = "fatha"
+    bases = " ".join(g for g in order
+                     if g not in ("fatha", ".notdef", "lam_alef", "lam_alef.fina", "beh_noon", "tatweel_heh"))
+    fea += ("table GDEF {\n  GlyphClassDef [%s], [lam_alef lam_alef.fina beh_noon tatweel_heh], [%s], ;\n} GDEF;\n"
+            % (bases, marks))
+    addOpenTypeFeaturesFromString(fb.font, fea)
+    pin(fb)
+    fb.save(out)
+
+
 def build_basic(out):
     """Everything ordinary, and the baseline every other fixture varies from."""
     fb = truetype("Basic", unicode_cmap())
@@ -4747,6 +4849,9 @@ FIXTURES = {
         "TrueType: vhea and vmtx with vertical advances unlike the horizontal ones, a vert "
         "feature giving CJK punctuation vertical forms, ideographs and kana, Latin letters, "
         "digits and brackets, for vertical paragraph layout"),
+    "arabic-join.ttf": (build_arabic_join,
+        "TrueType: eighteen Arabic letters with isol/init/medi/fina forms drawn as joined bars, "
+        "lam-alef and beh-noon ligatures in rlig, a tatweel and a fatha, for kashida justification"),
     "cff-repeats.otf": (build_cff_repeats,
         "CFF: twelve glyphs sharing two path fragments, six hinted glyphs sharing "
         "stems, masks and fragments, a long run of one stroke, and one glyph "

@@ -10,6 +10,7 @@
 # differential needs live only in the oracle image (design.md section 14.5).
 #
 # Tab-separated: <filename> <what it exercises>.
+arabic-join.ttf	TrueType: eighteen Arabic letters with isol/init/medi/fina forms drawn as joined bars, lam-alef and beh-noon ligatures in rlig, a tatweel and a fatha, for kashida justification
 bare-matrix.cff	A bare CFF whose FontMatrix scales the two axes differently, so it states no em this library can report and is refused by name; its translation components carry a DICT real in exponent form and one with more mantissa digits than 16.16 holds, and it states its licence in Notice rather than Copyright
 bare.cff	A bare CFF font program with no sfnt around it: the same CFF table as cff-curves.otf, so the two faces must draw identically
 basic.ttf	TrueType, cmap format 4 on (0,3) and (3,1), OS/2 v4, post v3

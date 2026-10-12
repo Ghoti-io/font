@@ -62,7 +62,17 @@ typedef struct {
   bool hyphen;                 // ... and then a hyphen is added to the line
   bool hard;                   // a line must break after it
   bool tab;                    // one tab character
+  uint32_t kashida;            // 1 + the kashida point in the gap after this unit, or 0
 } Unit;
+
+/** Where a word can be stretched: the tatweel it is stretched with, as shaped in context. */
+typedef struct {
+  PGlyph tw;                   // advance and ink of one tatweel
+  GFNT_F26Dot6 cap;            // the most the stroke may grow to
+} KPoint;
+
+/** The most tatweels one stretch is drawn with. */
+#define KASHIDA_COPIES_MAX 32
 
 struct GFNT_Paragraph {
   const GFNT_Allocator * allocator;
@@ -88,6 +98,8 @@ struct GFNT_Paragraph {
   GFNT_F26Dot6 * hyphen_width; // per span: the hyphen's width, or 0 when no point is in the span
   uint32_t * hyphen_cp;        // per span: the character it is set with
   size_t hyphen_glyphs;        // the most glyphs any span's hyphen shapes to
+  KPoint * kpoints;            // for ::GFNT_JUSTIFY_KASHIDA
+  size_t kcount;
   PRun fallback_metrics;       // the first span's first face, for an empty text
 };
 

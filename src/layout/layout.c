@@ -42,6 +42,7 @@
 #include <ghoti.io/unicode/utf.h>
 #include <stdlib.h>
 #include <string.h>
+#include "kashida.h"
 #include "layout_internal.h"
 
 #define ALLOC(p, n) (allocator->calloc_fn(allocator->ctx, (n) ? (n) : 1, sizeof *(p)))
@@ -92,6 +93,9 @@ static bool is_ideographic(uint32_t cp) {
 static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
     const uint32_t * text, size_t text_count, PGlyph * glyphs, size_t * count,
     GFNT_F26Dot6 * total, PRun * run, int force, GFNT_Error * error);
+static GFNT_Result shape_string_dir(const GFNT_Paragraph * p, size_t span,
+    const uint32_t * text, size_t text_count, PGlyph * glyphs, size_t * count,
+    GFNT_F26Dot6 * total, PRun * run, int force, int rtl, GFNT_Error * error);
 static uint8_t string_orientation(const GFNT_Paragraph * p, size_t span, uint32_t cp);
 static int hyphen_orientation(const GFNT_Paragraph * p);
 
@@ -218,6 +222,7 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
   allocator->free_fn(allocator->ctx, p->units);
   allocator->free_fn(allocator->ctx, p->hyphen_width);
   allocator->free_fn(allocator->ctx, p->hyphen_cp);
+  allocator->free_fn(allocator->ctx, p->kpoints);
   allocator->free_fn(allocator->ctx, p);
 }
 
@@ -302,6 +307,198 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
   }
   (void)error;
   return GFNT_OK;
+}
+
+
+/** What the chooser asks of a paragraph: whether a tatweel can go in front of a code point. */
+typedef struct {
+  const GFNT_Paragraph * p;
+  const size_t * unit_at;      // per code point: the unit that starts there, or SIZE_MAX
+  size_t word, word_end;      // the word: the chooser counts from its start
+  PGlyph tw;                   // the tatweel of the last place allowed
+  GFNT_Result r;
+  GFNT_Error * error;
+} KashidaProbe;
+
+/**
+ * Whether the text between two clusters can be pulled apart by a tatweel: the clusters are
+ * neighbours in one run of the span's first face, and the font draws "letter, tatweel, letter"
+ * as three glyphs of which the outer two are the ones already in the paragraph. Then adding
+ * tatweel glyphs between them is exactly what shaping the longer word would have drawn.
+ */
+static bool kashida_allowed(void * vctx, size_t word_before) {
+  KashidaProbe * c = vctx;
+  const size_t before = c->word + word_before;
+  const GFNT_Paragraph * p = c->p;
+  const Unit * a, * b;
+  const PRun * pr;
+  size_t u, pb;
+  uint32_t s[5];
+  PGlyph g[ELL_GLYPHS];
+  size_t n = 0, count;
+  GFNT_F26Dot6 total;
+  PRun run;
+  bool rtl;
+
+  if (c->r != GFNT_OK || c->unit_at[before] == SIZE_MAX || c->unit_at[before] == 0) {
+    return false;
+  }
+  u = c->unit_at[before];
+  a = &p->units[u - 1];
+  b = &p->units[u];
+  pr = &p->runs[b->run];
+  if (b->cp_start != before || a->cp_end != before || a->run != b->run
+      || a->g_hi <= a->g_lo || b->g_hi <= b->g_lo || pr->face_index != 0
+      || pr->orient != GFNT_ORIENT_RUN_HORIZONTAL) {
+    return false;
+  }
+  rtl = (pr->level & 1) != 0;
+  pb = before - 1;
+  while (pb > a->cp_start && guni_joining_type(p->cps[pb]) == GUNI_JT_TRANSPARENT) {
+    pb--;
+  }
+  {
+    // The two letters with the neighbour on each side that decides their forms, and the tatweel
+    // between them: shaped, it must keep the two letters as the paragraph has them.
+    size_t pp = pb, kn = before + 1;
+    size_t at_pb, at_tw, at_k;
+    bool have_pp = false;
+
+    for (size_t q = pb; q > c->word && !have_pp;) {
+      q--;
+      if (guni_joining_type(p->cps[q]) != GUNI_JT_TRANSPARENT) {
+        pp = q;
+        have_pp = true;
+      }
+    }
+    while (kn < c->word_end && guni_joining_type(p->cps[kn]) == GUNI_JT_TRANSPARENT) {
+      kn++;
+    }
+    PGlyph gc[ELL_GLYPHS];
+    size_t nc = 0, j = 0;
+
+    count = 0;
+    if (have_pp) {
+      s[count++] = p->cps[pp];
+    }
+    at_pb = count;
+    s[count++] = p->cps[pb];
+    at_tw = count;
+    s[count++] = 0x0640;
+    at_k = count;
+    s[count++] = p->cps[before];
+    if (kn < c->word_end) {
+      s[count++] = p->cps[kn];
+    }
+    (void)at_pb;
+    (void)at_k;
+    // Shaped with the tatweel and without: the tatweel must add one glyph and change none, so
+    // that drawing it between the clusters is what shaping the longer word would have drawn.
+    c->r = shape_string_dir(p, pr->span, s, count, g, &n, &total, &run,
+        GFNT_ORIENT_RUN_HORIZONTAL, rtl ? 1 : 0, c->error);
+    if (c->r != GFNT_OK) {
+      return false;
+    }
+    memmove(&s[at_tw], &s[at_tw + 1], (count - at_tw - 1) * sizeof s[0]);
+    c->r = shape_string_dir(p, pr->span, s, count - 1, gc, &nc, &total, &run,
+        GFNT_ORIENT_RUN_HORIZONTAL, rtl ? 1 : 0, c->error);
+    if (c->r != GFNT_OK || n != nc + 1 || nc == 0) {
+      return false;
+    }
+#define LOGICAL(arr, i) arr[rtl ? n - 1 - (i) : (i)]
+#define LOGICAL_C(i) gc[rtl ? nc - 1 - (i) : (i)]
+    while (j < nc && LOGICAL(g, j).glyph == LOGICAL_C(j).glyph) {
+      j++;
+    }
+    for (size_t i = j; i < nc; i++) {
+      if (LOGICAL(g, i + 1).glyph != LOGICAL_C(i).glyph) {
+        return false;        // the tatweel changed a neighbour
+      }
+    }
+    if (LOGICAL(g, j).glyph == 0 || LOGICAL(g, j).advance <= 0) {
+      return false;
+    }
+    // ... and the neighbours must be the ones the paragraph has.
+    if (a->g_hi - a->g_lo == 1 && j > 0
+        && p->glyphs[a->g_lo].glyph != LOGICAL(g, j - 1).glyph) {
+      return false;
+    }
+    if (b->g_hi - b->g_lo == 1 && j + 1 < n
+        && p->glyphs[b->g_lo].glyph != LOGICAL(g, j + 1).glyph) {
+      return false;
+    }
+    c->tw = LOGICAL(g, j);
+#undef LOGICAL
+#undef LOGICAL_C
+  }
+  return true;
+}
+
+/**
+ * For ::GFNT_JUSTIFY_KASHIDA, choose the place of every word that has one and keep the tatweel
+ * it will be stretched with. Horizontal text only.
+ */
+static GFNT_Result find_kashida(GFNT_Paragraph * p, GFNT_Error * error) {
+  const GFNT_Allocator * a = p->allocator;
+  size_t * unit_at;
+  GFNT_Result r = GFNT_OK;
+  KashidaProbe probe;
+  size_t i;
+
+  if (p->options.justify != GFNT_JUSTIFY_KASHIDA || p->vertical || p->length < 2) {
+    return GFNT_OK;
+  }
+  unit_at = a->calloc_fn(a->ctx, p->length + 1, sizeof *unit_at);
+  p->kpoints = a->calloc_fn(a->ctx, p->length / 2 + 1, sizeof *p->kpoints);
+  if (!unit_at || !p->kpoints) {
+    a->free_fn(a->ctx, unit_at);
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for the layout");
+  }
+  for (i = 0; i <= p->length; i++) {
+    unit_at[i] = SIZE_MAX;
+  }
+  for (i = 0; i < p->unit_count; i++) {
+    unit_at[p->units[i].cp_start] = i;
+  }
+  memset(&probe, 0, sizeof probe);
+  probe.p = p;
+  probe.unit_at = unit_at;
+  probe.r = GFNT_OK;
+  probe.error = error;
+  for (i = 0; i < p->length && probe.r == GFNT_OK;) {
+    size_t end = i;
+    size_t before;
+
+    if (hangs(p->cps[i]) || p->cps[i] == 0x09) {
+      i++;
+      continue;
+    }
+    while (end < p->length && !hangs(p->cps[end]) && p->cps[end] != 0x09) {
+      end++;
+    }
+    probe.word = i;
+    probe.word_end = end;
+    if (gfnt_kashida_point(&p->cps[i], end - i, &before, NULL, kashida_allowed, &probe)
+        && probe.r == GFNT_OK) {
+      KPoint * k = &p->kpoints[p->kcount];
+      const Unit * after = &p->units[unit_at[i + before]];
+      const GFNT_TextStyle * style = &p->styles[p->runs[after->run].span];
+      GFNT_F26Dot6 cap = probe.tw.advance * KASHIDA_COPIES_MAX;
+
+      // A stroke longer than two ems is a bar, not a letter.
+      if (cap > 2 * style->size) {
+        cap = 2 * style->size;
+      }
+      k->tw = probe.tw;
+      k->cap = cap;
+      p->units[unit_at[i + before] - 1].kashida = (uint32_t)++p->kcount;
+    }
+    i = end;
+  }
+  r = probe.r;
+  a->free_fn(a->ctx, unit_at);
+  return r;
 }
 
 static bool is_word_cp(uint32_t cp) {
@@ -588,6 +785,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
+      || options->space_share < 0 || options->space_share > 0x10000
       || (unsigned)options->writing_mode > GFNT_WRITING_SIDEWAYS_LR
       || (unsigned)options->text_orientation > GFNT_ORIENT_MIXED_PANGO) {
     return GFNT_ERR_INVALID;
@@ -1013,6 +1211,10 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   if (r != GFNT_OK) {
     goto done;
   }
+  r = find_kashida(p, error);
+  if (r != GFNT_OK) {
+    goto done;
+  }
   if (p->tab_width < 0) {
     if (options->tab_width > 0) {
       p->tab_width = options->tab_width;
@@ -1225,6 +1427,15 @@ static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
     const uint32_t * text, size_t text_count,
     PGlyph * glyphs, size_t * count, GFNT_F26Dot6 * total, PRun * run, int force,
     GFNT_Error * error) {
+  return shape_string_dir(p, span, text, text_count, glyphs, count, total, run, force, -1,
+      error);
+}
+
+/** As shape_string(), in a given direction: @p rtl 1 or 0, or -1 for the paragraph's own. */
+static GFNT_Result shape_string_dir(const GFNT_Paragraph * p, size_t span,
+    const uint32_t * text, size_t text_count,
+    PGlyph * glyphs, size_t * count, GFNT_F26Dot6 * total, PRun * run, int force, int rtl,
+    GFNT_Error * error) {
   const GFNT_TextStyle * style = &p->styles[span];
   GFNT_ShapeOptions so;
   GFNT_FaceRuns fr;
@@ -1240,7 +1451,8 @@ static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
   upright = text_count && (force >= 0 ? force == GFNT_ORIENT_RUN_UPRIGHT
       : string_orientation(p, span, text[0]) == GFNT_ORIENT_RUN_UPRIGHT);
   so.direction = upright ? GFNT_DIRECTION_TTB
-                         : (p->para_level & 1) ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
+                         : (rtl >= 0 ? rtl : (p->para_level & 1)) ? GFNT_DIRECTION_RTL
+                                                                  : GFNT_DIRECTION_LTR;
   *count = 0;
   *total = 0;
   r = gfnt_faces_shape(style->faces, 1, text, text_count, &so, p->allocator,
@@ -1336,6 +1548,57 @@ static size_t mark_justification(const GFNT_Paragraph * p, size_t ua, size_t han
   return n;
 }
 
+
+/** An ink box in line coordinates, or nothing. */
+typedef struct {
+  bool set;
+  GFNT_F26Dot6 l, t, r, b;
+} InkBox;
+
+/**
+ * Draw one kashida stroke: @p share of room along the line, as the tatweel set as many times as
+ * it takes, each copy shortened to fit (they overlap by the part cut, which a flat stroke
+ * hides). The copies carry the cluster of the glyph they extend. Returns how many glyphs.
+ */
+static size_t emit_stroke(const KPoint * kp, GFNT_F26Dot6 share, uint32_t cluster,
+    GFNT_F26Dot6 baseline, GFNT_F26Dot6 * cursor, GFNT_PlacedGlyph * out, InkBox * ink) {
+  const GFNT_F26Dot6 adv = kp->tw.advance;
+  size_t k = (size_t)((share + adv - 1) / adv);
+
+  if (k > KASHIDA_COPIES_MAX) {
+    k = KASHIDA_COPIES_MAX;
+  }
+  for (size_t i = 0; i < k; i++) {
+    GFNT_PlacedGlyph * pl = &out[i];
+    GFNT_F26Dot6 a = share / (GFNT_F26Dot6)k + ((GFNT_F26Dot6)i < share % (GFNT_F26Dot6)k ? 1 : 0);
+    GFNT_F26Dot6 l, t, r, b;
+
+    pl->glyph = kp->tw.glyph;
+    pl->cluster = cluster;
+    pl->pen_x = *cursor;
+    pl->pen_y = baseline;
+    pl->x = *cursor + kp->tw.dx;
+    pl->y = baseline - kp->tw.dy;
+    pl->advance = a;
+    if (kp->tw.has_ink) {
+      l = pl->x + kp->tw.ix0; t = pl->y - kp->tw.iy1;
+      r = pl->x + kp->tw.ix1; b = pl->y - kp->tw.iy0;
+      if (!ink->set) {
+        ink->l = l; ink->t = t; ink->r = r; ink->b = b;
+        ink->set = true;
+      }
+      else {
+        if (l < ink->l) ink->l = l;
+        if (t < ink->t) ink->t = t;
+        if (r > ink->r) ink->r = r;
+        if (b > ink->b) ink->b = b;
+      }
+    }
+    *cursor += a;
+  }
+  return k;
+}
+
 GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     GFNT_Layout * out, GFNT_Error * error) {
   const GFNT_Allocator * allocator;
@@ -1346,6 +1609,8 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   GFNT_F26Dot6 * ew = NULL;       // each unit's width in its line, tabs resolved
   GFNT_F26Dot6 * tabadv = NULL;   // a tab glyph's advance, by glyph index
   uint8_t * gjf = NULL;           // per glyph: the justification space it takes, before and after
+  uint32_t * gkp = NULL;          // per glyph: 1 + the kashida point it carries a stroke for
+  GFNT_F26Dot6 * kshare = NULL;   // per kashida point: the length of its stroke on this layout
   bool * hyphened = NULL;         // whether each line ends at a hyphenation point
   size_t * cand_at = NULL;        // scratch for break_lines
   GFNT_F26Dot6 * cand_fit = NULL;
@@ -1376,9 +1641,12 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   tabadv = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, sizeof *tabadv);
   gjf = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, 1);
   hyphened = allocator->calloc_fn(allocator->ctx, p->unit_count + 2, sizeof *hyphened);
+  gkp = allocator->calloc_fn(allocator->ctx, p->kcount ? p->glyph_count + 1 : 1, sizeof *gkp);
+  kshare = allocator->calloc_fn(allocator->ctx, p->kcount + 1, sizeof *kshare);
   cand_at = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *cand_at);
   cand_fit = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *cand_fit);
   if (!starts || !slices || !order || !slice_levels || !ew || !tabadv || !gjf || !hyphened
+      || !gkp || !kshare
       || !cand_at || !cand_fit) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the layout");
@@ -1397,7 +1665,8 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   // The glyphs of the text, those of the hyphen each line but the last may end in, and the
   // truncation mark.
   total_bytes = runs_bytes
-      + (p->glyph_count + line_count * p->hyphen_glyphs + ELL_GLYPHS + 1) * sizeof *placed;
+      + (p->glyph_count + line_count * p->hyphen_glyphs + ELL_GLYPHS + 1
+         + p->kcount * KASHIDA_COPIES_MAX) * sizeof *placed;
   lines = allocator->calloc_fn(allocator->ctx, line_count, sizeof *lines);
   storage = allocator->calloc_fn(allocator->ctx, total_bytes, 1);
   if (!lines || !storage) {
@@ -1499,10 +1768,52 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
         && li + 1 < total_lines && ub > ua && !p->units[ub - 1].hard) {
       const size_t opportunities = mark_justification(p, ua, hang_from, gjf);
       GFNT_F26Dot6 slack = width - natural;
+      size_t strokes = 0;
 
-      if (opportunities && slack > 0) {
-        extra = slack / (GFNT_F26Dot6)opportunities;
-        extra_rem = slack % (GFNT_F26Dot6)opportunities;
+      if (p->kcount && slack > 0) {
+        // The words of this line that can take a stroke: both clusters of the gap are on it.
+        for (size_t j = ua; j + 1 < hang_from; j++) {
+          if (p->units[j].kashida && p->units[j].run == p->units[j + 1].run) {
+            strokes++;
+          }
+        }
+      }
+      if ((opportunities || strokes) && slack > 0) {
+        GFNT_F26Dot6 spaced = slack;
+
+        if (strokes) {
+          // The strokes' part of the slack, shared equally; a stroke has a longest length, and
+          // what it cannot take falls to the spaces.
+          GFNT_F26Dot6 want = opportunities
+              ? (GFNT_F26Dot6)((int64_t)slack * (0x10000 - p->options.space_share) / 0x10000)
+              : slack;
+          GFNT_F26Dot6 each = want / (GFNT_F26Dot6)strokes;
+          GFNT_F26Dot6 rem = want % (GFNT_F26Dot6)strokes;
+
+          for (size_t j = ua; j + 1 < hang_from; j++) {
+            const Unit * u = &p->units[j];
+
+            if (u->kashida && u->run == p->units[j + 1].run) {
+              const KPoint * kp = &p->kpoints[u->kashida - 1];
+              const bool rtl = (p->runs[u->run].level & 1) != 0;
+              GFNT_F26Dot6 share = each + (rem > 0 ? 1 : 0);
+
+              if (rem > 0) {
+                rem--;
+              }
+              if (share > kp->cap) {
+                share = kp->cap;
+              }
+              kshare[u->kashida - 1] = share;
+              gkp[rtl ? u->g_lo : u->g_hi - 1] = u->kashida;
+              spaced -= share;
+            }
+          }
+        }
+        if (opportunities) {
+          extra = spaced / (GFNT_F26Dot6)opportunities;
+          extra_rem = spaced % (GFNT_F26Dot6)opportunities;
+        }
         line->justified = true;
       }
       else {
@@ -1633,12 +1944,33 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       lr->hyphen = s->hyphen;
       lr->level = s->level;
       lr->orientation = (GFNT_Orientation)pr->orient;
+      const size_t run_first = glyph_used;
+
       lr->glyphs = &placed[glyph_used];
-      lr->glyph_count = s->g_hi - s->g_lo;
       lr->pos = cursor;
       for (size_t g = s->g_lo; g < s->g_hi; g++) {
         const PGlyph * pg = &s->src[g];
-        GFNT_PlacedGlyph * pl = &placed[glyph_used++];
+        const bool stroke = line->justified && !s->hang && s->src == p->glyphs && p->kcount && gkp[g];
+        const bool rtl_run = (s->level & 1) != 0;
+        GFNT_PlacedGlyph * pl;
+
+        if (stroke && rtl_run) {
+          // The gap after this cluster in the text lies before it as the glyphs are placed.
+          InkBox ib = {false, 0, 0, 0, 0};
+
+          glyph_used += emit_stroke(&p->kpoints[gkp[g] - 1], kshare[gkp[g] - 1], pg->cluster,
+              line->baseline, &cursor, &placed[glyph_used], &ib);
+          if (ib.set) {
+            if (!ink_set) { ink_l = ib.l; ink_t = ib.t; ink_r = ib.r; ink_b = ib.b; ink_set = true; }
+            else {
+              if (ib.l < ink_l) ink_l = ib.l;
+              if (ib.t < ink_t) ink_t = ib.t;
+              if (ib.r > ink_r) ink_r = ib.r;
+              if (ib.b > ink_b) ink_b = ib.b;
+            }
+          }
+        }
+        pl = &placed[glyph_used++];
         GFNT_F26Dot6 adv = pg->tab && s->src == p->glyphs ? tabadv[g] : pg->advance;
 
         GFNT_F26Dot6 lead = 0, trail = 0, org, l, t, rr, b;
@@ -1701,7 +2033,23 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
             if (b > ink_b) ink_b = b;
           }
         }
+        if (stroke && !rtl_run) {
+          InkBox ib = {false, 0, 0, 0, 0};
+
+          glyph_used += emit_stroke(&p->kpoints[gkp[g] - 1], kshare[gkp[g] - 1], pg->cluster,
+              line->baseline, &cursor, &placed[glyph_used], &ib);
+          if (ib.set) {
+            if (!ink_set) { ink_l = ib.l; ink_t = ib.t; ink_r = ib.r; ink_b = ib.b; ink_set = true; }
+            else {
+              if (ib.l < ink_l) ink_l = ib.l;
+              if (ib.t < ink_t) ink_t = ib.t;
+              if (ib.r > ink_r) ink_r = ib.r;
+              if (ib.b > ink_b) ink_b = ib.b;
+            }
+          }
+        }
       }
+      lr->glyph_count = glyph_used - run_first;
       lr->advance = cursor - lr->pos;
       lr->start = s->b_lo;
       lr->end = s->b_hi;
@@ -1864,6 +2212,8 @@ done:
   allocator->free_fn(allocator->ctx, ew);
   allocator->free_fn(allocator->ctx, tabadv);
   allocator->free_fn(allocator->ctx, gjf);
+  allocator->free_fn(allocator->ctx, gkp);
+  allocator->free_fn(allocator->ctx, kshare);
   allocator->free_fn(allocator->ctx, hyphened);
   allocator->free_fn(allocator->ctx, cand_at);
   allocator->free_fn(allocator->ctx, cand_fit);

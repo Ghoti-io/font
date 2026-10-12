@@ -185,6 +185,18 @@ typedef enum GFNT_Justify {
   GFNT_JUSTIFY_AUTO = 0,
   GFNT_JUSTIFY_INTER_WORD,       ///< Spaces only: a gap in a script written without them stays closed.
   GFNT_JUSTIFY_INTER_CHARACTER,  ///< After every character (every cluster), spaces included.
+  /**
+   * Arabic-script words are lengthened inside, by a tatweel (U+0640) drawn where the word is
+   * stretched, and the rest of the slack goes to the spaces. One place per word is chosen by the
+   * connection-priority scheme of Internet Explorer 6 (an author's own tatweel, after a seen or
+   * sad, before a final letter by class, ...), from Unicode's joining data; ligatures a font
+   * must draw whole (lam-alef) are never pulled apart. The place is where the font drew the two
+   * letters as separate glyphs, so a pair it ligates is skipped, and so is a face that has no
+   * tatweel. How the slack is divided is ::GFNT_ParagraphOptions::space_share. Horizontal text
+   * only; a vertical paragraph is justified as by ::GFNT_JUSTIFY_INTER_WORD. Chromium's patch for
+   * `text-justify: kashida` is the model.
+   */
+  GFNT_JUSTIFY_KASHIDA,
   GFNT_JUSTIFY_NONE              ///< Not at all: the line is set as if aligned to its start.
 } GFNT_Justify;
 
@@ -285,6 +297,14 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_Hyphens hyphens;            ///< What hyphenation is done.
   GFNT_Hyphenator hyphenator;      ///< Or zeroed for none; read only for ::GFNT_HYPHENS_AUTO.
   GFNT_Justify justify;            ///< Where a justified line's slack goes.
+  /**
+   * For ::GFNT_JUSTIFY_KASHIDA, the part of the slack that goes to the spaces, as 16.16 from 0
+   * (all of it to the strokes: the default) to 0x10000 (all of it to the spaces, which is
+   * ::GFNT_JUSTIFY_INTER_WORD). CSS `text-kashida-space` is one minus this. What the strokes
+   * cannot take (no word with a place on the line, or a stroke at its longest) goes to the spaces,
+   * and what the spaces cannot take (none on the line) to the strokes.
+   */
+  GFNT_F16Dot16 space_share;
   GFNT_WritingMode writing_mode;   ///< Which way lines run and stack.
   /** How characters sit in a vertical mode; ignored for ::GFNT_WRITING_HORIZONTAL_TB. */
   GFNT_TextOrientation text_orientation;

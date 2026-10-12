@@ -46,6 +46,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -80,6 +82,30 @@ void utf8(uint32_t cp, std::string * out) {
     out->push_back(static_cast<char>(0x80 | (cp & 0x3F)));
   }
 }
+
+// The letters of tests/data/fonts/arabic-join.ttf, a tatweel, a mark, a space and a ZWNJ.
+const uint32_t kArabic[] = {
+    0x628, 0x62A, 0x62D, 0x633, 0x635, 0x639, 0x643, 0x644, 0x645, 0x646, 0x647, 0x64A, 0x627,
+    0x62F, 0x631, 0x648, 0x629, 0x698, 0x640, 0x64E, ' ', ' ', 0x200C, 'A'};
+constexpr size_t kArabicSize = sizeof kArabic / sizeof *kArabic;
+
+/** The Arabic fixture, for kashida; null (and the other face is used) if it cannot be read. */
+struct ArabicFace {
+  std::vector<uint8_t> bytes;
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+
+  ArabicFace() {
+    std::ifstream in("tests/data/fonts/arabic-join.ttf", std::ios::binary);   // run from the root
+    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    if (bytes.empty() ||
+        gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_BORROWED, nullptr, nullptr,
+            &blob, nullptr) != GFNT_OK ||
+        gfnt_face_load(blob, 0, nullptr, nullptr, &face, nullptr) != GFNT_OK) {
+      face = nullptr;
+    }
+  }
+};
 
 struct Face {
   std::vector<uint8_t> bytes;
@@ -175,6 +201,7 @@ bool inside(const GFNT_Rect & r, const GFNT_Layout & l) {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   static Face * face = new Face();
+  static ArabicFace * arabic = new ArabicFace();
   if (size < 4) {
     return 0;
   }
@@ -184,8 +211,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     text.assign(reinterpret_cast<const char *>(data + 3), size - 3);
   }
   else {
+    const bool use_arabic = (data[1] & 0x03) == 1 && (data[2] & 0x80) && arabic->face;
     for (size_t i = 3; i < size; ++i) {
-      utf8(kAlphabet[data[i] % kAlphabetSize], &text);
+      utf8(use_arabic ? kArabic[data[i] % kArabicSize] : kAlphabet[data[i] % kAlphabetSize],
+          &text);
     }
   }
   if (text.size() > 600) {
@@ -198,7 +227,16 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   if (o.align > GFNT_ALIGN_JUSTIFY) {
     o.align = GFNT_ALIGN_JUSTIFY;
   }
-  o.justify = static_cast<GFNT_Justify>(b & 0x03);
+  static const GFNT_Justify kJustify[] = {GFNT_JUSTIFY_AUTO, GFNT_JUSTIFY_INTER_WORD,
+      GFNT_JUSTIFY_INTER_CHARACTER, GFNT_JUSTIFY_NONE};
+  o.justify = kJustify[b & 0x03];
+  // Inter-word with the top bit of the room set is kashida, in the Arabic fixture, with the
+  // rest of the room byte as the share of the slack the spaces take.
+  const bool kashida = (b & 0x03) == 1 && (room_byte & 0x80);
+  if (kashida) {
+    o.justify = GFNT_JUSTIFY_KASHIDA;
+    o.space_share = static_cast<GFNT_F16Dot16>((room_byte & 0x7F) * 0x200);
+  }
   o.direction = static_cast<GFNT_BidiDirection>(((b >> 2) & 0x03) % 3);
   o.line_break = static_cast<GFNT_LineBreak>(((b >> 4) & 0x03));
   o.hyphens = static_cast<GFNT_Hyphens>(((b >> 6) & 0x03) % 4 == 3 ? GFNT_HYPHENS_MANUAL_PANGO
@@ -209,7 +247,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   }
   const GFNT_F26Dot6 room = room_byte == 0 ? GFNT_LAYOUT_UNBOUNDED
                                            : static_cast<GFNT_F26Dot6>(room_byte) * 64;
-  const GFNT_Face * faces[1] = {face->face};
+  const GFNT_Face * faces[1] = {kashida && arabic->face ? arabic->face : face->face};
   GFNT_TextSpan span{};
   span.length = text.size();
   span.style.faces = faces;

@@ -1554,8 +1554,8 @@ positioned run slices with its own metrics, both boxes, and its logical range.
 `gfnt_paragraph_min_content()` and `_max_content()` answer the constraint
 system without producing lines.
 
-Justification is space expansion in the first release, with `JSTF` and
-kashida (Arabic) as a later option; alignment is start/end/left/right/center
+Justification is space expansion in the first release, with `JSTF` as a later
+option (kashida is built, §10.8); alignment is start/end/left/right/center
 with bidi-aware start/end; truncation is an ellipsis string shaped in the
 paragraph's own style; tabs are stops or a default interval.
 
@@ -1700,11 +1700,32 @@ and the gap after). The same rule holds along a column. In a right-to-left parag
 left-to-right runs of mixed Latin, spaces and ideographs Chromium fills some lines short and counts
 one more opportunity on others, so it is no reference there; this library fills the line.
 
-**Kashida** (elongating Arabic letters to justify a line) is not done, on purpose: the references
-do not. Chromium 154 has no `text-justify: kashida` (`CSS.supports` says so) and justifies Arabic
-by its spaces, and so does Pango 1.56 (measured: only the space glyphs of a justified Arabic line
-change width), as this library does. If a reference ever does it the rule has an oracle to be held
-to; until then a rule written here would be a second reading of nothing.
+**Kashida** (`GFNT_JUSTIFY_KASHIDA`) lengthens the stroke inside Arabic-script words instead of
+widening the gaps between them. No released engine does it (Chromium 154 has no
+`text-justify: kashida`; Pango 1.56 widens only the spaces), so the model is the unmerged Chromium
+patch (CL 7957320) as its published page describes it, and the IE6 connection-priority scheme that
+patch follows. One place per word, chosen from Unicode's joining data (`kashida.c`): an author's
+own tatweel; after a seen or sad; before a final letter, by class (heh and dal, then alef, tah,
+lam, kaf and gaf, then waw, ain, qaf and feh, then any other); before a medial beh followed by a
+reh or yeh; and last, before any medial letter. "Final" is last in a joined group, not in the
+word. Ties go to the place nearest the word's end; a lam-alef and the lam-lam-heh of Allah are
+never cut.
+
+The stroke is drawn as copies of the font's own tatweel, shaped in context. The paragraph probes
+each candidate by shaping the letters around it with and without a tatweel: the tatweel must
+add one glyph and change none, and the neighbours must be the glyphs the paragraph has, so
+adding the glyph is what shaping the longer word would have drawn. A pair the font draws as one
+glyph, a face with no tatweel, and a place that fails the probe fall to the next best place, and
+a word with none is left to its spaces. (The patch reshapes the longer word; this library does not
+reshape, so a font whose contextual rules would alter a neighbour is skipped, not followed.) A
+line's slack is divided by `space_share`: that part to the spaces, the rest equally to the words that
+have a place, each stroke drawn with as many tatweels as it takes (at most 32) shortened to fit,
+a flat stroke hiding the overlap, and a stroke is at most two ems long (a choice, not a measure).
+What the strokes cannot take falls to the spaces and what the spaces cannot take to the strokes.
+A stroke's glyphs carry the cluster of the letter they extend, so hit testing and carets land on
+it. Not done: vertical text (set as inter-word), a face the shaper proves cannot take a tatweel
+(Nastaliq; the probe skips what it can see), line breaks chosen with the stretch in mind, and the
+font's own `JSTF` preferences, which the patch does not read either.
 
 Not done: ruby, which needs inline boxes this layout does not have.
 

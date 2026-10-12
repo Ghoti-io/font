@@ -53,6 +53,13 @@ typedef enum {
 } GFNT_KashidaPriority;
 
 /**
+ * Whether a place can be stretched: asked of a candidate only when it would be the best so far.
+ * The caller knows what the word was shaped to (a font may draw two letters as one glyph, and
+ * then a tatweel cannot go between them).
+ */
+typedef bool (*GFNT_KashidaAllowed)(void * ctx, size_t before);
+
+/**
  * Chooses the place to stretch a word.
  *
  * @param cp The word's code points (no spaces).
@@ -60,9 +67,11 @@ typedef enum {
  * @param before Receives the index of the code point the stretch goes in front
  *        of; for an author's tatweel, the first of its run.
  * @param priority Receives the rule that chose it; may be NULL.
+ * @param allowed Vetoes places, or NULL to allow them all.
+ * @param ctx Passed to @p allowed.
  * @return true if the word has a place; false if it must be left alone.
  */
 bool gfnt_kashida_point(const uint32_t * cp, size_t n, size_t * before,
-    GFNT_KashidaPriority * priority);
+    GFNT_KashidaPriority * priority, GFNT_KashidaAllowed allowed, void * ctx);
 
 #endif

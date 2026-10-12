@@ -76,7 +76,7 @@ static GFNT_KashidaPriority final_class(GUNI_JoiningGroup g) {
 }
 
 bool gfnt_kashida_point(const uint32_t * cp, size_t n, size_t * before,
-    GFNT_KashidaPriority * priority) {
+    GFNT_KashidaPriority * priority, GFNT_KashidaAllowed allowed, void * ctx) {
   // The letters that take part in joining; marks and other transparent
   // characters are skipped, as the shaper skips them.
   Letter letters[256];
@@ -111,7 +111,8 @@ bool gfnt_kashida_point(const uint32_t * cp, size_t n, size_t * before,
   for (i = 0; i < count; i++) {
     bool stroke = cp[letters[i].at] == TATWEEL;
     bool first = i == 0 || cp[letters[i - 1].at] != TATWEEL;
-    if (stroke && first && (i > 0 || count > 1)) {
+    if (stroke && first && i > 0 && joins_forward(&letters[i - 1])
+        && (!allowed || allowed(ctx, letters[i].at))) {
       best = GFNT_KASHIDA_AUTHOR;
       best_at = letters[i].at;
     }
@@ -153,7 +154,8 @@ bool gfnt_kashida_point(const uint32_t * cp, size_t n, size_t * before,
     } else {
       rank = GFNT_KASHIDA_MEDIAL;
     }
-    if (rank <= best) {      // the later of equals: nearest the end of the word
+    if (rank <= best && (!allowed || allowed(ctx, k->at))) {
+      // The later of equals: nearest the end of the word.
       best = rank;
       best_at = k->at;
     }

@@ -29,9 +29,15 @@
  */
 
 #include "test_helpers.h"
+#include "failing_allocator.h"
 
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
+
+#include <ghoti.io/font/font.h>
+#include <ghoti.io/font/layout.h>
 
 extern "C" {
 #include "../../src/layout/kashida.h"
@@ -60,7 +66,7 @@ long point(const char * word, int * priority = nullptr) {
   std::vector<uint32_t> w = cps(word);
   size_t at = 0;
   GFNT_KashidaPriority pr;
-  if (!gfnt_kashida_point(w.data(), w.size(), &at, &pr)) return -1;
+  if (!gfnt_kashida_point(w.data(), w.size(), &at, &pr, nullptr, nullptr)) return -1;
   if (priority) *priority = pr;
   return static_cast<long>(at);
 }
@@ -113,11 +119,357 @@ TEST(Kashida, Priorities) {
   point("كتب", &p);   EXPECT_EQ(p, GFNT_KASHIDA_BEFORE_FINAL);
 }
 
+TEST(Kashida, AVetoFallsBackToTheNextBest) {
+  std::vector<uint32_t> w = cps("بانه");
+  size_t at = 0;
+  GFNT_KashidaPriority pr;
+  auto no3 = [](void *, size_t before) { return before != 3; };
+  ASSERT_TRUE(gfnt_kashida_point(w.data(), w.size(), &at, &pr, no3, nullptr));
+  EXPECT_EQ(at, 1u);                          // the alef, once the heh is refused
+  EXPECT_EQ(pr, GFNT_KASHIDA_BEFORE_ALEF);
+  auto none = [](void *, size_t) { return false; };
+  EXPECT_FALSE(gfnt_kashida_point(w.data(), w.size(), &at, &pr, none, nullptr));
+}
+
 TEST(Kashida, MedialBehBeforeRehOrYeh) {
   int p = 0;
   // beh-beh-reh: the middle beh is medial and followed by a reh
   EXPECT_EQ(point("ببر", &p), 1);
   EXPECT_EQ(p, GFNT_KASHIDA_BEFORE_BEH_RA);
+}
+
+
+// ---- In a paragraph -------------------------------------------------------------------------
+//
+// `arabic-join.ttf`: every letter 34 pixels wide at size 100, a space 30, a tatweel 24, and
+// lam + alef one 62-pixel glyph. Glyph 3 is the tatweel and glyph 1 the space.
+
+constexpr GFNT_F26Dot6 px(int n) { return n * 64; }
+constexpr uint32_t kTatweel = 3, kSpace = 1;
+
+struct Font {
+  std::vector<uint8_t> bytes;
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+
+  Font() {
+    std::ifstream in(gfnttest::data("fonts/arabic-join.ttf"), std::ios::binary);
+    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    EXPECT_FALSE(bytes.empty());
+    EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_BORROWED, nullptr,
+                  nullptr, &blob, nullptr), GFNT_OK);
+    EXPECT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, nullptr), GFNT_OK);
+  }
+  Font(const Font &) = delete;
+  Font & operator=(const Font &) = delete;
+  ~Font() {
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+};
+
+struct Para {
+  GFNT_Paragraph * p = nullptr;
+  GFNT_Layout layout{};
+  const GFNT_Face * faces[1];
+  GFNT_Result created = GFNT_ERR_INTERNAL;
+
+  Para(const Font & font, const std::string & text, GFNT_Justify how, GFNT_F16Dot16 space_share = 0,
+      GFNT_BidiDirection direction = GFNT_BIDI_RTL) {
+    faces[0] = font.face;
+    GFNT_TextSpan span{};
+    span.length = text.size();
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = px(100);
+    GFNT_ParagraphOptions o{};
+    o.align = GFNT_ALIGN_JUSTIFY;
+    o.justify = how;
+    o.space_share = space_share;
+    o.direction = direction;
+    created = gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o, nullptr, &p, nullptr);
+  }
+  ~Para() {
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(p);
+  }
+  Para(const Para &) = delete;
+  Para & operator=(const Para &) = delete;
+};
+
+size_t count_glyph(const GFNT_Line & line, uint32_t glyph) {
+  size_t n = 0;
+  for (size_t r = 0; r < line.run_count; ++r) {
+    for (size_t g = 0; g < line.runs[r].glyph_count; ++g) {
+      n += line.runs[r].glyphs[g].glyph == glyph;
+    }
+  }
+  return n;
+}
+
+// The run that holds the text: a hanging space at the end of the line is a run of its own.
+const GFNT_LineRun & text_run(const GFNT_Line & line) {
+  const GFNT_LineRun * widest = &line.runs[0];
+  for (size_t r = 1; r < line.run_count; ++r) {
+    if (line.runs[r].glyph_count > widest->glyph_count) {
+      widest = &line.runs[r];
+    }
+  }
+  return *widest;
+}
+
+// The space between the words (the trailing one hangs, in a run of its own, and is not widened).
+GFNT_F26Dot6 space_advance(const GFNT_Line & line) {
+  GFNT_F26Dot6 widest = -1;
+  for (size_t r = 0; r < line.run_count; ++r) {
+    for (size_t g = 0; g < line.runs[r].glyph_count; ++g) {
+      if (line.runs[r].glyphs[g].glyph == kSpace && line.runs[r].glyphs[g].advance > widest) {
+        widest = line.runs[r].glyphs[g].advance;
+      }
+    }
+  }
+  return widest;
+}
+
+// Line one is "بسم سلسبيل": 3 + 6 letters and a space, 336 of 400, so 64 to give.
+const char kText[] = "بسم سلسبيل بسم";
+
+TEST(KashidaLayout, TheStrokesTakeTheSlackWhenTheSpacesTakeNone) {
+  Font font;
+  Para para(font, kText, GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(400), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_TRUE(line.justified);
+  EXPECT_EQ(line.extent, px(400));
+  EXPECT_EQ(space_advance(line), px(30)) << "the space is as it was";
+  EXPECT_EQ(count_glyph(line, kTatweel), 4u) << "32 to each word: two tatweels of 16 each";
+}
+
+TEST(KashidaLayout, TheSpacesTakeTheSlackWhenTheStrokesTakeNone) {
+  Font font;
+  Para kashida(font, kText, GFNT_JUSTIFY_KASHIDA, 0x10000);
+  Para words(font, kText, GFNT_JUSTIFY_INTER_WORD);
+  ASSERT_EQ(gfnt_paragraph_layout(kashida.p, px(400), &kashida.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(words.p, px(400), &words.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = kashida.layout.lines[0];
+  EXPECT_EQ(count_glyph(line, kTatweel), 0u);
+  EXPECT_EQ(space_advance(line), px(94));
+  EXPECT_EQ(space_advance(line), space_advance(words.layout.lines[0]));
+  ASSERT_EQ(line.run_count, words.layout.lines[0].run_count);
+  for (size_t r = 0; r < line.run_count; ++r) {
+    ASSERT_EQ(line.runs[r].glyph_count, words.layout.lines[0].runs[r].glyph_count);
+    for (size_t g = 0; g < line.runs[r].glyph_count; ++g) {
+      EXPECT_EQ(line.runs[r].glyphs[g].x, words.layout.lines[0].runs[r].glyphs[g].x);
+    }
+  }
+}
+
+TEST(KashidaLayout, TheSlackIsSharedByTheRatio) {
+  Font font;
+  const int quarters[] = {0, 1, 2, 3, 4};
+  GFNT_F26Dot6 previous_space = -1;
+  size_t previous_strokes = 99;
+  for (int q : quarters) {
+    Para para(font, kText, GFNT_JUSTIFY_KASHIDA, q * 0x4000);
+    ASSERT_EQ(gfnt_paragraph_layout(para.p, px(400), &para.layout, nullptr), GFNT_OK);
+    const GFNT_Line & line = para.layout.lines[0];
+    EXPECT_EQ(line.extent, px(400)) << q << "/4";
+    // The spaces get q/4 of the 64 pixels, to within the rounding of 1/64 pixel.
+    EXPECT_NEAR(space_advance(line) - px(30), px(64) * q / 4, 1) << q << "/4";
+    EXPECT_GT(space_advance(line), previous_space);
+    EXPECT_LE(count_glyph(line, kTatweel), previous_strokes);
+    previous_space = space_advance(line);
+    previous_strokes = count_glyph(line, kTatweel);
+  }
+}
+
+TEST(KashidaLayout, AStrokeIsDrawnWhereTheWordIsAndAsOneWithIt) {
+  Font font;
+  Para para(font, kText, GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(400), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  ASSERT_GE(line.run_count, 1u);
+  const GFNT_LineRun & run = text_run(line);
+  GFNT_F26Dot6 at = run.pos;
+  for (size_t g = 0; g < run.glyph_count; ++g) {
+    const GFNT_PlacedGlyph & pl = run.glyphs[g];
+    EXPECT_EQ(pl.pen_x, at) << g << ": glyphs follow one another with no gap";
+    at += pl.advance;
+    if (pl.glyph == kTatweel) {
+      // A stroke carries the cluster of the letter it extends, so a click on it lands there.
+      bool shared = false;
+      for (size_t h = 0; h < run.glyph_count; ++h) {
+        shared = shared || (run.glyphs[h].glyph != kTatweel && run.glyphs[h].cluster == pl.cluster);
+      }
+      EXPECT_TRUE(shared) << g;
+    }
+  }
+  EXPECT_EQ(at, run.pos + px(400));
+}
+
+TEST(KashidaLayout, AWordWithNoPlaceFallsBackToItsSpaces) {
+  Font font;
+  // Nothing in these words connects, or the only join is a lam-alef.
+  Para para(font, "زر ور لا زر", GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(240), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(count_glyph(line, kTatweel), 0u);
+  EXPECT_TRUE(line.justified) << "the spaces took it";
+  EXPECT_EQ(line.extent, px(240));
+}
+
+TEST(KashidaLayout, AStrokeHasALongestLength) {
+  Font font;
+  // "بسم" alone on a line of 500, followed by a word too long to join it: 398 to give, of which
+  // a stroke takes at most two ems; nothing else on the line can take the rest.
+  Para para(font, "بسم AAAAAAAAAAAA", GFNT_JUSTIFY_KASHIDA, 0, GFNT_BIDI_LTR);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(500), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(line.extent, px(102 + 200));
+  EXPECT_GT(count_glyph(line, kTatweel), 8u);
+}
+
+TEST(KashidaLayout, AnAuthorsTatweelIsTheOneStretched) {
+  Font font;
+  Para para(font, "كـتاب بسم كـتاب", GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(330), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_TRUE(line.justified);
+  EXPECT_EQ(line.extent, px(330));
+  EXPECT_GE(count_glyph(line, kTatweel), 3u);
+}
+
+TEST(KashidaLayout, ALigatureIsNeverPulledApart) {
+  Font font;
+  // "هلال": the only place is in front of the lam-alef glyph (62 wide), which stays one glyph.
+  Para para(font, "هلال هلال هلال", GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(300), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_GT(count_glyph(line, kTatweel), 0u);
+  EXPECT_EQ(count_glyph(line, 66), 2u) << "both words keep their lam-alef whole";
+}
+
+TEST(KashidaLayout, APairTheFontLigatesIsSkipped) {
+  Font font;
+  // "بن" is one glyph in this font, so the join inside it is no place for a tatweel.
+  Para para(font, "بن بن بن بن", GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(200), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(count_glyph(line, kTatweel), 0u);
+  EXPECT_TRUE(line.justified);
+  EXPECT_EQ(line.extent, px(200)) << "the spaces took it";
+}
+
+TEST(KashidaLayout, APlaceWhereTheTatweelWouldChangeALetterIsSkipped) {
+  Font font;
+  // The best place in "بانه" is in front of the heh; this font draws tatweel + heh as one glyph,
+  // so the stretch goes to the next best, in front of the alef: the stroke belongs to the beh.
+  Para para(font, "بانه بانه بانه", GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(300), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  size_t strokes = 0;
+  for (size_t r = 0; r < line.run_count; ++r) {
+    for (size_t g = 0; g < line.runs[r].glyph_count; ++g) {
+      if (line.runs[r].glyphs[g].glyph == kTatweel) {
+        ++strokes;
+        EXPECT_EQ(line.runs[r].glyphs[g].cluster % 9, 0u) << "the beh, the first letter of a word";
+      }
+    }
+  }
+  EXPECT_GT(strokes, 0u);
+}
+
+TEST(KashidaLayout, TheStrokeLiesInTheGapItNames) {
+  Font font;
+  // "بسم" is stretched after the seen: in a right-to-left line the strokes lie between the meem
+  // (to the left, later in the text) and the seen, and belong to the seen.
+  Para para(font, "بسم بسم بسم", GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(250), &para.layout, nullptr), GFNT_OK);
+  const GFNT_LineRun & run = text_run(para.layout.lines[0]);
+  size_t seen = 0;
+  for (size_t g = 0; g < run.glyph_count; ++g) {
+    if (run.glyphs[g].glyph != kTatweel) {
+      continue;
+    }
+    ++seen;
+    ASSERT_GT(g, 0u);
+    ASSERT_LT(g + 1, run.glyph_count);
+    EXPECT_GT(run.glyphs[g - 1].cluster, run.glyphs[g].cluster) << "the meem, later in the text";
+    EXPECT_TRUE(run.glyphs[g + 1].glyph == kTatweel || run.glyphs[g + 1].cluster == run.glyphs[g].cluster)
+        << "and the seen, whose stroke it is";
+  }
+  EXPECT_GT(seen, 0u);
+}
+
+TEST(KashidaLayout, TheRatioIsChecked) {
+  Font font;
+  Para fine(font, kText, GFNT_JUSTIFY_KASHIDA, 0x10000);
+  EXPECT_EQ(fine.created, GFNT_OK);
+  Para over(font, kText, GFNT_JUSTIFY_KASHIDA, 0x10001);
+  EXPECT_EQ(over.created, GFNT_ERR_INVALID);
+  Para under(font, kText, GFNT_JUSTIFY_KASHIDA, -1);
+  EXPECT_EQ(under.created, GFNT_ERR_INVALID);
+}
+
+TEST(KashidaLayout, HitTestingAStrokeFindsTheLetterItExtends) {
+  Font font;
+  Para para(font, kText, GFNT_JUSTIFY_KASHIDA, 0);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(400), &para.layout, nullptr), GFNT_OK);
+  const GFNT_LineRun & run = text_run(para.layout.lines[0]);
+  for (size_t g = 0; g < run.glyph_count; ++g) {
+    if (run.glyphs[g].glyph != kTatweel) {
+      continue;
+    }
+    GFNT_Hit hit{};
+    ASSERT_EQ(gfnt_layout_hit_test(para.p, &para.layout, run.glyphs[g].pen_x + run.glyphs[g].advance / 2,
+                  px(40), &hit), GFNT_OK);
+    EXPECT_LT(hit.offset, strlen(kText));
+  }
+}
+
+TEST(KashidaLayout, EveryAllocationFailsCleanly) {
+  Font font;
+  const std::string text = kText;
+  GFNT_TextSpan span{};
+  const GFNT_Face * faces[1] = {font.face};
+  span.length = text.size();
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = px(100);
+  GFNT_ParagraphOptions o{};
+  o.align = GFNT_ALIGN_JUSTIFY;
+  o.justify = GFNT_JUSTIFY_KASHIDA;
+  o.direction = GFNT_BIDI_RTL;
+  size_t requests = 0;
+  {
+    gfnttest::FailingAllocator counting(static_cast<size_t>(-1));
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o, counting.get(), &p,
+                  nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(p, px(400), &l, nullptr), GFNT_OK);
+    requests = counting.requests();
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    EXPECT_EQ(counting.live(), 0u);
+  }
+  for (size_t fail = 0; fail < requests; ++fail) {
+    gfnttest::FailingAllocator failing(fail);
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    GFNT_Result r = gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o, failing.get(), &p,
+        nullptr);
+    if (r == GFNT_OK) {
+      r = gfnt_paragraph_layout(p, px(400), &l, nullptr);
+    }
+    if (r != GFNT_OK) {
+      EXPECT_EQ(r, GFNT_ERR_OOM) << "request " << fail;
+    }
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    EXPECT_EQ(failing.live(), 0u) << "request " << fail << " leaked";
+  }
 }
 
 }  // namespace

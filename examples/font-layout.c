@@ -270,7 +270,11 @@ int main(int argc, char ** argv) {
 
       options.justify = strcmp(v, "inter-word") == 0 ? GFNT_JUSTIFY_INTER_WORD
           : strcmp(v, "inter-character") == 0 ? GFNT_JUSTIFY_INTER_CHARACTER
+          : strcmp(v, "kashida") == 0 ? GFNT_JUSTIFY_KASHIDA
           : strcmp(v, "none") == 0 ? GFNT_JUSTIFY_NONE : GFNT_JUSTIFY_AUTO;
+    }
+    else if (strcmp(argv[a], "--space-share") == 0 && a + 1 < argc) {
+      options.space_share = (GFNT_F16Dot16)(atof(argv[++a]) * 65536.0 + 0.5);
     }
     else if (strcmp(argv[a], "--hyphens") == 0 && a + 1 < argc) {
       const char * v = argv[++a];

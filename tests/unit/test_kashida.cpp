@@ -140,6 +140,23 @@ TEST(Kashida, MedialBehBeforeRehOrYeh) {
 }
 
 
+TEST(Kashida, TheHehClassHoldsDalAndTehMarbuta) {
+  // The IE connection-priority list (khtt.net, "The Big Kashida Secret"): class 3 is the final
+  // teh marbuta, heh and dal; each beats a final alef (class 4) in the same word.
+  int p = 0;
+  point("بيد", &p);   EXPECT_EQ(p, GFNT_KASHIDA_BEFORE_HEH);      // final dal
+  point("بة", &p);    EXPECT_EQ(p, GFNT_KASHIDA_BEFORE_HEH);      // final teh marbuta
+  point("كتبد", &p);  EXPECT_EQ(p, GFNT_KASHIDA_BEFORE_HEH);
+}
+
+TEST(Kashida, AlefMaqsuraCountsAsAYeh) {
+  int p = 0;
+  // beh-beh-alef maqsura: the middle beh is medial and followed by a yeh-group letter
+  EXPECT_EQ(point("ببى", &p), 1);
+  EXPECT_EQ(p, GFNT_KASHIDA_BEFORE_BEH_RA);
+}
+
+
 // ---- In a paragraph -------------------------------------------------------------------------
 //
 // `arabic-join.ttf`: every letter 34 pixels wide at size 100, a space 30, a tatweel 24, and

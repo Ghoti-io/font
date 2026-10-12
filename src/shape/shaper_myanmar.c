@@ -45,7 +45,7 @@
 enum {
   MC_X, MC_C, MC_RA, MC_IV, MC_GB, MC_DOTTEDCIRCLE, MC_H, MC_ZWNJ, MC_ZWJ,
   MC_AS, MC_MY, MC_MR, MC_MW, MC_MH, MC_ML, MC_VPRE, MC_VABV, MC_VBLW,
-  MC_VPST, MC_A, MC_DB, MC_SM, MC_PT, MC_VS, MC_P, MC_COUNT
+  MC_VPST, MC_A, MC_DB, MC_SM, MC_PT, MC_VS, MC_P, MC_D, MC_COUNT
 };
 
 enum { MS_CONSONANT, MS_PUNCTUATION, MS_BROKEN, MS_NON_MYANMAR, MS_COUNT };
@@ -126,6 +126,13 @@ static uint8_t myanmar_category(uint32_t u) {
   if ((u >= 0x1021 && u <= 0x102A) || (u >= 0x1052 && u <= 0x1055)) {
     return MC_IV;
   }
+  // A digit (and the three Khamti letters HarfBuzz sorts with them) starts a syllable as a
+  // consonant does but no virama stacks a letter on it (found by shaping a consonant, a virama,
+  // one of these and a vowel sign against HarfBuzz).
+  if ((u >= 0x1040 && u <= 0x1049) || (u >= 0x1090 && u <= 0x1099)
+      || (u >= 0xA9F0 && u <= 0xA9F9) || (u >= 0xAA74 && u <= 0xAA76)) {
+    return MC_D;
+  }
   if ((u >= 0x1000 && u <= 0x1020) || u == 0x103F || (u >= 0x1040 && u <= 0x104B)
       || u == 0x104E || u == 0x1050 || u == 0x1051 || (u >= 0x105B && u <= 0x105D)
       || u == 0x1061 || u == 0x1065 || u == 0x1066 || (u >= 0x106E && u <= 0x1070)
@@ -180,7 +187,7 @@ static GFNT_Nfa * myanmar_grammar(void) {
       ALT(SYM(MC_H), complex_tail));
   any = SET(~(uint64_t)0);
   roots[MS_CONSONANT] = SEQ(SEQ(OPT(k),
-      SEQ(SET(BIT(MC_C) | BIT(MC_RA) | BIT(MC_IV) | BIT(MC_GB)
+      SEQ(SET(BIT(MC_C) | BIT(MC_RA) | BIT(MC_IV) | BIT(MC_GB) | BIT(MC_D)
           | BIT(MC_DOTTEDCIRCLE)), OPT(SYM(MC_VS)))), syllable_tail);
   // HarfBuzz's punctuation cluster is a punctuation mark and a plain vowel, a
   // category that no character of its table has, so it never matches: the
@@ -239,7 +246,7 @@ static void myanmar_find_syllables(GFNT_ShapeCtx * ctx) {
 static bool myanmar_is_consonant(const GFNT_LInfo * info) {
   uint8_t c = info->category;
 
-  return c == MC_C || c == MC_RA || c == MC_IV || c == MC_GB
+  return c == MC_C || c == MC_RA || c == MC_IV || c == MC_GB || c == MC_D
       || c == MC_DOTTEDCIRCLE;
 }
 

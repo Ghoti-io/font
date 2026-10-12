@@ -403,7 +403,9 @@ static GFNT_Nfa * use_grammar(void) {
 
   roots[US_INDEPENDENT] = SEQ(SEQ(SET(BIT(UC_IND) | BIT(UC_O) | BIT(UC_WJ)),
       OPT(SYM(UC_VS))), zwnj);
-  roots[US_VIRAMA_TERMINATED] = SEQ(SEQ(SEQ(SEQ(start, cons_mod), medial),
+  // No medial stands before the terminator: a letter, its ra-kara and a virama is broken in
+  // HarfBuzz (Masaram Gondi), and no other script's pair of the kind shapes differently.
+  roots[US_VIRAMA_TERMINATED] = SEQ(SEQ(SEQ(start, cons_mod),
       SET(BIT(UC_H) | BIT(UC_HVM) | BIT(UC_SK) | BIT(UC_RK))), zwnj);
   roots[US_SAKOT_TERMINATED] = SEQ(SEQ(SEQ(start, middle), SYM(UC_SK)), zwnj);
   roots[US_STANDARD] = SEQ(SEQ(start, tail), zwnj);

@@ -208,6 +208,14 @@ def _script_words(prefix, seed, count=10):
         # Every ordered pair of the script's characters: where the two engines' grammars part.
         everyone = [chr(c) for c in cps if unicodedata.category(chr(c))
                     in ("Lo", "Lm", "Ll", "Lu", "Mc", "Mn", "Me", "Nd")]
+        mode = os.environ.get("HB_DIFF_PAIRS")
+        if mode == "2":
+            # Behind a consonant: the pairs of a word's middle.
+            return [letters[len(letters) // 3] + a + b for a in everyone for b in everyone]
+        if mode == "3" and viramas:
+            # Behind a consonant and a virama: a conjunct's second member and what follows.
+            return [letters[len(letters) // 3] + viramas[0] + a + b for a in everyone
+                    for b in everyone]
         return [a + b for a in everyone for b in everyone]
     out = []
     for _ in range(count):

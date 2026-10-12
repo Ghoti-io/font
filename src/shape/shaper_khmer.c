@@ -46,7 +46,7 @@
 enum {
   KC_X, KC_C, KC_V, KC_RA, KC_COENG, KC_ZWJ, KC_ZWNJ, KC_PLACEHOLDER,
   KC_DOTTEDCIRCLE, KC_ROBATIC, KC_XGROUP, KC_YGROUP, KC_VPRE, KC_VABV, KC_VBLW,
-  KC_VPST, KC_COUNT
+  KC_VPST, KC_DIGIT, KC_COUNT
 };
 
 enum { KS_CONSONANT, KS_BROKEN, KS_NON_KHMER, KS_COUNT };
@@ -73,8 +73,13 @@ static uint8_t khmer_category(uint32_t u) {
   if (u == 0x00A0 || u == 0x2010 || u == 0x2011) {
     return KC_PLACEHOLDER;
   }
-  // The digits and the phnaek muan take a robatic like a consonant, in HarfBuzz.
-  if ((u >= 0x17E0 && u <= 0x17E9) || u == 0x17D9) {
+  // The digits and the phnaek muan take a robatic like a consonant, in HarfBuzz, but no subscript
+  // stands under them: a coeng before a digit leaves it a syllable of its own (found by
+  // shaping a consonant, a coeng, a digit and a vowel sign).
+  if (u >= 0x17E0 && u <= 0x17E9) {
+    return KC_DIGIT;
+  }
+  if (u == 0x17D9) {
     return KC_C;
   }
   if (u == 0x179A) {
@@ -122,17 +127,18 @@ static uint8_t khmer_category(uint32_t u) {
 static GFNT_Nfa * khmer_grammar(void) {
   GFNT_ReBuilder b;
   GFNT_Nfa * nfa;
-  GFNT_Re c, cn, first_cn, coeng_c, joiner, xgroup, ygroup, matra_group, tail, coeng_cn, any;
+  GFNT_Re c, cf, cn, first_cn, coeng_c, joiner, xgroup, ygroup, matra_group, tail, coeng_cn, any;
   GFNT_Re roots[KS_COUNT];
 
   gfnt_re_init(&b);
   c = SET(BIT(KC_C) | BIT(KC_RA) | BIT(KC_V));
+  cf = SET(BIT(KC_C) | BIT(KC_RA) | BIT(KC_V) | BIT(KC_DIGIT));
   joiner = SET(BIT(KC_ZWJ) | BIT(KC_ZWNJ));
   cn = SEQ(c, OPT(SEQ(OPT(joiner), SYM(KC_ROBATIC))));
   // Straight after the base a second register shifter is allowed, where after a
   // subscript's consonant it is not (found by comparing where HarfBuzz puts a
   // dotted circle).
-  first_cn = SEQ(c, OPT(SEQ(SEQ(OPT(joiner), SYM(KC_ROBATIC)), OPT(SYM(KC_ROBATIC)))));
+  first_cn = SEQ(cf, OPT(SEQ(SEQ(OPT(joiner), SYM(KC_ROBATIC)), OPT(SYM(KC_ROBATIC)))));
   xgroup = STAR(SEQ(STAR(joiner), SYM(KC_XGROUP)));
   ygroup = STAR(SYM(KC_YGROUP));
   // This grammar was experimentally extracted from what Uniscribe allows.

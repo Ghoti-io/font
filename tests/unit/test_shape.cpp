@@ -2230,6 +2230,28 @@ TEST(ShapeUniversal, SignsHarfBuzzSortsDifferentlyFromTheDataAreSortedAsItDoes) 
   }
 }
 
+TEST(ShapeKhmer, ADigitAfterACoengIsASyllableOfItsOwn) {
+  // A consonant 2, the coeng 3, a digit 4, the vowel sign OE 5 (which splits into the pre-base
+  // E 6 and the above-base sign 5). HarfBuzz sets the vowel in front of the digit and not in
+  // front of the consonant: the digit has no subscript to take, so it starts a syllable.
+  Font font(small_font({}, 8, {{0x1792, 2}, {0x17D2, 3}, {0x17E0, 4}, {0x17BE, 5}, {0x17C1, 6}}));
+  Glyphs g;
+  Request request;
+  request.script = "khmr";
+  ASSERT_EQ(shape(font, V{0x1792, 0x17D2, 0x17E0, 0x17BE}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 3, 6, 4, 5}));
+}
+
+TEST(ShapeMyanmar, ADigitAfterAViramaIsASyllableOfItsOwn) {
+  // A consonant 2, the virama 3, a digit 4, the vowel sign E (written before) 5.
+  Font font(small_font({}, 8, {{0x1028, 2}, {0x1039, 3}, {0x1040, 4}, {0x1031, 5}}));
+  Glyphs g;
+  Request request;
+  request.script = "mym2";
+  ASSERT_EQ(shape(font, V{0x1028, 0x1039, 0x1040, 0x1031}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 3, 5, 4}));
+}
+
 TEST(ShapeUniversal, ALoneRephaIsBrokenAndALoneStackerIsNot) {
   // Masaram Gondi REPHA (a repha) and Zanabazar CLUSTER-INITIAL RA (a stacker), against a font
   // whose cmap holds only the dotted circle 5 and the space 6 (the characters are outside the

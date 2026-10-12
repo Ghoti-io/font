@@ -84,7 +84,12 @@ def main(argv):
     oracle_env.check_pin("fonttools")
     print(oracle_env.provenance(["fonttools"]))
     everything = corpus.fonts("sfnt")
-    candidates = [f for f in everything if not f.endswith((".ttc", ".otc"))]
+    # A collection says what it is in its first four bytes; its name does not. The W3C decoder
+    # suite's round-trip collections are named .ttf.
+    def is_collection(path):
+        with open(path, "rb") as handle:
+            return handle.read(4) == b"ttcf"
+    candidates = [f for f in everything if not is_collection(f)]
     small = [f for f in candidates if os.path.getsize(f) <= max_bytes]
     fonts = small[::stride]
     if limit:

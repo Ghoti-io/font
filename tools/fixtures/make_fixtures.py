@@ -2736,6 +2736,45 @@ def build_cff_subrs(out):
     fb.save(out)
 
 
+def build_cff_repeats(out):
+    """Charstrings that repeat each other, for the subsetter's subroutines.
+
+    Twelve plain glyphs share two path fragments and differ in one stroke; six
+    hinted glyphs share the stems, the hint mask and the fragments after it; one
+    glyph is a long run of one stroke (a repeat that overlaps itself); one calls
+    nothing in common. A subroutinizer that cuts through a hint mask, miscounts a
+    run, or lifts a fragment to a place the stack is not empty draws a different
+    outline from at least one of them.
+    """
+    first = [100, 50, "rlineto", 30, -20, "rlineto", 40, "hlineto", -60, "vlineto",
+             10, 10, 20, 20, 30, 30, "rrcurveto"]
+    second = [-40, "hlineto", -30, 20, "rlineto", -20, 10, -10, -30, -20, -20,
+              "rrcurveto", 15, "vlineto"]
+    order = [".notdef"] + ["plain%d" % i for i in range(12)] + \
+        ["hinted%d" % i for i in range(6)] + ["run", "alone"]
+    programs = {".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700,
+        "vlineto", -500, "hlineto", "endchar")}
+    for i in range(12):
+        programs["plain%d" % i] = charstring(500 + i, 10 * i + 5, 20, "rmoveto",
+            *first, 7 * i + 1, "hlineto", *second, "endchar")
+    for i in range(6):
+        programs["hinted%d" % i] = charstring(600, 100, 50, "hstemhm", 20, 30,
+            "vstemhm", "hintmask", ("mask", b"\xc0"), 10 * i + 5, 20, "rmoveto",
+            *first, 3 * i + 1, "vlineto", "hintmask", ("mask", b"\x80"), *second,
+            "endchar")
+    programs["run"] = charstring(600, 10, 10, "rmoveto",
+        *([5, "hlineto", 4, "vlineto"] * 12), -60, "hlineto", "endchar")
+    programs["alone"] = charstring(600, 7, 9, "rmoveto", 11, 13, "rlineto", 17,
+        "hlineto", "endchar")
+    advances = {name: 600 for name in order}
+    charset, strings = cff_names(order)
+    table = assemble_cff(names("CFF repeats")["psName"],
+        [programs[name] for name in order], charset=charset, strings=strings,
+        privates=[({20: 600, 21: 0}, [])])
+    fb = cff_otf("CFF repeats", order, table, advances, {0x20: ".notdef"})
+    fb.save(out)
+
+
 def build_cff_seac(out):
     """An accented character, and the charset and encoding that make it findable.
 
@@ -4578,6 +4617,10 @@ FIXTURES = {
         "CFF: local and global subroutines with the bias applied, nesting, a "
         "subroutine that ends without return, defaultWidthX, a nominalWidthX "
         "delta, and one glyph whose charstring advance hmtx disagrees with"),
+    "cff-repeats.otf": (build_cff_repeats,
+        "CFF: twelve glyphs sharing two path fragments, six hinted glyphs sharing "
+        "stems, masks and fragments, a long run of one stroke, and one glyph "
+        "that shares nothing, for the subsetter's subroutines"),
     "cff-seac.otf": (build_cff_seac,
         "CFF: an accented character (endchar with four operands) named by "
         "Standard Encoding code, a charset in format 1, a name in the font's "

@@ -94,7 +94,8 @@ struct Subset {
   size_t size = 0;
 
   Subset(const GFNT_Face * source, std::vector<uint32_t> glyphs, bool retain = false,
-      bool drop_hinting = false, std::vector<uint32_t> characters = {}) {
+      bool drop_hinting = false, std::vector<uint32_t> characters = {},
+      bool whole = false) {
     GFNT_SubsetOptions o;
     gfnt_subset_options_init(&o);
     o.codepoints = characters.data();
@@ -103,6 +104,7 @@ struct Subset {
     o.glyph_count = glyphs.size();
     o.retain_gids = retain;
     o.drop_hinting = drop_hinting;
+    o.no_subroutines = whole;
     o.map = &map;
     result = gfnt_subset(source, &o, nullptr, nullptr, &blob, &error);
     if (result == GFNT_OK) {
@@ -319,7 +321,7 @@ TEST(SubsetCff, ARetainedGapIsAnEmptyCharstring) {
   EXPECT_EQ(bytes[0], 14) << "endchar";
 }
 
-TEST(SubsetCff, SubroutinesAreFlattenedAway) {
+TEST(SubsetCff, SubroutinesAreFlattenedAwayWhenAskedForWhole) {
   Font source("cff-subrs.otf");
   bool source_calls = false;
   for (uint32_t g = 0; g < source.glyphs(); ++g) {
@@ -328,13 +330,100 @@ TEST(SubsetCff, SubroutinesAreFlattenedAway) {
         || p.find("callgsubr") != std::string::npos;
   }
   ASSERT_TRUE(source_calls) << "the fixture calls subroutines, or this proves nothing";
-  Subset sub(source.face, all_glyphs(source.glyphs()));
+  Subset sub(source.face, all_glyphs(source.glyphs()), false, false, {}, true);
   ASSERT_EQ(sub.result, GFNT_OK);
   for (uint32_t g = 0; g < sub.map.count; ++g) {
     const std::string p = program_of(sub.face, g);
     EXPECT_EQ(p.find("callsubr"), std::string::npos) << g << "\n" << p;
     EXPECT_EQ(p.find("callgsubr"), std::string::npos) << g << "\n" << p;
     EXPECT_EQ(p.find("return"), std::string::npos) << g << "\n" << p;
+  }
+}
+
+namespace {
+
+std::vector<uint8_t> table_of(const GFNT_Face * face, const char * tag);
+
+/** How many glyphs of @p face call a global subroutine. */
+size_t callers(const GFNT_Face * face, uint32_t glyphs) {
+  size_t n = 0;
+  for (uint32_t g = 0; g < glyphs; ++g) {
+    n += program_of(face, g).find("callgsubr") != std::string::npos ? 1 : 0;
+  }
+  return n;
+}
+
+}  // namespace
+
+TEST(SubsetCff, RepeatedSequencesBecomeSubroutinesAndTheOutlinesAreUnchanged) {
+  Font source("cff-repeats.otf");
+  Subset packed(source.face, all_glyphs(source.glyphs()));
+  Subset whole(source.face, all_glyphs(source.glyphs()), false, false, {}, true);
+  ASSERT_EQ(packed.result, GFNT_OK);
+  ASSERT_EQ(whole.result, GFNT_OK);
+  ASSERT_EQ(packed.map.count, whole.map.count);
+  EXPECT_LT(table_of(packed.face, "CFF ").size(), table_of(whole.face, "CFF ").size());
+  EXPECT_GE(callers(packed.face, static_cast<uint32_t>(packed.map.count)), 15u)
+      << "the glyphs that share fragments call them";
+  EXPECT_EQ(callers(whole.face, static_cast<uint32_t>(whole.map.count)), 0u);
+  for (uint32_t g = 0; g < packed.map.count; ++g) {
+    EXPECT_EQ(outline_of(packed.face, g), outline_of(whole.face, g)) << g;
+    EXPECT_EQ(outline_of(packed.face, g), outline_of(source.face, g)) << g;
+    const GFNT_CharstringMetrics a = metrics_of(packed.face, g);
+    const GFNT_CharstringMetrics b = metrics_of(whole.face, g);
+    EXPECT_EQ(a.width, b.width) << g;
+    EXPECT_EQ(a.width_stated, b.width_stated) << g;
+  }
+}
+
+TEST(SubsetCff, SubroutinesKeepHintMasksOutOfThem) {
+  Font source("cff-repeats.otf");
+  Subset packed(source.face, all_glyphs(source.glyphs()));
+  ASSERT_EQ(packed.result, GFNT_OK);
+  for (uint32_t g = 0; g < packed.map.count; ++g) {
+    const std::string p = program_of(packed.face, g);
+    if (p.find("hintmask") != std::string::npos) {
+      EXPECT_EQ(outline_of(packed.face, g), outline_of(source.face, g)) << g << "\n" << p;
+    }
+  }
+}
+
+TEST(SubsetCff, SubroutinesAreMadeWithoutHintsToo) {
+  Font source("cff-repeats.otf");
+  Subset packed(source.face, all_glyphs(source.glyphs()), false, true);
+  Subset whole(source.face, all_glyphs(source.glyphs()), false, true, {}, true);
+  ASSERT_EQ(packed.result, GFNT_OK);
+  ASSERT_EQ(whole.result, GFNT_OK);
+  EXPECT_LT(table_of(packed.face, "CFF ").size(), table_of(whole.face, "CFF ").size());
+  for (uint32_t g = 0; g < packed.map.count; ++g) {
+    EXPECT_EQ(outline_of(packed.face, g), outline_of(whole.face, g)) << g;
+  }
+}
+
+TEST(SubsetCff, ASubsetWithNothingRepeatedHasNoSubroutines) {
+  Font source("cff-repeats.otf");
+  // The one glyph that shares nothing, with the notdef.
+  const uint32_t alone = source.glyphs() - 1;
+  Subset packed(source.face, {alone});
+  ASSERT_EQ(packed.result, GFNT_OK);
+  EXPECT_EQ(callers(packed.face, static_cast<uint32_t>(packed.map.count)), 0u);
+}
+
+TEST(SubsetCff, EverySubroutinisedFixtureDrawsWhatTheWholeOneDraws) {
+  for (const char * name : {"cff.otf", "cff-curves.otf", "cff-hints.otf", "cff-subrs.otf",
+           "cff-seac.otf", "cff-cid.otf", "cff-cid3.otf", "cff-arith.otf", "cff-subset.otf",
+           "cff-repeats.otf", "variable-cff2.otf", "variable-cff2-hvar.otf", "cff2-fds.otf"}) {
+    SCOPED_TRACE(name);
+    Font source(name);
+    Subset packed(source.face, all_glyphs(source.glyphs()));
+    Subset whole(source.face, all_glyphs(source.glyphs()), false, false, {}, true);
+    ASSERT_EQ(packed.result, GFNT_OK);
+    ASSERT_EQ(whole.result, GFNT_OK);
+    EXPECT_LE(table_of(packed.face, "CFF ").size() + table_of(packed.face, "CFF2").size(),
+        table_of(whole.face, "CFF ").size() + table_of(whole.face, "CFF2").size());
+    for (uint32_t g = 0; g < packed.map.count; ++g) {
+      EXPECT_EQ(outline_of(packed.face, g), outline_of(whole.face, g)) << g;
+    }
   }
 }
 
@@ -418,7 +507,7 @@ TEST(SubsetCff, TypeOneCharstringsInACffAreRefusedByName) {
 }
 
 TEST(SubsetCff, EveryAllocationFailureIsSurvived) {
-  for (const char * name : {"cff-subrs.otf", "cff-cid.otf", "cff-seac.otf"}) {
+  for (const char * name : {"cff-subrs.otf", "cff-cid.otf", "cff-seac.otf", "cff-repeats.otf"}) {
     SCOPED_TRACE(name);
     Font source(name);
     std::vector<uint32_t> glyphs = all_glyphs(source.glyphs());

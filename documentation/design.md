@@ -1759,8 +1759,7 @@ shared tables de-duplicated by content.
 
 INDEX structures, DICTs with the offset-size fixups their self-references
 require, charsets, `FDArray`/`FDSelect` for CID output, and charstrings copied
-verbatim or with subroutines **flattened** (the simple, always-correct choice
-for a subset; re-subroutinisation is an optimisation for a later release).
+verbatim or with subroutines **flattened** and the repeats re-subroutinised (§12.3).
 
 ### 12.3 The subsetter
 
@@ -1856,7 +1855,7 @@ verbatim. Without it they are **rewritten** for the new numbering
 **`CFF ` outlines are subset too** (`src/write/subset_cff.c`), by writing the table afresh:
 the kept glyphs' charstrings with their subroutine calls **flattened** by an operand-holding
 evaluator (a `callsubr` takes back out the number it consumed; one whose number arithmetic
-computed is `GFNT_ERR_UNSUPPORTED`), so neither global nor local subroutines remain; a charset
+computed is `GFNT_ERR_UNSUPPORTED`), so no local subroutines remain and none of the source's global ones; the sequences the flattened charstrings repeat then become new global subroutines (below); a charset
 for the kept glyphs (ISOAdobe when it fits, else the smaller of formats 0, 1 and 2); a String
 INDEX of the strings still named, with SIDs renumbered; for a CID-keyed font only the Font
 DICTs a kept glyph uses, renumbered, with a new `FDSelect`; and Private DICTs without `Subrs`
@@ -1866,6 +1865,29 @@ charstrings and the advance carried on the first operator kept). An accented cha
 retained ids a dropped glyph is a lone `endchar` and keeps its name. `make check-oracle-subset`
 covers it: 36 URW CFF fonts, 281 subsets in each mode, drawing and charstring width read back
 through fontTools and shaping through HarfBuzz, 0 differences, no subroutine left, names kept.
+
+**Re-subroutinising** (`src/write/subroutinize.c`, off with `GFNT_SubsetOptions::no_subroutines`).
+Flattening alone leaves charstrings 20 to 40% larger than packed ones (18% and 39% in the two fonts below), so what the kept
+glyphs repeat is put back in global subroutines, by an algorithm of our own and not by keeping
+the source's. A charstring is cut into *operations*, the operands and the operator that takes them;
+a run of whole operations leaves the stack as it found it, so it can be lifted anywhere. An
+operator that leaves results on the stack (arithmetic, `blend`) does not end one. Hint and
+counter masks (their length is the stem count where they stand, which the flattener records),
+`endchar` and `vsindex` end one and are never put in a subroutine. The repeats are found by
+Re-Pair weighted by bytes: the pair of neighbouring symbols that saves the most becomes a
+subroutine everywhere at once, and so on among the results; each round takes every pair that saves at
+least a quarter as much as the best and shares no symbol with another taken, so the counts stay
+exact. A subroutine that does not pay for its call, INDEX offset and `return` once its real use
+count is known is put back (a subroutine used once never pays, which is what turns the pairs into
+the long subroutines a repeat deserves). Subroutines call each other at most eight deep (less if the
+caller's `max_charstring_depth` is small), the most used get the one-byte numbers, at most 30,000
+are made, and a subset with more than four million operations is left whole. If the result is not
+smaller than the flat charstrings it is dropped. The outlines and widths are the flat ones, which
+the unit tests check on every CFF and CFF2 fixture and `make check-oracle-subset` checks against
+fontTools on the corpus's 283 CFF subsets (31,501 subroutines). A 95-character ASCII subset of TeX
+Gyre Bonum Bold has a 16,753-byte `CFF ` (19,730 flat; fontTools' own subsetter writes 17,183,
+since it only keeps the source's subroutines that a kept glyph calls); 2,500 glyphs of Latin
+Modern Math go from 412 KB flat to 296 KB in 40 ms.
 
 **`CFF2` is subset by the same code**, variable fonts included. The flattener also follows
 `vsindex` and `blend` (a blend's result count needs the region count of the current

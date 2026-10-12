@@ -309,6 +309,7 @@ typedef struct Flat {
   GFNT_Error * error;
   uint32_t glyph;
   GFNT_WBuf out;
+  GFNT_WBuf masks;          // the length of each hint mask written, in order
   Ent st[STACK_MAX];
   size_t depth;
   size_t max_stack;
@@ -566,6 +567,7 @@ static GFNT_Result flat_run(Flat * f, const uint8_t * b, size_t n, size_t level)
           flush(f);
           gfnt_wbuf_u8(&f->out, c);
           gfnt_wbuf_bytes(&f->out, b + i + 1, masklen);
+          gfnt_wbuf_u8(&f->masks, (uint32_t)masklen);
           f->depth = 0;
           f->width_kept = false;
         }
@@ -812,6 +814,7 @@ static GFNT_Result flatten_glyph(const Src * s, uint32_t glyph, bool drop_hint,
     return result;
   }
   f->out.length = 0;
+  f->masks.length = 0;
   f->tab = &s->tab;
   f->lsubrs = &subrs;
   f->gsubrs = s->gsubrs;
@@ -873,6 +876,7 @@ GFNT_Result gfnt_subset_cff_closure(const GFNT_Face * face, uint8_t * keep, size
         "allocating the accent closure");
   }
   gfnt_wbuf_init(&f->out, allocator);
+  gfnt_wbuf_init(&f->masks, allocator);
   for (g = 0; g < count; ++g) {
     if (keep[g]) {
       work[sp++] = g;
@@ -897,6 +901,7 @@ GFNT_Result gfnt_subset_cff_closure(const GFNT_Face * face, uint8_t * keep, size
     }
   }
   gfnt_wbuf_free(&f->out);
+  gfnt_wbuf_free(&f->masks);
   allocator->free_fn(allocator->ctx, f);
   allocator->free_fn(allocator->ctx, work);
   return result;
@@ -1395,13 +1400,20 @@ static void build_fdselect(const Src * s, const Plan * plan, const uint16_t * fd
 }
 
 GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
-    size_t new_count, size_t count, bool drop_hinting, const char * ps_name,
+    size_t new_count, size_t count, bool drop_hinting, bool subroutines, const char * ps_name,
     const GFNT_Limits * limits, const GFNT_Allocator * a, GFNT_WBuf * out, GFNT_Error * error) {
   Src s;
   Flat * f = NULL;
   GFNT_WBuf cs;
   GFNT_WBuf fdsel, top, top_ix, str_ix, gsub_ix, cs_ix, fd_ix, name_ix, vstore_buf;
   GFNT_WBuf * privates = NULL;
+  GFNT_WBuf maskbuf;
+  GFNT_WBuf sub_cs, sub_bodies;
+  size_t * sub_at = NULL;
+  size_t nsub = 0;
+  size_t * mask_at = NULL;
+  size_t * new_at = NULL;
+  Item * sub_items = NULL;
   size_t * cs_at = NULL;
   uint32_t * values = NULL;
   uint16_t * fd_of_new = NULL;
@@ -1420,6 +1432,9 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
   memset(&plan, 0, sizeof plan);
   memset(&b, 0, sizeof b);
   gfnt_wbuf_init(&cs, a);
+  gfnt_wbuf_init(&maskbuf, a);
+  gfnt_wbuf_init(&sub_cs, a);
+  gfnt_wbuf_init(&sub_bodies, a);
   gfnt_wbuf_init(&fdsel, a);
   gfnt_wbuf_init(&top, a);
   gfnt_wbuf_init(&name_ix, a);
@@ -1445,6 +1460,8 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
   }
   f = a->calloc_fn(a->ctx, 1, sizeof *f);
   cs_at = a->calloc_fn(a->ctx, new_count + 1, sizeof *cs_at);
+  mask_at = a->calloc_fn(a->ctx, new_count + 1, sizeof *mask_at);
+  new_at = a->calloc_fn(a->ctx, new_count + 1, sizeof *new_at);
   values = a->calloc_fn(a->ctx, new_count + 1, sizeof *values);
   fd_of_new = a->calloc_fn(a->ctx, new_count + 1, sizeof *fd_of_new);
   sid_cap = new_count + 600;
@@ -1455,7 +1472,7 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
   privates = a->calloc_fn(a->ctx, plan.nsrc, sizeof *privates);
   b.private_off = a->calloc_fn(a->ctx, plan.nsrc, sizeof *b.private_off);
   b.private_size = a->calloc_fn(a->ctx, plan.nsrc, sizeof *b.private_size);
-  if (!f || !cs_at || !values || !fd_of_new || !sids || !plan.fd_src || !plan.fd_new
+  if (!f || !cs_at || !mask_at || !new_at || !values || !fd_of_new || !sids || !plan.fd_src || !plan.fd_new
       || !plan.fd_used || !privates || !b.private_off || !b.private_size) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
         "allocating the CFF subset");
@@ -1465,6 +1482,7 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
     gfnt_wbuf_init(&privates[k], a);
   }
   gfnt_wbuf_init(&f->out, a);
+  gfnt_wbuf_init(&f->masks, a);
   b.s = &s;
   b.map = &map;
   b.plan = &plan;
@@ -1477,6 +1495,7 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
     size_t fd;
 
     cs_at[j] = cs.length;
+    mask_at[j] = maskbuf.length;
     if (g == NO_GLYPH) {
       if (!s.cff2) {
         gfnt_wbuf_u8(&cs, 14);
@@ -1489,6 +1508,7 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
         goto done;
       }
       gfnt_wbuf_bytes(&cs, f->out.data, f->out.length);
+      gfnt_wbuf_bytes(&maskbuf, f->masks.data, f->masks.length);
       fd = fd_of(&s, g);
     }
     if (named >= count) {
@@ -1515,6 +1535,36 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
     }
   }
   cs_at[new_count] = cs.length;
+  mask_at[new_count] = maskbuf.length;
+  if (maskbuf.oom) {
+    result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
+        "building the CharStrings");
+    goto done;
+  }
+
+  // Sequences that several charstrings repeat become global subroutines. The ceiling on how
+  // deeply they call each other leaves the reader's own limit room for the charstring's call.
+  if (subroutines && limits->max_charstring_depth > 2) {
+    const size_t ceiling = limits->max_charstring_depth - 2 < 8 ? limits->max_charstring_depth - 2 : 8;
+
+    result = gfnt_cff_subroutinize(a, cs.data, cs_at, maskbuf.data, mask_at, new_count,
+        (uint8_t)ceiling, &sub_cs, new_at, &sub_bodies, &sub_at, &nsub, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+    if (nsub) {
+      sub_items = a->calloc_fn(a->ctx, nsub, sizeof *sub_items);
+      if (!sub_items) {
+        result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
+            "building the subroutines");
+        goto done;
+      }
+      for (j = 0; j < nsub; ++j) {
+        sub_items[j].p = sub_bodies.data + sub_at[j];
+        sub_items[j].n = sub_at[j + 1] - sub_at[j];
+      }
+    }
+  }
 
   // Font DICTs: the ones still used, in their order.
   if (s.fds) {
@@ -1645,10 +1695,16 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
       one.n = name_n;
       write_index(&name_ix, &one, 1);
     }
-    write_index_ex(&gsub_ix, NULL, 0, s.cff2);
+    write_index_ex(&gsub_ix, sub_items, nsub, s.cff2);
     for (j = 0; j < new_count; ++j) {
-      items[j].p = cs.data + cs_at[j];
-      items[j].n = cs_at[j + 1] - cs_at[j];
+      if (nsub) {
+        items[j].p = sub_cs.data + new_at[j];
+        items[j].n = new_at[j + 1] - new_at[j];
+      }
+      else {
+        items[j].p = cs.data + cs_at[j];
+        items[j].n = cs_at[j + 1] - cs_at[j];
+      }
     }
     write_index_ex(&cs_ix, items, new_count, s.cff2);
     if (s.cff2 && s.vstore) {
@@ -1753,7 +1809,7 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
     gfnt_wbuf_bytes(out, privates[k].data, privates[k].length);
   }
   if (out->oom || charset.bytes.oom || top.oom || top_ix.oom || str_ix.oom || fd_ix.oom
-      || fdsel.oom || cs_ix.oom || name_ix.oom || gsub_ix.oom || vstore_buf.oom) {
+      || fdsel.oom || sub_cs.oom || sub_bodies.oom || cs_ix.oom || name_ix.oom || gsub_ix.oom || vstore_buf.oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_CFF, 0, GFNT_GLYPH_NONE,
         "assembling the CFF subset");
   }
@@ -1761,7 +1817,15 @@ GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
 done:
   if (f) {
     gfnt_wbuf_free(&f->out);
+    gfnt_wbuf_free(&f->masks);
   }
+  a->free_fn(a->ctx, mask_at);
+  a->free_fn(a->ctx, new_at);
+  a->free_fn(a->ctx, sub_at);
+  a->free_fn(a->ctx, sub_items);
+  gfnt_wbuf_free(&maskbuf);
+  gfnt_wbuf_free(&sub_cs);
+  gfnt_wbuf_free(&sub_bodies);
   a->free_fn(a->ctx, f);
   a->free_fn(a->ctx, cs_at);
   a->free_fn(a->ctx, values);

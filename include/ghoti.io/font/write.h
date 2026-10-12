@@ -342,6 +342,11 @@ typedef struct GFNT_SubsetOptions {
   /** Drop `fpgm`, `prep`, `cvt ` and every glyph's instructions. */
   bool drop_hinting;
   /**
+   * Write every CFF charstring whole. By default the sequences several charstrings repeat are
+   * put in global subroutines, which makes the table smaller; the outlines are the same.
+   */
+  bool no_subroutines;
+  /**
    * Leave out `GSUB`, `GPOS`, `GDEF`, `kern`, `vhea`, `vmtx` and `VORG`.
    *
    * By default they are carried: copied as they are when ::retain_gids keeps the

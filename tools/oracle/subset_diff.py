@@ -297,6 +297,7 @@ def main(argv):
     finished = subprocess.run(argv_ft, capture_output=True, text=True)
     unopened = drawn = missed = 0
     extra = theirs = ours = 0
+    with_subrs = total_subrs = 0
     problems = []
     if finished.returncode == 0:
         with open(results_path, encoding="utf-8") as h:
@@ -315,8 +316,11 @@ def main(argv):
                                  % (r.get("at_locations"), r.get("var_tables_differ"))))
             if r.get("subrs") or r.get("names_differ"):
                 drawn += 1
-                problems.append((name, grp, "CFF subset: %s subroutines left, names differ %s"
+                problems.append((name, grp, "CFF subset: %s local subroutines, names differ %s"
                                  % (r.get("subrs"), r.get("names_differ"))))
+            if r.get("global_subrs"):
+                with_subrs += 1
+                total_subrs += r["global_subrs"]
             if r.get("missing"):
                 missed += 1
                 problems.append((name, grp, "fontTools keeps %s, this does not" % r["missing"][:5]))
@@ -337,6 +341,8 @@ def main(argv):
     print("fontTools: %d did not open, %d with a glyph read differently, "
           "%d with a glyph its closure keeps and this one lacks"
           % (unopened, drawn, missed))
+    print("CFF subsets: %d carry global subroutines (%d in all), none local"
+          % (with_subrs, total_subrs))
     if theirs:
         print("glyphs with outlines kept: fontTools %d, this library %d (%d it did not)"
               % (theirs, ours, extra))

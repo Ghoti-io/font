@@ -23,7 +23,7 @@
  *
  * Write a font holding only some of another's glyphs.
  *
- * Usage: font-subset [--retain-gids] [--no-closure] [--drop-hinting] [--map FILE]
+ * Usage: font-subset [--retain-gids] [--no-closure] [--drop-hinting] [--no-subroutines] [--map FILE]
  *                    [--drop-layout] [--features liga,kern] [--woff] [--rename FAMILY]
  *                    [--unicodes U+0041,U+0042] [--glyphs 3,4] <in> <out>
  *
@@ -133,6 +133,9 @@ int main(int argc, char ** argv) {
     else if (!strcmp(a, "--no-closure")) {
       options.no_gsub_closure = true;
     }
+    else if (!strcmp(a, "--no-subroutines")) {
+      options.no_subroutines = true;
+    }
     else if (!strcmp(a, "--drop-hinting")) {
       options.drop_hinting = true;
     }
@@ -162,7 +165,7 @@ int main(int argc, char ** argv) {
       paths[npaths++] = a;
     }
     else {
-      fprintf(stderr, "usage: %s [--retain-gids] [--no-closure] [--drop-hinting] "
+      fprintf(stderr, "usage: %s [--retain-gids] [--no-closure] [--drop-hinting] [--no-subroutines] "
           "[--drop-layout] [--features tags] [--map file] [--woff] [--rename family] [--unicodes list] "
           "[--glyphs list] <in> <out>\n", argv[0]);
       return 2;

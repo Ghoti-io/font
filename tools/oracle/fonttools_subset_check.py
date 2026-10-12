@@ -156,15 +156,15 @@ def check(job):
                 at.append([loc, "%s: %s" % (type(why).__name__, why)])
         out["at_locations"] = at[:3]
     if "CFF " in mine or "CFF2" in mine:
-        # Flattened: no subroutine anywhere. And a kept glyph keeps its name.
+        # Global subroutines are made from what the charstrings repeat and counted; a local one
+        # is never written. And a kept glyph keeps its name.
         table = mine["CFF "] if "CFF " in mine else mine["CFF2"]
         top = table.cff.topDictIndex[0]
-        subrs = len(table.cff.GlobalSubrs)
+        out["global_subrs"] = len(table.cff.GlobalSubrs)
         privates = [top.Private] if hasattr(top, "Private") else []
         if hasattr(top, "FDArray"):
             privates = [fd.Private for fd in top.FDArray]
-        subrs += sum(len(getattr(p, "Subrs", [])) for p in privates)
-        out["subrs"] = subrs
+        out["subrs"] = sum(len(getattr(p, "Subrs", [])) for p in privates)
         a_names = original.getGlyphOrder()
         b_names = mine.getGlyphOrder()
         if "map" in job:

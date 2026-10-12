@@ -861,7 +861,7 @@ def main():
                         ("variable-hvar.ttf", "variable-hvar"),
                         ("variable-cvar.ttf", "variable-cvar"),
                         ("cff-names.otf", "cff-names"), ("cff-cid-names.otf", "cff-cid-names"),
-                        ("cff2-fds.otf", "cff2-fds"),
+                        ("cff2-fds.otf", "cff2-fds"), ("cff-repeats.otf", "cff-repeats"),
                         ("variable-featurevars-nested.ttf", "featurevars-nested")):
         data = (root / "tests/data/fonts" / fixture).read_bytes()
         for options, kind in ((0x00, "renumber"), (0x01, "retain"),

@@ -675,7 +675,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (cff) {
     result = gfnt_subset_cff(face, w.old_of_new, new_count, count, options->drop_hinting,
-        ps_name, limits, allocator, &w.cff, error);
+        !options->no_subroutines, ps_name, limits, allocator, &w.cff, error);
     if (result != GFNT_OK) {
       goto done;
     }

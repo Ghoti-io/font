@@ -30,6 +30,7 @@ cff-cid3.otf	CFF: CID-keyed with three Font DICTs of different defaultWidthX, th
 cff-curves.otf	CFF: every curve operator in the form a pen never writes - three-group hvcurveto and vhcurveto with the trailing operand, hhcurveto and vvcurveto with the leading one, rcurveline, rlinecurve, and all four of flex, hflex, hflex1 and flex1 (twice, once per axis)
 cff-hints.otf	CFF: stem hints and the masks their count sizes - an odd operand count carrying the advance, a two-byte mask, stems declared inside a subroutine, an implicit vstem before hintmask, cntrmask, and a width on vstem
 cff-names.otf	CFF: a Top DICT stating FullName and FamilyName as strings of its own, after the glyph names, for the subsetter's rename
+cff-repeats.otf	CFF: twelve glyphs sharing two path fragments, six hinted glyphs sharing stems, masks and fragments, a long run of one stroke, and one glyph that shares nothing, for the subsetter's subroutines
 cff-seac.otf	CFF: an accented character (endchar with four operands) named by Standard Encoding code, a charset in format 1, a name in the font's own String INDEX, and a custom encoding with a supplement
 cff-subrs.otf	CFF: local and global subroutines with the bias applied, nesting, a subroutine that ends without return, defaultWidthX, a nominalWidthX delta, and one glyph whose charstring advance hmtx disagrees with
 cff-subset.otf	CFF: eight and sixteen stems before a hintmask (mask width on a multiple-of-eight boundary), three glyphs named in the font's own String INDEX, and a subroutine call, for the subsetter

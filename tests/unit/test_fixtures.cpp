@@ -191,6 +191,7 @@ const std::vector<Entry> & every_fixture() {
       {"cff2-fds.otf", 300},
       {"cff-curves.otf", 13},
       {"cff-hints.otf", 8},
+      {"cff-repeats.otf", 21},
       {"cff-seac.otf", 6},
       {"cff-subrs.otf", 10},
       {"cff-type1.otf", 8},

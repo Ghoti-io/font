@@ -178,12 +178,32 @@ GFNT_Result gfnt_subset_cff_closure(const GFNT_Face * face, uint8_t * keep, size
  * @param count The source face's glyph count.
  * @param ps_name The name to give the font in place of its own (a `CFF ` Name INDEX), which also
  *   drops the Top DICT's FullName and FamilyName and each Font DICT's FontName; or NULL to keep them.
+ * @param subroutines Put the sequences several charstrings repeat in global subroutines.
  * @param out Receives the table (appended).
  */
 GFNT_Result gfnt_subset_cff(const GFNT_Face * face, const uint32_t * old_of_new,
-    size_t new_count, size_t count, bool drop_hinting, const char * ps_name,
+    size_t new_count, size_t count, bool drop_hinting, bool subroutines, const char * ps_name,
     const GFNT_Limits * limits, const GFNT_Allocator * allocator, GFNT_WBuf * out,
     GFNT_Error * error);
+
+/**
+ * Finds the sequences of operations that the flattened charstrings repeat and writes them as
+ * global subroutines.
+ *
+ * @param cs The charstrings laid end to end, @p cs_at their @p glyphs + 1 offsets.
+ * @param masks The length of each hint and counter mask in them, glyph by glyph (@p mask_at,
+ *   @p glyphs + 1 offsets): a mask's length is the stem count where it stands.
+ * @param max_depth How deeply the subroutines may call each other; 0 does nothing.
+ * @param out_cs Receives the charstrings that call them, @p out_at their offsets.
+ * @param out_subrs Receives the subroutine bodies, @p out_sub_at (allocated with @p a, for the
+ *   caller to free) their @p out_count + 1 offsets.
+ * @return ::GFNT_OK with @p out_count 0 when nothing was worth making or a charstring was not
+ *   understood: the caller keeps its own.
+ */
+GFNT_Result gfnt_cff_subroutinize(const GFNT_Allocator * a, const uint8_t * cs,
+    const size_t * cs_at, const uint8_t * masks, const size_t * mask_at, size_t glyphs,
+    uint8_t max_depth, GFNT_WBuf * out_cs, size_t * out_at, GFNT_WBuf * out_subrs,
+    size_t ** out_sub_at, size_t * out_count, GFNT_Error * error);
 
 /**
  * `name` for a subset renamed to @p family: every record of the source is carried except the

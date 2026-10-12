@@ -222,7 +222,7 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
 
 /** Append the units of one face run, in logical order. */
 static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
-    size_t item_start, bool rtl, size_t run, size_t glyph_base,
+    size_t item_start, bool rtl, bool stored_reversed, size_t run, size_t glyph_base,
     const uint32_t * cps, GFNT_Error * error) {
   size_t first = item_start + fr->start;
   size_t last = first + fr->length;
@@ -240,7 +240,9 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
   }
   for (size_t k = 0; k < count; k++) {
     size_t g = rtl ? count - 1 - k : k;
-    size_t cluster = item_start + fr->run.glyphs[g].cluster;
+    // Upright text at an odd level is stored visually, which is the shaper's order reversed.
+    size_t cluster = item_start
+        + fr->run.glyphs[stored_reversed ? count - 1 - g : g].cluster;
     Unit * prev = p->unit_count > unit_first ? &p->units[p->unit_count - 1] : NULL;
 
     if (cluster < first) {
@@ -434,6 +436,9 @@ static GFNT_Result mark_hyphens(GFNT_Paragraph * p, const char * text, const siz
     p->hyphen_cp[i] = face_maps(p->styles[i].faces[0], 0x2010) ? 0x2010 : 0x2D;
     r = shape_string(p, i, &p->hyphen_cp[i], 1, g, &count, &width, &run, error);
     p->hyphen_width[i] = width;
+    if (count > p->hyphen_glyphs) {
+      p->hyphen_glyphs = count;
+    }
   }
   a->free_fn(a->ctx, wanted);
   return r;
@@ -953,7 +958,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         {
           // Not `r = `: an out-of-memory in a glyph's outline above would be lost,
           // and the glyphs after it would be left without their ink flag.
-          GFNT_Result units = add_units(p, f, start, rtl || rev, p->run_count,
+          GFNT_Result units = add_units(p, f, start, rtl || rev, rev, p->run_count,
               p->glyph_count, cps, error);
 
           if (r == GFNT_OK) {
@@ -1043,13 +1048,24 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     if (!u->space) {
       fit = total;
     }
-    // A stretch that ends at a hyphenation point ends in the hyphen.
-    shown = fit + (u->hyphen && u->opportunity ? p->hyphen_width[p->runs[u->run].span] : 0);
+    // A stretch that ends at a hyphenation point ends in the hyphen; the end of the text is not one.
+    shown = fit + (u->hyphen && u->opportunity && j + 1 < p->unit_count
+                       ? p->hyphen_width[p->runs[u->run].span] : 0);
     if (shown > widest) {
       widest = shown;
     }
     if (u->hard || u->opportunity) {
       total = fit = 0;
+    }
+  }
+  {
+    // A tab at the start of a stretch is a whole tab stop wide there and only the way to the next
+    // stop in the unbroken line, so the stretches can add up to more than the line: a width at
+    // which the line does not wrap needs no more than the line.
+    GFNT_F26Dot6 max = 0;
+
+    if (gfnt_paragraph_max_content(p, &max) == GFNT_OK && widest > max) {
+      widest = max;
     }
   }
   *out = widest;
@@ -1351,8 +1367,13 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     line_count = p->options.max_lines;
     more = true;
   }
-  runs_bytes = (p->unit_count + 2) * sizeof *runs;
-  total_bytes = runs_bytes + (p->glyph_count + ELL_GLYPHS + 1) * sizeof *placed;
+  // A line's runs are its units' (at most one each) and the hyphen it may end in; the last line
+  // may instead end in the truncation mark.
+  runs_bytes = (p->unit_count + line_count + 2) * sizeof *runs;
+  // The glyphs of the text, those of the hyphen each line but the last may end in, and the
+  // truncation mark.
+  total_bytes = runs_bytes
+      + (p->glyph_count + line_count * p->hyphen_glyphs + ELL_GLYPHS + 1) * sizeof *placed;
   lines = allocator->calloc_fn(allocator->ctx, line_count, sizeof *lines);
   storage = allocator->calloc_fn(allocator->ctx, total_bytes, 1);
   if (!lines || !storage) {

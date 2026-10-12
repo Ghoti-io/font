@@ -693,7 +693,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
 .PHONY: fuzz-cff2 fuzz-run-cff2 fuzz-metvar fuzz-run-metvar fuzz-vartables fuzz-run-vartables
-.PHONY: fuzz-shape fuzz-run-shape fuzz-subset fuzz-run-subset fuzz-fontset fuzz-run-fontset fuzz-svg fuzz-run-svg
+.PHONY: fuzz-shape fuzz-run-shape fuzz-subset fuzz-run-subset fuzz-fontset fuzz-run-fontset fuzz-svg fuzz-run-svg fuzz-layout fuzz-run-layout
 .PHONY: fuzz-cff fuzz-charstring
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
@@ -1952,6 +1952,8 @@ $(eval $(call fuzz-rule,fuzz_subset,subset))
 $(eval $(call fuzz-rule,fuzz_fontset,fontset))
 # fuzz_svg takes a whole `SVG ` table after an options byte and runs every reader of it.
 $(eval $(call fuzz-rule,fuzz_svg,svg))
+# fuzz_layout takes two option bytes, a room and a text, and asks the layout every question it answers.
+$(eval $(call fuzz-rule,fuzz_layout,layout))
 # fuzz_cff takes the whole `CFF ` table, because a CFF is a nest of offsets that
 # point at each other - the Top DICT at the charset and the CharStrings INDEX, the
 # Private DICT at its local subroutines *relative to itself* - and a fuzzer given
@@ -1986,7 +1988,7 @@ $(eval $(call fuzz-rule,fuzz_type1,type1))
 # input either.
 $(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
 
-FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables shape subset fontset svg
+FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables shape subset fontset svg layout
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

@@ -1181,6 +1181,47 @@ TEST(LayoutHyphen, ALineThatBreaksAtASoftHyphenEndsInAHyphenThatTakesRoom) {
   }
 }
 
+TEST(LayoutHyphen, MinContentNeverCountsAHyphenAtTheEndOfTheTextAndNeverExceedsMaxContent) {
+  Font font(latin_hyphen_ascii_only());
+  // The soft hyphen after C is the last character: there is no line after it to break to.
+  Para para("ABC\xC2\xAD", {font.face}, hyphenating(GFNT_HYPHENS_MANUAL));
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_F26Dot6 min = 0, max = 0;
+  ASSERT_EQ(gfnt_paragraph_min_content(para.p, &min), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(para.p, &max), GFNT_OK);
+  EXPECT_EQ(max, 3 * kLetter);
+  EXPECT_EQ(min, 3 * kLetter) << "no hyphen is shown there";
+  // A tab at the start of a stretch is a full stop wide there, and the way to the next stop only
+  // in the unbroken line; the narrowest width that does not overflow cannot be more than that.
+  Font tabbed({'A', 'B', ' ', '\t'});
+  Para tab("AB \tA", {tabbed.face});
+  ASSERT_EQ(tab.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_min_content(tab.p, &min), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(tab.p, &max), GFNT_OK);
+  EXPECT_LE(min, max);
+}
+
+TEST(LayoutHyphen, ThirtyLinesThatEndInAHyphenHaveRoomForTheirHyphenGlyphs) {
+  Font font(latin_hyphen_ascii_only());
+  // More hyphen glyphs than the layout once had room for beyond the text's own: found by the layout
+  // fuzzer, as an out-of-bounds write that only a sanitizer sees.
+  std::string text;
+  for (int i = 0; i < 40; ++i) {
+    text += "A\xC2\xAD";
+  }
+  Para para(text, {font.face}, hyphenating(GFNT_HYPHENS_MANUAL));
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(kLetter + kLetter / 2), GFNT_OK);
+  size_t hyphens = 0;
+  for (size_t i = 0; i < para.layout.line_count; ++i) {
+    for (size_t k = 0; k < para.layout.lines[i].run_count; ++k) {
+      hyphens += para.layout.lines[i].runs[k].hyphen ? para.layout.lines[i].runs[k].glyph_count : 0u;
+    }
+  }
+  EXPECT_EQ(hyphens, para.layout.line_count - 1);
+  EXPECT_GE(para.layout.line_count, 30u);
+}
+
 TEST(LayoutHyphen, TheHyphenIsU2010WhenTheFaceHasIt) {
   Font font(latin_hyphens());
   Para para("ABC\xC2\xAD" "DEF", {font.face});

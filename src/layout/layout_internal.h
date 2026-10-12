@@ -87,6 +87,7 @@ struct GFNT_Paragraph {
   size_t unit_count;
   GFNT_F26Dot6 * hyphen_width; // per span: the hyphen's width, or 0 when no point is in the span
   uint32_t * hyphen_cp;        // per span: the character it is set with
+  size_t hyphen_glyphs;        // the most glyphs any span's hyphen shapes to
   PRun fallback_metrics;       // the first span's first face, for an empty text
 };
 

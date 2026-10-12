@@ -24,13 +24,18 @@
  * Lay a paragraph out and draw it.
  *
  * Usage: font-paragraph [--size PX] [--width PX] [--align start|end|left|right|center|justify]
- *            [--bidi ltr|rtl|auto] [--margin PX] [--guides] <font> <out.pgm> <text>
+ *            [--bidi ltr|rtl|auto] [--margin PX] [--guides]
+ *            [--mode horizontal|vertical-rl|vertical-lr|sideways-rl|sideways-lr]
+ *            [--orient mixed|mixed-pango|upright|sideways]
+ *            [--justify auto|inter-word|inter-character|none] <font> <out.pgm> <text>
  *
  * One face, one size, black ink on white as a binary PGM. The lines come from
  * gfnt_paragraph_layout(): where they break, where each glyph sits, and for a
  * justified line how far its spaces were widened. `--guides` draws the column's
  * left and right edges in gray, so a justified paragraph can be seen to end on
- * the right edge and the others to fall short of it.
+ * the right edge and the others to fall short of it. In a vertical mode `--width` is the room along
+ * the lines (a height), the guides are the top and bottom edges, and a turned glyph is drawn upright
+ * and its coverage turned a quarter, which is exact.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -75,6 +80,28 @@ int main(int argc, char ** argv) {
           : !strcmp(v, "center") ? GFNT_ALIGN_CENTER
           : !strcmp(v, "justify") ? GFNT_ALIGN_JUSTIFY : GFNT_ALIGN_START;
     }
+    else if (!strcmp(argv[a], "--mode") && a + 1 < argc) {
+      const char * v = argv[++a];
+
+      options.writing_mode = !strcmp(v, "vertical-rl") ? GFNT_WRITING_VERTICAL_RL
+          : !strcmp(v, "vertical-lr") ? GFNT_WRITING_VERTICAL_LR
+          : !strcmp(v, "sideways-rl") ? GFNT_WRITING_SIDEWAYS_RL
+          : !strcmp(v, "sideways-lr") ? GFNT_WRITING_SIDEWAYS_LR : GFNT_WRITING_HORIZONTAL_TB;
+    }
+    else if (!strcmp(argv[a], "--orient") && a + 1 < argc) {
+      const char * v = argv[++a];
+
+      options.text_orientation = !strcmp(v, "upright") ? GFNT_ORIENT_UPRIGHT
+          : !strcmp(v, "sideways") ? GFNT_ORIENT_SIDEWAYS
+          : !strcmp(v, "mixed-pango") ? GFNT_ORIENT_MIXED_PANGO : GFNT_ORIENT_MIXED;
+    }
+    else if (!strcmp(argv[a], "--justify") && a + 1 < argc) {
+      const char * v = argv[++a];
+
+      options.justify = !strcmp(v, "inter-word") ? GFNT_JUSTIFY_INTER_WORD
+          : !strcmp(v, "inter-character") ? GFNT_JUSTIFY_INTER_CHARACTER
+          : !strcmp(v, "none") ? GFNT_JUSTIFY_NONE : GFNT_JUSTIFY_AUTO;
+    }
     else if (!strcmp(argv[a], "--bidi") && a + 1 < argc) {
       const char * v = argv[++a];
 
@@ -109,14 +136,22 @@ int main(int argc, char ** argv) {
     gfnt_error_dump(&error, stderr);
     return 1;
   }
-  w = width + 2 * margin;
+  w = (layout.width + 63) / 64 + 2 * margin;
   h = (layout.height + 63) / 64 + 2 * margin;
   canvas = malloc((size_t)w * h);
   memset(canvas, 255, (size_t)w * h);
   if (guides) {
-    for (int y = 0; y < h; y++) {
-      canvas[(size_t)y * w + margin - 1] = 200;
-      canvas[(size_t)y * w + margin + width] = 200;
+    if (options.writing_mode == GFNT_WRITING_HORIZONTAL_TB) {
+      for (int y = 0; y < h; y++) {
+        canvas[(size_t)y * w + margin - 1] = 200;
+        canvas[(size_t)y * w + margin + width] = 200;
+      }
+    }
+    else {
+      for (int x = 0; x < w; x++) {
+        canvas[(size_t)(margin - 1) * w + x] = 200;
+        canvas[(size_t)(margin + width) * w + x] = 200;
+      }
     }
   }
   for (size_t i = 0; i < layout.line_count; i++) {
@@ -129,18 +164,37 @@ int main(int argc, char ** argv) {
         const GFNT_PlacedGlyph * pg = &run->glyphs[g];
         GFNT_RasterOptions ro;
         GFNT_Coverage cov;
-        int gx = (int)floor(pg->x / 64.0), gy = (int)lround(pg->y / 64.0);
+        const bool turned = run->orientation == GFNT_ORIENT_RUN_CW
+            || run->orientation == GFNT_ORIENT_RUN_CCW;
+        int gx = turned ? (int)lround(pg->x / 64.0) : (int)floor(pg->x / 64.0);
+        int gy = (int)lround(pg->y / 64.0);
 
         memset(&ro, 0, sizeof ro);
-        ro.origin_x = pg->x - gx * 64;
+        ro.origin_x = turned ? 0 : pg->x - gx * 64;
         if (gfnt_face_render_glyph(run->face, pg->glyph, size, &ro, NULL, &cov, NULL)
                 != GFNT_OK) {
           continue;
         }
         for (uint32_t row = 0; row < cov.height; row++) {
           for (uint32_t col = 0; col < cov.width; col++) {
-            int x = margin + gx + cov.left + (int)col;
-            int y = margin + gy - cov.top + (int)row;
+            // A glyph pixel is (u, v) right of and above the origin. Drawn as it is, the page
+            // offset is (u, -v); turned a quarter clockwise it is (v, u) and counterclockwise
+            // (-v, -u), the pixel's own square landing on the square it covers.
+            int u = cov.left + (int)col, v = cov.top - (int)row - 1;
+            int x, y;
+
+            if (run->orientation == GFNT_ORIENT_RUN_CW) {
+              x = margin + gx + v;
+              y = margin + gy + u;
+            }
+            else if (run->orientation == GFNT_ORIENT_RUN_CCW) {
+              x = margin + gx - v - 1;
+              y = margin + gy - u - 1;
+            }
+            else {
+              x = margin + gx + u;
+              y = margin + gy - v - 1;
+            }
 
             if (x >= 0 && y >= 0 && x < w && y < h) {
               int ink = cov.data[row * cov.stride + col];

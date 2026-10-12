@@ -570,6 +570,95 @@ TEST(LayoutJustifyIdeographs, HangulIsNotSpreadAndNeitherAreTheDashAndEllipsis) 
   EXPECT_FALSE(para.layout.lines[0].justified) << "no spaces, and Hangul is no ideograph";
 }
 
+TEST(LayoutVertical, ManyColumnsThatEndInAHyphenEachKeepTheirOwnRunsAndGlyphs) {
+  Font font;
+  // Found by the layout fuzzer: with every unit on a line of its own and a hyphen ending most of
+  // them, the runs outnumbered the units and spilled into the glyphs after them.
+  const std::string text = std::string("\xEF\xBC\x81\xEF\xBC\x81") + "\xC2\xAD\xC2\xAD\xC2\xAD\xC2\xAD\xC2\xAD"
+      + "\xD7\x91" + "\xEF\xBC\x81\xEF\xBC\x81";
+  Para para(font, text, GFNT_WRITING_VERTICAL_RL);
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(px(1)), GFNT_OK);
+  size_t glyphs = 0;
+  for (size_t i = 0; i < para.layout.line_count; ++i) {
+    const GFNT_Line & line = para.layout.lines[i];
+    for (size_t k = 0; k < line.run_count; ++k) {
+      const GFNT_LineRun & run = line.runs[k];
+      for (size_t g = 0; g < run.glyph_count; ++g, ++glyphs) {
+        EXPECT_LT(run.glyphs[g].glyph, 64u) << "line " << i << " run " << k;
+        if (!run.hyphen) {
+          EXPECT_GE(run.glyphs[g].cluster, line.start) << i;
+          EXPECT_LE(run.glyphs[g].cluster, line.end) << i;
+        }
+      }
+    }
+  }
+  EXPECT_GT(glyphs, 8u);
+}
+
+TEST(LayoutVertical, UprightTextAtAnOddLevelIsStoredVisuallyWithItsClustersToMatch) {
+  Font font;
+  // Found by the layout fuzzer: upright exclamation marks between Hebrew letters in a right-to-left
+  // paragraph sit at level 1 and read bottom to top, so their glyphs are in reverse text order,
+  // and each cluster must still be the one its glyph stands for. If the marks were taken for one
+  // unit a line could not break between them.
+  const std::string text = std::string("\xD7\x91") + "\xEF\xBC\x81\xEF\xBC\x81\xEF\xBC\x81"
+      + "\xD7\x91";
+  {
+    Para para(font, text, GFNT_WRITING_VERTICAL_RL, GFNT_ORIENT_MIXED, GFNT_BIDI_RTL);
+    ASSERT_EQ(para.lay(px(600)), GFNT_OK);
+    const GFNT_Line & line = para.layout.lines[0];
+    const GFNT_LineRun * upright = nullptr;
+    for (size_t k = 0; k < line.run_count; ++k) {
+      if (line.runs[k].orientation == GFNT_ORIENT_RUN_UPRIGHT && line.runs[k].glyph_count == 3) {
+        upright = &line.runs[k];
+      }
+    }
+    ASSERT_NE(upright, nullptr);
+    EXPECT_EQ(upright->level, 1);
+    EXPECT_EQ(upright->glyphs[0].cluster, 8u) << "the last mark is first from the top";
+    EXPECT_EQ(upright->glyphs[1].cluster, 5u);
+    EXPECT_EQ(upright->glyphs[2].cluster, 2u);
+    EXPECT_LT(upright->glyphs[0].pen_y, upright->glyphs[1].pen_y);
+  }
+  {
+    // The minimal input the fuzzer reduced it to: five ill-formed bytes, five U+FFFD, upright and
+    // neutral, so at level 1 in a right-to-left paragraph, with a break allowed anywhere.
+    const std::string bad = "\xFF\xFF\xFF\xFF\xFF";
+    const GFNT_Face * faces[1] = {font.face};
+    GFNT_TextSpan span{};
+    span.length = bad.size();
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    GFNT_ParagraphOptions o{};
+    o.writing_mode = GFNT_WRITING_VERTICAL_LR;
+    o.text_orientation = GFNT_ORIENT_MIXED_PANGO;
+    o.direction = GFNT_BIDI_RTL;
+    o.align = GFNT_ALIGN_LEFT;
+    o.justify = GFNT_JUSTIFY_NONE;
+    o.hyphens = GFNT_HYPHENS_NONE;
+    o.line_break = GFNT_LINE_BREAK_ANYWHERE;
+    GFNT_Paragraph * p = nullptr;
+    GFNT_Layout l{};
+    ASSERT_EQ(gfnt_paragraph_create(bad.data(), bad.size(), &span, 1, &o, nullptr, &p, nullptr),
+        GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(p, px(415), &l, nullptr), GFNT_OK);
+    EXPECT_EQ(l.line_count, 2u) << "four to a column, as the room allows";
+    for (size_t i = 0; i < l.line_count; ++i) {
+      const GFNT_Line & line = l.lines[i];
+      for (size_t k = 0; k < line.run_count; ++k) {
+        for (size_t g = 0; g < line.runs[k].glyph_count; ++g) {
+          EXPECT_GE(line.runs[k].glyphs[g].cluster, line.start) << i;
+          EXPECT_LE(line.runs[k].glyphs[g].cluster, line.end) << i;
+        }
+      }
+    }
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+  }
+}
+
 TEST(LayoutVertical, ABadModeIsRefused) {
   Font font;
   const GFNT_Face * faces[1] = {font.face};

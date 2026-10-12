@@ -1700,7 +1700,13 @@ and the gap after). The same rule holds along a column. In a right-to-left parag
 left-to-right runs of mixed Latin, spaces and ideographs Chromium fills some lines short and counts
 one more opportunity on others, so it is no reference there; this library fills the line.
 
-Not yet: kashida and ruby.
+**Kashida** (elongating Arabic letters to justify a line) is not done, on purpose: the references
+do not. Chromium 154 has no `text-justify: kashida` (`CSS.supports` says so) and justifies Arabic
+by its spaces, and so does Pango 1.56 (measured: only the space glyphs of a justified Arabic line
+change width), as this library does. If a reference ever does it the rule has an oracle to be held
+to; until then a rule written here would be a second reading of nothing.
+
+Not done: ruby, which needs inline boxes this layout does not have.
 
 ### 10.7 Deliberately not here
 

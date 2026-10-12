@@ -40,8 +40,9 @@
  * ::gfnt_paragraph_layout() is the room *along* the lines, a height. A run says how its glyphs
  * sit (::GFNT_Orientation); a turned run's glyphs are drawn turned about their origin.
  *
- * **What it does not do, stated rather than approximated:** kashida justification
- * (a justified line widens its spaces and its ideograph gaps only), hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and anything that must know about a non-text box on its
+ * **What it does not do, stated rather than approximated:** kashida (a justified line
+ * widens its spaces and its ideograph gaps, which is all Chromium and Pango do to Arabic as well),
+ * hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and anything that must know about a non-text box on its
  * line. Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
  * the text is otherwise one bidirectional paragraph, so a caller with several
  * paragraphs lays out one object per paragraph.

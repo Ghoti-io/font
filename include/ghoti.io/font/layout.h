@@ -41,7 +41,7 @@
  * sit (::GFNT_Orientation); a turned run's glyphs are drawn turned about their origin.
  *
  * **What it does not do, stated rather than approximated:** kashida justification
- * (spaces only), hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and anything that must know about a non-text box on its
+ * (a justified line widens its spaces and its ideograph gaps only), hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and anything that must know about a non-text box on its
  * line. Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
  * the text is otherwise one bidirectional paragraph, so a caller with several
  * paragraphs lays out one object per paragraph.
@@ -148,12 +148,33 @@ typedef enum GFNT_Align {
   GFNT_ALIGN_RIGHT,
   GFNT_ALIGN_CENTER,
   /**
-   * Both edges: spaces on a line grow so it fills the width. A line that ends
-   * a paragraph or a newline, a truncated line, a line with no space on it and
-   * any line of an unbounded layout is aligned to the start instead.
+   * Both edges: the opportunities of ::GFNT_ParagraphOptions::justify on a line grow so it fills
+   * the room. A line that ends a paragraph or a newline, a truncated line, a line with no
+   * opportunity on it and any line of an unbounded layout is aligned to the start instead.
    */
   GFNT_ALIGN_JUSTIFY
 } GFNT_Align;
+
+/**
+ * @brief Where the slack of a justified line goes, after CSS `text-justify`.
+ *
+ * Every opportunity gets the same share. The last character of a line has none after it, and a
+ * line that ends a paragraph or a newline, a truncated line and any line of an unbounded layout
+ * are not justified.
+ */
+typedef enum GFNT_Justify {
+  /**
+   * Spaces, and the gap after every CJK ideograph, kana, bopomofo, CJK symbol or punctuation, or
+   * full- or half-width form (not Hangul, which is justified by its spaces, and not the em dash
+   * or ellipsis), and before one that follows something other than a space. A space is one
+   * opportunity, whatever stands beside it. This is what Chromium does, and for text with no
+   * ideographs it is the same as ::GFNT_JUSTIFY_INTER_WORD.
+   */
+  GFNT_JUSTIFY_AUTO = 0,
+  GFNT_JUSTIFY_INTER_WORD,       ///< Spaces only: a gap in a script written without them stays closed.
+  GFNT_JUSTIFY_INTER_CHARACTER,  ///< After every character (every cluster), spaces included.
+  GFNT_JUSTIFY_NONE              ///< Not at all: the line is set as if aligned to its start.
+} GFNT_Justify;
 
 /** @brief How eagerly a line breaks, after CSS `line-break`. */
 typedef enum GFNT_LineBreak {
@@ -244,6 +265,7 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_FontProvider font_provider; ///< Or zeroed for none.
   GFNT_Hyphens hyphens;            ///< What hyphenation is done.
   GFNT_Hyphenator hyphenator;      ///< Or zeroed for none; read only for ::GFNT_HYPHENS_AUTO.
+  GFNT_Justify justify;            ///< Where a justified line's slack goes.
   GFNT_WritingMode writing_mode;   ///< Which way lines run and stack.
   /** How characters sit in a vertical mode; ignored for ::GFNT_WRITING_HORIZONTAL_TB. */
   GFNT_TextOrientation text_orientation;

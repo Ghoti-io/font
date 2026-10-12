@@ -56,10 +56,25 @@ FONT = os.path.join(ROOT, "tests", "data", "fonts", "vertical-text.ttf")
 
 # The most a coordinate may differ, in pixels: two units of the 1/64 pixel both sides compute in.
 TOLERANCE = 0.05
+# A justified line spreads its slack over many gaps, each rounded to 1/64 pixel, and the two sides
+# round differently (Chromium may overshoot the room by a tenth of a pixel in all); the error
+# builds along the line, so a position may be off by a few of those.
+TOLERANCE_JUSTIFIED = 0.25
 
 SIZE = 50   # ascent 880 and descent 120 per 1000 are 44 and 6 pixels: whole, so nothing rounds
 
 J = "日本語"          # 日本語
+H = "\ud55c"                         # a Hangul syllable: justified by its spaces, not between characters
+JUSTIFY_TEXTS = [
+    ("cjk", J * 4),
+    ("mixed", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB\u65e5\u672c"),
+    ("latin", "AB ab AB ab AB ab AB ab AB ab AB ab"),
+    ("punct", "\u65e5\u3001\u672c\u3002\u300c\u8a9e\u300d\u65e5\u672c\u8a9e\u65e5\u672c\u8a9e\u65e5"),
+    ("dash", "\u65e5\u2014\u672c\u2026\u8a9e\u65e5\u672c\u8a9e\u65e5\u672c\u8a9e\u65e5"),
+    ("hangul", "a" + H + "a" + H + "a" + H + "a" + H + "a" + H + "a" + H + "a" + H + "a" + H + "a"),
+    ("digits", "\u65e5" "0124" "\u672c\u8a9e\u65e5\u672c\u8a9e\u65e5\u672c\u8a9e\u65e5"),
+    ("forms", "a\uff21a\uff71a\u3105a\u30fba\u3005a\uff01a\u3231a\u3400a\u337fa\u2e80a"),
+]
 CASES = [
     # name, text, mode, orientation, room (px, None = unbounded), align, direction
     ("horizontal-control", "AB ab 日 AB ab", "horizontal", "mixed", 330, "start", "ltr"),
@@ -90,6 +105,21 @@ CASES = [
     ("sideways-lr-mixed", "日AB本ab語", "sideways-lr", "mixed", 600, "start", "ltr"),
 ]
 
+for _name, _text in JUSTIFY_TEXTS:
+    for _mode, _room in (("horizontal", 330), ("vertical-rl", 330)):
+        for _j in ("auto", "inter-word", "inter-character", "none"):
+            CASES.append(("justify-%s-%s-%s" % (_name, _mode, _j), _text, _mode, "mixed", _room,
+                          "justify", "ltr", _j))
+# Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
+# 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
+# nowhere), and counts one more on others, so it is not a reference for them; this library fills
+# the line and spreads the slack over the opportunities it has. See notes/font/VERTICAL.md.
+CASES.append(("justify-rtl-cjk", J * 4, "horizontal", "mixed", 330, "justify", "rtl", "auto"))
+CASES.append(("justify-rtl-vertical", J * 4, "vertical-rl", "mixed", 330, "justify", "rtl", "auto"))
+CASES.append(("justify-lr", J * 4, "vertical-lr", "mixed", 330, "justify", "ltr", "auto"))
+CASES.append(("justify-sideways-lr", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB\u65e5\u672c",
+              "sideways-lr", "mixed", 330, "justify", "ltr", "auto"))
+
 PAGE = """<!doctype html><meta charset=utf-8>
 <style>
 @font-face { font-family: T; src: url("file://%(font)s"); }
@@ -107,6 +137,7 @@ function measure(c) {
   d.style.writingMode = c.mode === 'horizontal' ? 'horizontal-tb' : c.mode;
   d.style.textOrientation = c.orient;
   d.style.textAlign = c.align;
+  d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   if (c.room === null) {
     d.style.whiteSpace = 'pre';
@@ -147,8 +178,9 @@ Promise.all(cases.map(c => document.fonts.load(%(size)d + 'px T', c.text))).then
 def chrome_rects(cases):
     """Ask Chromium, in its pinned image, where every character of every case is."""
     os.makedirs(SCRATCH, exist_ok=True)
-    spec = [dict(name=n, text=t, mode=m, orient=o, room=r, align=a, dir=d)
-            for (n, t, m, o, r, a, d) in cases]
+    spec = [dict(name=c[0], text=c[1], mode=c[2], orient=c[3], room=c[4], align=c[5], dir=c[6],
+                 justify=c[7] if len(c) > 7 else "auto")
+            for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
         h.write(PAGE % dict(font=FONT, size=SIZE, cases=json.dumps(spec)))
@@ -166,9 +198,11 @@ def chrome_rects(cases):
 
 def ours(case):
     """This library's rectangles for one case, through the same driver the other gates use."""
-    name, text, mode, orient, room, align, direction = case
+    name, text, mode, orient, room, align, direction = case[:7]
+    justify = case[7] if len(case) > 7 else "auto"
     argv = [DRIVER, "--size", str(SIZE), "--mode", mode if mode != "horizontal" else "horizontal",
-            "--orient", orient, "--align", align, "--bidi", direction, FONT]
+            "--orient", orient, "--align", align, "--bidi", direction,
+            "--justify", justify, FONT]
     width = "u" if room is None else str(room * 64)
     request = "%s\t%s\n" % (width, text.encode("utf-8").hex())
     finished = subprocess.run(argv, input=request, capture_output=True, text=True)
@@ -181,6 +215,7 @@ def ours(case):
 def compare(case, theirs, mine, verbose):
     """The differences for one case: lines of text, empty when the case agrees."""
     name, text = case[0], case[1]
+    tolerance = TOLERANCE_JUSTIFIED if case[5] == "justify" else TOLERANCE
     problems = []
     chars = list(text)
     for i, ch in enumerate(chars):
@@ -192,7 +227,7 @@ def compare(case, theirs, mine, verbose):
             continue                       # a newline has no place in either
         if a[2] == 0 and a[3] == 0:
             continue                       # collapsed or hung to nothing
-        if all(abs(x - y) <= TOLERANCE for x, y in zip(a, b)):
+        if all(abs(x - y) <= tolerance for x, y in zip(a, b)):
             continue
         problems.append("char %d %r: chromium %s, this %s"
                         % (i, ch, [round(v, 2) for v in a], [round(v, 2) for v in b]))
@@ -221,6 +256,12 @@ INK_CASES = [
     ("ink-upright", "\u65e5AB\u672cab", "vertical-rl", "upright", 900),
     ("ink-sideways-text", "\u65e5AB\u672c", "vertical-rl", "sideways", 900),
     ("ink-horizontal", "AB\u65e5ab", "horizontal", "mixed", 900),
+    ("ink-justify-h", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB", "horizontal", "mixed",
+     1100, "justify"),
+    ("ink-justify-v", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB", "vertical-rl", "mixed",
+     1100, "justify"),
+    ("ink-justify-sideways-lr", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB",
+     "sideways-lr", "mixed", 1100, "justify"),
 ]
 
 INK_PAGE = """<!doctype html><meta charset=utf-8>
@@ -229,7 +270,8 @@ INK_PAGE = """<!doctype html><meta charset=utf-8>
 html, body { margin: 0; background: #fff }
 .t { font-family: T; font-size: %(size)dpx; line-height: normal; position: absolute;
      left: %(margin)dpx; top: %(margin)dpx; margin: 0; padding: 0; color: #000;
-     white-space: pre-wrap; writing-mode: %(mode)s; text-orientation: %(orient)s; %(room)s }
+     white-space: pre-wrap; writing-mode: %(mode)s; text-orientation: %(orient)s; %(room)s;
+     text-align: %(align)s }
 </style>
 <div class=t id=t></div>
 <script>
@@ -333,8 +375,10 @@ def predicted_ink(answer, size, upem=1000):
 
 
 def ink_case(case):
-    name, text, mode, orient, room = case
-    argv = [DRIVER, "--size", str(INK_SIZE), "--mode", mode, "--orient", orient, FONT]
+    name, text, mode, orient, room = case[:5]
+    align = case[5] if len(case) > 5 else "start"
+    argv = [DRIVER, "--size", str(INK_SIZE), "--mode", mode, "--orient", orient,
+            "--align", align, FONT]
     request = "%d\t%s\n" % (room * 64, text.encode("utf-8").hex())
     finished = subprocess.run(argv, input=request, capture_output=True, text=True)
     mine = json.loads(finished.stdout.splitlines()[0])
@@ -348,7 +392,7 @@ def ink_case(case):
     with open(page, "w", encoding="utf-8") as h:
         h.write(INK_PAGE % dict(font=FONT, size=INK_SIZE, margin=INK_MARGIN,
                                 mode="horizontal-tb" if mode == "horizontal" else mode,
-                                orient=orient, room="%s: %dpx" % (side, room),
+                                orient=orient, align=align, room="%s: %dpx" % (side, room),
                                 text=json.dumps(text)))
     argv = oracle_env.command("chrome", [
         "chromium", "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",

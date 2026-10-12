@@ -441,6 +441,112 @@ TEST(LayoutVertical, InkIsWhereTheTurnedGlyphsAre) {
   EXPECT_EQ(line.ink.x, line.runs[0].glyphs[0].pen_x);
 }
 
+/** A paragraph with a justification mode, for the tests below. */
+struct Justified {
+  GFNT_Paragraph * p = nullptr;
+  GFNT_Layout layout{};
+  const GFNT_Face * faces[1];
+
+  Justified(const Font & font, const std::string & text, GFNT_WritingMode mode, GFNT_Justify how,
+      GFNT_BidiDirection direction = GFNT_BIDI_LTR) {
+    faces[0] = font.face;
+    GFNT_TextSpan span{};
+    span.length = text.size();
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    GFNT_ParagraphOptions o{};
+    o.writing_mode = mode;
+    o.align = GFNT_ALIGN_JUSTIFY;
+    o.justify = how;
+    o.direction = direction;
+    EXPECT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o, nullptr, &p, nullptr),
+        GFNT_OK);
+  }
+  ~Justified() {
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(p);
+  }
+  Justified(const Justified &) = delete;
+  Justified & operator=(const Justified &) = delete;
+};
+
+TEST(LayoutJustifyIdeographs, AutoSpreadsTheSlackOverTheGapsBetweenIdeographs) {
+  Font font;
+  // Twelve ideographs of 100: five fit in 530, leaving 30 to share over four gaps.
+  Justified para(font, cjk(4), GFNT_WRITING_VERTICAL_RL, GFNT_JUSTIFY_AUTO);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(530), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_TRUE(line.justified);
+  ASSERT_EQ(line.runs[0].glyph_count, 5u);
+  for (size_t g = 0; g < 4; ++g) {
+    EXPECT_EQ(line.runs[0].glyphs[g].advance, px(100) + 480) << g << ": 7.5 pixels more";
+    EXPECT_EQ(line.runs[0].glyphs[g].pen_y, static_cast<GFNT_F26Dot6>(g) * (px(100) + 480)) << g;
+  }
+  EXPECT_EQ(line.runs[0].glyphs[4].advance, px(100)) << "none after the last of the line";
+  EXPECT_EQ(line.extent, px(530));
+  EXPECT_TRUE(para.layout.lines[1].justified);
+  EXPECT_FALSE(para.layout.lines[2].justified) << "and none at all on a paragraph's last line";
+}
+
+TEST(LayoutJustifyIdeographs, TheOtherModesPlaceTheSlackWhereTheirNamesSay) {
+  Font font;
+  {
+    Justified words(font, cjk(4), GFNT_WRITING_VERTICAL_RL, GFNT_JUSTIFY_INTER_WORD);
+    ASSERT_EQ(gfnt_paragraph_layout(words.p, px(530), &words.layout, nullptr), GFNT_OK);
+    EXPECT_FALSE(words.layout.lines[0].justified) << "there is no space to widen";
+  }
+  {
+    Justified none(font, "A B A B A B A B A B A B", GFNT_WRITING_HORIZONTAL_TB, GFNT_JUSTIFY_NONE);
+    ASSERT_EQ(gfnt_paragraph_layout(none.p, px(300), &none.layout, nullptr), GFNT_OK);
+    EXPECT_FALSE(none.layout.lines[0].justified);
+  }
+  {
+    // Every gap, Latin letters included: 300 holds "ABAB" at 70+65+70+65 = 270, 30 over three gaps.
+    Justified every(font, "ABAB ABAB ABAB", GFNT_WRITING_HORIZONTAL_TB,
+        GFNT_JUSTIFY_INTER_CHARACTER);
+    ASSERT_EQ(gfnt_paragraph_layout(every.p, px(300), &every.layout, nullptr), GFNT_OK);
+    const GFNT_Line & line = every.layout.lines[0];
+    EXPECT_TRUE(line.justified);
+    ASSERT_GE(line.runs[0].glyph_count, 4u);
+    EXPECT_EQ(line.runs[0].glyphs[0].advance, px(70) + px(10));
+    EXPECT_EQ(line.runs[0].glyphs[2].advance, px(70) + px(10));
+    EXPECT_EQ(line.runs[0].glyphs[3].advance, px(65)) << "the last of the line has none after it";
+  }
+}
+
+TEST(LayoutJustifyIdeographs, AGapBeforeAnIdeographFollowingLatinGoesBeforeItsGlyph) {
+  Font font;
+  // A and B turned (70 and 65), then six ideographs: five fit in 700 with 65 to spare, shared over
+  // the gap before the first and the four between them.
+  Justified para(font, std::string("AB") + cjk(2), GFNT_WRITING_VERTICAL_RL, GFNT_JUSTIFY_AUTO);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(700), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  ASSERT_TRUE(line.justified);
+  ASSERT_EQ(line.run_count, 2u);
+  const GFNT_LineRun & upright = line.runs[1];
+  ASSERT_GE(upright.glyph_count, 5u);
+  EXPECT_EQ(upright.glyphs[0].pen_y, px(135)) << "the pen is where the previous glyph ended";
+  // The glyph's origin is below the pen by the font's vertical origin (880 of 1000 = 88), and
+  // by the gap as well for the first, which has one before it.
+  EXPECT_EQ(upright.glyphs[0].y - upright.glyphs[0].pen_y, px(13) + px(88))
+      << "the glyph itself comes after the gap";
+  EXPECT_EQ(upright.glyphs[1].y - upright.glyphs[1].pen_y, px(88));
+  EXPECT_EQ(upright.glyphs[0].advance, px(13) + px(100) + px(13)) << "the gap and the one after";
+  EXPECT_EQ(line.runs[0].glyphs[0].advance, px(70)) << "A and B take none between them";
+  EXPECT_EQ(line.runs[0].glyphs[1].advance, px(65));
+}
+
+TEST(LayoutJustifyIdeographs, HangulIsNotSpreadAndNeitherAreTheDashAndEllipsis) {
+  Font font;
+  // U+D55C and U+2014 / U+2026 are ordinary letters or punctuation here: no gaps next to them.
+  const std::string hangul = "\xED\x95\x9C";
+  Justified para(font, "A" + hangul + "A" + hangul + "A" + hangul + "A" + hangul + "A" + hangul
+      + "A" + hangul, GFNT_WRITING_HORIZONTAL_TB, GFNT_JUSTIFY_AUTO);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(500), &para.layout, nullptr), GFNT_OK);
+  EXPECT_FALSE(para.layout.lines[0].justified) << "no spaces, and Hangul is no ideograph";
+}
+
 TEST(LayoutVertical, ABadModeIsRefused) {
   Font font;
   const GFNT_Face * faces[1] = {font.face};

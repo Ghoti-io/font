@@ -61,6 +61,31 @@ static bool hangs(uint32_t cp) {
   return guni_general_category(cp) == GUNI_GC_ZS;
 }
 
+/**
+ * Whether a character is one that justification opens gaps beside as it does between
+ * ideographs. The set is what Chromium 154 does, measured block by block on a font made for the
+ * purpose (css_layout_diff.py): the CJK radicals, symbols and punctuation, kana, bopomofo,
+ * enclosed and compatibility forms, the ideographs and their extensions, the vertical and
+ * small-form variants and the full- and half-width forms are in; Hangul, Yi, the katakana
+ * phonetic extensions, and every other script are not.
+ */
+static bool is_ideographic(uint32_t cp) {
+  return (cp >= 0x2E80 && cp <= 0x2FFF)
+      || (cp >= 0x3001 && cp <= 0x30FF)    // U+3000 is a space
+      || (cp >= 0x3100 && cp <= 0x312F)
+      || (cp >= 0x3190 && cp <= 0x319F)
+      || (cp >= 0x3200 && cp <= 0x4DBF)
+      || (cp >= 0x4E00 && cp <= 0x9FFF)
+      || (cp >= 0xF900 && cp <= 0xFAFF)
+      || (cp >= 0xFE10 && cp <= 0xFE1F)
+      || (cp >= 0xFE30 && cp <= 0xFE6F)
+      || (cp >= 0xFF01 && cp <= 0xFF9F)
+      || (cp >= 0xFFE0 && cp <= 0xFFEE)
+      || (cp >= 0x1B000 && cp <= 0x1B16F)
+      || (cp >= 0x1F200 && cp <= 0x1F2FF)
+      || (cp >= 0x20000 && cp <= 0x3FFFF);
+}
+
 #define PROVIDER_MAX 8
 #define ELL_GLYPHS 16
 
@@ -523,6 +548,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_AUTO
+      || (unsigned)options->justify > GFNT_JUSTIFY_NONE
       || (unsigned)options->writing_mode > GFNT_WRITING_SIDEWAYS_LR
       || (unsigned)options->text_orientation > GFNT_ORIENT_SIDEWAYS) {
     return GFNT_ERR_INVALID;
@@ -1196,6 +1222,62 @@ static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
   return r;
 }
 
+/**
+ * The justification opportunities of the units [ua, hang_from) of a line, as flags on the glyphs
+ * that take the space (bit 0: before the glyph, bit 1: after it, in the order the glyphs are
+ * placed). Returns how many there are. Only units with glyphs can hold one.
+ */
+static size_t mark_justification(const GFNT_Paragraph * p, size_t ua, size_t hang_from,
+    uint8_t * gjf) {
+  const GFNT_Justify mode = p->options.justify;
+  size_t n = 0;
+
+  if (mode == GFNT_JUSTIFY_NONE) {
+    return 0;
+  }
+  for (size_t j = ua; j < hang_from; j++) {
+    const Unit * u = &p->units[j];
+    const size_t first = u->g_lo, last = u->g_hi - 1;
+    const bool rtl = (p->runs[u->run].level & 1) != 0;
+    const bool more = j + 1 < hang_from;
+
+    if (u->g_hi <= u->g_lo || u->tab) {
+      continue;
+    }
+    if (mode == GFNT_JUSTIFY_INTER_CHARACTER) {
+      if (more) {
+        // After the unit in the text: its far edge as the glyphs are placed.
+        gjf[rtl ? first : last] |= rtl ? 1 : 2;
+        n++;
+      }
+      continue;
+    }
+    if (u->space) {
+      gjf[last] |= 2;
+      n++;
+      continue;
+    }
+    if (mode == GFNT_JUSTIFY_AUTO && more) {
+      const Unit * v = &p->units[j + 1];
+
+      if (is_ideographic(p->cps[u->cp_start])) {
+        // After an ideograph, whatever follows (a space included).
+        gjf[rtl ? first : last] |= rtl ? 1 : 2;
+        n++;
+      }
+      else if (!v->space && !v->tab && v->g_hi > v->g_lo
+          && is_ideographic(p->cps[v->cp_start])) {
+        // Before an ideograph that follows something else but a space.
+        const bool vrtl = (p->runs[v->run].level & 1) != 0;
+
+        gjf[vrtl ? v->g_hi - 1 : v->g_lo] |= vrtl ? 2 : 1;
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
 GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     GFNT_Layout * out, GFNT_Error * error) {
   const GFNT_Allocator * allocator;
@@ -1205,6 +1287,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   uint8_t * slice_levels = NULL;
   GFNT_F26Dot6 * ew = NULL;       // each unit's width in its line, tabs resolved
   GFNT_F26Dot6 * tabadv = NULL;   // a tab glyph's advance, by glyph index
+  uint8_t * gjf = NULL;           // per glyph: the justification space it takes, before and after
   bool * hyphened = NULL;         // whether each line ends at a hyphenation point
   size_t * cand_at = NULL;        // scratch for break_lines
   GFNT_F26Dot6 * cand_fit = NULL;
@@ -1233,11 +1316,12 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
   slice_levels = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, 1);
   ew = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *ew);
   tabadv = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, sizeof *tabadv);
+  gjf = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, 1);
   hyphened = allocator->calloc_fn(allocator->ctx, p->unit_count + 2, sizeof *hyphened);
   cand_at = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *cand_at);
   cand_fit = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *cand_fit);
-  if (!starts || !slices || !order || !slice_levels || !ew || !tabadv || !hyphened || !cand_at
-      || !cand_fit) {
+  if (!starts || !slices || !order || !slice_levels || !ew || !tabadv || !gjf || !hyphened
+      || !cand_at || !cand_fit) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the layout");
     goto done;
@@ -1350,18 +1434,20 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     }
     if (p->options.align == GFNT_ALIGN_JUSTIFY && bounded && !trunc_line
         && li + 1 < total_lines && ub > ua && !p->units[ub - 1].hard) {
-      size_t spaces = 0;
+      const size_t opportunities = mark_justification(p, ua, hang_from, gjf);
       GFNT_F26Dot6 slack = width - natural;
 
-      for (size_t j = ua; j < hang_from; j++) {
-        if (p->units[j].space && p->units[j].g_hi > p->units[j].g_lo) {
-          spaces++;
-        }
-      }
-      if (spaces && slack > 0) {
-        extra = slack / (GFNT_F26Dot6)spaces;
-        extra_rem = slack % (GFNT_F26Dot6)spaces;
+      if (opportunities && slack > 0) {
+        extra = slack / (GFNT_F26Dot6)opportunities;
+        extra_rem = slack % (GFNT_F26Dot6)opportunities;
         line->justified = true;
+      }
+      else {
+        for (size_t j = ua; j < hang_from; j++) {
+          for (size_t g = p->units[j].g_lo; g < p->units[j].g_hi; g++) {
+            gjf[g] = 0;
+          }
+        }
       }
     }
     // Slices: a run of units of one face and level.
@@ -1492,20 +1578,27 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
         GFNT_PlacedGlyph * pl = &placed[glyph_used++];
         GFNT_F26Dot6 adv = pg->tab && s->src == p->glyphs ? tabadv[g] : pg->advance;
 
-        if (line->justified && pg->expand && !s->hang) {
-          adv += extra + (expanded < (size_t)extra_rem ? 1 : 0);
-          expanded++;
+        GFNT_F26Dot6 lead = 0, trail = 0, org, l, t, rr, b;
+
+        if (line->justified && !s->hang && s->src == p->glyphs) {
+          // The space a justified line gives this glyph, before it and after it as placed.
+          if (gjf[g] & 1) {
+            lead = extra + (expanded < (size_t)extra_rem ? 1 : 0);
+            expanded++;
+          }
+          if (gjf[g] & 2) {
+            trail = extra + (expanded < (size_t)extra_rem ? 1 : 0);
+            expanded++;
+          }
         }
-
-        GFNT_F26Dot6 l, t, rr, b;
-
+        org = cursor + lead;
         pl->glyph = pg->glyph;
         pl->cluster = pg->cluster;
-        pl->advance = adv;
+        pl->advance = lead + adv + trail;
         if (!vertical) {
           pl->pen_x = cursor;
           pl->pen_y = line->baseline;
-          pl->x = cursor + pg->dx;
+          pl->x = org + pg->dx;
           pl->y = line->baseline - pg->dy;
           l = pl->x + pg->ix0; t = pl->y - pg->iy1;
           rr = pl->x + pg->ix1; b = pl->y - pg->iy0;
@@ -1516,7 +1609,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
           pl->pen_x = 0;
           pl->pen_y = cursor;
           pl->x = pg->dx;
-          pl->y = cursor - pg->dy;
+          pl->y = org - pg->dy;
           l = pl->x + pg->ix0; t = pl->y - pg->iy1;
           rr = pl->x + pg->ix1; b = pl->y - pg->iy0;
         }
@@ -1527,11 +1620,11 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
           pl->pen_x = -(pr->ascent - pr->descent) / 2;
           pl->pen_y = cursor;
           pl->x = pl->pen_x + pg->dy;
-          pl->y = cursor + pg->dx;
+          pl->y = org + pg->dx;
           l = pl->x + pg->iy0; t = pl->y + pg->ix0;
           rr = pl->x + pg->iy1; b = pl->y + pg->ix1;
         }
-        cursor += adv;
+        cursor += lead + adv + trail;
         if (pg->has_ink) {
 
           if (!ink_set) {
@@ -1707,6 +1800,7 @@ done:
   allocator->free_fn(allocator->ctx, slice_levels);
   allocator->free_fn(allocator->ctx, ew);
   allocator->free_fn(allocator->ctx, tabadv);
+  allocator->free_fn(allocator->ctx, gjf);
   allocator->free_fn(allocator->ctx, hyphened);
   allocator->free_fn(allocator->ctx, cand_at);
   allocator->free_fn(allocator->ctx, cand_fit);

@@ -1674,7 +1674,21 @@ as thick as the column. `make check-oracle-css` holds the layout to Chromium (th
 CSS Writing Modes): the rectangle of every character in 22 cases, and the ink of 40 glyphs read
 from a screenshot, agree to 0.05 and 1.6 pixels; a wrong orientation or direction fails both.
 
-Not yet: kashida, justification between ideographs (Chromium does it, in both axes), and ruby.
+**Justification** (`GFNT_ParagraphOptions::justify`, CSS `text-justify`): `AUTO` (the default) widens
+the spaces of a line and the gaps next to ideographs, `INTER_WORD` the spaces only, `INTER_CHARACTER`
+every gap, `NONE` nothing. `AUTO` is Chromium's rule, measured on a font made for the purpose: a space
+is one opportunity, whatever stands beside it; the gap after an ideograph, kana, bopomofo, CJK
+symbol or punctuation, or full- or half-width form is one, and so is the gap before one that follows
+something other than a space; there is none after the last character of the line; the slack is shared
+equally. Hangul, the em dash and the ellipsis are not ideographs here (as in Chromium), and the
+katakana phonetic extensions and Yi are not either. The space a gap adds goes *before* the glyph
+of the character it is attributed to when that is the character after the gap, so the placed glyph
+and the character's rectangle both include it (`PlacedGlyph::advance` is then the gap, the advance
+and the gap after). The same rule holds along a column. In a right-to-left paragraph holding
+left-to-right runs of mixed Latin, spaces and ideographs Chromium fills some lines short and counts
+one more opportunity on others, so it is no reference there; this library fills the line.
+
+Not yet: kashida and ruby.
 
 ### 10.7 Deliberately not here
 

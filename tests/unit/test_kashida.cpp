@@ -193,13 +193,15 @@ struct Para {
   GFNT_Result created = GFNT_ERR_INTERNAL;
 
   Para(const Font & font, const std::string & text, GFNT_Justify how, GFNT_F16Dot16 space_share = 0,
-      GFNT_BidiDirection direction = GFNT_BIDI_RTL, bool justify_last = false) {
+      GFNT_BidiDirection direction = GFNT_BIDI_RTL, bool justify_last = false,
+      GFNT_F26Dot6 letter_spacing = 0) {
     faces[0] = font.face;
     GFNT_TextSpan span{};
     span.length = text.size();
     span.style.faces = faces;
     span.style.face_count = 1;
     span.style.size = px(100);
+    span.style.letter_spacing = letter_spacing;
     GFNT_ParagraphOptions o{};
     o.align = GFNT_ALIGN_JUSTIFY;
     o.justify = how;
@@ -310,6 +312,27 @@ TEST(KashidaLayout, TheSpacesTakeTheSlackWhenTheStrokesTakeNone) {
       EXPECT_EQ(line.runs[r].glyphs[g].x, words.layout.lines[0].runs[r].glyphs[g].x);
     }
   }
+}
+
+TEST(KashidaLayout, LetterSpacingBelongsToTheLettersAndNotToTheStrokes) {
+  Font font;
+  Para para(font, kText, GFNT_JUSTIFY_KASHIDA, 0, GFNT_BIDI_RTL, false, px(2));
+  ASSERT_EQ(para.created, GFNT_OK);
+  // Line one is 9 letters of 36, a space of 32 and the hanging one: 356 of 420, 64 to give. Each
+  // word's share is 32: one tatweel of 24 (a stroke is not a character of the text, so it takes
+  // no spacing) and 8 over, which the space takes.
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, px(420), &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(line.extent, px(420));
+  EXPECT_EQ(count_glyph(line, kTatweel), 2u);
+  for (size_t r = 0; r < line.run_count; ++r) {
+    for (size_t g = 0; g < line.runs[r].glyph_count; ++g) {
+      if (line.runs[r].glyphs[g].glyph == kTatweel) {
+        EXPECT_EQ(line.runs[r].glyphs[g].advance, px(24)) << "a stroke takes no spacing";
+      }
+    }
+  }
+  EXPECT_EQ(space_advance(line), px(32 + 16));
 }
 
 TEST(KashidaLayout, TheSlackIsSharedByTheRatio) {

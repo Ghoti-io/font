@@ -273,6 +273,9 @@ int main(int argc, char ** argv) {
           : strcmp(v, "kashida") == 0 ? GFNT_JUSTIFY_KASHIDA
           : strcmp(v, "none") == 0 ? GFNT_JUSTIFY_NONE : GFNT_JUSTIFY_AUTO;
     }
+    else if (strcmp(argv[a], "--justify-last") == 0) {
+      options.justify_last = true;
+    }
     else if (strcmp(argv[a], "--space-share") == 0 && a + 1 < argc) {
       options.space_share = (GFNT_F16Dot16)(atof(argv[++a]) * 65536.0 + 0.5);
     }

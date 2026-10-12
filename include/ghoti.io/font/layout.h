@@ -186,15 +186,20 @@ typedef enum GFNT_Justify {
   GFNT_JUSTIFY_INTER_WORD,       ///< Spaces only: a gap in a script written without them stays closed.
   GFNT_JUSTIFY_INTER_CHARACTER,  ///< After every character (every cluster), spaces included.
   /**
-   * Arabic-script words are lengthened inside, by a tatweel (U+0640) drawn where the word is
+   * Arabic-script words are lengthened inside, by whole tatweels (U+0640) drawn where the word is
    * stretched, and the rest of the slack goes to the spaces. One place per word is chosen by the
    * connection-priority scheme of Internet Explorer 6 (an author's own tatweel, after a seen or
    * sad, before a final letter by class, ...), from Unicode's joining data; ligatures a font
-   * must draw whole (lam-alef) are never pulled apart. The place is where the font drew the two
-   * letters as separate glyphs, so a pair it ligates is skipped, and so is a face that has no
-   * tatweel. How the slack is divided is ::GFNT_ParagraphOptions::space_share. Horizontal text
+   * must draw whole (lam-alef) are never pulled apart. The word is reshaped with the tatweels in
+   * it, so the glyphs are the ones the font makes of the longer word (Amiri's own long tatweel
+   * glyphs, and the letters' forms beside them), and the paragraph's glyphs for those letters are
+   * replaced. A face with no tatweel, a pair the font ligates and a place whose letters cannot
+   * be reproduced fall to the next best place. A stroke is whole tatweels, so a word with room
+   * for less than one is left to the spaces and a line with no spaces may fall short by less
+   * than one. How the slack is divided is ::GFNT_ParagraphOptions::space_share. Horizontal text
    * only; a vertical paragraph is justified as by ::GFNT_JUSTIFY_INTER_WORD. Chromium's patch for
-   * `text-justify: kashida` is the model.
+   * `text-justify: kashida` is the model, and `make check-oracle-kashida` holds this to its
+   * published screenshots.
    */
   GFNT_JUSTIFY_KASHIDA,
   GFNT_JUSTIFY_NONE              ///< Not at all: the line is set as if aligned to its start.
@@ -305,6 +310,11 @@ typedef struct GFNT_ParagraphOptions {
    * and what the spaces cannot take (none on the line) to the strokes.
    */
   GFNT_F16Dot16 space_share;
+  /**
+   * Justify the last line of the paragraph, and a line that ends at a newline, as the others
+   * (CSS `text-align-last: justify`). Only with ::GFNT_ALIGN_JUSTIFY.
+   */
+  bool justify_last;
   GFNT_WritingMode writing_mode;   ///< Which way lines run and stack.
   /** How characters sit in a vertical mode; ignored for ::GFNT_WRITING_HORIZONTAL_TB. */
   GFNT_TextOrientation text_orientation;

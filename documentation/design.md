@@ -1711,21 +1711,27 @@ reh or yeh; and last, before any medial letter. "Final" is last in a joined grou
 word. Ties go to the place nearest the word's end; a lam-alef and the lam-lam-heh of Allah are
 never cut.
 
-The stroke is drawn as copies of the font's own tatweel, shaped in context. The paragraph probes
-each candidate by shaping the letters around it with and without a tatweel: the tatweel must
-add one glyph and change none, and the neighbours must be the glyphs the paragraph has, so
-adding the glyph is what shaping the longer word would have drawn. A pair the font draws as one
-glyph, a face with no tatweel, and a place that fails the probe fall to the next best place, and
-a word with none is left to its spaces. (The patch reshapes the longer word; this library does not
-reshape, so a font whose contextual rules would alter a neighbour is skipped, not followed.) A
-line's slack is divided by `space_share`: that part to the spaces, the rest equally to the words that
-have a place, each stroke drawn with as many tatweels as it takes (at most 32) shortened to fit,
-a flat stroke hiding the overlap, and a stroke is at most two ems long (a choice, not a measure).
-What the strokes cannot take falls to the spaces and what the spaces cannot take to the strokes.
-A stroke's glyphs carry the cluster of the letter they extend, so hit testing and carets land on
-it. Not done: vertical text (set as inter-word), a face the shaper proves cannot take a tatweel
-(Nastaliq; the probe skips what it can see), line breaks chosen with the stretch in mind, and the
-font's own `JSTF` preferences, which the patch does not read either.
+The word is reshaped, locally, as the patch does. A place is a candidate if shaping the units
+of the word around it (the whole word, or eight units either side) with a tatweel in it and
+without gives, without, the paragraph's own glyphs and, with, a tatweel the face has and some
+growth. When a line is justified each place on it is shaped with as many tatweels as fit
+(Amiri draws a run of up to seven as one longer glyph and longer ones as a flat glyph of its
+own, so one probed glyph repeated would be wrong, and the letters beside the stroke take the
+forms the font gives them there: a jeem before an alef is not the jeem before a tatweel), and
+those glyphs replace the paragraph's for the units they cover. A face with no tatweel, a place
+inside a ligature the font makes of two letters, and a place whose units the probe cannot
+reproduce fall to the next best place; a word with none is left to its spaces. A line's slack is
+divided by `space_share`: that part to the spaces, the rest equally to the words that have a
+place, each stroke as many whole tatweels as fit (at most 128, never shortened: a flat stroke
+would hide the overlap, Amiri's does not) with what a word cannot use carried to the next, and
+whatever the strokes cannot take left to the spaces; if the line has none it falls short by less
+than a tatweel, as the patch's own screenshots do. A stroke's glyphs carry the cluster of the
+letter before them, so hit testing and carets land on it. Not done: vertical text (set as
+inter-word), a face the shaper proves cannot take a tatweel (Nastaliq; the probe skips what it
+can see), line breaks chosen with the stretch in mind, and the font's own `JSTF` preferences,
+which the patch does not read either. `make check-oracle-kashida` holds all this to the
+screenshots of the patch's published page (23 words and phrases in Amiri, and the three
+`text-kashida-space` settings), which agree to within one tatweel at every stroke.
 
 Not done: ruby, which needs inline boxes this layout does not have.
 

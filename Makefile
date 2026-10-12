@@ -700,7 +700,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-pango check-oracle-orientation check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-pango check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -1188,6 +1188,13 @@ check-oracle-pango: $(EXAMPLES)
 check-oracle-orientation: ## Set every BMP character as Pango does in vertical text (GFNT_ORIENT_MIXED_PANGO)
 check-oracle-orientation: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools,pango -- python3 $(ORACLE)/orientation_survey.py --pango
+
+# Not in check-oracle: its oracle is a set of screenshots of an unmerged Chromium patch, fetched
+# over the network by `tools/oracle/kashida_compare.py --fetch` (pinned by the hash of the font
+# they were made with), and read with the host's numpy and Pillow, not from a pinned image.
+check-oracle-kashida: ## Hold kashida justification to the screenshots of the Chromium patch (after --fetch)
+check-oracle-kashida: $(EXAMPLES)
+	@python3 $(ORACLE)/kashida_compare.py
 
 check-oracle-color: ## Read every CPAL palette and COLR layer of the color fixtures and diff against fontTools
 check-oracle-color: $(EXAMPLES)

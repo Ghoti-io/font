@@ -105,16 +105,23 @@ bool gfnt_kashida_point(const uint32_t * cp, size_t n, size_t * before,
     letters[count].group = guni_joining_group(cp[i]);
     count++;
   }
-  // An author's own tatweel wins outright; several in a row are one stroke, and
-  // the stretch goes in front of it. The last such stroke is the one nearest the
-  // end of the word.
-  for (i = 0; i < count; i++) {
-    bool stroke = cp[letters[i].at] == TATWEEL;
-    bool first = i == 0 || cp[letters[i - 1].at] != TATWEEL;
-    if (stroke && first && i > 0 && joins_forward(&letters[i - 1])
-        && (!allowed || allowed(ctx, letters[i].at))) {
-      best = GFNT_KASHIDA_AUTHOR;
-      best_at = letters[i].at;
+  // An author's own tatweel wins outright; several in a row are one stroke, and the stretch
+  // extends it: it goes in front of the letter after it (or, at the end of a word, in front of
+  // the stroke). The last such stroke is the one nearest the end of the word.
+  for (i = 1; i < count; i++) {
+    if (cp[letters[i].at] == TATWEEL && cp[letters[i - 1].at] != TATWEEL
+        && joins_forward(&letters[i - 1])) {
+      size_t after = i;
+      size_t where;
+
+      while (after < count && cp[letters[after].at] == TATWEEL) {
+        after++;
+      }
+      where = after < count ? letters[after].at : letters[i].at;
+      if (!allowed || allowed(ctx, where)) {
+        best = GFNT_KASHIDA_AUTHOR;
+        best_at = where;
+      }
     }
   }
   for (i = 1; i < count; i++) {

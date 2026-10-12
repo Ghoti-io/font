@@ -65,14 +65,19 @@ typedef struct {
   uint32_t kashida;            // 1 + the kashida point in the gap after this unit, or 0
 } Unit;
 
-/** Where a word can be stretched: the tatweel it is stretched with, as shaped in context. */
+/** Where a word can be stretched: the units it is shaped as, and what a tatweel there measures. */
 typedef struct {
-  PGlyph tw;                   // advance and ink of one tatweel
-  GFNT_F26Dot6 cap;            // the most the stroke may grow to
+  size_t unit;                 // the unit after the place (the stroke goes before it)
+  size_t win_lo, win_hi;       // the units shaped with the tatweels
+  size_t lo, hi;               // the units whose glyphs the stroke replaces
+  GFNT_F26Dot6 adv1;           // the advance of one tatweel, to guess how many fit
 } KPoint;
 
-/** The most tatweels one stretch is drawn with. */
-#define KASHIDA_COPIES_MAX 32
+/** The most tatweels in a stroke, how far (in units) either way the probe looks, and the most
+ * code points it shapes. */
+#define KASHIDA_COPIES_MAX 128
+#define KASHIDA_REACH 8
+#define KASHIDA_PROBE 256
 
 struct GFNT_Paragraph {
   const GFNT_Allocator * allocator;
@@ -100,6 +105,7 @@ struct GFNT_Paragraph {
   size_t hyphen_glyphs;        // the most glyphs any span's hyphen shapes to
   KPoint * kpoints;            // for ::GFNT_JUSTIFY_KASHIDA
   size_t kcount;
+  GFNT_F26Dot6 kmin_adv;       // the shortest tatweel among the points
   PRun fallback_metrics;       // the first span's first face, for an empty text
 };
 

@@ -27,7 +27,8 @@
  *            [--bidi ltr|rtl|auto] [--margin PX] [--guides]
  *            [--mode horizontal|vertical-rl|vertical-lr|sideways-rl|sideways-lr]
  *            [--orient mixed|mixed-pango|upright|sideways]
- *            [--justify auto|inter-word|inter-character|none] <font> <out.pgm> <text>
+ *            [--justify auto|inter-word|inter-character|kashida|none] [--space-share 0..1]
+ *            [--justify-last] [--fallback <font>] <font> <out.pgm> <text>
  *
  * One face, one size, black ink on white as a binary PGM. The lines come from
  * gfnt_paragraph_layout(): where they break, where each glyph sits, and for a
@@ -57,7 +58,10 @@ int main(int argc, char ** argv) {
   GFNT_Blob * blob = NULL;
   GFNT_Face * face = NULL;
   GFNT_Error error;
-  const GFNT_Face * faces[1];
+  const GFNT_Face * faces[2];
+  const char * fallback = NULL;
+  GFNT_Blob * fallback_blob = NULL;
+  GFNT_Face * fallback_face = NULL;
   GFNT_TextSpan span;
   GFNT_Paragraph * paragraph = NULL;
   GFNT_Layout layout;
@@ -103,6 +107,10 @@ int main(int argc, char ** argv) {
           : !strcmp(v, "kashida") ? GFNT_JUSTIFY_KASHIDA
           : !strcmp(v, "none") ? GFNT_JUSTIFY_NONE : GFNT_JUSTIFY_AUTO;
     }
+    else if (!strcmp(argv[a], "--fallback") && a + 1 < argc) fallback = argv[++a];
+    else if (!strcmp(argv[a], "--justify-last")) {
+      options.justify_last = true;
+    }
     else if (!strcmp(argv[a], "--space-share") && a + 1 < argc) {
       options.space_share = (GFNT_F16Dot16)(atof(argv[++a]) * 65536.0 + 0.5);
     }
@@ -128,10 +136,18 @@ int main(int argc, char ** argv) {
     return 1;
   }
   faces[0] = face;
+  if (fallback) {
+    if (gfnt_blob_create_file(fallback, NULL, NULL, &fallback_blob, &error) != GFNT_OK
+        || gfnt_face_load(fallback_blob, 0, NULL, NULL, &fallback_face, &error) != GFNT_OK) {
+      gfnt_error_dump(&error, stderr);
+      return 1;
+    }
+    faces[1] = fallback_face;
+  }
   memset(&span, 0, sizeof span);
   span.length = strlen(text);
   span.style.faces = faces;
-  span.style.face_count = 1;
+  span.style.face_count = fallback ? 2 : 1;
   span.style.size = (GFNT_F26Dot6)(size * 64);
   if (gfnt_paragraph_create(text, span.length, &span, 1, &options, NULL, &paragraph,
           &error) != GFNT_OK
@@ -230,5 +246,7 @@ int main(int argc, char ** argv) {
   gfnt_paragraph_free(paragraph);
   gfnt_face_free(face);
   gfnt_blob_destroy(blob);
+  gfnt_face_free(fallback_face);
+  gfnt_blob_destroy(fallback_blob);
   return 0;
 }

@@ -285,6 +285,7 @@
 #define gfnt_fontset_serialize GHOTIIO_FONT(gfnt_fontset_serialize)
 #define gfnt_fontset_deserialize GHOTIIO_FONT(gfnt_fontset_deserialize)
 #define GFNT_FontAxisRange GHOTIIO_FONT(GFNT_FontAxisRange)
+#define GFNT_FontInstance GHOTIIO_FONT(GFNT_FontInstance)
 #define GFNT_FontQuery GHOTIIO_FONT(GFNT_FontQuery)
 #define GFNT_FontMatch GHOTIIO_FONT(GFNT_FontMatch)
 #define gfnt_fontquery_init GHOTIIO_FONT(gfnt_fontquery_init)

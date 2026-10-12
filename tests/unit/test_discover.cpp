@@ -1144,9 +1144,70 @@ void expect_same_record(const GFNT_FontRecord * a, const GFNT_FontRecord * b) {
   }
   EXPECT_EQ(a->file_size, b->file_size);
   EXPECT_EQ(a->file_mtime_ns, b->file_mtime_ns);
+  ASSERT_EQ(a->instance_count, b->instance_count);
+  for (size_t i = 0; i < a->instance_count; ++i) {
+    const GFNT_FontInstance & x = a->instances[i];
+    const GFNT_FontInstance & y = b->instances[i];
+    EXPECT_STREQ(x.style, y.style);
+    EXPECT_STREQ(x.full_name, y.full_name);
+    EXPECT_STREQ(x.postscript_name, y.postscript_name);
+    EXPECT_EQ(x.wght, y.wght);
+    EXPECT_EQ(x.wdth, y.wdth);
+    EXPECT_EQ(x.slnt, y.slnt);
+    EXPECT_EQ(x.ital, y.ital);
+    EXPECT_EQ(x.is_default, y.is_default);
+  }
 }
 
 }  // namespace
+
+TEST(DiscoverInstances, AVariableFaceListsItsNamedInstancesAndAStaticFaceNone) {
+  TempTree tree;
+  ASSERT_TRUE(keep_tree(tree));
+  Set held;
+  ASSERT_EQ(scan_one(tree.path(), nullptr, 0, &held.set, nullptr), GFNT_OK);
+  const GFNT_FontRecord * variable = nullptr;
+  size_t with_instances = 0;
+  for (size_t i = 0; i < gfnt_fontset_count(held.set); ++i) {
+    const GFNT_FontRecord * r = gfnt_fontset_at(held.set, i);
+    if (r->wght_axis.present) {
+      variable = r;
+    }
+    if (r->instance_count) {
+      ++with_instances;
+      EXPECT_NE(r->instances, nullptr);
+    } else {
+      EXPECT_EQ(r->instances, nullptr);
+    }
+  }
+  EXPECT_EQ(with_instances, 1u) << "only the variable face has instances";
+  ASSERT_NE(variable, nullptr);
+  ASSERT_EQ(variable->instance_count, 3u);
+  const GFNT_FontInstance * in = variable->instances;
+  const std::string family = variable->family;
+  // fvar order. Light is off the default and has no PostScript name of its own.
+  EXPECT_STREQ(in[0].style, "Light");
+  EXPECT_EQ(in[0].wght, 300 * 65536);
+  EXPECT_EQ(in[0].wdth, 100 * 65536);
+  EXPECT_FALSE(in[0].is_default);
+  EXPECT_EQ(std::string(in[0].full_name), family + " Light");
+  // Regular sits on the default of both axes, and fvar names its PostScript name.
+  EXPECT_STREQ(in[1].style, "Regular");
+  EXPECT_TRUE(in[1].is_default);
+  EXPECT_STREQ(in[1].postscript_name, "VariableGvar-Regular");
+  // Bold Condensed moves both axes; the recommended PostScript name lists each, in fvar order.
+  EXPECT_STREQ(in[2].style, "Bold Condensed");
+  EXPECT_EQ(in[2].wght, 700 * 65536);
+  EXPECT_EQ(in[2].wdth, 75 * 65536);
+  std::string prefix;
+  for (char c : family) {
+    if (c != ' ') {
+      prefix += c;
+    }
+  }
+  EXPECT_EQ(std::string(in[0].postscript_name), prefix + "_300wght");
+  EXPECT_EQ(std::string(in[2].postscript_name), prefix + "_700wght_75wdth");
+}
 
 TEST(DiscoverKeep, ASetComesBackWithEveryFieldOfEveryRecordAndAlias) {
   TempTree tree;

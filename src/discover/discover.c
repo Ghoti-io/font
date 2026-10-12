@@ -105,6 +105,10 @@ static char * discover_dup_str(const GFNT_Allocator * allocator,
   return discover_dup(allocator, text, strlen(text));
 }
 
+static void * discover_alloc(const GFNT_Allocator * allocator, size_t bytes) {
+  return allocator->malloc_fn(allocator->ctx, bytes);
+}
+
 static void discover_free(const GFNT_Allocator * allocator, void * ptr) {
   allocator->free_fn(allocator->ctx, ptr);
 }
@@ -760,6 +764,209 @@ static void discover_read_axes(const GFNT_Face * face, GFNT_FontRecord * rec) {
   }
 }
 
+
+static void discover_free_instances(const GFNT_Allocator * allocator, GFNT_FontRecord * rec) {
+  size_t i;
+
+  for (i = 0; i < rec->instance_count; i++) {
+    discover_free(allocator, (void *)rec->instances[i].style);
+    discover_free(allocator, (void *)rec->instances[i].full_name);
+    discover_free(allocator, (void *)rec->instances[i].postscript_name);
+  }
+  discover_free(allocator, (void *)rec->instances);
+  rec->instances = NULL;
+  rec->instance_count = 0;
+}
+
+/** Appends @p value as a decimal (whole when it is, else to two places) to @p out. */
+static size_t discover_put_axis_value(char * out, GFNT_F16Dot16 value) {
+  int64_t v = (int64_t)value;
+  int64_t whole;
+  int64_t frac;
+  size_t n = 0;
+  char digits[24];
+  size_t d = 0;
+
+  if (v < 0) {
+    out[n++] = '-';
+    v = -v;
+  }
+  whole = v >> 16;
+  frac = ((v & 0xFFFF) * 100 + 0x8000) >> 16;
+  if (frac == 100) {
+    whole++;
+    frac = 0;
+  }
+  do {
+    digits[d++] = (char)('0' + whole % 10);
+    whole /= 10;
+  } while (whole);
+  while (d) {
+    out[n++] = digits[--d];
+  }
+  if (frac) {
+    out[n++] = '.';
+    out[n++] = (char)('0' + frac / 10);
+    if (frac % 10) {
+      out[n++] = (char)('0' + frac % 10);
+    }
+  }
+  return n;
+}
+
+/**
+ * The named instances of a variable face. A name that cannot be read leaves the style empty; a
+ * face whose axes or instances cannot be read has none (the face itself is still listed).
+ */
+static GFNT_Result discover_read_instances(const GFNT_Allocator * allocator,
+    const GFNT_Face * face, const char * family, GFNT_FontRecord * rec, GFNT_Error * error) {
+  size_t axes = 0;
+  size_t count = 0;
+  size_t i;
+  size_t k;
+  char * prefix = NULL;
+  bool found = false;
+  GFNT_Result result;
+  GFNT_FontInstance * list;
+
+  if (gfnt_face_axis_count(face, &axes, NULL) != GFNT_OK || axes == 0
+      || gfnt_face_instance_count(face, &count, NULL) != GFNT_OK || count == 0) {
+    return GFNT_OK;
+  }
+  result = discover_copy_name(face, 25, allocator, &prefix, &found, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (!prefix || !prefix[0]) {
+    size_t len = strlen(family);
+    size_t o = 0;
+
+    discover_free(allocator, prefix);
+    prefix = discover_dup(allocator, family, len);
+    if (!prefix) {
+      return GFNT_ERR_OOM;
+    }
+    for (i = 0; i < len; i++) {
+      if (prefix[i] != ' ') {
+        prefix[o++] = prefix[i];
+      }
+    }
+    prefix[o] = '\0';
+  }
+  list = discover_alloc(allocator, count * sizeof *list);
+  if (!list) {
+    discover_free(allocator, prefix);
+    return GFNT_ERR_OOM;
+  }
+  memset(list, 0, count * sizeof *list);
+  rec->instances = list;
+  for (i = 0; i < count; i++) {
+    GFNT_NamedInstance in;
+    GFNT_FontInstance * out = &list[i];
+    char * style = NULL;
+    char * full = NULL;
+    char * ps = NULL;
+    size_t fl = strlen(family);
+
+    if (gfnt_face_instance_at(face, i, &in, NULL) != GFNT_OK) {
+      break;
+    }
+    result = discover_copy_name(face, in.name_id, allocator, &style, &found, error);
+    if (result != GFNT_OK) {
+      goto fail;
+    }
+    if (!style) {
+      style = discover_dup(allocator, "", 0);
+    }
+    if (!style) {
+      result = GFNT_ERR_OOM;
+      goto fail;
+    }
+    out->style = style;
+    out->is_default = true;
+    // A postScriptNameID that names nothing falls through to the recommended spelling.
+    if (in.postscript_name_id != GFNT_INSTANCE_NO_POSTSCRIPT_NAME) {
+      result = discover_copy_name(face, in.postscript_name_id, allocator, &ps, &found, error);
+      if (result != GFNT_OK) {
+        goto fail;
+      }
+      if (ps && !ps[0]) {
+        discover_free(allocator, ps);
+        ps = NULL;
+      }
+    }
+    for (k = 0; k < axes && k < in.coordinate_count; k++) {
+      GFNT_Axis axis;
+
+      if (gfnt_face_axis_at(face, k, &axis, NULL) != GFNT_OK) {
+        continue;
+      }
+      if (in.coordinates[k] != axis.def) {
+        out->is_default = false;
+      }
+      if (axis.tag == GFNT_TAG('w', 'g', 'h', 't')) {
+        out->wght = in.coordinates[k];
+      } else if (axis.tag == GFNT_TAG('w', 'd', 't', 'h')) {
+        out->wdth = in.coordinates[k];
+      } else if (axis.tag == GFNT_TAG('s', 'l', 'n', 't')) {
+        out->slnt = in.coordinates[k];
+      } else if (axis.tag == GFNT_TAG('i', 't', 'a', 'l')) {
+        out->ital = in.coordinates[k];
+      }
+    }
+    if (!ps) {
+      // `Prefix_100wght`: every axis that is off its default, in `fvar` order.
+      size_t cap = strlen(prefix) + axes * 32 + 1;
+      size_t n;
+
+      ps = discover_alloc(allocator, cap);
+      if (!ps) {
+        result = GFNT_ERR_OOM;
+        goto fail;
+      }
+      n = strlen(prefix);
+      memcpy(ps, prefix, n);
+      for (k = 0; k < axes && k < in.coordinate_count; k++) {
+        GFNT_Axis axis;
+
+        if (gfnt_face_axis_at(face, k, &axis, NULL) != GFNT_OK
+            || in.coordinates[k] == axis.def) {
+          continue;
+        }
+        ps[n++] = '_';
+        n += discover_put_axis_value(ps + n, in.coordinates[k]);
+        ps[n++] = (char)(axis.tag >> 24);
+        ps[n++] = (char)(axis.tag >> 16);
+        ps[n++] = (char)(axis.tag >> 8);
+        ps[n++] = (char)axis.tag;
+      }
+      ps[n] = '\0';
+    }
+    out->postscript_name = ps;
+    full = discover_alloc(allocator, fl + 1 + strlen(style) + 1);
+    if (!full) {
+      result = GFNT_ERR_OOM;
+      goto fail;
+    }
+    memcpy(full, family, fl);
+    full[fl] = ' ';
+    strcpy(full + fl + 1, style);
+    out->full_name = full;
+    rec->instance_count = i + 1;
+    continue;
+fail:
+    out->style = style;
+    out->postscript_name = ps;
+    rec->instance_count = i + 1;
+    discover_free(allocator, full);
+    discover_free(allocator, prefix);
+    discover_free_instances(allocator, rec);
+    return result;
+  }
+  discover_free(allocator, prefix);
+  return GFNT_OK;
+}
+
 static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
     GFNT_Face * face, GFNT_Error * error) {
   DiscoverFace built;
@@ -904,9 +1111,20 @@ static GFNT_Result discover_fill_face(GFNT_FontSet * set, const char * path,
   built.rec.full_name = full;
   built.rec.postscript_name = postscript;
 
+  result = discover_read_instances(set->allocator, face, family, &built.rec, error);
+  if (result != GFNT_OK) {
+    discover_free(set->allocator, full);
+    discover_free(set->allocator, postscript);
+    discover_free(set->allocator, path_copy);
+    discover_free(set->allocator, family);
+    discover_free(set->allocator, legacy);
+    discover_free(set->allocator, style);
+    return result;
+  }
   grown = discover_grow(set->allocator, set->faces, &set->face_cap,
       set->face_count, sizeof *grown);
   if (!grown) {
+    discover_free_instances(set->allocator, &built.rec);
     discover_free(set->allocator, full);
     discover_free(set->allocator, postscript);
     discover_free(set->allocator, path_copy);
@@ -1435,7 +1653,7 @@ GFNT_Result gfnt_fontset_record_current(const GFNT_FontRecord * record, bool * o
   return GFNT_OK;
 }
 
-#define SET_MAGIC "GFNTSET2"
+#define SET_MAGIC "GFNTSET3"
 
 typedef struct SetWriter {
   uint8_t * out;
@@ -1518,6 +1736,19 @@ GFNT_Result gfnt_fontset_serialize(const GFNT_FontSet * set, uint8_t * out, size
     }
     sw_u(&w, r->file_size, 8);
     sw_u(&w, (uint64_t)r->file_mtime_ns, 8);
+    sw_u(&w, r->instance_count, 4);
+    for (k = 0; k < r->instance_count; k++) {
+      const GFNT_FontInstance * in = &r->instances[k];
+
+      sw_str(&w, in->style);
+      sw_str(&w, in->full_name);
+      sw_str(&w, in->postscript_name);
+      sw_u(&w, (uint32_t)in->wght, 4);
+      sw_u(&w, (uint32_t)in->wdth, 4);
+      sw_u(&w, (uint32_t)in->slnt, 4);
+      sw_u(&w, (uint32_t)in->ital, 4);
+      sw_u(&w, in->is_default ? 1 : 0, 1);
+    }
   }
   for (i = 0; i < set->alias_count; i++) {
     sw_str(&w, set->aliases[i].name);
@@ -1670,6 +1901,43 @@ GFNT_Result gfnt_fontset_deserialize(const uint8_t * data, size_t length,
     }
     f.rec.file_size = sr_u(&r, 8);
     f.rec.file_mtime_ns = (int64_t)sr_u(&r, 8);
+    {
+      // An instance takes at least three string lengths, four coordinates and a flag.
+      const uint64_t count = sr_u(&r, 4);
+
+      if (!r.bad && count > (r.n - r.at) / 29) {
+        r.bad = true;
+      }
+      if (!r.bad && count) {
+        GFNT_FontInstance * list = discover_alloc(allocator, (size_t)count * sizeof *list);
+        uint64_t k2;
+
+        if (!list) {
+          oom = true;
+        } else {
+          memset(list, 0, (size_t)count * sizeof *list);
+          f.rec.instances = list;
+          for (k2 = 0; k2 < count && !r.bad && !oom; k2++) {
+            list[k2].style = sr_str(&r, allocator, &oom);
+            list[k2].full_name = oom ? NULL : sr_str(&r, allocator, &oom);
+            list[k2].postscript_name = oom ? NULL : sr_str(&r, allocator, &oom);
+            list[k2].wght = (GFNT_F16Dot16)(int32_t)(uint32_t)sr_u(&r, 4);
+            list[k2].wdth = (GFNT_F16Dot16)(int32_t)(uint32_t)sr_u(&r, 4);
+            list[k2].slnt = (GFNT_F16Dot16)(int32_t)(uint32_t)sr_u(&r, 4);
+            list[k2].ital = (GFNT_F16Dot16)(int32_t)(uint32_t)sr_u(&r, 4);
+            {
+              const uint64_t flag = sr_u(&r, 1);
+
+              if (flag > 1) {
+                r.bad = true;
+              }
+              list[k2].is_default = flag == 1;
+            }
+            f.rec.instance_count = (size_t)k2 + 1;
+          }
+        }
+      }
+    }
     if (r.bad || oom || !f.rec.path || !f.rec.family || !f.rec.style
         || !f.rec.full_name || !f.rec.postscript_name) {
       discover_free(allocator, (void *)f.rec.path);
@@ -1678,6 +1946,7 @@ GFNT_Result gfnt_fontset_deserialize(const uint8_t * data, size_t length,
       discover_free(allocator, (void *)f.rec.full_name);
       discover_free(allocator, (void *)f.rec.postscript_name);
       discover_free(allocator, (void *)f.rec.legacy_family);
+      discover_free_instances(allocator, &f.rec);
       break;
     }
     grown = discover_grow(allocator, set->faces, &set->face_cap, set->face_count, sizeof *grown);
@@ -1689,6 +1958,7 @@ GFNT_Result gfnt_fontset_deserialize(const uint8_t * data, size_t length,
       discover_free(allocator, (void *)f.rec.full_name);
       discover_free(allocator, (void *)f.rec.postscript_name);
       discover_free(allocator, (void *)f.rec.legacy_family);
+      discover_free_instances(allocator, &f.rec);
       break;
     }
     set->faces = grown;
@@ -1743,6 +2013,7 @@ void gfnt_fontset_free(GFNT_FontSet * set) {
     discover_free(allocator, (void *)set->faces[i].rec.style);
     discover_free(allocator, (void *)set->faces[i].rec.full_name);
     discover_free(allocator, (void *)set->faces[i].rec.postscript_name);
+    discover_free_instances(allocator, &set->faces[i].rec);
   }
   discover_free(allocator, set->faces);
   for (i = 0; i < set->alias_count; i++) {

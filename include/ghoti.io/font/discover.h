@@ -120,6 +120,28 @@ typedef struct GFNT_FontAxisRange {
 } GFNT_FontAxisRange;
 
 /**
+ * @brief One named instance of a variable face: a point in its design space with a name.
+ *
+ * `fvar` lists them (Regular, Bold, ExtraLight Italic). `wght`, `wdth`, `slnt` and `ital` are the
+ * instance's coordinates on the record's axis of that name, in the axis's own units; where the
+ * record has no such axis (`present` false) the value is zero and means nothing. Strings are
+ * owned by the set. `full_name` is the family and the style, as fontconfig composes it, and
+ * `postscript_name` is the instance's own when `fvar` gives one, else the one the OpenType
+ * variations specification recommends: name ID 25 or the family without spaces, then
+ * `_<value><tag>` for each axis that is off its default.
+ */
+typedef struct GFNT_FontInstance {
+  const char * style;            ///< The instance's subfamily name. Never NULL.
+  const char * full_name;        ///< Family and style. Never NULL.
+  const char * postscript_name;  ///< Never NULL.
+  GFNT_F16Dot16 wght;            ///< Coordinate on the `wght` axis.
+  GFNT_F16Dot16 wdth;            ///< Coordinate on the `wdth` axis.
+  GFNT_F16Dot16 slnt;            ///< Coordinate on the `slnt` axis.
+  GFNT_F16Dot16 ital;            ///< Coordinate on the `ital` axis.
+  bool is_default;               ///< Every coordinate is the axis's default: the face itself.
+} GFNT_FontInstance;
+
+/**
  * @brief One face found by a scan.
  *
  * Every string is owned by the set and lives until ::gfnt_fontset_free().
@@ -156,6 +178,13 @@ typedef struct GFNT_FontRecord {
   GFNT_FontAxisRange wdth_axis;
   GFNT_FontAxisRange slnt_axis;
   GFNT_FontAxisRange ital_axis;
+  /**
+   * The named instances of a variable face, in `fvar` order, and how many. Matching ranges over
+   * the axes and does not read them; they are for a font picker or a consumer that names styles
+   * the way fontconfig does (one per instance, none for the default). NULL and 0 for a static face.
+   */
+  const GFNT_FontInstance * instances;
+  size_t instance_count;
   /**
    * How far an oblique face leans, in degrees clockwise from upright (`post`'s
    * `italicAngle`, negated), or 0 when the face does not state one.

@@ -550,7 +550,7 @@ TEST(SubsetCff2, EveryKeptGlyphDrawsAndAdvancesAsItDidAtEveryPlace) {
   }
 }
 
-TEST(SubsetCff2, TheItemVariationStoreIsCarriedWhole) {
+TEST(SubsetCff2, TheMetricsStoreIsPrunedToTheRowsTheKeptGlyphsReach) {
   Font source("variable-cff2-hvar.otf");
   Subset sub(source.face, {4, 7});
   ASSERT_EQ(sub.result, GFNT_OK);
@@ -560,35 +560,32 @@ TEST(SubsetCff2, TheItemVariationStoreIsCarriedWhole) {
     const auto b = table_of(sub.face, tag);
     ASSERT_GT(a.size(), 24u);
     ASSERT_GT(b.size(), 24u);
+    EXPECT_LT(b.size(), a.size()) << "rows no kept glyph uses are gone";
+    // The rows that are left count as many as the map entries can reach.
+    auto u16 = [](const std::vector<uint8_t> & t, size_t at) {
+      return static_cast<size_t>((t[at] << 8) | t[at + 1]);
+    };
     auto u32 = [](const std::vector<uint8_t> & t, size_t at) {
       return static_cast<size_t>((t[at] << 24) | (t[at + 1] << 16) | (t[at + 2] << 8) | t[at + 3]);
     };
-    const size_t start = u32(a, 4);
-    // The store's extent by the format's own layout: the region list, then every
-    // ItemVariationData with its rows.
-    const uint8_t * p = a.data() + start;
-    auto u16 = [&](size_t at) { return static_cast<size_t>((p[at] << 8) | p[at + 1]); };
-    auto w32 = [&](size_t at) {
-      return static_cast<size_t>((p[at] << 24) | (p[at + 1] << 16) | (p[at + 2] << 8) | p[at + 3]);
+    auto rows = [&](const std::vector<uint8_t> & t) {
+      const size_t s = u32(t, 4);
+      size_t total = 0;
+      for (size_t d = 0; d < u16(t, s + 6); ++d) {
+        total += u16(t, s + u32(t, s + 8 + 4 * d));
+      }
+      return total;
     };
-    size_t end = w32(2) + 4 + u16(w32(2)) * u16(w32(2) + 2) * 6;
-    for (size_t d = 0; d < u16(6); ++d) {
-      const size_t at = w32(8 + 4 * d);
-      const size_t items = u16(at);
-      size_t words = u16(at + 2);
-      const size_t regions = u16(at + 4);
-      size_t row;
-      if (words & 0x8000u) {
-        words &= 0x7FFFu;
-        row = words * 4 + (regions - words) * 2;
-      }
-      else {
-        row = words * 2 + (regions - words);
-      }
-      end = std::max(end, at + 6 + 2 * regions + items * row);
+    // Three glyphs (notdef and the two), each in at most as many maps as the table has.
+    EXPECT_LE(rows(b), 3u * (std::string(tag) == "HVAR" ? 3u : 4u));
+    EXPECT_LT(rows(b), rows(a));
+  }
+  // What the rows say is unchanged: the glyphs measure the same at every place.
+  for (uint32_t old : {4u, 7u}) {
+    for (const Place & p : kPlaces) {
+      EXPECT_EQ(at_place(sub.face, static_cast<uint32_t>(sub.new_of(old)), p),
+          at_place(source.face, old, p)) << "glyph " << old;
     }
-    const std::vector<uint8_t> store(a.begin() + start, a.begin() + start + end);
-    EXPECT_NE(std::search(b.begin(), b.end(), store.begin(), store.end()), b.end());
   }
 }
 

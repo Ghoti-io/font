@@ -22,14 +22,14 @@
  * @file
  *
  * The variation tables that are indexed by glyph: `HVAR` and `VVAR`, and the item
- * variation store they and `GDEF` keep their deltas in.
+ * variation store they keep their deltas in (`GDEF`'s store is carried whole elsewhere).
  *
- * documentation/design.md section 12.3. A store is carried as it is, whole: its
- * rows are addressed by (outer, inner) and nothing in it names a glyph. What names
- * glyphs is the delta-set index map, which sends a glyph to its row; it is rebuilt
- * for the new numbering, one entry for each kept glyph, and an advance map the font
- * did not state (the glyph id is then the row) is stated, because the ids have
- * moved.
+ * documentation/design.md section 12.3. What names glyphs is the delta-set index map,
+ * which sends a glyph to its row (outer, inner); it is rebuilt for the new numbering,
+ * one entry for each kept glyph, and an advance map the font did not state (the glyph
+ * id is then the row) is stated, because the ids have moved. The store is pruned to
+ * the rows those maps now reach: a set with none left is dropped, the rest are
+ * renumbered, and the region list is kept whole.
  */
 
 #include <string.h>
@@ -158,27 +158,15 @@ static unsigned bits_for(uint32_t v) {
   return b;
 }
 
-/** A delta-set index map sending each kept glyph to the row its source glyph had. */
-static GFNT_Result write_map(const uint8_t * old_map, size_t old_n, bool implicit,
-    const uint32_t * old_of_new, size_t new_count, GFNT_WBuf * out, GFNT_Error * error) {
-  uint32_t * outers;
-  uint32_t * inners;
-  uint32_t max_outer = 0;
-  uint32_t max_inner = 0;
+/**
+ * The (outer, inner) pair of each kept glyph under one map, in new-glyph order: the row its
+ * source glyph had. An advance map the font left out is the glyph id itself, in set 0.
+ */
+static GFNT_Result read_pairs(const uint8_t * old_map, size_t old_n, bool implicit,
+    const uint32_t * old_of_new, size_t new_count, uint32_t * outers, uint32_t * inners,
+    GFNT_Error * error) {
   size_t j;
-  unsigned ibits;
-  unsigned obits;
-  size_t size;
-  const GFNT_Allocator * a = out->allocator;
 
-  outers = a->calloc_fn(a->ctx, new_count + 1, sizeof *outers);
-  inners = a->calloc_fn(a->ctx, new_count + 1, sizeof *inners);
-  if (!outers || !inners) {
-    a->free_fn(a->ctx, outers);
-    a->free_fn(a->ctx, inners);
-    return gfnt_error_set(error, GFNT_ERR_OOM, T_HVAR, 0, GFNT_GLYPH_NONE,
-        "rebuilding a delta-set index map");
-  }
   for (j = 0; j < new_count; ++j) {
     uint32_t g = old_of_new[j] == 0xFFFFFFFFu ? 0 : old_of_new[j];
 
@@ -187,11 +175,24 @@ static GFNT_Result write_map(const uint8_t * old_map, size_t old_n, bool implici
       inners[j] = g;
     }
     else if (!map_lookup(old_map, old_n, g, &outers[j], &inners[j])) {
-      a->free_fn(a->ctx, outers);
-      a->free_fn(a->ctx, inners);
       return gfnt_error_set(error, GFNT_ERR_CORRUPT, T_HVAR, 0, GFNT_GLYPH_NONE,
           "a delta-set index map that cannot be read");
     }
+  }
+  return GFNT_OK;
+}
+
+/** A delta-set index map holding @p outers and @p inners as they are. */
+static GFNT_Result emit_map(const uint32_t * outers, const uint32_t * inners, size_t new_count,
+    GFNT_WBuf * out, GFNT_Error * error) {
+  uint32_t max_outer = 0;
+  uint32_t max_inner = 0;
+  size_t j;
+  unsigned ibits;
+  unsigned obits;
+  size_t size;
+
+  for (j = 0; j < new_count; ++j) {
     if (outers[j] > max_outer) {
       max_outer = outers[j];
     }
@@ -203,8 +204,6 @@ static GFNT_Result write_map(const uint8_t * old_map, size_t old_n, bool implici
   obits = max_outer ? bits_for(max_outer) : 0;
   size = (ibits + obits + 7) / 8;
   if (size > 4 || new_count > 65535) {
-    a->free_fn(a->ctx, outers);
-    a->free_fn(a->ctx, inners);
     return gfnt_error_set(error, GFNT_ERR_LIMIT, T_HVAR, 0, GFNT_GLYPH_NONE,
         "a delta-set index map entry wider than four bytes");
   }
@@ -219,21 +218,107 @@ static GFNT_Result write_map(const uint8_t * old_map, size_t old_n, bool implici
       gfnt_wbuf_u8(out, (v >> (8 * (k - 1))) & 0xFF);
     }
   }
-  a->free_fn(a->ctx, outers);
-  a->free_fn(a->ctx, inners);
   return GFNT_OK;
+}
+
+/** The bytes of one row of the ItemVariationData at @p d (whose layout the extent check vouched for). */
+static size_t row_size(const uint8_t * d) {
+  size_t words = be16(d + 2);
+  size_t regions = be16(d + 4);
+
+  if (words & 0x8000u) {
+    words &= 0x7FFFu;
+    return words * 4 + (regions > words ? regions - words : 0) * 2;
+  }
+  return words * 2 + (regions > words ? regions - words : 0);
+}
+
+/**
+ * Writes the store @p s with only the rows in @p used (one flag per row of each set, laid end
+ * to end from @p first_row) and no set left empty, and fills @p new_outer and @p new_inner
+ * (the same layout) with where each kept row went. The region list is kept whole.
+ */
+static void write_pruned_store(const uint8_t * s, const uint8_t * used, const size_t * first_row,
+    uint32_t * new_outer, uint32_t * new_inner, GFNT_WBuf * out) {
+  const size_t sets = be16(s + 6);
+  const size_t regions = be32(s + 2);
+  const size_t region_len = 4 + (size_t)be16(s + regions) * be16(s + regions + 2) * 6;
+  const size_t base = out->length;
+  size_t kept_sets = 0;
+  size_t i;
+  size_t r;
+
+  for (i = 0; i < sets; ++i) {
+    const size_t items = be16(s + be32(s + 8 + 4 * i));
+
+    for (r = 0; r < items; ++r) {
+      if (used[first_row[i] + r]) {
+        ++kept_sets;
+        break;
+      }
+    }
+  }
+  gfnt_wbuf_u16(out, 1);
+  gfnt_wbuf_u32(out, (uint32_t)(8 + 4 * kept_sets));
+  gfnt_wbuf_u16(out, (uint32_t)kept_sets);
+  for (i = 0; i < kept_sets; ++i) {
+    gfnt_wbuf_u32(out, 0);
+  }
+  gfnt_wbuf_bytes(out, s + regions, region_len);
+  kept_sets = 0;
+  for (i = 0; i < sets; ++i) {
+    const uint8_t * d = s + be32(s + 8 + 4 * i);
+    const size_t items = be16(d);
+    const size_t rows = row_size(d);
+    const size_t index_count = be16(d + 4);
+    size_t kept = 0;
+
+    for (r = 0; r < items; ++r) {
+      kept += used[first_row[i] + r] ? 1u : 0u;
+    }
+    if (!kept) {
+      continue;
+    }
+    if (!out->oom) {
+      gfnt_write_put32(out->data + base + 8 + 4 * kept_sets, (uint32_t)(out->length - base));
+    }
+    gfnt_wbuf_u16(out, (uint32_t)kept);
+    gfnt_wbuf_u16(out, be16(d + 2));
+    gfnt_wbuf_u16(out, (uint32_t)index_count);
+    gfnt_wbuf_bytes(out, d + 6, 2 * index_count);
+    kept = 0;
+    for (r = 0; r < items; ++r) {
+      if (used[first_row[i] + r]) {
+        gfnt_wbuf_bytes(out, d + 6 + 2 * index_count + r * rows, rows);
+        new_outer[first_row[i] + r] = (uint32_t)kept_sets;
+        new_inner[first_row[i] + r] = (uint32_t)kept++;
+      }
+    }
+    ++kept_sets;
+  }
 }
 
 GFNT_Result gfnt_subset_var_metrics(const GFNT_Face * face, GFNT_Tag tag,
     const uint32_t * old_of_new, size_t new_count, GFNT_WBuf * out, GFNT_Error * error) {
   GFNT_Reader reader;
   const uint8_t * t;
+  const uint8_t * s;
   size_t n;
   size_t maps = tag == T_HVAR ? 3 : 4;
   size_t header = 8 + 4 * maps;
   size_t store_len = 0;
   size_t base = out->length;
   size_t i;
+  size_t j;
+  size_t sets;
+  size_t rows_total = 0;
+  size_t * first_row = NULL;
+  uint8_t * used = NULL;
+  uint32_t * new_outer = NULL;
+  uint32_t * new_inner = NULL;
+  uint32_t * pairs = NULL; // per map: new_count outers then new_count inners
+  bool present[4] = {false, false, false, false};
+  const GFNT_Allocator * a = out->allocator;
   GFNT_Result result = GFNT_OK;
 
   if (!gfnt_face_has_table(face, tag)) {
@@ -249,35 +334,109 @@ GFNT_Result gfnt_subset_var_metrics(const GFNT_Face * face, GFNT_Tag tag,
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, tag, 0, GFNT_GLYPH_NONE,
         "a variation metrics table with no readable item variation store");
   }
-  gfnt_wbuf_u16(out, 1);
-  gfnt_wbuf_u16(out, 0);
-  gfnt_wbuf_u32(out, (uint32_t)header);
-  for (i = 0; i < maps; ++i) {
-    gfnt_wbuf_u32(out, 0);
+  s = t + be32(t + 4);
+  sets = be16(s + 6);
+  first_row = a->calloc_fn(a->ctx, sets + 1, sizeof *first_row);
+  pairs = a->calloc_fn(a->ctx, 2 * maps * (new_count + 1), sizeof *pairs);
+  if (!first_row || !pairs) {
+    result = gfnt_error_set(error, GFNT_ERR_OOM, tag, 0, GFNT_GLYPH_NONE,
+        "rewriting a variation metrics table");
+    goto done;
   }
-  gfnt_wbuf_bytes(out, t + be32(t + 4), store_len);
-  gfnt_wbuf_align(out, 4);
-  for (i = 0; i < maps && result == GFNT_OK; ++i) {
+  for (i = 0; i < sets; ++i) {
+    first_row[i] = rows_total;
+    rows_total += be16(s + be32(s + 8 + 4 * i));
+  }
+  used = a->calloc_fn(a->ctx, rows_total + 1, 1);
+  new_outer = a->calloc_fn(a->ctx, rows_total + 1, sizeof *new_outer);
+  new_inner = a->calloc_fn(a->ctx, rows_total + 1, sizeof *new_inner);
+  if (!used || !new_outer || !new_inner) {
+    result = gfnt_error_set(error, GFNT_ERR_OOM, tag, 0, GFNT_GLYPH_NONE,
+        "rewriting a variation metrics table");
+    goto done;
+  }
+  // Read every map's pairs, and mark the rows the kept glyphs use.
+  for (i = 0; i < maps; ++i) {
     size_t off = be32(t + 8 + 4 * i);
+    uint32_t * po = pairs + 2 * i * (new_count + 1);
+    uint32_t * pi = po + new_count + 1;
 
     // The first map is the advance: stated even when the font left it to the glyph id.
     if (off == 0 && i != 0) {
       continue;
     }
     if (off >= n) {
-      return gfnt_error_set(error, GFNT_ERR_CORRUPT, tag, 0, GFNT_GLYPH_NONE,
+      result = gfnt_error_set(error, GFNT_ERR_CORRUPT, tag, 0, GFNT_GLYPH_NONE,
           "a delta-set index map outside its table");
+      goto done;
     }
-    if (!out->oom) {
-      gfnt_write_put32(out->data + base + 8 + 4 * i, (uint32_t)(out->length - base));
+    present[i] = true;
+    result = read_pairs(off ? t + off : NULL, off ? n - off : 0, off == 0, old_of_new,
+        new_count, po, pi, error);
+    if (result != GFNT_OK) {
+      goto done;
     }
-    result = write_map(off ? t + off : NULL, off ? n - off : 0, off == 0, old_of_new,
-        new_count, out, error);
-    gfnt_wbuf_align(out, 4);
+    for (j = 0; j < new_count; ++j) {
+      if (po[j] < sets && pi[j] < be16(s + be32(s + 8 + 4 * po[j]))) {
+        used[first_row[po[j]] + pi[j]] = 1;
+      }
+    }
+  }
+  gfnt_wbuf_u16(out, 1);
+  gfnt_wbuf_u16(out, 0);
+  gfnt_wbuf_u32(out, (uint32_t)header);
+  for (i = 0; i < maps; ++i) {
+    gfnt_wbuf_u32(out, 0);
+  }
+  write_pruned_store(s, used, first_row, new_outer, new_inner, out);
+  gfnt_wbuf_align(out, 4);
+  {
+    uint32_t kept_sets = 0;
+
+    for (i = 0; i < sets; ++i) {
+      for (j = 0; j < be16(s + be32(s + 8 + 4 * i)); ++j) {
+        if (used[first_row[i] + j]) {
+          ++kept_sets;
+          break;
+        }
+      }
+    }
+    for (i = 0; i < maps && result == GFNT_OK; ++i) {
+      uint32_t * po = pairs + 2 * i * (new_count + 1);
+      uint32_t * pi = po + new_count + 1;
+
+      if (!present[i]) {
+        continue;
+      }
+      for (j = 0; j < new_count; ++j) {
+        if (po[j] < sets && pi[j] < be16(s + be32(s + 8 + 4 * po[j]))) {
+          const size_t row = first_row[po[j]] + pi[j];
+
+          po[j] = new_outer[row];
+          pi[j] = new_inner[row];
+        }
+        else {
+          // A row the font never had stays a row nobody has: no delta.
+          po[j] = kept_sets;
+          pi[j] = 0;
+        }
+      }
+      if (!out->oom) {
+        gfnt_write_put32(out->data + base + 8 + 4 * i, (uint32_t)(out->length - base));
+      }
+      result = emit_map(po, pi, new_count, out, error);
+      gfnt_wbuf_align(out, 4);
+    }
   }
   if (result == GFNT_OK && out->oom) {
     result = gfnt_error_set(error, GFNT_ERR_OOM, tag, 0, GFNT_GLYPH_NONE,
         "rewriting a variation metrics table");
   }
+done:
+  a->free_fn(a->ctx, first_row);
+  a->free_fn(a->ctx, pairs);
+  a->free_fn(a->ctx, used);
+  a->free_fn(a->ctx, new_outer);
+  a->free_fn(a->ctx, new_inner);
   return result;
 }

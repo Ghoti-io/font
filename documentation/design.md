@@ -1867,7 +1867,7 @@ covers it: 36 URW CFF fonts, 281 subsets in each mode, drawing and charstring wi
 through fontTools and shaping through HarfBuzz, 0 differences, no subroutine left, names kept.
 
 **Re-subroutinising** (`src/write/subroutinize.c`, off with `GFNT_SubsetOptions::no_subroutines`).
-Flattening alone leaves charstrings 20 to 40% larger than packed ones (18% and 39% in the two fonts below), so what the kept
+Flattening alone leaves charstrings 18 to 39% larger than packed ones (18% and 39% in the two fonts below), so what the kept
 glyphs repeat is put back in global subroutines, by an algorithm of our own and not by keeping
 the source's. A charstring is cut into *operations*, the operands and the operator that takes them;
 a run of whole operations leaves the stack as it found it, so it can be lifted anywhere. An

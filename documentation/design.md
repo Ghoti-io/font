@@ -2002,6 +2002,29 @@ shapes the subsets; the variable `glyf` corpus fonts and the `variable-*.ttf` fi
 `HVAR`/`VVAR` and `GDEF` stores are pruned as above; a `gvar` is not re-packed (shared point
 numbers and tuples a dropped glyph used stay).
 
+**`MATH`** (`src/write/subset_math.c`) is carried. A kept glyph that has a construction brings every
+size it grows to and every piece of its assembly, over both directions and until no glyph is added; those
+glyphs are then closed over `GSUB` again, and over composites and color, in the same loop, so a component
+of a kept glyph brings its own sizes too (fontTools' closure does not: this keeps ten more glyphs than it
+over the corpus's subsets, all of them pieces of a bracket or an integral that is also a component).
+The table is written afresh: the constants as they are, and the italics corrections, top accent
+attachments, extended shapes, kern tables (four corners, each with its heights) and variant
+constructions of the kept glyphs under the new ids, each structure's device tables put behind it and
+linked again (a variation index is renumbered through `GDEF`'s map, so the store is pruned to the rows
+named). An assembly that names a glyph that was not kept is left out whole rather than shortened. An
+empty structure is left out (fontTools writes it empty; the two say the same). A table that cannot be
+read is left out, and `drop_layout` leaves it out and brings none of its glyphs. `make
+check-oracle-subset-math` subsets the corpus's math fonts (DejaVu Sans and Serif, TeX Gyre's five, and
+the `math.ttf` fixture: 8 fonts, 78 subsets of a formula's characters and seeded draws from every kind
+of entry the table has, retained and renumbered) and asks fontTools, **given the glyph set this library
+kept and with its closure off**, for the table it would write; the two trees, every glyph an id in the
+source's numbering, must be the same, and fontTools' own closure for the same characters must not keep a
+glyph this one missed (bidi mirroring, which it adds and this leaves to the caller, is turned off). Each of
+these was planted and seen to fail, in the unit tests and in the differential: the device tables of the
+constants dropped, the kern corners swapped, a construction's pieces left out of the closure, and a
+part's glyph not renumbered. The fixture's `MATH` has every part, with device tables on two constants, an italics correction,
+a kern value and an assembly.
+
 **Renaming** (`GFNT_SubsetOptions::family_name`, `src/write/subset_name.c`) is what a font whose
 licence reserves its name needs, since a subset is a modified font. Every `name` record that states
 the family is removed in every language and platform - IDs 1, 3, 4, 6, 16, 18, 20, 21 and 25 -

@@ -572,6 +572,209 @@ def build_arabic_join(out):
     fb.save(out)
 
 
+def build_math(out, variation=False):
+    """A small math font, for subsetting `MATH`.
+
+    Every part of the table is present and distinctive: constants (two with device tables), an
+    italics correction and a top accent for some letters (one value with a device), extended
+    shapes, kern tables on all four corners (one with a device), vertical constructions with
+    and without an assembly (the assembly's italics correction has a device), and a horizontal
+    one. Glyphs are boxes; what matters is which glyph each entry names. `z` and `y` carry
+    entries no test text asks for, `integral` is a construction nothing else reaches, and
+    `junk` is named by nothing.
+
+    With `variation`, the device tables of the constant `AxisHeight`, of `z`'s italics correction,
+    of one of `x`'s kern values and of the parenthesis assembly's italics correction are variation
+    indices into a `GDEF` store of two sets of three rows each, so that pruning the store and
+    renumbering the indices both have something to do.
+    """
+    from fontTools.ttLib import newTable
+    from fontTools.ttLib.tables import otTables as ot
+
+    cmap = {0x20: "space", 0x78: "x", 0x79: "y", 0x7A: "z", 0x28: "parenleft", 0x7C: "bar",
+            0x222B: "integral", 0x23DE: "overbrace", 0x5E: "hat"}
+    order = [".notdef", "space", "x", "y", "z", "parenleft", "parenleft.v1", "parenleft.v2",
+             "parenleft.bt", "parenleft.ex", "parenleft.tp", "bar", "bar.v1", "integral",
+             "integral.v1", "integral.bt", "integral.ex", "integral.tp", "overbrace",
+             "overbrace.h1", "overbrace.lf", "overbrace.mid", "overbrace.rt", "overbrace.ext",
+             "hat", "hat.w1", "junk"]
+    glyphs, hmetrics = {}, {}
+
+    def box(w, h):
+        pen = TTGlyphPen(None)
+        if w:
+            pen.moveTo((20, 0)); pen.lineTo((20, h)); pen.lineTo((w - 20, h))
+            pen.lineTo((w - 20, 0)); pen.closePath()
+        return pen.glyph()
+
+    for name in order:
+        w = 0 if name == "space" else 640 if name == ".notdef" else 500 + 10 * order.index(name)
+        glyphs[name] = box(w, 600)
+        hmetrics[name] = (w or 300, 20 if w else 0)
+    fb = FontBuilder(UPEM, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics(hmetrics)
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, [subtable(4, 3, 1, cmap), subtable(4, 0, 3, cmap)])
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names("Math"), mac=True)
+    fb.setupPost(keepGlyphNames=True)
+
+    def device(start, end, fmt, deltas):
+        d = ot.Device()
+        d.StartSize, d.EndSize, d.DeltaFormat, d.DeltaValue = start, end, fmt, deltas
+        return d
+
+    def value(v, dev=None):
+        r = ot.MathValueRecord()
+        r.Value, r.DeviceTable = v, dev
+        return r
+
+    def varidx(outer, inner):
+        # fontTools spells a variation index as a Device whose format is 0x8000: the outer index
+        # where the start size is, the inner where the end size is, and no deltas.
+        return device(outer, inner, 0x8000, None)
+
+    def coverage(names_):
+        c = ot.Coverage()
+        c.glyphs = sorted(names_, key=order.index)
+        return c
+
+    table = newTable("MATH")
+    m = table.table = ot.MATH()
+    m.Version = 0x00010000
+    c = m.MathConstants = ot.MathConstants()
+    c.ScriptPercentScaleDown, c.ScriptScriptPercentScaleDown = 70, 50
+    c.DelimitedSubFormulaMinHeight, c.DisplayOperatorMinHeight = 1300, 1400
+    records = [
+        "MathLeading", "AxisHeight", "AccentBaseHeight", "FlattenedAccentBaseHeight",
+        "SubscriptShiftDown", "SubscriptTopMax", "SubscriptBaselineDropMin",
+        "SuperscriptShiftUp", "SuperscriptShiftUpCramped", "SuperscriptBottomMin",
+        "SuperscriptBaselineDropMax", "SubSuperscriptGapMin", "SuperscriptBottomMaxWithSubscript",
+        "SpaceAfterScript", "UpperLimitGapMin", "UpperLimitBaselineRiseMin", "LowerLimitGapMin",
+        "LowerLimitBaselineDropMin", "StackTopShiftUp", "StackTopDisplayStyleShiftUp",
+        "StackBottomShiftDown", "StackBottomDisplayStyleShiftDown", "StackGapMin",
+        "StackDisplayStyleGapMin", "StretchStackTopShiftUp", "StretchStackBottomShiftDown",
+        "StretchStackGapAboveMin", "StretchStackGapBelowMin", "FractionNumeratorShiftUp",
+        "FractionNumeratorDisplayStyleShiftUp", "FractionDenominatorShiftDown",
+        "FractionDenominatorDisplayStyleShiftDown", "FractionNumeratorGapMin",
+        "FractionNumDisplayStyleGapMin", "FractionRuleThickness", "FractionDenominatorGapMin",
+        "FractionDenomDisplayStyleGapMin", "SkewedFractionHorizontalGap",
+        "SkewedFractionVerticalGap", "OverbarVerticalGap", "OverbarRuleThickness",
+        "OverbarExtraAscender", "UnderbarVerticalGap", "UnderbarRuleThickness",
+        "UnderbarExtraDescender", "RadicalVerticalGap", "RadicalDisplayStyleVerticalGap",
+        "RadicalRuleThickness", "RadicalExtraAscender", "RadicalKernBeforeDegree",
+        "RadicalKernAfterDegree"]
+    assert len(records) == 51
+    for i, name in enumerate(records):
+        dev = None
+        if name == "AxisHeight":
+            dev = varidx(1, 2) if variation else device(9, 13, 1, [1, 0, -1, -2, 0])
+        elif name == "FractionRuleThickness":
+            dev = device(10, 11, 2, [3, -4])
+        setattr(c, name, value(100 + 7 * i, dev))
+    c.RadicalDegreeBottomRaisePercent = 60
+
+    gi = m.MathGlyphInfo = ot.MathGlyphInfo()
+    ic = gi.MathItalicsCorrectionInfo = ot.MathItalicsCorrectionInfo()
+    ic.Coverage = coverage(["x", "y", "z", "integral"])
+    ic.ItalicsCorrection = [value(31), value(32, device(12, 14, 1, [1, 1, 0])),
+                            value(33, varidx(0, 1) if variation else None), value(34)]
+    ic.ItalicsCorrectionCount = 4
+    ta = gi.MathTopAccentAttachment = ot.MathTopAccentAttachment()
+    ta.TopAccentCoverage = coverage(["x", "y", "z", "hat"])
+    ta.TopAccentAttachment = [value(250), value(260), value(270), value(280)]
+    ta.TopAccentAttachmentCount = 4
+    gi.ExtendedShapeCoverage = coverage(["parenleft.v2", "integral", "bar.v1"])
+
+    def kern(heights, kerns):
+        k = ot.MathKern()
+        k.HeightCount = len(heights)
+        k.CorrectionHeight = [value(h) for h in heights]
+        k.KernValue = [value(v, d) for v, d in kerns]
+        return k
+
+    ki = gi.MathKernInfo = ot.MathKernInfo()
+    ki.MathKernCoverage = coverage(["x", "z"])
+    rx = ot.MathKernInfoRecord()
+    rx.TopRightMathKern = kern([100, 300], [(10, None), (20, varidx(1, 0) if variation else device(8, 9, 2, [1, -1])), (30, None)])
+    rx.TopLeftMathKern = None
+    rx.BottomRightMathKern = None
+    rx.BottomLeftMathKern = kern([150], [(-5, None), (-6, None)])
+    rz = ot.MathKernInfoRecord()
+    rz.TopRightMathKern = kern([50], [(1, None), (2, None)])
+    rz.TopLeftMathKern = kern([60], [(3, None), (4, None)])
+    rz.BottomRightMathKern = kern([70], [(5, None), (6, None)])
+    rz.BottomLeftMathKern = kern([80], [(7, None), (8, None)])
+    ki.MathKernInfoRecords = [rx, rz]
+    ki.MathKernCount = 2
+
+    def construction(base, sizes, parts=None, italics=None):
+        con = ot.MathGlyphConstruction()
+        con.VariantCount = len(sizes)
+        recs = []
+        for g, adv in sizes:
+            r = ot.MathGlyphVariantRecord()
+            r.VariantGlyph, r.AdvanceMeasurement = g, adv
+            recs.append(r)
+        con.MathGlyphVariantRecord = recs
+        if parts:
+            a = con.GlyphAssembly = ot.GlyphAssembly()
+            a.ItalicsCorrection = italics or value(0)
+            a.PartCount = len(parts)
+            a.PartRecords = []
+            for g, start, end, adv, flags in parts:
+                p = ot.GlyphPartRecord()
+                p.glyph, p.StartConnectorLength, p.EndConnectorLength = g, start, end
+                p.FullAdvance, p.PartFlags = adv, flags
+                a.PartRecords.append(p)
+        else:
+            con.GlyphAssembly = None
+        return con
+
+    v = m.MathVariants = ot.MathVariants()
+    v.MinConnectorOverlap = 50
+    vert = {
+        "parenleft": construction("parenleft",
+            [("parenleft", 1000), ("parenleft.v1", 1500), ("parenleft.v2", 2000)],
+            [("parenleft.bt", 40, 0, 600, 0), ("parenleft.ex", 100, 100, 300, 1),
+             ("parenleft.tp", 0, 40, 600, 0)], value(7, varidx(0, 2) if variation else device(11, 13, 1, [0, 1, -1]))),
+        "bar": construction("bar", [("bar", 1000), ("bar.v1", 2000)]),
+        "integral": construction("integral", [("integral", 1100), ("integral.v1", 2200)],
+            [("integral.bt", 20, 0, 700, 0), ("integral.ex", 50, 50, 200, 1),
+             ("integral.tp", 0, 20, 700, 0)]),
+    }
+    horiz = {"overbrace": construction("overbrace",
+        [("overbrace", 800), ("overbrace.h1", 1600)],
+        [("overbrace.lf", 0, 30, 500, 0), ("overbrace.ext", 80, 80, 250, 1),
+         ("overbrace.mid", 30, 30, 400, 0), ("overbrace.ext", 80, 80, 250, 1),
+         ("overbrace.rt", 30, 0, 500, 0)])}
+    v.VertGlyphCoverage = coverage(vert)
+    v.VertGlyphConstruction = [vert[g] for g in v.VertGlyphCoverage.glyphs]
+    v.VertGlyphCount = len(vert)
+    v.HorizGlyphCoverage = coverage(horiz)
+    v.HorizGlyphConstruction = [horiz[g] for g in v.HorizGlyphCoverage.glyphs]
+    v.HorizGlyphCount = len(horiz)
+    fb.font["MATH"] = table
+    if variation:
+        fb.setupFvar([("wght", 100, 400, 900, "Weight"), ("wdth", 75, 100, 125, "Width")], [])
+        store = _var_store([([0, 1], [[3, 1], [-4, 2], [5, -2]]), ([0, 1], [[10, 0], [-7, 1], [8, 8]])])
+        gdef = fb.font["GDEF"] = newTable("GDEF")
+        g = gdef.table = ot.GDEF()
+        g.Version = 0x00010003
+        g.GlyphClassDef = g.AttachList = g.LigCaretList = g.MarkAttachClassDef = None
+        g.MarkGlyphSetsDef = None
+        g.VarStore = store
+    pin(fb)
+    fb.save(out)
+
+
+def build_math_variable(out):
+    """`math.ttf` with its device tables replaced by variation indices into `GDEF`'s store."""
+    build_math(out, variation=True)
+
+
 def build_basic(out):
     """Everything ordinary, and the baseline every other fixture varies from."""
     fb = truetype("Basic", unicode_cmap())
@@ -4849,6 +5052,13 @@ FIXTURES = {
         "TrueType: vhea and vmtx with vertical advances unlike the horizontal ones, a vert "
         "feature giving CJK punctuation vertical forms, ideographs and kana, Latin letters, "
         "digits and brackets, for vertical paragraph layout"),
+    "math.ttf": (build_math,
+        "TrueType: a MATH table with every part present (constants and some with device tables, "
+        "italics corrections, top accents, extended shapes, kerns on all four corners, vertical "
+        "constructions with and without an assembly, a horizontal one), for the subsetter"),
+    "math-variable.ttf": (build_math_variable,
+        "TrueType: math.ttf with variation indices in four MATH device tables and a GDEF store of "
+        "two sets of three rows, for pruning and renumbering the store"),
     "arabic-join.ttf": (build_arabic_join,
         "TrueType: eighteen Arabic letters with isol/init/medi/fina forms drawn as joined bars, "
         "lam-alef and beh-noon ligatures in rlig, a tatweel and a fatha, for kashida justification"),

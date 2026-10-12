@@ -194,6 +194,8 @@ const std::vector<Entry> & every_fixture() {
       {"cff-repeats.otf", 21},
       {"vertical-text.ttf", 53},
       {"arabic-join.ttf", 69},
+      {"math.ttf", 27},
+      {"math-variable.ttf", 27},
       {"cff-seac.otf", 6},
       {"cff-subrs.otf", 10},
       {"cff-type1.otf", 8},

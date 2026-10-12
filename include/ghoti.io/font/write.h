@@ -347,7 +347,7 @@ typedef struct GFNT_SubsetOptions {
    */
   bool no_subroutines;
   /**
-   * Leave out `GSUB`, `GPOS`, `GDEF`, `kern`, `vhea`, `vmtx` and `VORG`.
+   * Leave out `GSUB`, `GPOS`, `GDEF`, `MATH`, `kern`, `vhea`, `vmtx` and `VORG`.
    *
    * By default they are carried: copied as they are when ::retain_gids keeps the
    * ids where they were, rewritten for the new numbering when it does not.
@@ -460,6 +460,15 @@ GFNT_API void gfnt_subset_options_init(GFNT_SubsetOptions * options);
  * **A variable `glyf` font** is subset too: `gvar` keeps each kept glyph's variation data and the
  * shared tuples, with its offsets rebuilt, `cvar` goes with the control values it varies, and the
  * tables above are carried or rebuilt as for `CFF2`.
+ *
+ * **`MATH`** is carried: a kept glyph that has a construction (a bracket or an integral that
+ * grows, a radical, an accent that widens) brings every size it grows to and every piece it is
+ * built from, until no glyph is added, and then what `GSUB` reaches from those; the constants are
+ * copied as they are, and the italics corrections, top accent attachments, extended shapes, kern
+ * tables and constructions are written again for the kept glyphs under the new ids, with the device
+ * tables behind their values. A variation index in one of them names a row of `GDEF`'s store, which
+ * is pruned to the rows used when ids are renumbered. A table that cannot be read is left out, and
+ * ::GFNT_SubsetOptions::drop_layout leaves it out too (and brings none of its glyphs).
  *
  * `SVG ` is carried only when ids are retained (the documents name glyph ids inside themselves): the
  * documents that serve a kept glyph, unchanged; renumbering leaves the table out.

@@ -197,6 +197,16 @@ GFNT_Result gfnt_subset_gdef(const GFNT_Face * face, const uint8_t * shape,
     size_t new_count, GFNT_IvsMap * ivs, GFNT_WBuf * out, const GFNT_Allocator * allocator,
     GFNT_Error * error);
 
+/**
+ * `MATH` for a new numbering: the constants as they are, and the italics corrections, top
+ * accent attachments, extended shapes, kern tables and variant constructions of the kept
+ * glyphs, renumbered. Written into @p out; left empty when the face has none or it cannot be
+ * read. @p ivs renumbers the variation indices of device tables, or NULL to copy them.
+ */
+GFNT_Result gfnt_subset_math(const GFNT_Face * face, const uint8_t * keep,
+    const uint32_t * new_of_old, const uint32_t * old_of_new, size_t count, size_t new_count,
+    GFNT_IvsMap * ivs, GFNT_WBuf * out, const GFNT_Allocator * allocator, GFNT_Error * error);
+
 #ifdef __cplusplus
 }
 #endif

@@ -206,6 +206,20 @@ RUN chmod +x /usr/local/bin/fonttools-fetch-woff2 /usr/local/bin/fonttools-corpu
 # Debian's alternatives symlinks - skips a symlink too.
 RUN mv /usr/share/wine/fonts /usr/share/fonts/truetype/wine
 
+# The math fonts: `MATH` is the one table the corpus above has next to nothing of (DejaVu
+# carries a small one), and a subsetter that keeps it has to keep the right entries of a real
+# one - sizes a glyph grows to, the pieces it is built from, italics corrections, kerns.
+# TeX Gyre's five math fonts (Bonum, DejaVu, Pagella, Schola, Termes) are CFF-flavoured sfnts
+# from one foundry with different glyph sets. They install under /usr/share/texmf, which the
+# corpus lists do not walk, so they are moved to where the others are, as the Wine fonts were.
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+      fonts-texgyre-math=20180621-6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /usr/share/fonts/opentype/texgyre-math \
+    && mv /usr/share/texmf/fonts/opentype/public/tex-gyre-math/*.otf \
+      /usr/share/fonts/opentype/texgyre-math/
+
 # The four scripts an oracle driver runs, copied in rather than written with
 # printf inside a RUN. The first draft did use printf, and its \x27 escapes
 # reached the file as literal backslash-x-2-7 - a quoting layer between the

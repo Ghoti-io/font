@@ -63,6 +63,8 @@ layout-gpos.shape	The runs layout-gpos.ttf is shaped on, one per line: script, l
 layout-gpos.ttf	GPOS with one of every lookup type and format: single in both formats, pair in both (with a value for each glyph of a pair, and a value with device tables), cursive in left-to-right and right-to-left lookups, mark to base, to ligature (a different anchor on each component) and to mark, context in formats 1, 2 and 3, chain in formats 2 and 3, and a lookup behind an extension - written by fontTools
 layout-gsub.shape	The runs layout-gsub.ttf is shaped on, one per line: script, language, features, code points, and what the case exercises
 layout-gsub.ttf	GSUB with one of every lookup type and format: single in both formats, multiple (including to nothing), alternate, ligature, context in formats 1, 2 and 3, chain in formats 1, 2 and 3, reverse chaining, a lookup behind an extension, lookup flags with and without a mark filtering set and a mark attachment type, and nested lookups that grow the run - written by fontTools
+math-variable.ttf	TrueType: math.ttf with variation indices in four MATH device tables and a GDEF store of two sets of three rows, for pruning and renumbering the store
+math.ttf	TrueType: a MATH table with every part present (constants and some with device tables, italics corrections, top accents, extended shapes, kerns on all four corners, vertical constructions with and without an assembly, a horizontal one), for the subsetter
 name-mac-encodings.ttf	name: every single-byte Macintosh encoding, all 128 high bytes each
 name-macroman.ttf	name: a Macintosh Roman record holding U+2122 as byte 0xAA
 os2-v0.ttf	OS/2 version 0: no code page ranges, no x-height, no optical size

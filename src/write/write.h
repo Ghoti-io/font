@@ -155,6 +155,15 @@ GFNT_Result gfnt_subset_colr(const GFNT_Face * face, const uint8_t * keep,
     const GFNT_Allocator * allocator, GFNT_WBuf * out, GFNT_Error * error);
 
 /**
+ * Add to @p keep the glyphs the kept glyphs of a `MATH` table grow to and are built from: every
+ * size in a kept glyph's construction and every part of its assembly, until nothing is added;
+ * @p changed says whether anything was. A face with no `MATH`, or one that cannot be read, is
+ * left as it is.
+ */
+GFNT_Result gfnt_subset_math_closure(const GFNT_Face * face, uint8_t * keep, size_t count,
+    const GFNT_Allocator * allocator, bool * changed, GFNT_Error * error);
+
+/**
  * `SVG ` for a subset that retains its glyph ids: the documents that serve a kept glyph, each
  * with its range, written again into @p out (left empty when there are none or the table is of
  * a version this library does not read). With renumbered ids the table is not carried.

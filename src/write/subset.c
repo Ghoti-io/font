@@ -56,6 +56,7 @@
 #define T_FPGM GFNT_TAG('f', 'p', 'g', 'm')
 #define T_PREP GFNT_TAG('p', 'r', 'e', 'p')
 #define T_GDEF GFNT_TAG('G', 'D', 'E', 'F')
+#define T_MATH GFNT_TAG('M', 'A', 'T', 'H')
 #define T_GSUB GFNT_TAG('G', 'S', 'U', 'B')
 #define T_GPOS GFNT_TAG('G', 'P', 'O', 'S')
 #define T_KERN GFNT_TAG('k', 'e', 'r', 'n')
@@ -306,6 +307,7 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf gsub;
   GFNT_WBuf gpos;
   GFNT_WBuf gdef;
+  GFNT_WBuf math;
   GFNT_WBuf kern;
   GFNT_WBuf vhea;
   GFNT_WBuf vmtx;
@@ -333,6 +335,7 @@ static void work_free(GFNT_SubsetWork * w) {
   gfnt_wbuf_free(&w->gsub);
   gfnt_wbuf_free(&w->gpos);
   gfnt_wbuf_free(&w->gdef);
+  gfnt_wbuf_free(&w->math);
   gfnt_wbuf_free(&w->kern);
   gfnt_wbuf_free(&w->vhea);
   gfnt_wbuf_free(&w->vmtx);
@@ -359,6 +362,37 @@ static void work_free(GFNT_SubsetWork * w) {
   w->a->free_fn(w->a->ctx, w->offsets);
 }
 
+/**
+ * One round of the closure a `MATH` table adds: the sizes and parts of the kept glyphs, and
+ * then, because those can be substituted for in turn, what `GSUB` reaches from them.
+ *
+ * @param grew Receives whether the kept set grew.
+ */
+static GFNT_Result math_round(const GFNT_Face * face, const GFNT_SubsetOptions * options,
+    uint8_t * keep, size_t count, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
+    bool * grew, GFNT_Error * error) {
+  size_t before = 0;
+  size_t after = 0;
+  size_t g;
+  bool changed;
+  GFNT_Result result;
+
+  *grew = false;
+  for (g = 0; g < count; ++g) {
+    before += keep[g];
+  }
+  result = gfnt_subset_math_closure(face, keep, count, allocator, &changed, error);
+  if (result == GFNT_OK && changed && !options->no_gsub_closure) {
+    result = gfnt_subset_layout_scan(face, T_GSUB, keep, count, true, options->features,
+        options->feature_count, limits, allocator, NULL, NULL, error);
+  }
+  for (g = 0; g < count; ++g) {
+    after += keep[g];
+  }
+  *grew = after != before;
+  return result;
+}
+
 GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * options,
     const GFNT_Limits * limits, const GFNT_Allocator * allocator,
     GFNT_Blob ** out_blob, GFNT_Error * error) {
@@ -383,6 +417,8 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   char * ps_name = NULL;
   bool variable;
   bool rewrite_layout;
+  bool math = false;
+  bool math_grew = false;
   GFNT_Result result;
 
   if (!face || !out_blob) {
@@ -436,6 +472,7 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   gfnt_wbuf_init(&w.gsub, allocator);
   gfnt_wbuf_init(&w.gpos, allocator);
   gfnt_wbuf_init(&w.gdef, allocator);
+  gfnt_wbuf_init(&w.math, allocator);
   gfnt_wbuf_init(&w.kern, allocator);
   gfnt_wbuf_init(&w.vhea, allocator);
   gfnt_wbuf_init(&w.vmtx, allocator);
@@ -524,6 +561,19 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     }
     w.keep[options->glyphs[i]] = 1;
   }
+  math = !options->drop_layout && gfnt_face_has_table(face, T_MATH);
+  // A math glyph that is kept brings the sizes it grows to and the parts it is built from, and
+  // those can be reached by substitutions of their own: close over both until nothing is added.
+  if (math) {
+    bool grew;
+
+    do {
+      result = math_round(face, options, w.keep, count, limits, allocator, &grew, error);
+    } while (result == GFNT_OK && grew);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+  }
   // The glyphs GSUB can reach. Renumbering also needs to know which lookups the
   // closure found active, and that holds when the glyph set is not being grown.
   rewrite_layout = !retain && !options->drop_layout;
@@ -552,44 +602,53 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     memcpy(w.shape, w.keep, count);
   }
 
-  // A color glyph needs the glyphs it paints with. Text does not reach those, so like
-  // the composites' components they are added after the layout's reachable set is fixed.
-  result = gfnt_subset_colr_closure(face, w.keep, count, limits, allocator, error);
-  if (result != GFNT_OK) {
-    goto done;
-  }
-  if (outlines) {
-    result = gfnt_face_table_reader(face, T_GLYF, &glyf, error);
+  do {
+    math_grew = false;
+    // A color glyph needs the glyphs it paints with. Text does not reach those, so like
+    // the composites' components they are added after the layout's reachable set is fixed.
+    result = gfnt_subset_colr_closure(face, w.keep, count, limits, allocator, error);
     if (result != GFNT_OK) {
       goto done;
     }
-  }
-  for (g = 0; g < count && outlines; ++g) {
-    if (w.keep[g]) {
-      w.stack[sp++] = g;
+    if (outlines) {
+      result = gfnt_face_table_reader(face, T_GLYF, &glyf, error);
+      if (result != GFNT_OK) {
+        goto done;
+      }
     }
-  }
-  while (sp) {
-    const uint8_t * data;
-    size_t length;
-    uint32_t top = w.stack[--sp];
+    for (g = 0; g < count && outlines; ++g) {
+      if (w.keep[g]) {
+        w.stack[sp++] = g;
+      }
+    }
+    while (sp) {
+      const uint8_t * data;
+      size_t length;
+      uint32_t top = w.stack[--sp];
 
-    result = glyph_data(face, &glyf, top, &data, &length, error);
-    if (result == GFNT_OK && length) {
-      result = scan_composite(data, length, w.keep, count, w.stack, &sp, top, error);
+      result = glyph_data(face, &glyf, top, &data, &length, error);
+      if (result == GFNT_OK && length) {
+        result = scan_composite(data, length, w.keep, count, w.stack, &sp, top, error);
+      }
+      if (result != GFNT_OK) {
+        goto done;
+      }
     }
-    if (result != GFNT_OK) {
-      goto done;
-    }
-  }
 
-  // A CFF glyph built as an accented character needs the two glyphs it is built from.
-  if (cff) {
-    result = gfnt_subset_cff_closure(face, w.keep, count, limits, allocator, error);
-    if (result != GFNT_OK) {
-      goto done;
+    // A CFF glyph built as an accented character needs the two glyphs it is built from.
+    if (cff) {
+      result = gfnt_subset_cff_closure(face, w.keep, count, limits, allocator, error);
+      if (result != GFNT_OK) {
+        goto done;
+      }
     }
-  }
+    if (math) {
+      result = math_round(face, options, w.keep, count, limits, allocator, &math_grew, error);
+      if (result != GFNT_OK) {
+        goto done;
+      }
+    }
+  } while (math_grew);
 
   // The numbering.
   w.old_of_new = allocator->calloc_fn(allocator->ctx, count, sizeof *w.old_of_new);
@@ -762,6 +821,15 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     goto done;
   }
 
+  // MATH with the ids where they were: the store its devices name is carried whole.
+  if (retain && !options->drop_layout) {
+    result = gfnt_subset_math(face, w.keep, w.new_of_old, w.old_of_new, count, new_count, NULL,
+        &w.math, allocator, error);
+    if (result != GFNT_OK) {
+      goto done;
+    }
+  }
+
   // GSUB, GPOS and GDEF, rewritten for the new numbering.
   if (rewrite_layout) {
     if (gfnt_face_has_table(face, T_GSUB)) {
@@ -781,6 +849,12 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
       if (result != GFNT_OK) {
         goto done;
       }
+    }
+    // MATH's device tables name rows of the same store, so it is written before the store is.
+    result = gfnt_subset_math(face, w.keep, w.new_of_old, w.old_of_new, count, new_count,
+        w.ivs, &w.math, allocator, error);
+    if (result != GFNT_OK) {
+      goto done;
     }
     result = gfnt_subset_gdef(face, w.shape, w.new_of_old, w.old_of_new, count,
         new_count, w.ivs, &w.gdef, allocator, error);
@@ -887,6 +961,9 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
   }
   if (w.gdef.length) {
     ADD_BUF(T_GDEF, w.gdef);
+  }
+  if (w.math.length) {
+    ADD_BUF(T_MATH, w.math);
   }
   if (w.gsub.length) {
     ADD_BUF(T_GSUB, w.gsub);

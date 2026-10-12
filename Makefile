@@ -700,7 +700,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-pango check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-pango check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -990,7 +990,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-layout check-oracle-css check-oracle-pango check-oracle-orientation check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+check-oracle: check-oracle-layout check-oracle-css check-oracle-pango check-oracle-orientation check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
@@ -1243,6 +1243,10 @@ check-oracle-collection-write: $(EXAMPLES)
 check-oracle-subset-color: ## Subset every static color font and read the COLR and CPAL back through fontTools
 check-oracle-subset-color: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/subset_color_diff.py --quiet
+
+check-oracle-subset-math: ## Subset every corpus font with a MATH table and hold the table to fontTools
+check-oracle-subset-math: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/math_subset_diff.py --quiet
 
 check-oracle-subset-rename: ## Subset every corpus font under a new family name and read the `name` tables back through fontTools
 check-oracle-subset-rename: $(EXAMPLES)

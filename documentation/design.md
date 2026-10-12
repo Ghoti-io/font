@@ -1877,11 +1877,11 @@ the variation store copied whole behind its length. The tables around it: `fvar`
 and `MVAR` name no glyph and are copied; `HVAR` and `VVAR` keep their store and have their
 delta-set index maps rebuilt (`src/write/subset_var.c`), one entry for each kept glyph, with an
 advance map the font left to the glyph id stated, since the ids move, and their own store pruned to the rows those maps reach (a set left empty is dropped, the rest renumbered, the region list kept whole); `GDEF` 1.3 carries its
-item variation store whole, so the variation indices in `GPOS` still point at their rows.
+item variation store pruned to the rows `GPOS` and its carets name, the variation indices renumbered to match.
 Retained ids copy all of them untouched. The pair-adjustment rewrite had a bug this showed: a
 `PairPos` format 1 value record's device offset is counted from its PairSet, and the rewrite counted
 it from the subtable, which turned a variation index into a different device table (fixed). The
-`GDEF`'s and `CFF2`'s stores are not pruned: regions and rows no kept glyph uses stay. `make check-oracle-subset` shapes
+`GDEF`'s store is pruned the same way as its users are written (each variation index in a `GPOS` device table or a `GDEF` caret gets its row's new place, first seen first); `CFF2`'s is not: regions and rows no kept glyph uses stay. `make check-oracle-subset` shapes
 each variable subset with HarfBuzz at eight places in the design space (every extreme, the
 middle, each axis alone) and compares advances, offsets and the box each glyph's outline fills,
 and fontTools draws every kept glyph at the same places; Cantarell (the corpus's one variable CFF2
@@ -1897,7 +1897,7 @@ with the composite, so nothing in them is renumbered. `cvar` is copied when `cvt
 with it under `drop_hinting`. `HVAR` and `VVAR` are rebuilt as for CFF2. `fontTools` draws every kept
 glyph at the oracle's places (decomposed, so a composite's component names do not matter) and HarfBuzz
 shapes the subsets; the variable `glyf` corpus fonts and the `variable-*.ttf` fixtures are in it.
-`HVAR`/`VVAR` stores are pruned as above and `GDEF`'s is not; a `gvar` is not re-packed (shared point
+`HVAR`/`VVAR` and `GDEF` stores are pruned as above; a `gvar` is not re-packed (shared point
 numbers and tuples a dropped glyph used stay).
 
 **Renaming** (`GFNT_SubsetOptions::family_name`, `src/write/subset_name.c`) is what a font whose

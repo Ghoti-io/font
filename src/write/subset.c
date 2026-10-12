@@ -298,6 +298,7 @@ typedef struct GFNT_SubsetWork {
   GFNT_WBuf os2;
   GFNT_WBuf post;
   uint8_t * shape;        // glyphs text can reach: the set the GSUB closure ended with
+  GFNT_IvsMap * ivs;      // GDEF's item variation store, being pruned as GPOS is rewritten
   uint8_t * gsub_active;  // lookups of GSUB and GPOS the kept glyphs can call
   uint8_t * gpos_active;
   uint32_t gsub_count;
@@ -345,6 +346,7 @@ static void work_free(GFNT_SubsetWork * w) {
   gfnt_wbuf_free(&w->vvar);
   gfnt_subset_strikes_free(&w->strikes);
   w->a->free_fn(w->a->ctx, w->shape);
+  gfnt_ivs_map_free(w->ivs);
   w->a->free_fn(w->a->ctx, w->gsub_active);
   w->a->free_fn(w->a->ctx, w->gpos_active);
   w->a->free_fn(w->a->ctx, w->keep);
@@ -765,21 +767,23 @@ GFNT_Result gfnt_subset(const GFNT_Face * face, const GFNT_SubsetOptions * optio
     if (gfnt_face_has_table(face, T_GSUB)) {
       result = gfnt_subset_layout_rewrite(face, T_GSUB, w.shape, w.new_of_old,
           w.old_of_new, count, new_count, w.gsub_active, w.gsub_count, options->features,
-          options->feature_count, &w.gsub, allocator, error);
+          options->feature_count, NULL, &w.gsub, allocator, error);
       if (result != GFNT_OK) {
         goto done;
       }
     }
+    // GDEF's store is pruned to the rows GPOS's device tables and GDEF's carets name.
+    w.ivs = gfnt_subset_gdef_ivs(face, allocator);
     if (gfnt_face_has_table(face, T_GPOS)) {
       result = gfnt_subset_layout_rewrite(face, T_GPOS, w.shape, w.new_of_old,
-          w.old_of_new, count, new_count, w.gpos_active, w.gpos_count, NULL, 0,
+          w.old_of_new, count, new_count, w.gpos_active, w.gpos_count, NULL, 0, w.ivs,
           &w.gpos, allocator, error);
       if (result != GFNT_OK) {
         goto done;
       }
     }
     result = gfnt_subset_gdef(face, w.shape, w.new_of_old, w.old_of_new, count,
-        new_count, &w.gdef, allocator, error);
+        new_count, w.ivs, &w.gdef, allocator, error);
     if (result != GFNT_OK) {
       goto done;
     }

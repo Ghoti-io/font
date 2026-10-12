@@ -628,7 +628,7 @@ static void build_lookup(GFNT_RW * rw, bool is_gpos, size_t lookup_list, uint32_
 GFNT_Result gfnt_subset_layout_rewrite(const GFNT_Face * face, GFNT_Tag tag,
     const uint8_t * shape, const uint32_t * new_of_old, const uint32_t * old_of_new,
     size_t count, size_t new_count, const uint8_t * active, uint32_t active_count,
-    const GFNT_Tag * features, size_t feature_count, GFNT_WBuf * out,
+    const GFNT_Tag * features, size_t feature_count, GFNT_IvsMap * ivs, GFNT_WBuf * out,
     const GFNT_Allocator * allocator, GFNT_Error * error) {
   GFNT_LayoutTable lt;
   GFNT_RW rw;
@@ -657,6 +657,7 @@ GFNT_Result gfnt_subset_layout_rewrite(const GFNT_Face * face, GFNT_Tag tag,
   rw.new_count = new_count;
   rw.active = active;
   rw.lookup_count = active_count;
+  rw.ivs = ivs;
   gfnt_wbuf_init(&scripts, allocator);
   gfnt_wbuf_init(&feats, allocator);
   gfnt_wbuf_init(&lkl, allocator);

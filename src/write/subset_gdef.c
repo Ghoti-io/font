@@ -25,7 +25,7 @@
  *
  * Glyph classes, attachment points, ligature carets, mark attachment classes
  * and mark glyph sets are carried for the glyphs the text can reach. The item
- * variation store (version 1.3) is carried whole.
+ * variation store (version 1.3) is pruned to the rows the device tables name, or carried whole when no map is given.
  */
 
 #include <stdlib.h>
@@ -273,9 +273,34 @@ static void build_mark_sets(GFNT_RW * rw, size_t list, GFNT_WBuf * out) {
   lout_to_buf(rw, &o, out);
 }
 
+GFNT_IvsMap * gfnt_subset_gdef_ivs(const GFNT_Face * face, const GFNT_Allocator * allocator) {
+  GFNT_Reader table;
+  const uint8_t * raw;
+  uint16_t minor = 0;
+  uint32_t var = 0;
+  uint16_t hi = 0;
+  uint16_t lo = 0;
+
+  if (!gfnt_face_has_table(face, GFNT_TAG_GDEF)
+      || gfnt_face_table_reader(face, GFNT_TAG_GDEF, &table, NULL) != GFNT_OK) {
+    return NULL;
+  }
+  table.error = NULL;
+  if (gfnt_reader_u16_at(&table, 2, &minor) != GFNT_OK || minor < 3
+      || gfnt_reader_u16_at(&table, 14, &hi) != GFNT_OK
+      || gfnt_reader_u16_at(&table, 16, &lo) != GFNT_OK) {
+    return NULL;
+  }
+  var = ((uint32_t)hi << 16) | lo;
+  if (!var || var >= table.length || gfnt_read_bytes(&table, table.length, &raw) != GFNT_OK) {
+    return NULL;
+  }
+  return gfnt_ivs_map_create(raw + var, table.length - var, allocator);
+}
+
 GFNT_Result gfnt_subset_gdef(const GFNT_Face * face, const uint8_t * shape,
     const uint32_t * new_of_old, const uint32_t * old_of_new, size_t count,
-    size_t new_count, GFNT_WBuf * out, const GFNT_Allocator * allocator,
+    size_t new_count, GFNT_IvsMap * ivs, GFNT_WBuf * out, const GFNT_Allocator * allocator,
     GFNT_Error * error) {
   GFNT_Reader table;
   GFNT_RW rw;
@@ -307,6 +332,7 @@ GFNT_Result gfnt_subset_gdef(const GFNT_Face * face, const uint8_t * shape,
   rw.old_of_new = old_of_new;
   rw.count = count;
   rw.new_count = new_count;
+  rw.ivs = ivs;
 
   major = gfnt_rw_u16(&rw, 0);
   minor = gfnt_rw_u16(&rw, 2);
@@ -372,7 +398,25 @@ GFNT_Result gfnt_subset_gdef(const GFNT_Face * face, const uint8_t * shape,
     piece.length = 0;
   }
   if (var_bytes && healthy(&rw)) {
-    gfnt_lout_link32(&o, 14, 0, gfnt_lout_add(&o, var_bytes, var_length));
+    if (ivs) {
+      // Only the rows a device table in GPOS or here named, which now have their new places.
+      if (gfnt_ivs_map_rows(ivs)) {
+        GFNT_WBuf store;
+
+        gfnt_wbuf_init(&store, allocator);
+        gfnt_ivs_map_write(ivs, &store);
+        if (store.oom || gfnt_ivs_map_failed(ivs)) {
+          rw.oom = true;
+        }
+        else {
+          gfnt_lout_link32(&o, 14, 0, gfnt_lout_add(&o, store.data, store.length));
+        }
+        gfnt_wbuf_free(&store);
+      }
+    }
+    else {
+      gfnt_lout_link32(&o, 14, 0, gfnt_lout_add(&o, var_bytes, var_length));
+    }
   }
   gfnt_wbuf_free(&piece);
   if (rw.bad) {

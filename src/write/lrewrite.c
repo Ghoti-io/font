@@ -466,6 +466,20 @@ void gfnt_rw_device(GFNT_RW * rw, size_t source, GFNT_WBuf * out) {
   size_t size = device_size(rw, source);
   size_t i;
 
+  if (rw->ivs && size == 6 && gfnt_rw_u16(rw, source + 4) == 0x8000u && !rw->bad) {
+    // A variation index: the row it names has a new place in the pruned store.
+    uint32_t outer = 0xFFFFu;
+    uint32_t inner = 0xFFFFu;
+
+    if (!gfnt_ivs_map_assign(rw->ivs, gfnt_rw_u16(rw, source), gfnt_rw_u16(rw, source + 2),
+            &outer, &inner)) {
+      outer = inner = 0xFFFFu;   // No such row: still none.
+    }
+    gfnt_wbuf_u16(out, outer);
+    gfnt_wbuf_u16(out, inner);
+    gfnt_wbuf_u16(out, 0x8000u);
+    return;
+  }
   for (i = 0; i < size && !rw->bad; i += 2) {
     gfnt_wbuf_u16(out, gfnt_rw_u16(rw, source + i));
   }

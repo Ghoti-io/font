@@ -632,6 +632,36 @@ TEST(SubsetCff2, VariablePositioningKeepsItsDeviceTablesAndTheStoreTheyIndex) {
       gpos.end());
 }
 
+TEST(SubsetCff2, TheGdefStoreKeepsOnlyTheRowsTheKeptGlyphsDeviceTablesName) {
+  Font source("variable-cff2-hvar.otf");
+  auto rows = [](const std::vector<uint8_t> & t) {
+    auto u16 = [&](size_t at) { return static_cast<size_t>((t[at] << 8) | t[at + 1]); };
+    auto u32 = [&](size_t at) {
+      return static_cast<size_t>((u16(at) << 16) | u16(at + 2));
+    };
+    if (t.size() < 18 || u16(2) < 3 || u32(14) == 0) {
+      return static_cast<size_t>(0);
+    }
+    const size_t s = u32(14);
+    size_t total = 0;
+    for (size_t d = 0; d < u16(s + 6); ++d) {
+      total += u16(s + u32(s + 8 + 4 * d));
+    }
+    return total;
+  };
+  const size_t all = rows(table_of(source.face, "GDEF"));
+  ASSERT_GT(all, 1u);
+  bool pruned = false;
+  for (uint32_t g = 1; g < source.glyphs(); ++g) {
+    Subset sub(source.face, {g});
+    ASSERT_EQ(sub.result, GFNT_OK);
+    const size_t now = rows(table_of(sub.face, "GDEF"));
+    EXPECT_LE(now, all) << "glyph " << g;
+    pruned = pruned || now < all;
+  }
+  EXPECT_TRUE(pruned) << "a glyph whose device tables name fewer rows leaves the others out";
+}
+
 TEST(SubsetCff2, EveryAllocationFailureIsSurvived) {
   Font source("variable-cff2-hvar.otf");
   std::vector<uint32_t> glyphs = {4, 5, 7};

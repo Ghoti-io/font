@@ -40,6 +40,24 @@ extern "C" {
 
 #define GFNT_RW_NONE 0xFFFFFFFFu
 
+/**
+ * An item variation store being pruned as its users are written: each (outer, inner) pair a
+ * variation index names is given a new place in first-seen order, and ::gfnt_ivs_map_write()
+ * then writes the store with only those rows. The region list is kept whole.
+ */
+typedef struct GFNT_IvsMap GFNT_IvsMap;
+
+/** A map over the store at @p store (@p avail bytes), or NULL if it cannot be read or memory ran out. */
+GFNT_IvsMap * gfnt_ivs_map_create(const uint8_t * store, size_t avail, const GFNT_Allocator * a);
+void gfnt_ivs_map_free(GFNT_IvsMap * m);
+/** The new place of a row; false when the store has no such row (the caller then writes "no delta"). */
+bool gfnt_ivs_map_assign(GFNT_IvsMap * m, uint32_t outer, uint32_t inner, uint32_t * new_outer,
+    uint32_t * new_inner);
+size_t gfnt_ivs_map_rows(const GFNT_IvsMap * m);
+uint32_t gfnt_ivs_map_sets(const GFNT_IvsMap * m);
+bool gfnt_ivs_map_failed(const GFNT_IvsMap * m);
+void gfnt_ivs_map_write(GFNT_IvsMap * m, GFNT_WBuf * out);
+
 /** The source table, the glyph numbering, and what has gone wrong. */
 typedef struct GFNT_RW {
   const GFNT_Allocator * a;
@@ -52,6 +70,7 @@ typedef struct GFNT_RW {
   const uint8_t * active;       ///< Per old lookup: kept. NULL where lookups do not matter.
   const uint32_t * lookup_map;  ///< Per old lookup: its new index.
   uint32_t lookup_count;
+  GFNT_IvsMap * ivs;  ///< Where a variation index in a device table is renumbered, or NULL to copy it.
   bool bad;       ///< The source table could not be read.
   bool oom;
   bool overflow;  ///< A 16-bit offset did not fit.
@@ -167,12 +186,15 @@ bool gfnt_rw_subtable(GFNT_RW * rw, bool is_gpos, uint16_t type, size_t st,
 GFNT_Result gfnt_subset_layout_rewrite(const GFNT_Face * face, GFNT_Tag tag,
     const uint8_t * shape, const uint32_t * new_of_old, const uint32_t * old_of_new,
     size_t count, size_t new_count, const uint8_t * active, uint32_t active_count,
-    const GFNT_Tag * features, size_t feature_count, GFNT_WBuf * out,
+    const GFNT_Tag * features, size_t feature_count, GFNT_IvsMap * ivs, GFNT_WBuf * out,
     const GFNT_Allocator * allocator, GFNT_Error * error);
+
+/** The map over `GDEF`'s item variation store, or NULL when it has none (or memory ran out: the store is then carried whole). */
+GFNT_IvsMap * gfnt_subset_gdef_ivs(const GFNT_Face * face, const GFNT_Allocator * allocator);
 
 GFNT_Result gfnt_subset_gdef(const GFNT_Face * face, const uint8_t * shape,
     const uint32_t * new_of_old, const uint32_t * old_of_new, size_t count,
-    size_t new_count, GFNT_WBuf * out, const GFNT_Allocator * allocator,
+    size_t new_count, GFNT_IvsMap * ivs, GFNT_WBuf * out, const GFNT_Allocator * allocator,
     GFNT_Error * error);
 
 #ifdef __cplusplus

@@ -52,7 +52,7 @@ for j in jobs:
     lay.set_text(j['text'], -1)
     if j.get('room'):
         lay.set_width(int(j['room'] * Pango.SCALE))
-    lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+    lay.set_wrap(Pango.WrapMode.WORD)   # a word wider than the room overflows, as in a paragraph here
     chars = []
     pos = 0
     for ch in j['text']:

@@ -27,7 +27,8 @@
  *                    [--align start|end|left|right|center|justify] [--face N]
  *                    [--mode horizontal|vertical-rl|vertical-lr|sideways-rl|sideways-lr]
  *                    [--orient mixed|mixed-pango|upright|sideways]
- *                    [--justify auto|inter-word|inter-character|none] <font>
+ *                    [--justify auto|inter-word|inter-character|none]
+ *                    [--hyphens manual|manual-pango|none] <font>
  *
  * Reads one request per line from standard input: `<width>\t<hex>`, where the
  * width is in 26.6 pixels or `u` for unbounded and the text is the hex of its
@@ -270,6 +271,12 @@ int main(int argc, char ** argv) {
       options.justify = strcmp(v, "inter-word") == 0 ? GFNT_JUSTIFY_INTER_WORD
           : strcmp(v, "inter-character") == 0 ? GFNT_JUSTIFY_INTER_CHARACTER
           : strcmp(v, "none") == 0 ? GFNT_JUSTIFY_NONE : GFNT_JUSTIFY_AUTO;
+    }
+    else if (strcmp(argv[a], "--hyphens") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+
+      options.hyphens = strcmp(v, "none") == 0 ? GFNT_HYPHENS_NONE
+          : strcmp(v, "manual-pango") == 0 ? GFNT_HYPHENS_MANUAL_PANGO : GFNT_HYPHENS_MANUAL;
     }
     else if (strcmp(argv[a], "--orient") == 0 && a + 1 < argc) {
       const char * v = argv[++a];

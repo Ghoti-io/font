@@ -204,7 +204,14 @@ typedef enum GFNT_Hyphens {
   GFNT_HYPHENS_MANUAL = 0,
   GFNT_HYPHENS_NONE,  ///< A soft hyphen is not a place to break either; it is invisible.
   /** Soft hyphens, and the places ::GFNT_Hyphenator names in the words it is asked about. */
-  GFNT_HYPHENS_AUTO
+  GFNT_HYPHENS_AUTO,
+  /**
+   * As ::GFNT_HYPHENS_MANUAL, but a soft hyphen after an ideograph is a place to break (with no
+   * hyphen shown), as Pango has it. With ::GFNT_HYPHENS_MANUAL, Chromium's way, a soft hyphen
+   * after an ideograph is no place to break and is invisible: the break falls where it would
+   * have without it.
+   */
+  GFNT_HYPHENS_MANUAL_PANGO
 } GFNT_Hyphens;
 
 /**

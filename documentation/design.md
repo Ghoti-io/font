@@ -1670,11 +1670,21 @@ joiners and variation selectors follow their base; a run is a stretch of one scr
 and one orientation. A column is as thick as its thickest box, every box being centred on the same
 axis. `SIDEWAYS_LR` (text reads upward, columns stack from the left, glyphs turned the other way)
 is `SIDEWAYS_RL` turned half a turn about the paragraph box, and hit testing turns the point back.
-Breaking, hanging, hyphenation, tabs, truncation and the bidirectional algorithm are the
-horizontal rules along the other axis. A caret is a horizontal bar, and a range's rectangles are
+Breaking, hanging, tabs, truncation and the bidirectional algorithm are the horizontal rules along
+the other axis. Soft hyphens follow Chromium (measured, `make check-oracle-css`): the hyphen a line
+ends in is upright on its vertical advance in a `vertical-rl` or `vertical-lr` column with orientation
+mixed or upright, and turned otherwise; and after an ideograph a soft hyphen is invisible and no place
+to break (`GFNT_HYPHENS_MANUAL_PANGO`: a place to break, as Pango has it, and the hyphen turned with
+the text). A caret is a horizontal bar, and a range's rectangles are
 as thick as the column. `make check-oracle-css` holds the layout to Chromium (the `chrome` image,
 CSS Writing Modes): the rectangle of every character in 22 cases, and the ink of 40 glyphs read
 from a screenshot, agree to 0.05 and 1.6 pixels; a wrong orientation or direction fails both.
+
+**Held to Pango too** (`make check-oracle-pango`, the pinned `pango` image): with
+`GFNT_ORIENT_MIXED_PANGO` and `GFNT_HYPHENS_MANUAL_PANGO` the line each character lies on and where
+along it, in rows and in columns, for wrapping, mixed orientation, digits, punctuation, soft hyphens
+(Latin and ideographic) and newlines: 127 characters in 13 cases, 0 differences; Chromium's rules
+against Pango's differ in 2 of them.
 
 **Justification** (`GFNT_ParagraphOptions::justify`, CSS `text-justify`): `AUTO` (the default) widens
 the spaces of a line and the gaps next to ideographs, `INTER_WORD` the spaces only, `INTER_CHARACTER`

@@ -659,6 +659,90 @@ TEST(LayoutVertical, UprightTextAtAnOddLevelIsStoredVisuallyWithItsClustersToMat
   }
 }
 
+/** One column laid out with the given hyphen handling, for the tests below. */
+struct Hyphenated {
+  GFNT_Paragraph * p = nullptr;
+  GFNT_Layout layout{};
+  const GFNT_Face * faces[1];
+
+  Hyphenated(const Font & font, const std::string & text, GFNT_WritingMode mode,
+      GFNT_Hyphens how, GFNT_TextOrientation orientation = GFNT_ORIENT_MIXED) {
+    faces[0] = font.face;
+    GFNT_TextSpan span{};
+    span.length = text.size();
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    GFNT_ParagraphOptions o{};
+    o.writing_mode = mode;
+    o.text_orientation = orientation;
+    o.hyphens = how;
+    EXPECT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o, nullptr, &p, nullptr),
+        GFNT_OK);
+  }
+  ~Hyphenated() {
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(p);
+  }
+  Hyphenated(const Hyphenated &) = delete;
+  Hyphenated & operator=(const Hyphenated &) = delete;
+};
+
+TEST(LayoutVerticalHyphen, TheHyphenAtTheEndOfAColumnIsUprightInCssAndTurnedInPango) {
+  Font font;
+  // "AB" turned, 135 across, then a soft hyphen; the room holds one AB and the hyphen.
+  const std::string text = "AB\xC2\xAD" "AB";
+  Hyphenated css(font, text, GFNT_WRITING_VERTICAL_RL, GFNT_HYPHENS_MANUAL);
+  ASSERT_EQ(gfnt_paragraph_layout(css.p, px(200), &css.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(css.layout.line_count, 2u);
+  const GFNT_LineRun * hyphen = nullptr;
+  for (size_t k = 0; k < css.layout.lines[0].run_count; ++k) {
+    if (css.layout.lines[0].runs[k].hyphen) {
+      hyphen = &css.layout.lines[0].runs[k];
+    }
+  }
+  ASSERT_NE(hyphen, nullptr);
+  EXPECT_EQ(hyphen->orientation, GFNT_ORIENT_RUN_UPRIGHT) << "on its vertical advance, as Chromium";
+  EXPECT_EQ(hyphen->advance, px(60));
+  Hyphenated pango(font, text, GFNT_WRITING_VERTICAL_RL, GFNT_HYPHENS_MANUAL_PANGO,
+      GFNT_ORIENT_MIXED_PANGO);
+  ASSERT_EQ(gfnt_paragraph_layout(pango.p, px(200), &pango.layout, nullptr), GFNT_OK);
+  hyphen = nullptr;
+  for (size_t k = 0; k < pango.layout.lines[0].run_count; ++k) {
+    if (pango.layout.lines[0].runs[k].hyphen) {
+      hyphen = &pango.layout.lines[0].runs[k];
+    }
+  }
+  ASSERT_NE(hyphen, nullptr);
+  EXPECT_EQ(hyphen->orientation, GFNT_ORIENT_RUN_CW) << "turned with the text, as Pango";
+  EXPECT_EQ(hyphen->advance, px(33));
+}
+
+TEST(LayoutVerticalHyphen, ASoftHyphenAfterAnIdeographIsInvisibleAndBreaksOnlyInPango) {
+  Font font;
+  // 日本 SHY 語日 SHY 本語 with room for two ideographs and a bit.
+  const std::string text = std::string(kJi) + kHon + "\xC2\xAD" + kGo + kJi + "\xC2\xAD" + kHon
+      + kGo;
+  Hyphenated css(font, text, GFNT_WRITING_VERTICAL_RL, GFNT_HYPHENS_MANUAL);
+  ASSERT_EQ(gfnt_paragraph_layout(css.p, px(250), &css.layout, nullptr), GFNT_OK);
+  // The break falls between ideographs as it would without the soft hyphens: 日本 語日 本語 does
+  // not, 日 本語 日本 語 does (the soft hyphen after 本 is no place to break).
+  EXPECT_EQ(css.layout.line_count, 4u);
+  for (size_t i = 0; i < css.layout.line_count; ++i) {
+    for (size_t k = 0; k < css.layout.lines[i].run_count; ++k) {
+      EXPECT_FALSE(css.layout.lines[i].runs[k].hyphen) << "no hyphen after an ideograph";
+    }
+  }
+  Hyphenated pango(font, text, GFNT_WRITING_VERTICAL_RL, GFNT_HYPHENS_MANUAL_PANGO);
+  ASSERT_EQ(gfnt_paragraph_layout(pango.p, px(250), &pango.layout, nullptr), GFNT_OK);
+  EXPECT_EQ(pango.layout.line_count, 3u) << "the soft hyphen is a place to break, with no hyphen";
+  for (size_t i = 0; i < pango.layout.line_count; ++i) {
+    for (size_t k = 0; k < pango.layout.lines[i].run_count; ++k) {
+      EXPECT_FALSE(pango.layout.lines[i].runs[k].hyphen);
+    }
+  }
+}
+
 TEST(LayoutVertical, ABadModeIsRefused) {
   Font font;
   const GFNT_Face * faces[1] = {font.face};

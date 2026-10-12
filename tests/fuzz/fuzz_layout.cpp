@@ -201,7 +201,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   o.justify = static_cast<GFNT_Justify>(b & 0x03);
   o.direction = static_cast<GFNT_BidiDirection>(((b >> 2) & 0x03) % 3);
   o.line_break = static_cast<GFNT_LineBreak>(((b >> 4) & 0x03));
-  o.hyphens = static_cast<GFNT_Hyphens>(((b >> 6) & 0x01));
+  o.hyphens = static_cast<GFNT_Hyphens>(((b >> 6) & 0x03) % 4 == 3 ? GFNT_HYPHENS_MANUAL_PANGO
+      : ((b >> 6) & 0x03) % 3);
   if (((a >> 6) & 1) && !text.empty()) {
     o.max_lines = 1 + (b & 1);
     o.ellipsis = "A";

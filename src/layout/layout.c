@@ -91,8 +91,9 @@ static bool is_ideographic(uint32_t cp) {
 
 static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
     const uint32_t * text, size_t text_count, PGlyph * glyphs, size_t * count,
-    GFNT_F26Dot6 * total, PRun * run, GFNT_Error * error);
+    GFNT_F26Dot6 * total, PRun * run, int force, GFNT_Error * error);
 static uint8_t string_orientation(const GFNT_Paragraph * p, size_t span, uint32_t cp);
+static int hyphen_orientation(const GFNT_Paragraph * p);
 
 /** The width of a unit that starts @p pos from the line's start: a tab goes to the next stop. */
 static GFNT_F26Dot6 eff_width(const GFNT_Paragraph * p, const Unit * u,
@@ -335,9 +336,14 @@ static GFNT_Result mark_hyphens(GFNT_Paragraph * p, const char * text, const siz
       u->opportunity = false;
     }
     else if (!u->hard) {
-      u->opportunity = true;
-      u->hyphen = true;
-      any = true;
+      // A soft hyphen is a place to break, and a hyphen is shown there, unless the character before
+      // it is an ideograph: neither Chromium nor Pango shows one, and Chromium does not break there
+      // either (Pango does).
+      const bool ideograph = u->cp_end >= 2 && is_ideographic(p->cps[u->cp_end - 2]);
+
+      u->opportunity = !ideograph || p->options.hyphens == GFNT_HYPHENS_MANUAL_PANGO;
+      u->hyphen = !ideograph;
+      any = any || u->hyphen;
     }
   }
   if (automatic && p->length > 1 && p->unit_count) {
@@ -401,8 +407,8 @@ static GFNT_Result mark_hyphens(GFNT_Paragraph * p, const char * text, const siz
         if (allowed[k] && unit != (size_t)-1 && !p->units[unit].hard
             && !p->units[unit].opportunity) {
           p->units[unit].opportunity = true;
-          p->units[unit].hyphen = true;
-          any = true;
+          p->units[unit].hyphen = !is_ideographic(p->cps[i - 1]);
+          any = any || p->units[unit].hyphen;
         }
       }
     }
@@ -434,7 +440,7 @@ static GFNT_Result mark_hyphens(GFNT_Paragraph * p, const char * text, const siz
       continue;
     }
     p->hyphen_cp[i] = face_maps(p->styles[i].faces[0], 0x2010) ? 0x2010 : 0x2D;
-    r = shape_string(p, i, &p->hyphen_cp[i], 1, g, &count, &width, &run, error);
+    r = shape_string(p, i, &p->hyphen_cp[i], 1, g, &count, &width, &run, hyphen_orientation(p), error);
     p->hyphen_width[i] = width;
     if (count > p->hyphen_glyphs) {
       p->hyphen_glyphs = count;
@@ -532,6 +538,22 @@ static uint8_t string_orientation(const GFNT_Paragraph * p, size_t span, uint32_
                                                                     : GFNT_ORIENT_RUN_CW;
 }
 
+/**
+ * How the hyphen a line ends in sits. In vertical text that reads CSS's way (the columns of
+ * `vertical-rl` and `vertical-lr`, orientation mixed or upright) Chromium draws it upright, on
+ * the vertical advance, however the letters before it sit; everywhere else it is set as the
+ * character it is, which for a hyphen is sideways (and Pango's way, whatever the orientation).
+ * -1 means that.
+ */
+static int hyphen_orientation(const GFNT_Paragraph * p) {
+  if ((p->mode == GFNT_WRITING_VERTICAL_RL || p->mode == GFNT_WRITING_VERTICAL_LR)
+      && (p->options.text_orientation == GFNT_ORIENT_MIXED
+          || p->options.text_orientation == GFNT_ORIENT_UPRIGHT)) {
+    return GFNT_ORIENT_RUN_UPRIGHT;
+  }
+  return -1;
+}
+
 GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     const GFNT_TextSpan * spans, size_t span_count,
     const GFNT_ParagraphOptions * options, const GFNT_Allocator * allocator,
@@ -564,7 +586,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   if ((unsigned)options->direction > GFNT_BIDI_AUTO
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
-      || (unsigned)options->hyphens > GFNT_HYPHENS_AUTO
+      || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
       || (unsigned)options->writing_mode > GFNT_WRITING_SIDEWAYS_LR
       || (unsigned)options->text_orientation > GFNT_ORIENT_MIXED_PANGO) {
@@ -1002,7 +1024,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       GFNT_F26Dot6 w = 0;
       PRun tr;
 
-      r = shape_string(p, 0, &space, 1, g, &gn, &w, &tr, error);
+      r = shape_string(p, 0, &space, 1, g, &gn, &w, &tr, -1, error);
       if (r != GFNT_OK) {
         goto done;
       }
@@ -1201,7 +1223,7 @@ static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
 /** Shape a short string in a span's style and first face. */
 static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
     const uint32_t * text, size_t text_count,
-    PGlyph * glyphs, size_t * count, GFNT_F26Dot6 * total, PRun * run,
+    PGlyph * glyphs, size_t * count, GFNT_F26Dot6 * total, PRun * run, int force,
     GFNT_Error * error) {
   const GFNT_TextStyle * style = &p->styles[span];
   GFNT_ShapeOptions so;
@@ -1215,7 +1237,8 @@ static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
   memset(&fr, 0, sizeof fr);
   so.language = style->language;
   so.variation = style->variation;
-  upright = text_count && string_orientation(p, span, text[0]) == GFNT_ORIENT_RUN_UPRIGHT;
+  upright = text_count && (force >= 0 ? force == GFNT_ORIENT_RUN_UPRIGHT
+      : string_orientation(p, span, text[0]) == GFNT_ORIENT_RUN_UPRIGHT);
   so.direction = upright ? GFNT_DIRECTION_TTB
                          : (p->para_level & 1) ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
   *count = 0;
@@ -1229,7 +1252,8 @@ static GFNT_Result shape_string(const GFNT_Paragraph * p, size_t span,
   run->face = style->faces[0];
   run->span = span;
   run->level = p->para_level;
-  run->orient = text_count ? string_orientation(p, span, text[0]) : GFNT_ORIENT_RUN_HORIZONTAL;
+  run->orient = !text_count ? GFNT_ORIENT_RUN_HORIZONTAL
+      : force >= 0 ? (uint8_t)force : string_orientation(p, span, text[0]);
   scale_metrics(run->face, style, run);
   if (gfnt_face_units_per_em(run->face, &upem, NULL) != GFNT_OK || !upem) {
     upem = 1000;
@@ -1431,7 +1455,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       const PRun * last = &p->runs[p->units[ub - 1].run];
 
       r = shape_string(p, last->span, &p->hyphen_cp[last->span], 1, hy_g, &hy_n, &hy_w,
-          &hy_run, error);
+          &hy_run, hyphen_orientation(p), error);
       if (r != GFNT_OK) {
         goto done;
       }
@@ -1446,7 +1470,7 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
                                                   : 0);
 
       r = shape_string(p, span, p->ell, p->ell_count, ell_g, &ell_n, &ell_w,
-          &ell_run, error);
+          &ell_run, -1, error);
       if (r != GFNT_OK) {
         goto done;
       }

@@ -114,6 +114,13 @@ for _name, _text in JUSTIFY_TEXTS:
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
 # the line and spreads the slack over the opportunities it has. See notes/font/VERTICAL.md.
+# Soft hyphens (hyphens: manual, Chromium's default) in both axes, with the hyphen that ends a line.
+for _mode, _room in (("horizontal", 170), ("vertical-rl", 170), ("vertical-lr", 170),
+                     ("sideways-lr", 170)):
+    CASES.append(("soft-hyphens-" + _mode, "AB\u00adAB\u00adAB\u00adAB\u00adAB", _mode, "mixed",
+                  _room, "start", "ltr"))
+    CASES.append(("soft-hyphens-cjk-" + _mode, "\u65e5\u672c\u00ad\u8a9e\u65e5\u00ad\u672c\u8a9e",
+                  _mode, "mixed", 150, "start", "ltr"))
 CASES.append(("justify-rtl-cjk", J * 4, "horizontal", "mixed", 330, "justify", "rtl", "auto"))
 CASES.append(("justify-rtl-vertical", J * 4, "vertical-rl", "mixed", 330, "justify", "rtl", "auto"))
 CASES.append(("justify-lr", J * 4, "vertical-lr", "mixed", 330, "justify", "ltr", "auto"))
@@ -155,12 +162,13 @@ function measure(c) {
     const r = document.createRange();
     r.setStart(tn, i);
     r.setEnd(tn, i + ch.length);
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
     for (const q of r.getClientRects()) {
+      n++;
       x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y);
       x1 = Math.max(x1, q.x + q.width); y1 = Math.max(y1, q.y + q.height);
     }
-    chars.push(x0 === Infinity ? null : [x0, y0, x1 - x0, y1 - y0]);
+    chars.push(x0 === Infinity ? null : [x0, y0, x1 - x0, y1 - y0, n]);
     i += ch.length;
   }
   const b = d.getBoundingClientRect();
@@ -223,11 +231,16 @@ def compare(case, theirs, mine, verbose):
         b = [v / 64.0 for v in mine["chars"][i]]
         if a is None:
             continue                       # Chromium gave this character no box
-        if ch in "\n":
-            continue                       # a newline has no place in either
+        if ch in "\n\u00ad":
+            continue                       # a newline has no place in either; a soft hyphen's
+                                           # rectangle holds the hyphen Chromium adds, which is no
+                                           # character of the text
+        if len(a) > 4 and a[4] > 1:
+            continue                       # a character split over two lines: Chromium's united
+                                           # rectangle is not a place on either
         if a[2] == 0 and a[3] == 0:
             continue                       # collapsed or hung to nothing
-        if all(abs(x - y) <= tolerance for x, y in zip(a, b)):
+        if all(abs(x - y) <= tolerance for x, y in zip(a[:4], b)):
             continue
         problems.append("char %d %r: chromium %s, this %s"
                         % (i, ch, [round(v, 2) for v in a], [round(v, 2) for v in b]))
@@ -256,6 +269,11 @@ INK_CASES = [
     ("ink-upright", "\u65e5AB\u672cab", "vertical-rl", "upright", 900),
     ("ink-sideways-text", "\u65e5AB\u672c", "vertical-rl", "sideways", 900),
     ("ink-horizontal", "AB\u65e5ab", "horizontal", "mixed", 900),
+    ("ink-hyphen-h", "AB\u00adAB\u00adAB\u00adAB", "horizontal", "mixed", 300),
+    ("ink-hyphen-v", "AB\u00adAB\u00adAB\u00adAB", "vertical-rl", "mixed", 300),
+    ("ink-hyphen-sideways-lr", "AB\u00adAB\u00adAB\u00adAB", "sideways-lr", "mixed", 300),
+    ("ink-hyphen-cjk-v", "\u65e5\u672c\u00ad\u8a9e\u65e5\u00ad\u672c\u8a9e", "vertical-rl", "mixed",
+     250),
     ("ink-justify-h", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB", "horizontal", "mixed",
      1100, "justify"),
     ("ink-justify-v", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB", "vertical-rl", "mixed",

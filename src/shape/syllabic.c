@@ -78,6 +78,11 @@ bool gfnt_syllabic_insert_dotted_circles(GFNT_ShapeCtx * ctx,
             && buf->info[at].category == repha_category) {
           at++;
         }
+        // A syllable that is a repha and nothing else has no letter to follow it: the circle
+        // stands in front (HarfBuzz, found by shaping every lone prefixed consonant).
+        if (at >= buf->len || buf->info[at].syllable != last_syllable) {
+          at = i;
+        }
       }
       if (!gfnt_lbuf_insert(buf, at, &circle)) {
         ctx->oom = true;

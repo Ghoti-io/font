@@ -2200,6 +2200,27 @@ TEST(ShapeThai, LaoMaiKonGoesAfterTheNikhahitOfASaraAmToo) {
   EXPECT_EQ(ids(g), (V{2, 4, 3, 5}));
 }
 
+TEST(ShapeUniversal, ALoneRephaIsBrokenAndALoneStackerIsNot) {
+  // Masaram Gondi REPHA (a repha) and Zanabazar CLUSTER-INITIAL RA (a stacker), against a font
+  // whose cmap holds only the dotted circle 5 and the space 6 (the characters are outside the
+  // plane the fixture's cmap reaches, so they draw as glyph 0). Each set against HarfBuzz in a
+  // real font that has the circle.
+  Font font(small_font({}, 8, {{0x25CC, 5}, {0x20, 6}}));
+  Glyphs g;
+  Request request;
+  request.script = "gonm";
+  ASSERT_EQ(shape(font, V{0x11D46}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5, 0})) << "the circle stands in front of a lone repha";
+  // A space is no base for it: the repha is broken and the space is set apart, after.
+  ASSERT_EQ(shape(font, V{0x11D46, 0x20}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{5, 0, 6}));
+  request.script = "zanb";
+  ASSERT_EQ(shape(font, V{0x11A3A}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{0}));
+  ASSERT_EQ(shape(font, V{0x11A3A, 0x20}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{0, 6}));
+}
+
 namespace {
 
 /**

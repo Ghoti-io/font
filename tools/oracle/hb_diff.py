@@ -187,6 +187,74 @@ PSALTER = _words([(0x10b80, 0x10b91)], 7)
 SOGDIAN = _words([(0x10f30, 0x10f45), (0x10f46, 0x10f50)], 8)
 PHAGSPA = _words([(0xa840, 0xa873)], 9)
 
+def _script_words(prefix, seed, count=10):
+    """Words of a script found by character name (its letters, signs and viramas), shaped as a
+    syllable would be written: a letter, then often a virama and a letter, a vowel sign, a
+    mark. Invalid sequences are on purpose: how a broken cluster is shaped is part of the
+    shaping, and HarfBuzz decides it."""
+    import random
+    import unicodedata
+    rng = random.Random(seed)
+    cps = [c for c in range(0x80, 0x110000)
+           if unicodedata.name(chr(c), "").startswith(prefix + " ")]
+    letters = [chr(c) for c in cps if unicodedata.category(chr(c)) in ("Lo", "Lm", "Ll", "Lu")]
+    viramas = [chr(c) for c in cps if unicodedata.combining(chr(c)) == 9]
+    signs = [chr(c) for c in cps if unicodedata.category(chr(c)) in ("Mc", "Mn", "Me")
+             and unicodedata.combining(chr(c)) != 9]
+    digits = [chr(c) for c in cps if unicodedata.category(chr(c)) == "Nd"]
+    if not letters:
+        return []
+    out = []
+    for _ in range(count):
+        word = ""
+        for _ in range(rng.randint(1, 3)):
+            word += rng.choice(letters)
+            if viramas and rng.random() < 0.35:
+                word += rng.choice(viramas) + rng.choice(letters)
+            for _ in range(rng.choice([0, 0, 1, 1, 2])):
+                if signs:
+                    word += rng.choice(signs)
+        out.append(word)
+    if digits:
+        out.append("".join(rng.choice(digits) for _ in range(4)))
+    out.append(" ".join(out[:3]))
+    return out
+
+
+# (case name, ISO 15924, OpenType tag, character name prefix)
+NAMED_SCRIPTS = [
+    ("balinese", "Bali", "bali", "BALINESE"), ("batak", "Batk", "batk", "BATAK"),
+    ("bengali", "Beng", "beng", "BENGALI"), ("bhaiksuki", "Bhks", "bhks", "BHAIKSUKI"),
+    ("brahmi", "Brah", "brah", "BRAHMI"), ("buginese", "Bugi", "bugi", "BUGINESE"),
+    ("buhid", "Buhd", "buhd", "BUHID"), ("chakma", "Cakm", "cakm", "CHAKMA"),
+    ("cham", "Cham", "cham", "CHAM"), ("devanagari", "Deva", "deva", "DEVANAGARI"),
+    ("grantha", "Gran", "gran", "GRANTHA"), ("gujarati", "Gujr", "gujr", "GUJARATI"),
+    ("gunjala gondi", "Gong", "gong", "GUNJALA GONDI"), ("gurmukhi", "Guru", "guru", "GURMUKHI"),
+    ("hanunoo", "Hano", "hano", "HANUNOO"), ("javanese", "Java", "java", "JAVANESE"),
+    ("kaithi", "Kthi", "kthi", "KAITHI"), ("kannada", "Knda", "knda", "KANNADA"),
+    ("kharoshthi", "Khar", "khar", "KHAROSHTHI"), ("khmer", "Khmr", "khmr", "KHMER"),
+    ("khojki", "Khoj", "khoj", "KHOJKI"), ("khudawadi", "Sind", "sind", "KHUDAWADI"),
+    ("lepcha", "Lepc", "lepc", "LEPCHA"), ("limbu", "Limb", "limb", "LIMBU"),
+    ("mahajani", "Mahj", "mahj", "MAHAJANI"), ("malayalam", "Mlym", "mlym", "MALAYALAM"),
+    ("masaram gondi", "Gonm", "gonm", "MASARAM GONDI"),
+    ("meetei mayek", "Mtei", "mtei", "MEETEI MAYEK"), ("modi", "Modi", "modi", "MODI"),
+    ("multani", "Mult", "mult", "MULTANI"), ("myanmar", "Mymr", "mymr", "MYANMAR"),
+    ("newa", "Newa", "newa", "NEWA"), ("new tai lue", "Talu", "talu", "NEW TAI LUE"),
+    ("oriya", "Orya", "orya", "ORIYA"), ("rejang", "Rjng", "rjng", "REJANG"),
+    ("saurashtra", "Saur", "saur", "SAURASHTRA"), ("sharada", "Shrd", "shrd", "SHARADA"),
+    ("siddham", "Sidd", "sidd", "SIDDHAM"), ("sinhala", "Sinh", "sinh", "SINHALA"),
+    ("sora sompeng", "Sora", "sora", "SORA SOMPENG"), ("soyombo", "Soyo", "soyo", "SOYOMBO"),
+    ("sundanese", "Sund", "sund", "SUNDANESE"), ("syloti nagri", "Sylo", "sylo", "SYLOTI NAGRI"),
+    ("tagalog", "Tglg", "tglg", "TAGALOG"), ("tagbanwa", "Tagb", "tagb", "TAGBANWA"),
+    ("tai le", "Tale", "tale", "TAI LE"), ("tai tham", "Lana", "lana", "TAI THAM"),
+    ("tai viet", "Tavt", "tavt", "TAI VIET"), ("takri", "Takr", "takr", "TAKRI"),
+    ("tamil", "Taml", "taml", "TAMIL"), ("telugu", "Telu", "telu", "TELUGU"),
+    ("tibetan", "Tibt", "tibt", "TIBETAN"), ("tirhuta", "Tirh", "tirh", "TIRHUTA"),
+    ("zanabazar square", "Zanb", "zanb", "ZANABAZAR SQUARE"), ("ahom", "Ahom", "ahom", "AHOM"),
+    ("dogra", "Dogr", "dogr", "DOGRA"), ("wancho", "Wcho", "wcho", "WANCHO"),
+    ("marchen", "Marc", "marc", "MARCHEN"),
+]
+
 THAANA = [
     "\u078b\u07a8\u0788\u07ac\u0780\u07a8 \u0784\u07a6\u0790\u07b0",
     "\u0780\u07a8\u0783\u07a6\u078e\u07a6\u0782\u07b0 \u0787\u07a6\u0787\u07a8",
@@ -280,6 +348,12 @@ GROUPS = [
     ("greek", "Grek", "grek", None, "", "", GREEK),
     ("cyrillic", "Cyrl", "cyrl", None, "", "", CYRILLIC),
 ]
+
+for _i, (_name, _iso, _ot, _prefix) in enumerate(NAMED_SCRIPTS):
+    _texts = _script_words(_prefix, 100 + _i)
+    if _texts:
+        GROUPS.append((_name, _iso, _ot, None, "", "", _texts, "",
+                      next(ord(c) for t in _texts for c in t if c.isalpha())))
 
 
 # The BCP 47 tag HarfBuzz takes for an OpenType language system a case names.

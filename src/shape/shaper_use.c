@@ -372,8 +372,10 @@ static GFNT_Nfa * use_grammar(void) {
       STAR(SYM(UC_FPST)));
   fin_mod = ALT(SEQ(STAR(SYM(UC_FMABV)), STAR(SYM(UC_FMBLW))),
       OPT(SYM(UC_FMPST)));
-  start = SEQ(SEQ(OPT(SET(BIT(UC_R) | BIT(UC_CS))),
-                  SET(BIT(UC_B) | BIT(UC_GB) | BIT(UC_O))), OPT(SYM(UC_VS)));
+  // A repha or a stacker stands before a letter or a placeholder, not before other characters
+  // such as a space (HarfBuzz breaks that syllable and sets the space apart).
+  start = SEQ(ALT(SEQ(OPT(SET(BIT(UC_R) | BIT(UC_CS))), SET(BIT(UC_B) | BIT(UC_GB))),
+                  SYM(UC_O)), OPT(SYM(UC_VS)));
   middle = SEQ(SEQ(SEQ(cons_mod, medial), SEQ(dep_vow, vow_mod)),
       STAR(SEQ(SYM(UC_SK), SYM(UC_B))));
   // A halant straight after the consonant modifiers may be followed by the rest
@@ -520,9 +522,9 @@ static void use_find_syllables(GFNT_ShapeCtx * ctx) {
       length = 1;
       token = US_NON_CLUSTER;
     }
-    // A lone repha or stacker is not a broken syllable either.
-    if (token == US_BROKEN && length == 1
-        && (cats[pos] == UC_R || cats[pos] == UC_CS)) {
+    // A lone stacker is not a broken syllable. A lone repha is, in every font that has the
+    // dotted circle (Masaram Gondi, Sharada and Soyombo set against HarfBuzz).
+    if (token == US_BROKEN && length == 1 && cats[pos] == UC_CS) {
       token = US_NON_CLUSTER;
     }
     for (i = pos; i < pos + length; i++) {

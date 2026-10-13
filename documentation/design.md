@@ -1482,6 +1482,28 @@ characters in nine scripts that are sorted differently as a known gap and holds 
 rest to the glyph, the cluster, the advance and the offset; `notes/font/SHAPING.md`
 records how each rule was found and what is still open in the Indic scripts.
 
+### 9.7 Behaviour followed from HarfBuzz with no reason found
+
+Some rules are here only because HarfBuzz 10.2.0 does them, found by shaping the same
+text in both and comparing; no specification or published discussion gives a reason, and
+a later HarfBuzz may change any of them. Each has a test that names the case.
+
+- **Marks are sorted only if the text has a mark after its first character.** A precomposed
+  character that decomposes to several marks (Hebrew U+FB2C is shin, dagesh, shin dot) is
+  left in the decomposition's order when no mark follows the first character, and sorted
+  with the rest when one does, so U+FB2C alone and typed shin, dagesh, shin dot come out in
+  different orders, and a mark written *before* the letter does not count.
+- **The Arabic fallback never joins a shadda to a kasratan.** A font with no layout
+  tables is given the shadda-with-vowel forms from its `cmap`, for the fatha, damma,
+  kasra and dammatan but not U+FC5F. The Unicode mailing list (February 2022, "Wrong
+  sequence for Arabic ligature marks") discusses only that these characters'
+  decompositions put the vowel before the shadda, which holds for all five and does not
+  single out U+FC5F. Nothing found says it is deliberate; it may be an oversight.
+- **Arabic U+08CA, 08CB and 08CD to 08CF are modifier marks** and go ahead of the other
+  marks; U+08CC is not and sorts as an ordinary mark.
+- **A Gurmukhi vowel sign II after a bindu after a virama** gets a dotted circle, though
+  the same sign after a bindu with no virama does not.
+
 ---
 
 ## 10. Layout

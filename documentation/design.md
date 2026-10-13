@@ -1,15 +1,11 @@
 # Design
 
-What is implemented reads the sfnt container, the metric tables, `cmap` and
-`name`, `glyf` and `CFF`/`CFF2` outlines (with their variation), bare CFF, Type 1
-and the standalone bitmap formats, rasterises an outline, and shapes text through
-`GSUB`, `GPOS`, `kern` and Apple's `morx`/`kerx`/`trak`, with a shaper for each
-script that needs one and a bidi-aware shaping call (§9; §18 is the list and says
-what is not built). Paragraph layout is built in part (§10.8), and font discovery
-lists faces and does not match them. The `SVG ` table is read (`svg.h`) and not drawn;
-writing is built for the sfnt and WOFF 1 and for subsetting static TrueType fonts (§12). Layout and the script shapers
-need the `unicode` library. Reading a file, drawing an outline and applying a
-font's lookups do not.
+The library reads supported font containers and tables, produces outlines and
+coverage, shapes text, lays out paragraphs, discovers and matches fonts, and
+writes and subsets fonts. The current inventory and remaining gaps are
+summarized in §18; the phase-by-phase notes below record how the implementation
+developed. Layout and script shaping use the `unicode` library. Reading a file,
+drawing an outline and applying a font's lookups do not.
 
 `font` is the suite's font library: font files in - every family of them, not
 one - and positioned glyphs, coverage bitmaps and laid-out paragraphs out, with
@@ -143,19 +139,20 @@ which of them this library takes, and which of those it reads today.
 
 ## 4. Modules
 
-What is implemented is the reader: a blob, the checked sfnt reader, metrics,
-`cmap`, names and glyph access. The rest of this table is not implemented.
-A header does not include one it does not need, and `make check-layering`
-enforces that, as `chron` does.
+The library implements reading, outlines and rasterisation, shaping, paragraph
+layout, discovery and matching, and writing/subsetting. The table below gives
+the current module boundaries; detailed coverage and explicit gaps follow in
+their respective sections. A header does not include one it does not need, and
+`make check-layering` enforces that, as `chron` does.
 
 | What | Holds | Needs | Who uses it | Implemented |
 | --- | --- | --- | --- | --- |
-| Reading | blob, the checked reader, every table parser, metrics, `cmap`, strikes, glyph access, the glyph union | `cutil`, `compress` | everyone | the sfnt container, metric tables, `cmap` and `name`. §18 is the list |
-| Outlines and raster | outlines as paths; rasterisation to coverage | the reader | `image`, `cjelly`, PDF | `glyf`/`loca`, `CFF ` charstrings and the scan converter. §18 is the list |
-| Shaping | `GDEF`/`GSUB`/`GPOS`, the script shapers, the cluster map | the reader, `unicode` | `cjelly`, PDF (for text extraction) | no |
-| Layout | itemisation, bidi, breaking, paragraphs, boxes, hit testing | shaping, `unicode` | `cjelly`, `image` | no |
-| Discovery | directories, matching, the platform APIs | the reader, the OS | `cjelly` | the list is built; matching is not |
-| Writing | writing and subsetting | the reader | PDF, tools | no |
+| Reading | blob, checked readers, supported table parsers, metrics, `cmap`, strikes, glyph access | `cutil`, `compress` | everyone | sfnt and supported standalone containers; unsupported formats/tables are named |
+| Outlines and raster | outlines as paths; rasterisation to coverage | the reader | `image`, `cjelly`, PDF | `glyf`, CFF/CFF2 charstrings and scan conversion |
+| Shaping | `GDEF`/`GSUB`/`GPOS`, script shapers, cluster map | the reader, `unicode` | `cjelly`, PDF (for text extraction) | implemented, with documented AAT/JSTF and differential gaps (§9) |
+| Layout | itemisation, bidi, breaking, paragraphs, boxes, hit testing | shaping, `unicode` | `cjelly`, `image` | paragraph layout implemented; inline objects/flow and ruby remain out (§10) |
+| Discovery | directories, matching, platform APIs | the reader, the OS | `cjelly` | scanning, matching and fallback provider; native Windows/macOS enumeration remains TODO (§11) |
+| Writing | writing and subsetting | the reader | PDF, tools | implemented; PDF-specific helpers are not (§12–13) |
 
 `image` wants the reader, rasterisation and layout ("draw this wrapped
 label") and never pays for discovery; a PDF reader wants the reader, shaping
@@ -179,10 +176,10 @@ to keep open.
 | `outline.h` | `GFNT_Outline`: the path; `glyf` and charstring producers; transforms; bounds. Both producers are implemented |
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
 | `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Implemented; of the four containers that feed them, `CFF ` inside an sfnt is read |
-| `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()`. The default shaper only: no language registry, no script shapers (§9.2) |
-| `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, the providers. Not implemented |
-| `discover.h` | `GFNT_FontSet` and directory scanning are built. Matching and the default fallback provider are not |
-| `write.h` | the sfnt serialiser, WOFF 1 writer and TrueType subsetter (built); the PDF helpers (not built) |
+| `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()` and script shapers; see §9 for unsupported tables and known differential gaps |
+| `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, fallback providers; paragraph layout is implemented, while inline flow and ruby are not (§10) |
+| `discover.h` | `GFNT_FontSet`, directory scanning, serialization, matching and fallback; native Windows/macOS enumeration remains TODO (§11) |
+| `write.h` | sfnt/WOFF/bitmap/standalone writers and subsetting; PDF-specific helpers are not implemented (§12–13) |
 | `font.h` | umbrella for what is implemented |
 
 ---
@@ -1520,11 +1517,11 @@ drew.
 | # | Thing | Where |
 | --- | --- | --- |
 | 1 | Shaping | `font` shaping - implemented, including the script shapers (§9.6) |
-| 2 | Run measurement: advance sum, ink extents | `font` shaping; the advance sum is a sum over the run, the ink extents are not built |
-| 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, implemented (§10.8); a caller-supplied fallback provider is not |
+| 2 | Run measurement: advance sum, ink extents | `font` shaping and layout |
+| 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, implemented with a caller-supplied fallback provider (§10.8) |
 | 4 | Break opportunities: UAX #14 lines, UAX #29 graphemes and words | `unicode`, applied here |
-| 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout: wrap, stack and align are implemented (§10.8); the rest is not |
-| 6 | Inline layout: inline objects, per-line constraints (flow around boxes), ruby and emphasis marks, decoration geometry | `font` (planned, not built; the rule is that `font` owns what needs only text, styles, faces and geometry the caller passes in, so that a program with no GUI can use it) |
+| 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout; see §10.8 |
+| 6 | Inline layout: inline objects, per-line constraints (flow around boxes), ruby and emphasis marks, decoration geometry | `font` for text and geometry-only inline layout (planned); application-specific painting remains with the caller |
 | 6a | List markers, and what an inline object contains and how it is painted | `cjelly` |
 | 7 | Box model: margins, padding, where a float sits, flex, grid, constraints | `cjelly` (its Task 3.1); a float's band reaches `font` as a per-line constraint |
 
@@ -1760,13 +1757,11 @@ Not done: ruby, which needs inline boxes this layout does not have.
 
 ### 10.7 Deliberately not here
 
-Hyphenation *data* (Liang patterns are a dictionary per language, each with its
-own licence; `GFNT_Hyphenator` is the seam, built), dictionary word breaking for the
-`SA` scripts (`unicode`'s seam, passed through; without a provider Thai does
-not wrap, and the header says so), Knuth-Plass optimal breaking (greedy first;
-an option later), vertical writing modes (`vhea`/`vmtx` *metrics* are read;
-vertical *layout* is not), ruby, and anything that must know about a non-text
-box sharing its line.
+Hyphenation data (the `GFNT_Hyphenator` seam is built), dictionary word breaking
+for the `SA` scripts (a caller-supplied `unicode` break provider is supported),
+Knuth-Plass optimal breaking, ruby, and inline objects/flow around non-text
+boxes are outside the current implementation. Vertical writing modes are
+implemented; see §10.8.
 
 ---
 
@@ -2726,7 +2721,7 @@ answered on 2026-09-23/24; the rest stand as recommended.
 
 1. **Layout is in this library, up to the paragraph.** Decided (§10).
 2. **No hinting interpreter.** Decided (§8.5).
-3. **Bitmap fonts are first-class in the API.** Decided (§5.3, §5.4). The strike tables are not read yet.
+3. **Bitmap fonts are first-class in the API.** Decided (§5.3, §5.4); standalone and embedded strike formats are implemented.
 4. **Outlines and rasterisation both live here**, writing into `GIMG_Raster`
    when `image` is present and a byte buffer when not; `image` stays optional
    (§8.2).
@@ -3753,23 +3748,19 @@ What that cost in findings:
   `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
   which is a fact about the font rather than about the object model.
 
-**Not built:**
-a `FeatureVariations` condition of format 2 (§7.7); paragraph layout, and font matching (discovery lists faces, §11); the `CFF` writer (§12); the multi-byte
-Macintosh and Microsoft `name` encodings (§7.2); `gasp`.
-`maxp` has no `_dump` because nothing
-reads its fields beyond `numGlyphs`. `GFNT_Glyph`, the tagged union of §5.4, is
-**still only its enum, and now deliberately rather than for want of a second
-arm**: there are two kinds of glyph data, and each has an accessor of its own -
-`gfnt_face_glyph_outline()` and `gfnt_face_glyph_bitmap()`. A caller that knows
-which it wants asks for it; the union is for the caller that does not, which is a
-layout engine, and one arrives with the shaper. Building it now would be inventing
-the shape of a question nothing asks yet.
+**Remaining implementation gaps (current):** `FeatureVariations` condition
+format 2; multibyte Macintosh and Microsoft `name` encodings; `gasp`; native
+Windows and macOS font enumeration; `JSTF` and the AAT features listed in §9;
+PDF-specific writing helpers; `COLR` v1 compositing and SVG drawing/rewriting;
+and inline-object layout, flow, and ruby. The TrueType hinting interpreter,
+WOFF 2 collection writer, and the formats/features in §16 are deliberate
+first-release non-goals. These statements supersede the earlier phase notes in
+this section, which record implementation history rather than current status.
 
-The `freetype` oracle `tools/oracle/containers/IMAGES` names - an outline and
-coverage differential against FreeType's own `ftgrays` - is not built. It is the
-next thing that would strengthen phase 1 rather than a gap in it: the outlines
-are checked against fontTools over two million fields, and the coverage against
-an independent sampler and three big-endian targets.
+An outline and coverage differential against FreeType's `ftgrays` remains a
+possible strengthening of the oracle suite; current coverage includes the
+fontTools outline comparison, an independent coverage sampler, and golden
+renderings on three big-endian targets.
 
 ---
 

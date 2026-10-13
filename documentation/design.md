@@ -1524,8 +1524,9 @@ drew.
 | 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, implemented (§10.8); a caller-supplied fallback provider is not |
 | 4 | Break opportunities: UAX #14 lines, UAX #29 graphemes and words | `unicode`, applied here |
 | 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout: wrap, stack and align are implemented (§10.8); the rest is not |
-| 6 | Inline layout: inline images and widgets, mixed sizes on one line, ruby | `cjelly` |
-| 7 | Box model: margins, padding, floats, flex, grid, constraints | `cjelly` (its Task 3.1) |
+| 6 | Inline layout: inline objects, per-line constraints (flow around boxes), ruby and emphasis marks, decoration geometry | `font` (planned, not built; the rule is that `font` owns what needs only text, styles, faces and geometry the caller passes in, so that a program with no GUI can use it) |
+| 6a | List markers, and what an inline object contains and how it is painted | `cjelly` |
+| 7 | Box model: margins, padding, where a float sits, flex, grid, constraints | `cjelly` (its Task 3.1); a float's band reaches `font` as a per-line constraint |
 
 ### 10.2 The promises
 

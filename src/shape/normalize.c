@@ -458,7 +458,11 @@ bool gfnt_normalize(const GFNT_Face * face, GFNT_LInfo ** info, size_t * len,
     GFNT_LInfo * out = c.out;
     size_t n = c.len;
 
-    for (i = 0; i < n; i++) {
+    // HarfBuzz does it only when the text had a mark after its first character:
+    // marks that a decomposition made are otherwise left as it gave them (U+FB2C
+    // alone comes out shin, dagesh, shin dot, where typed they would sort shin dot
+    // first).
+    for (i = 0; saw_marks && i < n; i++) {
       size_t end;
 
       if (out[i].mcc == 0) {

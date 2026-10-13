@@ -413,8 +413,14 @@ static void indic_find_syllables(GFNT_ShapeCtx * ctx) {
     cats[i] = buf->info[i].category;
     // HarfBuzz lets the Gurmukhi vowel sign II follow a syllable modifier
     // without a circle of its own, so for the grammar it is a matra that is
-    // also allowed in the tail.
+    // also allowed in the tail. After a virama the modifier is a syllable of
+    // its own (the virama ended the one before), and the vowel sign gets a circle.
     if (cats[i] == IC_M && buf->info[i].unicode == 0x0A40) {
+      bool after_virama = i >= 2 && cats[i - 1] == IC_SM && cats[i - 2] == IC_H;
+
+      if (after_virama) {
+        continue;
+      }
       if (i && cats[i - 1] == IC_SM) {
         // In the tail it stays where it is, as a mark that is not reordered.
         buf->info[i].category = IC_A;

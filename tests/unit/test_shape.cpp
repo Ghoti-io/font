@@ -5295,6 +5295,59 @@ TEST(ShapeHebrew, AMetegAfterAPatahAndAShevaTradesPlacesWithTheSheva) {
   EXPECT_EQ(ids(g), (V{2, 4, 3, 1}));
 }
 
+TEST(ShapeHebrew, MarksADecompositionMadeAreSortedOnlyWhenTheTextHasAMarkAfterItsFirstCharacter) {
+  // U+FB2C is shin, dagesh, shin dot. HarfBuzz sorts typed marks (shin dot before
+  // dagesh) but leaves the pair a decomposition made as it came, unless the text has
+  // a mark after its first character. Drawn right to left the glyphs come out
+  // reversed. (HarfBuzz 10.2.0.)
+  Font font(small_font({}, 30, {{0x5E9, 1}, {0x5BC, 2}, {0x5C1, 3}, {0x5B7, 4}}));
+  Glyphs g;
+  Request request;
+
+  request.script = "hebr";
+  request.rtl = true;
+  ASSERT_EQ(shape(font, V{0xFB2C}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2, 1}));
+  ASSERT_EQ(shape(font, V{0x5E9, 0x5BC, 0x5C1}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 3, 1}));
+  ASSERT_EQ(shape(font, V{0xFB2C, 0x5B7}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 2, 3, 1}));
+  // A mark in front of the letter is the text's first character, not one after it.
+  ASSERT_EQ(shape(font, V{0x5B7, 0xFB2C}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2, 1, 4}));
+}
+
+TEST(ShapeArabic, TheUnicode14ModifierMarksGoAheadOfTheOtherMarks) {
+  // U+08CB is a modifier mark like the hamza: it goes ahead of a fatha typed
+  // before it; U+08CC is not one. (HarfBuzz 10.2.0.)
+  Font font(small_font({}, 30, {{0x64B, 2}, {0x8CB, 3}, {0x8CC, 4}}));
+  Glyphs g;
+  Request request;
+
+  request.script = "arab";
+  request.rtl = true;
+  ASSERT_EQ(shape(font, V{0x64B, 0x8CB}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{2, 3}));
+  ASSERT_EQ(shape(font, V{0x64B, 0x8CC}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{4, 2}));
+}
+
+TEST(ShapeIndic, AGurmukhiVowelSignIIAfterABinduAfterAViramaGetsACircle) {
+  // KA, VIRAMA, BINDU, VOWEL SIGN II: the virama ended the syllable, so the bindu
+  // stands alone and the vowel sign has no base. Without the virama the bindu
+  // belongs to the syllable and the sign follows it with no circle. (HarfBuzz 10.2.0.)
+  Font font(small_font({}, 30,
+      {{0xA15, 1}, {0xA4D, 2}, {0xA02, 3}, {0xA40, 4}, {0x25CC, 5}}));
+  Glyphs g;
+  Request request;
+
+  request.script = "guru";
+  ASSERT_EQ(shape(font, V{0xA15, 0xA4D, 0xA02, 0xA40}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{1, 2, 3, 5, 4}));
+  ASSERT_EQ(shape(font, V{0xA15, 0xA02, 0xA40}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{1, 3, 4}));
+}
+
 TEST(ShapeVertical, TheIndicShaperIsAsKindToVerticalTextAsToHorizontal) {
   // A Devanagari mark keeps its place in the line in vertical text: the shaper that
   // would leave it its advance horizontally leaves it its advance here too, where

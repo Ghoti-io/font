@@ -299,7 +299,8 @@ static void gfnt_arabic_setup_masks(GFNT_ShapeCtx * ctx) {
 static bool gfnt_arabic_mcm(uint32_t u) {
   switch (u) {
     case 0x0654: case 0x0655: case 0x0658: case 0x06DC: case 0x06E3:
-    case 0x06E7: case 0x06E8: case 0x08D3: case 0x08F3:
+    case 0x06E7: case 0x06E8: case 0x08CA: case 0x08CB:
+    case 0x08CD: case 0x08CE: case 0x08CF: case 0x08D3: case 0x08F3:
       return true;
     default:
       return false;

@@ -5332,6 +5332,22 @@ TEST(ShapeArabic, TheUnicode14ModifierMarksGoAheadOfTheOtherMarks) {
   EXPECT_EQ(ids(g), (V{4, 2}));
 }
 
+TEST(ShapeArabic, TheFallbackJoinsAShaddaToEveryVowelButTheKasratan) {
+  // A font with no layout gets the shadda-with-vowel forms from its cmap, except
+  // U+FC5F (shadda with kasratan), which HarfBuzz 10.2.0 never uses.
+  Font font(small_font({}, 30,
+      {{0x651, 2}, {0x64D, 3}, {0x64E, 4}, {0xFC5F, 5}, {0xFC60, 6}}));
+  Glyphs g;
+  Request request;
+
+  request.script = "arab";
+  request.rtl = true;
+  ASSERT_EQ(shape(font, V{0x651, 0x64E}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{6}));
+  ASSERT_EQ(shape(font, V{0x651, 0x64D}, request, &g), GFNT_OK);
+  EXPECT_EQ(ids(g), (V{3, 2}));
+}
+
 TEST(ShapeIndic, AGurmukhiVowelSignIIAfterABinduAfterAViramaGetsACircle) {
   // KA, VIRAMA, BINDU, VOWEL SIGN II: the virama ended the syllable, so the bindu
   // stands alone and the vowel sign has no base. Without the virama the bindu

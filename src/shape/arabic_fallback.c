@@ -313,6 +313,12 @@ static bool gfnt_af_ligatures(GFNT_AfBytes * out, const GFNT_Face * face,
         uint32_t a = out_cps[1];
         uint32_t b = out_cps[2];
 
+        // HarfBuzz 10.2.0 composes the shadda with every vowel but the kasratan:
+        // U+FC5F is never used, whatever the font has.
+        if (x == 0xFC5F) {
+          continue;
+        }
+
         if (gfnt_u_modified_ccc(a) > gfnt_u_modified_ccc(b)) {
           uint32_t t = a;
 

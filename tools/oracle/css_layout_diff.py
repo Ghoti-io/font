@@ -128,6 +128,26 @@ CASES.append(("justify-lr", J * 4, "vertical-lr", "mixed", 330, "justify", "ltr"
 CASES.append(("justify-sideways-lr", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB\u65e5\u672c",
               "sideways-lr", "mixed", 330, "justify", "ltr", "auto"))
 
+# Rectangle, circle and polygon floats on both sides. The height-zero query sees the full width,
+# then the measured-height query intersects the float and narrows the band.
+FLOW_CASES = []
+for _shape in ("rect", "circle", "polygon"):
+    for _side in ("left", "right"):
+        for _index in range(5):
+            _inset = 80 + _index * 20
+            _height = _inset if _shape == "circle" else 70 + _index * 20
+            _name = "flow-%s-%s-%d" % (_shape, _side, _index)
+            _flow = {"left": _inset, "top": 0, "height": _height,
+                     "shape": _shape, "side": _side}
+            _driver = ("--flow-left", str(_inset), "--flow-top", "0",
+                       "--flow-depth", str(_height), "--flow-shape", _shape,
+                       "--flow-side", _side)
+            FLOW_CASES.append(_name)
+            # Short words fit the narrowed bands; the repeated spaces force wrapping while
+            # the float is active, unlike an unbreakable word that simply clears the float.
+            CASES.append((_name, "AA " * 40, "horizontal", "mixed", 300,
+                          "start", "ltr", "auto", {"flow": _flow, "driver": _driver}))
+
 # Explicit line-height rectangles, including a requested height below the font metrics.
 for _name, _text, _css, _driver in (
     ("line-height-short", "AB ab", "30px", ("--line-height-length", "30")),
@@ -186,7 +206,20 @@ function measure(c) {
   } else {
     d.style.height = c.room + 'px';
   }
-  if (c.secondSpan) {
+  if (c.flow) {
+    const f = document.createElement('div');
+    f.style.cssFloat = c.flow.side;
+    f.style.width = c.flow.left + 'px';
+    f.style.marginTop = c.flow.top + 'px';
+    f.style.height = c.flow.height + 'px';
+    if (c.flow.shape === 'circle') f.style.shapeOutside = 'circle(50%%)';
+    if (c.flow.shape === 'polygon') {
+      f.style.shapeOutside = c.flow.side === 'left'
+        ? 'polygon(0 0, 100%% 0, 60%% 100%%, 0 100%%)'
+        : 'polygon(0 0, 100%% 0, 100%% 100%%, 40%% 100%%)';
+    }
+    d.append(f, document.createTextNode(c.text));
+  } else if (c.secondSpan) {
     const first = document.createTextNode(c.text.slice(0, c.secondSpan.start));
     const span = document.createElement('span');
     span.style.fontSize = c.secondSpan.size + 'px';
@@ -204,7 +237,8 @@ function measure(c) {
     d.textContent = c.text;
   }
   document.body.appendChild(d);
-  const tn = c.secondSpan ? null : (c.verticalAlign ? d.firstChild.firstChild : d.firstChild);
+  const tn = c.secondSpan ? null : (c.flow ? d.childNodes[1]
+      : c.verticalAlign ? d.firstChild.firstChild : d.firstChild);
   const chars = [];
   let i = 0;
   for (const ch of c.text) {
@@ -242,7 +276,8 @@ def chrome_rects(cases):
                  justify=c[7] if len(c) > 7 else "auto",
                  lineHeight=(c[8].get("lineHeight", "normal") if len(c) > 8 else "normal"),
                  verticalAlign=(c[8].get("verticalAlign") if len(c) > 8 else None),
-                 secondSpan=(c[8].get("secondSpan") if len(c) > 8 else None))
+                 secondSpan=(c[8].get("secondSpan") if len(c) > 8 else None),
+                 flow=(c[8].get("flow") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
@@ -567,10 +602,22 @@ def ink_case(case):
 def main():
     verbose = "-v" in sys.argv
     names = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if "flow" in names:
+        names = [name for name in names if name != "flow"] + FLOW_CASES
     cases = [c for c in CASES if not names or c[0] in names]
     measured = chrome_rects(cases)
     differ = compared = 0
     for case, theirs in zip(cases, measured):
+        if case[0] in FLOW_CASES:
+            flow = case[8]["flow"]
+            chars = [r for r in theirs["chars"] if r is not None]
+            rows = {round(r[1], 2) for r in chars}
+            inset_rows = [r for r in chars if r[1] < flow["height"]]
+            active_side = [r for r in inset_rows
+                           if (r[0] >= flow["left"] - 1 if flow["side"] == "left"
+                               else r[0] + r[2] <= 300 - flow["left"] + 1)]
+            if len(rows) < 2 or not active_side:
+                raise RuntimeError("%s does not wrap into its narrowed float band" % case[0])
         mine = ours(case)
         problems = compare(case, theirs, mine, verbose)
         compared += sum(1 for c in theirs["chars"] if c is not None)

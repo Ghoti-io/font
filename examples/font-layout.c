@@ -33,6 +33,7 @@
  *                    [--second-vertical-align KIND[:VALUE]]
  *                    [--object-at BYTE --object-advance PX --object-ascent PX --object-descent PX]
  *                    [--strut] [--fallback <font>]
+ *                    [--flow-left PX --flow-top PX --flow-depth PX]
  *                    [--hyphens manual|manual-pango|none] <font>
  *
  * Reads one request per line from standard input: `<width>\t<hex>`, where the
@@ -59,6 +60,7 @@
 #include <ghoti.io/font/font.h>
 #include <ghoti.io/font/layout.h>
 #include <ghoti.io/font/outline.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,11 +76,55 @@ static void print_rect(GFNT_Rect r) {
   printf("[%d,%d,%d,%d]", r.x, r.y, r.width, r.height);
 }
 
+typedef struct {
+  GFNT_F26Dot6 width, inset, start, depth;
+  int shape, side;
+} FlowSpec;
+
+static GFNT_Result float_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6 height,
+    GFNT_Band * out) {
+  const FlowSpec * flow = context;
+  const int64_t bottom = (int64_t)flow->start + flow->depth;
+  const int64_t line_bottom = (int64_t)top + height;
+  out->start = 0;
+  out->width = flow->width;
+  out->next_top = 0;
+  if ((int64_t)top < bottom && line_bottom > flow->start) {
+    long double intrusion = flow->inset;
+    if (flow->shape == 1) {
+      const long double radius = flow->inset / 2.0L;
+      const long double center = (long double)flow->start + flow->depth / 2.0L;
+      const long double lo = top > flow->start ? top : flow->start;
+      const long double hi = line_bottom < bottom ? line_bottom : bottom;
+      long double dy = 0;
+      if (center < lo) dy = lo - center;
+      else if (center > hi) dy = center - hi;
+      intrusion = radius + sqrtl(radius * radius - dy * dy);
+    }
+    else if (flow->shape == 2) {
+      long double y = top > flow->start ? top : flow->start;
+      if (y > bottom) y = bottom;
+      const long double fraction = flow->depth ? (y - flow->start) / flow->depth : 0;
+      intrusion = flow->inset * (1.0L - 0.4L * fraction);
+    }
+    if (flow->side == 0) {
+      out->start = (GFNT_F26Dot6)ceill(intrusion);
+      out->width = flow->width - out->start;
+    }
+    else {
+      out->start = 0;
+      out->width = flow->width - (GFNT_F26Dot6)ceill(intrusion);
+    }
+    out->next_top = bottom > INT32_MAX ? INT32_MAX : (GFNT_F26Dot6)bottom;
+  }
+  return GFNT_OK;
+}
+
 static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char * text, size_t length,
     GFNT_F26Dot6 width, GFNT_F26Dot6 size, const GFNT_ParagraphOptions * options,
     const GFNT_TextStyle * style_options, size_t split_at, GFNT_F26Dot6 second_size,
     const GFNT_TextStyle * second_style_options, size_t object_at,
-    GFNT_InlineObject * inline_object) {
+    GFNT_InlineObject * inline_object, const FlowSpec * flow) {
   const GFNT_Face * faces[2] = {face, fallback};
   GFNT_TextSpan spans[4];
   GFNT_TextSpan base_span;
@@ -146,9 +192,11 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     }
   }
   gfnt_error_clear(&error);
+  GFNT_LineConstraint constraint = {(void *)flow, flow ? float_band : NULL};
   if (gfnt_paragraph_create(text, length, spans, span_count, options, NULL, &p, &error)
           != GFNT_OK
-      || gfnt_paragraph_layout(p, width, &l, &error) != GFNT_OK
+      || (flow ? gfnt_paragraph_layout_flow(p, &constraint, &l, &error)
+               : gfnt_paragraph_layout(p, width, &l, &error)) != GFNT_OK
       || gfnt_paragraph_min_content(p, &min) != GFNT_OK
       || gfnt_paragraph_max_content(p, &max) != GFNT_OK) {
     printf("{\"error\":\"%s\"}\n", error.message ? error.message : "refused");
@@ -303,6 +351,8 @@ int main(int argc, char ** argv) {
   GFNT_F26Dot6 second_size = 0;
   size_t split_at = 0;
   size_t object_at = 0;
+  FlowSpec flow = {0};
+  int have_flow = 0;
   GFNT_InlineObject inline_object;
   int have_object = 0;
   GFNT_Blob * blob = NULL;
@@ -340,6 +390,28 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[a], "--object-descent") == 0 && a + 1 < argc) {
       inline_object.descent = (GFNT_F26Dot6)(atof(argv[++a]) * 64.0 + 0.5);
+    }
+    else if (strcmp(argv[a], "--flow-left") == 0 && a + 1 < argc) {
+      flow.inset = (GFNT_F26Dot6)(atof(argv[++a]) * 64.0 + 0.5);
+      have_flow = 1;
+    }
+    else if (strcmp(argv[a], "--flow-depth") == 0 && a + 1 < argc) {
+      flow.depth = (GFNT_F26Dot6)(atof(argv[++a]) * 64.0 + 0.5);
+      have_flow = 1;
+    }
+    else if (strcmp(argv[a], "--flow-top") == 0 && a + 1 < argc) {
+      flow.start = (GFNT_F26Dot6)(atof(argv[++a]) * 64.0 + 0.5);
+      have_flow = 1;
+    }
+    else if (strcmp(argv[a], "--flow-shape") == 0 && a + 1 < argc) {
+      const char * shape = argv[++a];
+      flow.shape = strcmp(shape, "circle") == 0 ? 1
+          : strcmp(shape, "polygon") == 0 ? 2 : 0;
+      have_flow = 1;
+    }
+    else if (strcmp(argv[a], "--flow-side") == 0 && a + 1 < argc) {
+      flow.side = strcmp(argv[++a], "right") == 0 ? 1 : 0;
+      have_flow = 1;
     }
     else if (strcmp(argv[a], "--face") == 0 && a + 1 < argc) {
       index = (uint32_t)atoi(argv[++a]);
@@ -502,8 +574,10 @@ int main(int argc, char ** argv) {
     for (; hexval(hex[0]) >= 0 && hexval(hex[1]) >= 0; hex += 2) {
       text[n++] = (char)(hexval(hex[0]) * 16 + hexval(hex[1]));
     }
+    flow.width = width;
     answer(face, fallback, text, n, width, size, &options, &style_options,
-        split_at, second_size, &second_style_options, object_at, have_object ? &inline_object : NULL);
+        split_at, second_size, &second_style_options, object_at,
+        have_object ? &inline_object : NULL, have_flow ? &flow : NULL);
     free(text);
   }
   free(line);

@@ -1666,6 +1666,28 @@ dimensions, an invalid alignment, or a descriptor on any other span range is
 rejected when the paragraph is created. Descriptor storage and identity remain
 owned by the caller and must outlive the paragraph and layouts.
 
+**Per-line flow constraints (L3).** `gfnt_paragraph_layout_flow()` asks a caller
+for one along-line band at each line's block position. It first asks with a
+zero height, breaks and measures the line, then asks again with that height;
+when the band changes it rebreaks until the band is stable or the bounded
+callback budget returns `GFNT_ERR_LIMIT`. A later `next_top` lets a caller move
+an unbreakable stretch below an exclusion; with no later band the stretch
+overflows to guarantee progress. Each line retains its own start and width for
+alignment, justification, boxes and hit testing. A whole-width callback keeps
+the legacy geometry. `text_indent` and `hanging_indent` adjust the first line or
+the later lines, and `tabs_from_container` chooses the tab-stop origin. Negative
+band starts are allowed, widths are nonnegative, and the band end must fit the
+26.6 coordinate range. The callback owns its geometry and remains independent
+of any GUI or markup system.
+
+`GFNT_Exclusions` supplies a ready callback context for one-sided rectangular,
+circular and polygonal exclusions. Its caller-owned array describes paragraph
+coordinates, nonnegative margins and whether text stays to the left or right;
+polygon points and the array must remain alive during layout. The band is the
+intersection across the complete line height, and `next_top` moves an
+unbreakable line past the active exclusions. Polygon margins conservatively
+expand the clipped horizontal extent.
+
 Justification (`GFNT_ALIGN_JUSTIFY`) widens the spaces of a line, sharing the
 slack out in whole 1/64 pixels; a line that ends a paragraph or a newline, a
 truncated one, one with no space but a hanging one, and every line of an
@@ -3784,7 +3806,7 @@ What that cost in findings:
 format 2; multibyte Macintosh and Microsoft `name` encodings; `gasp`; native
 Windows and macOS font enumeration; `JSTF` and the AAT features listed in §9;
 PDF-specific writing helpers; `COLR` v1 compositing and SVG drawing/rewriting;
-and inline-object layout, flow, and ruby. The TrueType hinting interpreter,
+and ruby annotation tracks and emphasis marks. The TrueType hinting interpreter,
 WOFF 2 collection writer, and the formats/features in §16 are deliberate
 first-release non-goals. These statements supersede the earlier phase notes in
 this section, which record implementation history rather than current status.

@@ -197,6 +197,15 @@ bool inside(const GFNT_Rect & r, const GFNT_Layout & l) {
                   : r.y >= -slack && static_cast<int64_t>(r.y) + r.height <= l.height + slack;
 }
 
+GFNT_Result fuzz_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6,
+    GFNT_Band * out) {
+  const GFNT_F26Dot6 width = *static_cast<const GFNT_F26Dot6 *>(context);
+  out->start = (top / (20 * 64) & 1) ? 32 : 0;
+  out->width = width;
+  out->next_top = 0;
+  return GFNT_OK;
+}
+
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
@@ -260,17 +269,25 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     check(created == GFNT_ERR_INVALID || created == GFNT_ERR_LIMIT || created == GFNT_ERR_OOM);
     return 0;
   }
-  GFNT_Layout l{}, again{};
+  GFNT_Layout l{}, again{}, flow{}, flow_again{};
   GFNT_F26Dot6 min = 0, max = 0;
 
   check(gfnt_paragraph_layout(p, room, &l, nullptr) == GFNT_OK);
   check(gfnt_paragraph_layout(p, room, &again, nullptr) == GFNT_OK);
+  GFNT_F26Dot6 flow_width = room == GFNT_LAYOUT_UNBOUNDED ? 8 * 20 * 64
+      : std::max<GFNT_F26Dot6>(64, room / 2);
+  GFNT_LineConstraint constraint{&flow_width, fuzz_band};
+  check(gfnt_paragraph_layout_flow(p, &constraint, &flow, nullptr) == GFNT_OK);
+  check(gfnt_paragraph_layout_flow(p, &constraint, &flow_again, nullptr) == GFNT_OK);
   check(gfnt_paragraph_min_content(p, &min) == GFNT_OK);
   check(gfnt_paragraph_max_content(p, &max) == GFNT_OK);
   check(min >= 0 && max >= min);
   check(l.line_count == again.line_count && l.width == again.width && l.height == again.height);
   check(l.line_count >= 1 && l.width >= 0 && l.height >= 0);
   check(l.writing_mode == o.writing_mode);
+  check(flow.line_count >= 1 && flow.width >= 0 && flow.height >= 0);
+  check(flow.line_count == flow_again.line_count && flow.width == flow_again.width
+      && flow.height == flow_again.height);
 
   size_t at = 0;
   for (size_t i = 0; i < l.line_count; ++i) {
@@ -296,6 +313,44 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     }
     check(again.lines[i].start == line.start && again.lines[i].end == line.end
         && again.lines[i].extent == line.extent);
+  }
+  size_t flow_at = 0;
+  for (size_t i = 0; i < flow.line_count; ++i) {
+    const GFNT_Line & line = flow.lines[i];
+    const GFNT_Line & repeated = flow_again.lines[i];
+    check(line.start == flow_at || (o.max_lines && i + 1 == flow.line_count) || i == 0);
+    check(line.start <= line.end && line.end <= text.size());
+    check(inside(line.box, flow));
+    check(line.start == repeated.start && line.end == repeated.end
+        && line.extent == repeated.extent && line.baseline == repeated.baseline
+        && line.box.x == repeated.box.x && line.box.y == repeated.box.y
+        && line.box.width == repeated.box.width && line.box.height == repeated.box.height
+        && line.run_count == repeated.run_count);
+    if (o.writing_mode == GFNT_WRITING_HORIZONTAL_TB) {
+      const GFNT_F26Dot6 expected_start = ((line.box.y / (20 * 64)) & 1) ? 32 : 0;
+      check(line.box.x == expected_start && line.box.width == flow_width);
+    }
+    for (size_t j = 0; j < line.run_count; ++j) {
+      const GFNT_LineRun & run = line.runs[j];
+      check(j < repeated.run_count);
+      check(run.start == repeated.runs[j].start && run.end == repeated.runs[j].end
+          && run.pos == repeated.runs[j].pos && run.advance == repeated.runs[j].advance
+          && run.glyph_count == repeated.runs[j].glyph_count);
+      check(run.glyph_count == repeated.runs[j].glyph_count);
+      for (size_t g = 0; g < run.glyph_count; ++g) {
+        const GFNT_PlacedGlyph & glyph = run.glyphs[g];
+        const GFNT_PlacedGlyph & repeat_glyph = repeated.runs[j].glyphs[g];
+        check(run.ellipsis || run.hyphen
+            || (glyph.cluster >= line.start && glyph.cluster <= line.end));
+        check(glyph.cluster == repeat_glyph.cluster && glyph.pen_x == repeat_glyph.pen_x
+            && glyph.pen_y == repeat_glyph.pen_y && glyph.x == repeat_glyph.x
+            && glyph.y == repeat_glyph.y && glyph.advance == repeat_glyph.advance);
+      }
+    }
+    flow_at = line.end;
+  }
+  if (!flow.truncated) {
+    check(flow_at == text.size());
   }
 
   // The questions the layout answers.
@@ -326,6 +381,26 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     for (const GFNT_Rect & r : rects) {
       check(inside(r, l));
     }
+  }
+  for (size_t off = 0; off <= text.size(); off += 1 + text.size() / 24) {
+    GFNT_Caret caret{};
+    GFNT_Hit hit{};
+    if (gfnt_layout_caret(p, &flow, off, GFNT_AFFINITY_DOWNSTREAM, &caret) != GFNT_OK) continue;
+    check(caret.line < flow.line_count && caret.length >= 0);
+    const GFNT_F26Dot6 x = caret.horizontal ? caret.x + caret.length / 2 : caret.x;
+    const GFNT_F26Dot6 y = caret.horizontal ? caret.y : caret.y + caret.length / 2;
+    check(gfnt_layout_hit_test(p, &flow, x, y, &hit) == GFNT_OK);
+    check(hit.line < flow.line_count && hit.offset <= text.size());
+  }
+  {
+    size_t count = 0;
+    check(gfnt_layout_range_rects(p, &flow, 0, text.size(), nullptr, 0, &count) == GFNT_OK);
+    std::vector<GFNT_Rect> rects(count < 4096 ? count : 4096);
+    size_t got = 0;
+    check(gfnt_layout_range_rects(p, &flow, 0, text.size(), rects.data(), rects.size(), &got)
+        == GFNT_OK);
+    check(got == count);
+    for (const GFNT_Rect & rect : rects) check(inside(rect, flow));
   }
   // Exercise an explicit atomic object on every seed as well as the arbitrary text above.
   {
@@ -370,6 +445,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   }
   gfnt_layout_free(&l);
   gfnt_layout_free(&again);
+  gfnt_layout_free(&flow);
+  gfnt_layout_free(&flow_again);
   gfnt_paragraph_free(p);
   return 0;
 }

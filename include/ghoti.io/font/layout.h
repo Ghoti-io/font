@@ -42,9 +42,11 @@
  *
  * **What it does not do, stated rather than approximated:** kashida (a justified line
  * widens its spaces and its ideograph gaps, which is all Chromium and Pango do to Arabic as well),
- * hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and per-line flow
- * constraints. A caller may describe an atomic U+FFFC inline object with ::GFNT_InlineObject;
- * the library places its synthetic glyph and returns its caller identity, but never paints it.
+ * hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), and ruby annotations.
+ * Per-line constraints use ::gfnt_paragraph_layout_flow(); ::GFNT_Exclusions supplies a built-in
+ * callback for one-sided shapes. A caller may describe an atomic U+FFFC inline
+ * object with ::GFNT_InlineObject; the library places its synthetic glyph and
+ * returns its caller identity, but never paints it.
  * Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
  * the text is otherwise one bidirectional paragraph, so a caller with several
  * paragraphs lays out one object per paragraph.
@@ -371,7 +373,74 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_TextOrientation text_orientation;
   /** Include the first span's inline box as a paragraph strut on every line; off by default. */
   bool strut;
+  /** Indent the first line in 26.6 pixels; with hanging_indent, indent every later line instead. */
+  GFNT_F26Dot6 text_indent;
+  bool hanging_indent;
+  /** Measure tab stops from the paragraph origin instead of each line's start. */
+  bool tabs_from_container;
 } GFNT_ParagraphOptions;
+
+/** @brief The one inline band available to a line at a given block position. */
+typedef struct GFNT_Band {
+  GFNT_F26Dot6 start;    ///< Start along the line (x in horizontal text, y in vertical text; may be negative).
+  GFNT_F26Dot6 width;    ///< Available length along the line; zero means no room at this position.
+  GFNT_F26Dot6 next_top; ///< Next block position with room, or <= top when there is none.
+} GFNT_Band;
+
+/** @brief Callback that returns the intersection band over a line's block-axis interval. */
+typedef GFNT_Result (*GFNT_LineBandFn)(void * ctx, GFNT_F26Dot6 top,
+    GFNT_F26Dot6 height, GFNT_Band * out);
+
+/** @brief Per-line constraint callback and context. */
+typedef struct GFNT_LineConstraint {
+  void * ctx;
+  GFNT_LineBandFn band;
+} GFNT_LineConstraint;
+
+/** @brief A point in paragraph coordinates, 26.6 pixels, y down. */
+typedef struct GFNT_FlowPoint {
+  GFNT_F26Dot6 x;
+  GFNT_F26Dot6 y;
+} GFNT_FlowPoint;
+
+/** @brief The geometry used by the built-in exclusion constraint. */
+typedef enum GFNT_ExclusionShape {
+  GFNT_EXCLUSION_RECTANGLE = 0,
+  GFNT_EXCLUSION_CIRCLE,
+  GFNT_EXCLUSION_POLYGON
+} GFNT_ExclusionShape;
+
+/** @brief Which side of an exclusion remains available to text. */
+typedef enum GFNT_ExclusionSide {
+  GFNT_EXCLUSION_TEXT_RIGHT = 0, ///< Exclusion occupies the left side of the band.
+  GFNT_EXCLUSION_TEXT_LEFT       ///< Exclusion occupies the right side of the band.
+} GFNT_ExclusionSide;
+
+/** @brief One caller-owned exclusion; polygon points remain caller-owned. */
+typedef struct GFNT_Exclusion {
+  GFNT_ExclusionShape shape;
+  GFNT_ExclusionSide side;
+  GFNT_F26Dot6 margin; ///< Nonnegative expansion around the shape.
+  union {
+    GFNT_Rect rectangle;
+    struct { GFNT_FlowPoint center; GFNT_F26Dot6 radius; } circle;
+    struct { const GFNT_FlowPoint * points; size_t count; } polygon;
+  } geometry;
+} GFNT_Exclusion;
+
+/**
+ * @brief A caller-owned collection and containing inline interval for horizontal writing.
+ *
+ * The built-in exclusion callback interprets top/height as y coordinates and start/width as x
+ * coordinates. Vertical writing modes should use a custom ::GFNT_LineBandFn that maps their
+ * physical exclusion geometry to the paragraph's inline and block axes.
+ */
+typedef struct GFNT_Exclusions {
+  const GFNT_Exclusion * items;
+  size_t count;
+  GFNT_F26Dot6 start;
+  GFNT_F26Dot6 width;
+} GFNT_Exclusions;
 
 /** @brief A shaped, itemised paragraph. Opaque; free with ::gfnt_paragraph_free(). */
 typedef struct GFNT_Paragraph GFNT_Paragraph;
@@ -523,6 +592,24 @@ GFNT_API void gfnt_paragraph_free(GFNT_Paragraph * paragraph);
  */
 GFNT_API GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * paragraph,
     GFNT_F26Dot6 width, GFNT_Layout * out, GFNT_Error * error);
+
+/**
+ * @brief Lay out a paragraph against a callback-provided band for each line.
+ *
+ * The callback is called first with height 0, then with the measured line height. If the
+ * intersection changes, the line is broken and measured again. A stable band is required within
+ * 2 * unit_count + 16 callback attempts per layout. When the first unbreakable stretch does not
+ * fit, a later next_top moves the line down; without a later position it overflows, matching
+ * ::gfnt_paragraph_layout(). A zero-width band with no next_top also overflows one stretch to
+ * ensure progress. Callback errors propagate. Negative starts are allowed; widths must be
+ * nonnegative and the band end must fit in the 26.6 coordinate range.
+ */
+GFNT_API GFNT_Result gfnt_paragraph_layout_flow(const GFNT_Paragraph * paragraph,
+    const GFNT_LineConstraint * constraint, GFNT_Layout * out, GFNT_Error * error);
+
+/** @brief Callback for a ::GFNT_Exclusions value, usable in a line constraint. */
+GFNT_API GFNT_Result gfnt_exclusions_band(void * ctx, GFNT_F26Dot6 top,
+    GFNT_F26Dot6 height, GFNT_Band * out);
 
 /** @brief Release a layout. A zeroed one, or one already freed, is harmless. */
 GFNT_API void gfnt_layout_free(GFNT_Layout * layout);

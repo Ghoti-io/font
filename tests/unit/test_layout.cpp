@@ -202,6 +202,40 @@ struct Para {
   Para & operator=(const Para &) = delete;
 };
 
+struct FlowBands {
+  size_t calls = 0;
+  bool offset = true;
+  bool zero_width = false;
+  bool retry_by_height = false;
+  bool clear = false;
+  bool oscillate = false;
+  GFNT_Result result = GFNT_OK;
+  bool invalid = false;
+};
+
+GFNT_Result flow_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6 height,
+    GFNT_Band * out) {
+  auto & bands = *static_cast<FlowBands *>(context);
+  ++bands.calls;
+  if (bands.invalid) {
+    out->start = 0;
+    out->width = -1;
+    out->next_top = 0;
+    return GFNT_OK;
+  }
+  out->start = bands.offset ? (top == 0 ? 64 : 128) : 0;
+  out->width = 800;
+  if (bands.zero_width) out->width = 0;
+  out->next_top = 0;
+  if (bands.retry_by_height && height > 0) out->width = 320;
+  if (bands.clear && top < 1000) {
+    out->width = 400;
+    out->next_top = 1000;
+  }
+  if (bands.oscillate && height > 0) out->width = (bands.calls & 1) ? 800 : 640;
+  return bands.result;
+}
+
 TEST(Layout, ALineOfLettersIsPlacedFromTheLeftOnTheBaseline) {
   Font font(latin());
   Para para("ABC", {font.face});
@@ -230,6 +264,278 @@ TEST(Layout, ALineOfLettersIsPlacedFromTheLeftOnTheBaseline) {
     EXPECT_EQ(run.glyphs[i].pen_x, static_cast<GFNT_F26Dot6>(i) * kLetter);
     EXPECT_EQ(run.glyphs[i].y, 512);
   }
+}
+
+TEST(LayoutFlow, FullWidthBandMatchesTheExistingLayout) {
+  Font font(latin());
+  Para para("AB CD EF", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_Layout legacy{};
+  GFNT_Layout flow{};
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, 800, &legacy, nullptr), GFNT_OK);
+  FlowBands context;
+  context.offset = false;
+  GFNT_LineConstraint constraint{&context, flow_band};
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &flow, nullptr), GFNT_OK);
+  ASSERT_EQ(flow.line_count, legacy.line_count);
+  EXPECT_EQ(flow.width, 800);
+  EXPECT_EQ(flow.height, legacy.height);
+  for (size_t li = 0; li < flow.line_count; ++li) {
+    const GFNT_Line & actual = flow.lines[li];
+    const GFNT_Line & expected = legacy.lines[li];
+    EXPECT_EQ(actual.start, expected.start);
+    EXPECT_EQ(actual.end, expected.end);
+    EXPECT_EQ(actual.extent, expected.extent);
+    EXPECT_EQ(actual.baseline, expected.baseline);
+    EXPECT_EQ(actual.box.height, expected.box.height);
+    ASSERT_EQ(actual.run_count, expected.run_count);
+    ASSERT_EQ(actual.runs[0].glyph_count, expected.runs[0].glyph_count);
+    for (size_t g = 0; g < actual.runs[0].glyph_count; ++g) {
+      EXPECT_EQ(actual.runs[0].glyphs[g].pen_x, expected.runs[0].glyphs[g].pen_x);
+      EXPECT_EQ(actual.runs[0].glyphs[g].pen_y, expected.runs[0].glyphs[g].pen_y);
+    }
+  }
+  EXPECT_GE(context.calls, flow.line_count * 2);
+  gfnt_layout_free(&flow);
+  gfnt_layout_free(&legacy);
+}
+
+TEST(LayoutFlow, BandOffsetMovesLineBoxAndGlyphs) {
+  Font font(latin());
+  Para para("AB CD", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  FlowBands context;
+  GFNT_LineConstraint constraint{&context, flow_band};
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].box.x, 64);
+  EXPECT_EQ(para.layout.lines[1].box.x, 128);
+  EXPECT_EQ(para.layout.lines[0].runs[0].glyphs[0].pen_x, 64);
+  EXPECT_EQ(para.layout.lines[1].runs[0].glyphs[0].pen_x, 128);
+  GFNT_Hit hit{};
+  GFNT_Caret caret{};
+  EXPECT_EQ(gfnt_layout_hit_test(para.p, &para.layout, 70, 10, &hit), GFNT_OK);
+  EXPECT_EQ(gfnt_layout_caret(para.p, &para.layout, hit.offset, hit.affinity, &caret), GFNT_OK);
+  size_t rect_count = 0;
+  EXPECT_EQ(gfnt_layout_range_rects(para.p, &para.layout, 0, 2, nullptr, 0, &rect_count), GFNT_OK);
+  EXPECT_GT(rect_count, 0u);
+}
+
+TEST(LayoutFlow, RebreaksWhenMeasuredHeightChangesTheBand) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.line_break = GFNT_LINE_BREAK_ANYWHERE;
+  Para para("AB CD EF", {font.face}, options);
+  ASSERT_EQ(para.created, GFNT_OK);
+  FlowBands context;
+  context.retry_by_height = true;
+  GFNT_LineConstraint constraint{&context, flow_band};
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
+  EXPECT_GE(context.calls, 4u);
+  ASSERT_GE(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].end, 1u);
+}
+
+TEST(LayoutFlow, ClearsAnUnbreakableStretchToTheNextBand) {
+  Font font(latin());
+  Para para("AB", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  FlowBands context;
+  context.clear = true;
+  GFNT_LineConstraint constraint{&context, flow_band};
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].box.y, 1000);
+  EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter);
+}
+
+TEST(LayoutFlow, FirstAndHangingIndentsChangeTheBandsAndBreaks) {
+  Font font(latin());
+  GFNT_ParagraphOptions first{};
+  first.text_indent = 200;
+  Para para("A B C D E", {font.face}, first);
+  ASSERT_EQ(para.created, GFNT_OK);
+  FlowBands context;
+  context.offset = false;
+  GFNT_LineConstraint constraint{&context, flow_band};
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
+  ASSERT_GE(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].box.x, 200);
+  EXPECT_EQ(para.layout.lines[0].box.width, 600);
+  EXPECT_EQ(para.layout.lines[1].box.x, 0);
+  GFNT_ParagraphOptions fixed_first{};
+  fixed_first.text_indent = 200;
+  Para fixed("A B C D E", {font.face}, fixed_first);
+  ASSERT_EQ(fixed.lay(800), GFNT_OK);
+  ASSERT_GE(fixed.layout.line_count, 2u);
+  EXPECT_EQ(fixed.layout.lines[0].box.x, 200);
+  EXPECT_EQ(fixed.layout.lines[0].box.width, 600);
+  EXPECT_EQ(fixed.layout.lines[1].box.x, 0);
+
+  GFNT_ParagraphOptions hanging{};
+  hanging.text_indent = 200;
+  hanging.hanging_indent = true;
+  Para hung("A B C D E", {font.face}, hanging);
+  ASSERT_EQ(hung.created, GFNT_OK);
+  context.calls = 0;
+  ASSERT_EQ(gfnt_paragraph_layout_flow(hung.p, &constraint, &hung.layout, nullptr), GFNT_OK);
+  ASSERT_GE(hung.layout.line_count, 2u);
+  EXPECT_EQ(hung.layout.lines[0].box.x, 0);
+  EXPECT_EQ(hung.layout.lines[1].box.x, 200);
+  EXPECT_EQ(hung.layout.lines[1].box.width, 600);
+}
+
+TEST(LayoutFlow, ZeroWidthWithoutALaterBandOverflowsOneStretch) {
+  Font font(latin());
+  Para para("AB CD", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  FlowBands context;
+  context.zero_width = true;
+  context.offset = false;
+  GFNT_LineConstraint constraint{&context, flow_band};
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
+  ASSERT_GE(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].end, 3u); // The trailing space hangs on the line.
+  EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter);
+}
+
+TEST(LayoutFlow, VerticalBandsUseTheAlongLineAxis) {
+  Font font(latin());
+  for (GFNT_WritingMode mode : {GFNT_WRITING_VERTICAL_RL, GFNT_WRITING_VERTICAL_LR,
+           GFNT_WRITING_SIDEWAYS_RL, GFNT_WRITING_SIDEWAYS_LR}) {
+    GFNT_ParagraphOptions options{};
+    options.writing_mode = mode;
+    Para para("AB", {font.face}, options);
+    ASSERT_EQ(para.created, GFNT_OK);
+    FlowBands context;
+    GFNT_LineConstraint constraint{&context, flow_band};
+    ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
+    ASSERT_EQ(para.layout.line_count, 1u);
+    EXPECT_EQ(para.layout.lines[0].box.height, 800);
+    const GFNT_PlacedGlyph & glyph = para.layout.lines[0].runs[0].glyphs[0];
+    EXPECT_GE(glyph.pen_y, para.layout.lines[0].box.y);
+    EXPECT_LE(glyph.pen_y, para.layout.lines[0].box.y + para.layout.lines[0].box.height);
+  }
+}
+
+TEST(LayoutFlow, StopsWhenTheBandNeverStabilizes) {
+  Font font(latin());
+  Para para("AB CD", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  FlowBands context;
+  context.oscillate = true;
+  GFNT_LineConstraint constraint{&context, flow_band};
+  GFNT_Layout layout{};
+  EXPECT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &layout, nullptr), GFNT_ERR_LIMIT);
+  EXPECT_EQ(layout.lines, nullptr);
+}
+
+TEST(LayoutFlow, PropagatesCallbackErrorsAndRejectsInvalidBands) {
+  Font font(latin());
+  Para para("AB", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_Layout layout{};
+  FlowBands context;
+  context.result = GFNT_ERR_OOM;
+  GFNT_LineConstraint constraint{&context, flow_band};
+  EXPECT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &layout, nullptr), GFNT_ERR_OOM);
+  EXPECT_EQ(layout.lines, nullptr);
+  context.result = GFNT_OK;
+  context.invalid = true;
+  EXPECT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &layout, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(layout.lines, nullptr);
+}
+
+TEST(LayoutFlow, BuiltInExclusionsSupportRectanglesCirclesAndPolygons) {
+  GFNT_Exclusion exclusion{};
+  GFNT_Exclusions exclusions{&exclusion, 1, 0, 300};
+  GFNT_Band band{};
+
+  exclusion.shape = GFNT_EXCLUSION_RECTANGLE;
+  exclusion.side = GFNT_EXCLUSION_TEXT_RIGHT;
+  exclusion.margin = 5;
+  exclusion.geometry.rectangle = {10, 10, 20, 30};
+  ASSERT_EQ(gfnt_exclusions_band(&exclusions, 15, 10, &band), GFNT_OK);
+  EXPECT_EQ(band.start, 35);
+  EXPECT_EQ(band.width, 265);
+  EXPECT_EQ(band.next_top, 45);
+
+  exclusion = {};
+  exclusion.shape = GFNT_EXCLUSION_CIRCLE;
+  exclusion.side = GFNT_EXCLUSION_TEXT_LEFT;
+  exclusion.geometry.circle = {{100, 50}, 20};
+  ASSERT_EQ(gfnt_exclusions_band(&exclusions, 50, 0, &band), GFNT_OK);
+  EXPECT_EQ(band.start, 0);
+  EXPECT_EQ(band.width, 80);
+
+  const GFNT_FlowPoint points[] = {{0, 0}, {100, 0}, {50, 100}};
+  exclusion = {};
+  exclusion.shape = GFNT_EXCLUSION_POLYGON;
+  exclusion.side = GFNT_EXCLUSION_TEXT_RIGHT;
+  exclusion.geometry.polygon = {points, 3};
+  ASSERT_EQ(gfnt_exclusions_band(&exclusions, 50, 0, &band), GFNT_OK);
+  EXPECT_EQ(band.start, 75);
+  EXPECT_EQ(band.width, 225);
+  EXPECT_EQ(band.next_top, 100);
+}
+
+TEST(LayoutFlow, BuiltInExclusionsRechecksAtNearestBlockerBoundary) {
+  GFNT_Exclusion items[2]{};
+  items[0].shape = GFNT_EXCLUSION_RECTANGLE;
+  items[0].side = GFNT_EXCLUSION_TEXT_RIGHT;
+  items[0].geometry.rectangle = {10, 10, 20, 10};
+  items[1].shape = GFNT_EXCLUSION_RECTANGLE;
+  items[1].side = GFNT_EXCLUSION_TEXT_RIGHT;
+  items[1].geometry.rectangle = {30, 10, 20, 30};
+  GFNT_Exclusions exclusions{items, 2, 0, 300};
+  GFNT_Band band{};
+
+  ASSERT_EQ(gfnt_exclusions_band(&exclusions, 12, 2, &band), GFNT_OK);
+  EXPECT_EQ(band.start, 50);
+  EXPECT_EQ(band.next_top, 20);
+  ASSERT_EQ(gfnt_exclusions_band(&exclusions, band.next_top, 10, &band), GFNT_OK);
+  EXPECT_EQ(band.start, 50);
+  EXPECT_EQ(band.next_top, 40);
+}
+
+TEST(LayoutFlow, BuiltInExclusionsClearAtTheirExactBottomEdge) {
+  GFNT_Exclusion item{};
+  item.shape = GFNT_EXCLUSION_RECTANGLE;
+  item.side = GFNT_EXCLUSION_TEXT_RIGHT;
+  item.geometry.rectangle = {10, 10, 20, 10};
+  GFNT_Exclusions exclusions{&item, 1, 0, 300};
+  GFNT_Band band{};
+
+  ASSERT_EQ(gfnt_exclusions_band(&exclusions, 20, 4, &band), GFNT_OK);
+  EXPECT_EQ(band.start, 0);
+  EXPECT_EQ(band.width, 300);
+  EXPECT_EQ(band.next_top, 20);
+}
+
+TEST(LayoutFlow, ExclusionsOutsideContainerDoNotTriggerClearing) {
+  GFNT_Exclusion items[2]{};
+  items[0].shape = GFNT_EXCLUSION_RECTANGLE;
+  items[0].side = GFNT_EXCLUSION_TEXT_RIGHT;
+  items[0].geometry.rectangle = {0, 10, 10, 30};
+  items[1].shape = GFNT_EXCLUSION_RECTANGLE;
+  items[1].side = GFNT_EXCLUSION_TEXT_LEFT;
+  items[1].geometry.rectangle = {400, 10, 20, 30};
+  GFNT_Exclusions exclusions{items, 2, 20, 300};
+  GFNT_Band band{};
+
+  ASSERT_EQ(gfnt_exclusions_band(&exclusions, 15, 10, &band), GFNT_OK);
+  EXPECT_EQ(band.start, 20);
+  EXPECT_EQ(band.width, 300);
+  EXPECT_EQ(band.next_top, 15);
+}
+
+TEST(LayoutFlow, BuiltInExclusionsRejectInvalidGeometry) {
+  GFNT_Exclusion exclusion{};
+  exclusion.shape = GFNT_EXCLUSION_CIRCLE;
+  exclusion.geometry.circle.radius = -1;
+  GFNT_Exclusions exclusions{&exclusion, 1, 0, 300};
+  GFNT_Band band{};
+  EXPECT_EQ(gfnt_exclusions_band(&exclusions, 0, 10, &band), GFNT_ERR_INVALID);
 }
 
 TEST(LayoutLineBox, ExplicitLengthLineHeightCentersLeadingAroundTheBaseline) {
@@ -1464,6 +1770,23 @@ TEST(LayoutTabs, StopsRestartOnEachLine) {
   ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
   ASSERT_EQ(para.layout.line_count, 2u);
   EXPECT_EQ(para.layout.lines[1].runs[0].glyphs[2].pen_x, 1000);
+}
+
+TEST(LayoutTabs, ContainerOriginIncludesTheFirstLineIndent) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.tab_width = 1000;
+  options.text_indent = 200;
+  Para line_origin("A\tB", {font.face}, options);
+  ASSERT_EQ(line_origin.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  const auto line_tab = line_origin.layout.lines[0].runs[0].glyphs[1].advance;
+
+  options.tabs_from_container = true;
+  Para container_origin("A\tB", {font.face}, options);
+  ASSERT_EQ(container_origin.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  const auto container_tab = container_origin.layout.lines[0].runs[0].glyphs[1].advance;
+  EXPECT_EQ(line_tab, 680);
+  EXPECT_EQ(container_tab, 480);
 }
 
 TEST(LayoutInk, TheInkBoxIsTheOutlinesAtTheirPlacedPositions) {

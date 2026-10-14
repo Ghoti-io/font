@@ -40,6 +40,7 @@
 #include <ghoti.io/unicode/char.h>
 #include <ghoti.io/unicode/script.h>
 #include <ghoti.io/unicode/utf.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "kashida.h"
@@ -99,12 +100,20 @@ static GFNT_Result shape_string_dir(const GFNT_Paragraph * p, size_t span,
 static uint8_t string_orientation(const GFNT_Paragraph * p, size_t span, uint32_t cp);
 static int hyphen_orientation(const GFNT_Paragraph * p);
 
-/** The width of a unit that starts @p pos from the line's start: a tab goes to the next stop. */
-static int64_t eff_width(const GFNT_Paragraph * p, const Unit * u, int64_t pos) {
+/** The width of a unit at @p pos from @p origin: a tab goes to the next stop. */
+static int64_t eff_width_at(const GFNT_Paragraph * p, const Unit * u,
+    int64_t pos, int64_t origin) {
   if (!u->tab || p->tab_width <= 0) {
     return u->width;
   }
-  return p->tab_width - pos % p->tab_width;
+  int64_t remainder = (pos + origin) % p->tab_width;
+  if (remainder < 0) remainder += p->tab_width;
+  return p->tab_width - remainder;
+}
+
+/** The width of a unit measured from the line start (the legacy tab origin). */
+static int64_t eff_width(const GFNT_Paragraph * p, const Unit * u, int64_t pos) {
+  return eff_width_at(p, u, pos, 0);
 }
 
 static GFNT_F26Dot6 scale_v(GFNT_F26Dot6 v, GFNT_F16Dot16 scale) {
@@ -1731,7 +1740,8 @@ typedef struct {
 
 /** Choose one line end without mutating paragraph state. */
 static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
-    GFNT_F26Dot6 width, size_t * cand_at, GFNT_F26Dot6 * cand_fit) {
+    GFNT_F26Dot6 width, GFNT_F26Dot6 tab_origin, size_t * cand_at,
+    GFNT_F26Dot6 * cand_fit) {
   BreakResult result = {p->unit_count, false};
   size_t i = start;
   GFNT_F26Dot6 total = 0, fit = 0;
@@ -1741,7 +1751,7 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
   for (size_t j = i; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
 
-    total += eff_width(p, u, total);
+    total += eff_width_at(p, u, total, tab_origin);
     if (!u->space) {
       fit = total;
     }
@@ -1779,26 +1789,60 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
   return result;
 }
 
+/** Apply the paragraph's first-line or hanging indent to a callback band. */
+static bool indent_band(const GFNT_Paragraph * p, size_t line, GFNT_Band * band) {
+  const bool apply = p->options.hanging_indent ? line > 0 : line == 0;
+  if (!apply || !p->options.text_indent) return true;
+  int64_t start = (int64_t)band->start + p->options.text_indent;
+  int64_t width = (int64_t)band->width - p->options.text_indent;
+  if (band->width == GFNT_LAYOUT_UNBOUNDED && p->options.text_indent < 0) {
+    width = GFNT_LAYOUT_UNBOUNDED;
+  }
+  if (width < 0) width = 0;
+  if (start < INT32_MIN || start > INT32_MAX || width > INT32_MAX
+      || start + width > INT32_MAX) return false;
+  band->start = (GFNT_F26Dot6)start;
+  band->width = (GFNT_F26Dot6)width;
+  return true;
+}
+
 static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
-    size_t * starts, bool * hyphened, size_t * cand_at, GFNT_F26Dot6 * cand_fit) {
+    size_t * starts, bool * hyphened, size_t * cand_at, GFNT_F26Dot6 * cand_fit,
+    GFNT_F26Dot6 * band_starts, GFNT_F26Dot6 * band_widths) {
   size_t lines = 0;
   size_t i = 0;
 
   if (p->unit_count == 0) {
     starts[0] = 0;
     hyphened[0] = false;
+    GFNT_Band band = {0, width, 0};
+    if (!indent_band(p, 0, &band)) return 1;
+    band_starts[0] = band.start;
+    band_widths[0] = band.width;
     return 1;
   }
   while (i < p->unit_count) {
     BreakResult result;
 
     starts[lines] = i;
-    result = break_one_line(p, i, width, cand_at, cand_fit);
+    GFNT_Band band = {0, width, 0};
+    if (!indent_band(p, lines, &band)) {
+      // Creation has no error channel here; an unrepresentable indent is rejected by layout.
+      band.width = width;
+    }
+    band_starts[lines] = band.start;
+    band_widths[lines] = band.width;
+    GFNT_F26Dot6 tab_origin = p->options.tabs_from_container ? band.start : 0;
+    result = break_one_line(p, i, band.width, tab_origin, cand_at, cand_fit);
     hyphened[lines++] = result.hyphen;
     i = result.end;
   }
   // A text ending in a newline has an empty last line.
   if (p->units[p->unit_count - 1].hard) {
+    GFNT_Band band = {0, width, 0};
+    (void)indent_band(p, lines, &band);
+    band_starts[lines] = band.start;
+    band_widths[lines] = band.width;
     hyphened[lines] = false;
     starts[lines++] = p->unit_count;
   }
@@ -2014,7 +2058,7 @@ static bool inline_shift(const GFNT_Paragraph * p, const PRun * run,
 
 /** Measure the shaped units that will be placed on one line. */
 static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size_t end,
-    GFNT_F26Dot6 width, GFNT_F26Dot6 top_y, GFNT_F26Dot6 * ew,
+    GFNT_F26Dot6 width, GFNT_F26Dot6 top_y, GFNT_F26Dot6 tab_origin, GFNT_F26Dot6 * ew,
     GFNT_F26Dot6 * tabadv) {
   LayoutLineState state = {0};
   GFNT_F26Dot6 pos = 0;
@@ -2040,7 +2084,7 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
     const Unit * unit = &p->units[j];
     const PRun * run = &p->runs[unit->run];
 
-    ew[j] = eff_width(p, unit, pos);
+    ew[j] = eff_width_at(p, unit, pos, tab_origin);
     pos += ew[j];
     if (unit->tab) {
       tabadv[unit->g_lo] = ew[j];
@@ -2353,7 +2397,8 @@ static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_co
 
 /** Apply paragraph alignment and convert a line from line-relative to physical coordinates. */
 static void align_line(const GFNT_Paragraph * p, GFNT_Line * line,
-    GFNT_F26Dot6 available, GFNT_F26Dot6 block_extent, bool para_rtl, bool vertical) {
+    GFNT_F26Dot6 band_start, GFNT_F26Dot6 available, GFNT_F26Dot6 block_extent,
+    bool para_rtl, bool vertical) {
   GFNT_F26Dot6 slack = available - line->extent;
   GFNT_F26Dot6 off;
   GFNT_Align align = p->options.align;
@@ -2377,19 +2422,19 @@ static void align_line(const GFNT_Paragraph * p, GFNT_Line * line,
         : align == GFNT_ALIGN_CENTER ? slack / 2 : 0;
   }
   shift = off + line->offset;
-  line->offset = off;
+  line->offset = band_start + off;
   if (vertical) {
     const GFNT_F26Dot6 before = line->box.x;
 
     line->box.x = p->mode == GFNT_WRITING_VERTICAL_LR
         ? before : block_extent - before - line->box.width;
-    line->box.y = 0;
+    line->box.y = band_start;
     line->box.height = available;
     across = line->box.x + line->box.width / 2;
     line->baseline = across;
   }
   else {
-    line->box.x = 0;
+    line->box.x = band_start;
     line->box.width = available;
   }
   if (line->ink.width || line->ink.height) {
@@ -2421,7 +2466,7 @@ static void align_line(const GFNT_Paragraph * p, GFNT_Line * line,
     }
   }
   if (p->mode == GFNT_WRITING_SIDEWAYS_LR) {
-    const GFNT_F26Dot6 bw = block_extent, bh = available;
+    const GFNT_F26Dot6 bw = block_extent, bh = band_start + available;
 
     line->box.x = bw - (line->box.x + line->box.width);
     line->offset = bh - (line->offset + line->extent);
@@ -2451,14 +2496,18 @@ static void align_line(const GFNT_Paragraph * p, GFNT_Line * line,
 
 /** Align every line and union the placed glyph ink boxes. */
 static GFNT_Rect align_lines(const GFNT_Paragraph * p, GFNT_Line * lines, size_t line_count,
-    GFNT_F26Dot6 available, GFNT_F26Dot6 block_extent, bool para_rtl, bool vertical) {
+    const GFNT_F26Dot6 * band_starts, const GFNT_F26Dot6 * band_widths,
+    GFNT_F26Dot6 default_width, GFNT_F26Dot6 widest, GFNT_F26Dot6 block_extent,
+    bool para_rtl, bool vertical) {
   GFNT_Rect ink = {0, 0, 0, 0};
   bool ink_any = false;
 
   for (size_t li = 0; li < line_count; li++) {
     GFNT_Line * line = &lines[li];
 
-    align_line(p, line, available, block_extent, para_rtl, vertical);
+    GFNT_F26Dot6 available = band_widths[li];
+    if (default_width == GFNT_LAYOUT_UNBOUNDED) available = widest;
+    align_line(p, line, band_starts[li], available, block_extent, para_rtl, vertical);
     if (line->ink.width || line->ink.height) {
       if (ink_any) {
         GFNT_F26Dot6 r1 = ink.x + ink.width, b1 = ink.y + ink.height;
@@ -2498,6 +2547,7 @@ typedef struct {
 typedef struct {
   const GFNT_Allocator * allocator;
   size_t * starts, * order, * cand_at;
+  GFNT_F26Dot6 * band_starts, * band_widths, * line_tops;
   Slice * slices;
   uint8_t * slice_levels, * gjf;
   GFNT_F26Dot6 * ew, * tabadv, * cand_fit;
@@ -2519,7 +2569,7 @@ typedef struct {
 
 /** Reserve every paragraph and output buffer before placement begins. */
 static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragraph * p,
-    GFNT_F26Dot6 width, GFNT_Error * error) {
+    GFNT_F26Dot6 width, const GFNT_LineConstraint * constraint, GFNT_Error * error) {
   const GFNT_Allocator * allocator = state->allocator;
   GFNT_F26Dot6 max_content;
 
@@ -2548,14 +2598,162 @@ static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragra
       sizeof *state->cand_at);
   state->cand_fit = allocator->calloc_fn(allocator->ctx, p->unit_count + 1,
       sizeof *state->cand_fit);
+  state->band_starts = allocator->calloc_fn(allocator->ctx, p->unit_count + 2,
+      sizeof *state->band_starts);
+  state->band_widths = allocator->calloc_fn(allocator->ctx, p->unit_count + 2,
+      sizeof *state->band_widths);
+  state->line_tops = allocator->calloc_fn(allocator->ctx, p->unit_count + 2,
+      sizeof *state->line_tops);
   if (!state->starts || !state->slices || !state->order || !state->slice_levels
       || !state->ew || !state->tabadv || !state->gjf || !state->hyphened || !state->gk
-      || !state->kres || !state->cand_at || !state->cand_fit) {
+      || !state->kres || !state->cand_at || !state->cand_fit || !state->band_starts
+      || !state->band_widths || !state->line_tops) {
     return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the layout");
   }
-  state->line_count = break_lines(p, width, state->starts, state->hyphened,
-      state->cand_at, state->cand_fit);
+  if (!constraint) {
+    state->line_count = break_lines(p, width, state->starts, state->hyphened,
+        state->cand_at, state->cand_fit, state->band_starts, state->band_widths);
+    GFNT_F26Dot6 top = 0;
+    for (size_t li = 0; li < state->line_count; li++) {
+      state->line_tops[li] = top;
+      LayoutLineState measured = measure_line(p, state->starts[li], state->starts[li + 1],
+          state->band_widths[li], top,
+          p->options.tabs_from_container ? state->band_starts[li] : 0,
+          state->ew, state->tabadv);
+      if (measured.invalid || measured.thickness < 0
+          || top > INT32_MAX - measured.thickness) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+            "line metrics exceed the supported layout range");
+      }
+      top += measured.thickness;
+    }
+  }
+  else {
+    size_t unit = 0;
+    GFNT_F26Dot6 top = 0;
+    size_t attempts = 0;
+    const size_t callback_budget = p->unit_count > (SIZE_MAX - 16) / 2
+        ? SIZE_MAX : 2 * p->unit_count + 16;
+    bool trailing_empty = false;
+    do {
+      GFNT_Band raw_band = {0}, band = {0};
+      size_t line_start = unit;
+      BreakResult br;
+      LayoutLineState measured;
+      GFNT_F26Dot6 height;
+      size_t retries = 0;
+      bool stable = false;
+      bool have_candidate = false;
+      GFNT_Result callback_result;
+
+      do {
+        if (!have_candidate) {
+          if (++attempts > callback_budget) {
+            return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+                "line constraint did not stabilize within its callback budget");
+          }
+          callback_result = constraint->band(constraint->ctx, top, 0, &raw_band);
+          if (callback_result != GFNT_OK) return callback_result;
+          if (raw_band.width < 0 || raw_band.next_top < 0
+              || (int64_t)raw_band.start + raw_band.width > INT32_MAX) {
+            return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+                "line constraint returned an invalid band");
+          }
+          band = raw_band;
+          if (!indent_band(p, state->line_count, &band)) {
+            return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+                "line indentation exceeds the supported coordinate range");
+          }
+          have_candidate = true;
+        }
+        if (!band.width && band.next_top > top) {
+          top = band.next_top;
+          have_candidate = false;
+          continue;
+        }
+        GFNT_F26Dot6 tab_origin = p->options.tabs_from_container ? band.start : 0;
+        br = break_one_line(p, unit, band.width, tab_origin, state->cand_at, state->cand_fit);
+        measured = measure_line(p, unit, br.end, band.width, top, tab_origin, state->ew,
+            state->tabadv);
+        if (measured.invalid || measured.thickness < 0) {
+          return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+              "line metrics exceed the supported layout range");
+        }
+        height = measured.thickness;
+        {
+          GFNT_Band actual = {0};
+          if (++attempts > callback_budget) {
+            return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+                "line constraint did not stabilize within its callback budget");
+          }
+          callback_result = constraint->band(constraint->ctx, top, height, &actual);
+          if (callback_result != GFNT_OK) return callback_result;
+          if (actual.width < 0 || actual.next_top < 0
+              || (int64_t)actual.start + actual.width > INT32_MAX) {
+            return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+                "line constraint returned an invalid band");
+          }
+          if (actual.start == raw_band.start && actual.width == raw_band.width) {
+            raw_band = actual;
+            band = actual;
+            if (!indent_band(p, state->line_count, &band)) {
+              return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+                  "line indentation exceeds the supported coordinate range");
+            }
+            stable = true;
+          }
+          else {
+            raw_band = actual;
+            band = actual;
+            if (!indent_band(p, state->line_count, &band)) {
+              return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+                  "line indentation exceeds the supported coordinate range");
+            }
+            have_candidate = true;
+            if (++retries > callback_budget) break;
+          }
+        }
+      } while (!stable && retries <= callback_budget);
+      if (!stable) {
+        return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+            "line constraint changed continuously while measuring a line");
+      }
+      if (measured.natural > band.width && band.next_top > top) {
+        top = band.next_top;
+        have_candidate = false;
+        continue;
+      }
+      state->starts[state->line_count] = line_start;
+      state->hyphened[state->line_count] = br.hyphen;
+      state->band_starts[state->line_count] = band.start;
+      state->band_widths[state->line_count] = band.width;
+      state->line_tops[state->line_count] = top;
+      state->line_count++;
+      if (br.end <= unit && unit < p->unit_count) {
+        return gfnt_error_set(error, GFNT_ERR_INTERNAL, 0, 0, GFNT_GLYPH_NONE,
+            "line breaker did not advance");
+      }
+      unit = br.end;
+      if (line_start == p->unit_count) {
+        trailing_empty = false;
+        break;
+      }
+      if (height > 0 && top > INT32_MAX - height) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+            "line block position exceeds the coordinate range");
+      }
+      top += height;
+      if (unit == p->unit_count && p->unit_count
+          && p->units[p->unit_count - 1].hard && !trailing_empty) {
+        trailing_empty = true;
+      }
+      else if (unit == p->unit_count) {
+        break;
+      }
+    } while (state->line_count < p->unit_count + 2);
+    if (!state->line_count) state->line_count = 1;
+  }
   state->starts[state->line_count] = p->unit_count;
   state->total_lines = state->line_count;
   if (p->options.max_lines && state->line_count > p->options.max_lines) {
@@ -2590,6 +2788,9 @@ static void layout_state_free(LayoutState * state) {
   const GFNT_Allocator * allocator = state->allocator;
 
   allocator->free_fn(allocator->ctx, state->starts);
+  allocator->free_fn(allocator->ctx, state->band_starts);
+  allocator->free_fn(allocator->ctx, state->band_widths);
+  allocator->free_fn(allocator->ctx, state->line_tops);
   allocator->free_fn(allocator->ctx, state->slices);
   allocator->free_fn(allocator->ctx, state->order);
   allocator->free_fn(allocator->ctx, state->slice_levels);
@@ -2734,7 +2935,7 @@ static void layout_process_finish(LayoutState * state, const GFNT_Paragraph * p,
   state->y = y;
   state->widest = widest;
   state->ink = align_lines(p, state->lines, state->line_count,
-      width == GFNT_LAYOUT_UNBOUNDED ? widest : width, y, para_rtl, vertical);
+      state->band_starts, state->band_widths, width, widest, y, para_rtl, vertical);
 }
 
 /** Run measurement, justification, visual-run construction, placement, then alignment. */
@@ -2754,6 +2955,8 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
   GFNT_LineRun * runs = state->runs;
   GFNT_PlacedGlyph * placed = state->placed;
   size_t line_count = state->line_count, total_lines = state->total_lines;
+  GFNT_F26Dot6 * band_starts = state->band_starts, * band_widths = state->band_widths;
+  GFNT_F26Dot6 * line_tops = state->line_tops;
   size_t run_used = state->run_used, glyph_used = state->glyph_used;
   bool more = state->more, any_truncated = false;
   GFNT_F26Dot6 y = 0, widest = 0;
@@ -2763,7 +2966,11 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     size_t ua = starts[li];
     size_t ub = starts[li + 1];
     GFNT_Line * line = &lines[li];
-    LayoutLineState line_state = measure_line(p, ua, ub, width, y, ew, tabadv);
+    GFNT_F26Dot6 line_width = band_widths[li];
+    GFNT_F26Dot6 line_top = line_tops[li];
+    GFNT_F26Dot6 tab_origin = p->options.tabs_from_container ? band_starts[li] : 0;
+    LayoutLineState line_state = measure_line(p, ua, ub, line_width, line_top, tab_origin,
+        ew, tabadv);
     size_t hang_from;
     size_t ns = 0;
     PlacementState placement = {0};
@@ -2777,7 +2984,9 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     PRun hy_run;
     bool hy_line = false;
     bool trunc_line = false;
-    bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
+    bool bounded = line_width != GFNT_LAYOUT_UNBOUNDED;
+
+    line_state.start_offset = band_starts[li];
 
     if (line_state.invalid) {
       r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
@@ -2804,7 +3013,7 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
       natural += hy_w;
     }
     if (p->options.max_lines && p->ell_count && li + 1 == line_count
-        && (more || (bounded && natural > width))) {
+        && (more || (bounded && natural > line_width))) {
       size_t span = ub > ua ? p->runs[p->units[ub - 1].run].span
                             : (ua < p->unit_count ? p->runs[p->units[ua].run].span
                                                   : 0);
@@ -2818,7 +3027,7 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
         return r;
       }
       if (bounded) {
-        GFNT_F26Dot6 room = width - ell_w, used = 0;
+        GFNT_F26Dot6 room = line_width - ell_w, used = 0;
         size_t k = ua;
 
         while (k < ub && used + ew[k] <= room) {
@@ -2840,11 +3049,11 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     }
     {
       JustificationState justification = {
-        p, allocator, gjf, gk, kres, &spool, &spool_len, &spool_cap
+          p, allocator, gjf, gk, kres, &spool, &spool_len, &spool_cap
       };
 
       r = justify_line(&justification, line, ua, ub, hang_from, natural,
-          line_state.available_width, li, total_lines, bounded, trunc_line,
+          line_width, li, total_lines, bounded, trunc_line,
           &extra, &extra_rem, error);
       if (r != GFNT_OK) {
         state->spool = spool;
@@ -2857,7 +3066,7 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
       LineBuildState build = {
         p, slices, slice_levels, order, line, ua, ub, hang_from, 0,
         hy_line, trunc_line, vertical, hy_g, ell_g, hy_n, ell_n,
-        &hy_run, &ell_run, &line_state, y
+        &hy_run, &ell_run, &line_state, line_top
       };
 
       r = build_line_slices(&build, error);
@@ -2898,32 +3107,222 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     if (line->extent > widest) {
       widest = line->extent;
     }
-    y += vertical ? line->box.width : line->box.height;
+    {
+      GFNT_F26Dot6 line_height = vertical ? line->box.width : line->box.height;
+      if (line_top <= INT32_MAX - line_height && line_top + line_height > y) {
+        y = line_top + line_height;
+      }
+    }
   }
   layout_process_finish(state, p, width, vertical, para_rtl, spool, spool_len,
       spool_cap, run_used, glyph_used, any_truncated, y, widest);
   return GFNT_OK;
 }
 
+static GFNT_Result paragraph_layout_internal(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
+    const GFNT_LineConstraint * constraint, GFNT_Layout * out, GFNT_Error * error);
+
 GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     GFNT_Layout * out, GFNT_Error * error) {
+  return paragraph_layout_internal(p, width, NULL, out, error);
+}
+
+static GFNT_Result paragraph_layout_internal(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
+    const GFNT_LineConstraint * constraint, GFNT_Layout * out, GFNT_Error * error) {
   LayoutState state = {0};
   bool para_rtl;
   const bool vertical = p ? p->vertical : false;
   GFNT_Result r = GFNT_OK;
 
   gfnt_error_clear(error);
-  if (!p || !out || width < 0) return GFNT_ERR_INVALID;
+  if (!p || !out || width < 0 || (constraint && !constraint->band)) return GFNT_ERR_INVALID;
+  if (!constraint && width != GFNT_LAYOUT_UNBOUNDED
+      && (int64_t)width - p->options.text_indent > INT32_MAX) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "line indentation exceeds the supported coordinate range");
+  }
   para_rtl = (p->para_level & 1) != 0;
   state.allocator = p->allocator;
-  r = layout_state_allocate(&state, p, width, error);
+  r = layout_state_allocate(&state, p, constraint ? GFNT_LAYOUT_UNBOUNDED : width,
+      constraint, error);
   if (r != GFNT_OK) goto done;
-  r = layout_process_lines(p, width, vertical, para_rtl, &state, error);
+  r = layout_process_lines(p, constraint ? 0 : width, vertical, para_rtl, &state, error);
   if (r != GFNT_OK) goto done;
+  if (constraint) {
+    width = 0;
+    for (size_t li = 0; li < state.line_count; li++) {
+      int64_t end = (int64_t)state.band_starts[li] + state.band_widths[li];
+      if (end > width) width = (GFNT_F26Dot6)end;
+    }
+  }
   layout_state_finish(&state, out, p, width, vertical, state.y, state.widest,
       state.line_count, state.any_truncated, state.ink);
   return GFNT_OK;
 done:
   layout_state_free(&state);
   return r;
+}
+
+GFNT_Result gfnt_paragraph_layout_flow(const GFNT_Paragraph * p,
+    const GFNT_LineConstraint * constraint, GFNT_Layout * out, GFNT_Error * error) {
+  if (!constraint) return GFNT_ERR_INVALID;
+  return paragraph_layout_internal(p, GFNT_LAYOUT_UNBOUNDED, constraint, out, error);
+}
+
+static void flow_include_x(long double x, long double * lo, long double * hi, bool * found) {
+  if (!*found || x < *lo) *lo = x;
+  if (!*found || x > *hi) *hi = x;
+  *found = true;
+}
+
+/** Bounds of a polygon clipped to a horizontal slab. */
+static bool flow_polygon_slab(const GFNT_FlowPoint * points, size_t count,
+    long double y0, long double y1, long double * x0, long double * x1,
+    long double * bottom) {
+  bool found = false;
+  long double lo = 0, hi = 0, min_y = points[0].y, max_y = points[0].y;
+  for (size_t i = 1; i < count; i++) {
+    if (points[i].y < min_y) min_y = points[i].y;
+    if (points[i].y > max_y) max_y = points[i].y;
+  }
+  if (y1 <= min_y || y0 >= max_y) return false;
+  for (size_t i = 0; i < count; i++) {
+    const GFNT_FlowPoint a = points[i], b = points[(i + 1) % count];
+    const long double ay = a.y, by = b.y;
+    if (ay > max_y) max_y = ay;
+    if (ay >= y0 && ay <= y1) flow_include_x(a.x, &lo, &hi, &found);
+    if (ay != by) {
+      const long double low = ay < by ? ay : by;
+      const long double high = ay > by ? ay : by;
+      const long double scans[] = {y0, y1};
+      for (size_t k = 0; k < 2; k++) {
+        const long double y = scans[k];
+        if (y >= low && y <= high) {
+          const long double x = a.x + (y - ay) * ((long double)b.x - a.x) / (by - ay);
+          flow_include_x(x, &lo, &hi, &found);
+        }
+      }
+    }
+  }
+  if (!found) return false;
+  *x0 = lo; *x1 = hi; *bottom = max_y;
+  return true;
+}
+
+/** Bounds of one exclusion over the line's cross-axis interval. */
+static bool flow_exclusion_slab(const GFNT_Exclusion * item, GFNT_F26Dot6 top,
+    GFNT_F26Dot6 height, long double * x0, long double * x1, int64_t * bottom) {
+  const long double margin = item->margin;
+  const long double y0 = (long double)top - margin;
+  const long double y1 = (long double)top + height + margin;
+  long double lo = 0, hi = 0, lower = 0;
+  switch (item->shape) {
+    case GFNT_EXCLUSION_RECTANGLE: {
+      const GFNT_Rect r = item->geometry.rectangle;
+      const long double upper = (long double)r.y - margin;
+      lower = (long double)r.y + r.height + margin;
+      if (y1 <= upper || y0 >= lower) return false;
+      lo = (long double)r.x - margin;
+      hi = (long double)r.x + r.width + margin;
+      break;
+    }
+    case GFNT_EXCLUSION_CIRCLE: {
+      const GFNT_FlowPoint center = item->geometry.circle.center;
+      const long double radius = (long double)item->geometry.circle.radius + margin;
+      const long double top_edge = (long double)center.y - radius;
+      lower = (long double)center.y + radius;
+      if (y1 <= top_edge || y0 >= lower) return false;
+      long double dy = 0;
+      if ((long double)center.y < y0) dy = y0 - center.y;
+      else if ((long double)center.y > y1) dy = center.y - y1;
+      const long double reach = sqrtl(radius * radius - dy * dy);
+      lo = (long double)center.x - reach;
+      hi = (long double)center.x + reach;
+      break;
+    }
+    case GFNT_EXCLUSION_POLYGON:
+      if (!flow_polygon_slab(item->geometry.polygon.points, item->geometry.polygon.count,
+              y0, y1, &lo, &hi, &lower)) return false;
+      lo -= margin; hi += margin; lower += margin;
+      break;
+    default:
+      return false;
+  }
+  lo = floorl(lo); hi = ceill(hi);
+  if (lo < INT32_MIN || hi > INT32_MAX || lower < INT32_MIN || lower > INT32_MAX) return false;
+  *x0 = lo; *x1 = hi; *bottom = (int64_t)lower;
+  return true;
+}
+
+GFNT_Result gfnt_exclusions_band(void * ctx, GFNT_F26Dot6 top,
+    GFNT_F26Dot6 height, GFNT_Band * out) {
+  const GFNT_Exclusions * exclusions = ctx;
+  int64_t start, end, next_top;
+  bool blocked = false;
+  if (!exclusions || !out || top < 0 || height < 0 || exclusions->width < 0
+      || (exclusions->count && !exclusions->items)) return GFNT_ERR_INVALID;
+  start = exclusions->start;
+  end = start + (int64_t)exclusions->width;
+  next_top = top;
+  if (start < INT32_MIN || start > INT32_MAX || end < INT32_MIN || end > INT32_MAX) {
+    return GFNT_ERR_INVALID;
+  }
+  for (size_t i = 0; i < exclusions->count; i++) {
+    const GFNT_Exclusion * item = &exclusions->items[i];
+    long double left, right;
+    int64_t bottom;
+    bool affects = false;
+    if (item->margin < 0 || item->side < GFNT_EXCLUSION_TEXT_RIGHT
+        || item->side > GFNT_EXCLUSION_TEXT_LEFT || item->shape < GFNT_EXCLUSION_RECTANGLE
+        || item->shape > GFNT_EXCLUSION_POLYGON) return GFNT_ERR_INVALID;
+    if (item->shape == GFNT_EXCLUSION_RECTANGLE) {
+      const GFNT_Rect r = item->geometry.rectangle;
+      const int64_t right_edge = (int64_t)r.x + r.width + item->margin;
+      const int64_t bottom_edge = (int64_t)r.y + r.height + item->margin;
+      if (r.width < 0 || r.height < 0 || (int64_t)r.x - item->margin < INT32_MIN
+          || right_edge > INT32_MAX || (int64_t)r.y - item->margin < INT32_MIN
+          || bottom_edge > INT32_MAX) return GFNT_ERR_INVALID;
+    }
+    if (item->shape == GFNT_EXCLUSION_CIRCLE) {
+      const int64_t radius = (int64_t)item->geometry.circle.radius + item->margin;
+      const GFNT_FlowPoint center = item->geometry.circle.center;
+      if (item->geometry.circle.radius < 0 || (int64_t)center.x - radius < INT32_MIN
+          || (int64_t)center.x + radius > INT32_MAX || (int64_t)center.y - radius < INT32_MIN
+          || (int64_t)center.y + radius > INT32_MAX) return GFNT_ERR_INVALID;
+    }
+    if (item->shape == GFNT_EXCLUSION_POLYGON
+        && (!item->geometry.polygon.points || item->geometry.polygon.count < 3)) {
+      return GFNT_ERR_INVALID;
+    }
+    if (item->shape == GFNT_EXCLUSION_POLYGON) {
+      for (size_t j = 0; j < item->geometry.polygon.count; j++) {
+        const GFNT_FlowPoint point = item->geometry.polygon.points[j];
+        if ((int64_t)point.x - item->margin < INT32_MIN
+            || (int64_t)point.x + item->margin > INT32_MAX
+            || (int64_t)point.y - item->margin < INT32_MIN
+            || (int64_t)point.y + item->margin > INT32_MAX) return GFNT_ERR_INVALID;
+      }
+    }
+    if (!flow_exclusion_slab(item, top, height, &left, &right, &bottom)) continue;
+    if (item->side == GFNT_EXCLUSION_TEXT_RIGHT) {
+      if (right > start) {
+        start = (int64_t)right;
+        affects = true;
+      }
+    }
+    else if (left < end) {
+      end = (int64_t)left;
+      affects = true;
+    }
+    if (affects && bottom > top) {
+      if (!blocked || bottom < next_top) next_top = bottom;
+      blocked = true;
+    }
+  }
+  if (start < INT32_MIN || start > INT32_MAX || end < INT32_MIN || end > INT32_MAX
+      || end - start > INT32_MAX || next_top > INT32_MAX) return GFNT_ERR_INVALID;
+  out->start = (GFNT_F26Dot6)start;
+  out->width = end > start ? (GFNT_F26Dot6)(end - start) : 0;
+  out->next_top = blocked ? (GFNT_F26Dot6)next_top : top;
+  return GFNT_OK;
 }

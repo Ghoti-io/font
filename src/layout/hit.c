@@ -256,6 +256,21 @@ GFNT_Result gfnt_layout_hit_test(const GFNT_Paragraph * p, const GFNT_Layout * l
   hit.line = li;
   hit.offset = l->lines[li].start;
   hit.affinity = GFNT_AFFINITY_DOWNSTREAM;
+  for (size_t ai = 0; ai < l->lines[li].annotation_count; ai++) {
+    const GFNT_LineAnnotation * annotation = &l->lines[li].annotations[ai];
+    const GFNT_Rect box = annotation->box;
+    if (x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height) {
+      const GFNT_F26Dot6 along = is_vertical(l) ? y : x;
+      const GFNT_F26Dot6 start = is_vertical(l) ? box.y : box.x;
+      const GFNT_F26Dot6 extent = is_vertical(l) ? box.height : box.width;
+      hit.offset = along < start + extent / 2 ? annotation->base_start : annotation->base_end;
+      hit.affinity = hit.offset == annotation->base_start
+          ? GFNT_AFFINITY_DOWNSTREAM : GFNT_AFFINITY_UPSTREAM;
+      p->allocator->free_fn(p->allocator->ctx, boxes);
+      *out = hit;
+      return GFNT_OK;
+    }
+  }
   if (n) {
     size_t pick = n;
     bool leading;
@@ -390,10 +405,24 @@ GFNT_Result gfnt_layout_range_rects(const GFNT_Paragraph * p,
     size_t n = 0;
     bool open = false;
     GFNT_Rect cur = {0, 0, 0, 0};   // x and width: the span along the line, in the boxes' frame
+    int64_t ann_over = 0, ann_under = 0;
     GFNT_Result r;
 
     if (line->end <= start || line->start >= end) {
       continue;
+    }
+    for (size_t ai = 0; ai < p->annotation_count; ai++) {
+      const PAnnotation * annotation = &p->annotations[ai];
+      const size_t annotation_start = p->cp_byte[annotation->cp_start];
+      const size_t annotation_end = p->cp_byte[annotation->cp_end];
+      if (annotation_end <= start || annotation_start >= end
+          || annotation_end <= line->start || annotation_start >= line->end) continue;
+      if (annotation->descriptor.position == GFNT_ANNOTATION_UNDER) {
+        ann_under += (int64_t)annotation->ascent + annotation->descent;
+      }
+      else {
+        ann_over += (int64_t)annotation->ascent + annotation->descent;
+      }
     }
     r = line_boxes(p, l, line, &boxes, &n);
     if (r != GFNT_OK) {
@@ -410,14 +439,14 @@ GFNT_Result gfnt_layout_range_rects(const GFNT_Paragraph * p,
         GFNT_Rect rect = cur;
 
         if (is_vertical(l)) {
-          rect.x = line->box.x;
+          rect.x = line->box.x + (GFNT_F26Dot6)ann_over;
           rect.y = is_flipped(l) ? l->height - (cur.x + cur.width) : cur.x;
-          rect.width = line->box.width;
+          rect.width = (GFNT_F26Dot6)(line->ascent + line->descent - ann_over - ann_under);
           rect.height = cur.width;
         }
         else {
-          rect.y = line->box.y;
-          rect.height = line->box.height;
+          rect.y = line->baseline - line->ascent + (GFNT_F26Dot6)ann_over;
+          rect.height = (GFNT_F26Dot6)(line->ascent + line->descent - ann_over - ann_under);
         }
         if (out && total < capacity) {
           out[total] = rect;

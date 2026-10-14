@@ -1699,6 +1699,18 @@ first face, fits; with no string the lines are only counted. The mark is a
 `GFNT_LineRun` with `ellipsis` set, stands for no bytes and is not a box for hit
 testing.
 
+**Annotation tracks (L4, partial).** `GFNT_ParagraphOptions.annotations` accepts
+UTF-8 byte ranges for ruby text and emphasis marks. Ruby text is shaped once in
+its own style, reserves advance before line breaking, and currently keeps its
+base range indivisible. Over/under tracks contribute to line metrics and emit
+`GFNT_LineAnnotation` runs and boxes in the paragraph coordinate frame. Nested
+descriptors are copied and emitted recursively. A point hit on a top-level track
+maps to an edge of its base range; range rectangles over base text exclude the
+annotation, matching Chromium and Firefox. Preset emphasis chooses its default
+mark from the first base character and writing mode. `merge=true` and
+`INTER_CHARACTER` are rejected until implemented. Ruby overhang is approximate;
+there is not yet a browser oracle target for annotation geometry.
+
 Letter-spacing (`GFNT_TextStyle.letter_spacing`) is added to the advance of the
 last glyph of every cluster, in reading order, before any line is broken, so it
 counts in the widths; ligatures are not switched off, as CSS does. A tab
@@ -1807,7 +1819,8 @@ which the patch does not read either. `make check-oracle-kashida` holds all this
 screenshots of the patch's published page (23 words and phrases in Amiri, and the three
 `text-kashida-space` settings), which agree to within one tatweel at every stroke.
 
-Not done: flow constraints and ruby.
+Not done: ruby merge, inter-character positioning, per-cluster default emphasis,
+accurate line-specific overhang, and Chromium/Firefox annotation geometry oracles.
 
 ### 10.7 Deliberately not here
 

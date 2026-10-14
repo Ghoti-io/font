@@ -13,7 +13,7 @@ BUILD ?= release
 # The version of this library. MINOR_VERSION carries the minor and the patch as
 # one dotted string; the two are split out below for the places that need three
 # separate integers. See CONVENTIONS.md section 4.
-MAJOR_VERSION := 0
+MAJOR_VERSION := 1
 MINOR_VERSION := 0.0
 VERSION_MINOR_ONLY := $(word 1,$(subst ., ,$(MINOR_VERSION)))
 VERSION_PATCH_ONLY := $(or $(word 2,$(subst ., ,$(MINOR_VERSION))),0)
@@ -248,13 +248,12 @@ CC := cc
 # all four trees CFLAGS reaches - release, asan, coverage and debug - and the
 # last two are the -O0 ones, which is the evidence for that half.
 #
-# Building the debug tree needs one flag, because BRANCH becomes `-debug` and
-# CUTIL_PC is derived from it, so pkg-config is asked for a
-# ghoti.io-cutil-debug that only a whole-suite debug bootstrap installs.
-# Override the name and a debug build runs against the ordinary release
-# prefix:
+# Dependencies keep their own major version. This library's major ABI is
+# independent, so a version bump here does not imply matching dependency bumps.
+# Override dependency package names only when building against a different
+# dependency ABI:
 #
-#   make BUILD=debug CUTIL_PC=ghoti.io-cutil-$(MAJOR_VERSION) test
+#   make CUTIL_PC=ghoti.io-cutil-1 test
 #
 # 262 tests pass there at -O0.
 #
@@ -384,7 +383,7 @@ endif
 # comment here used to say "fall back to a sibling checkout", which the error
 # below has always contradicted. The name must carry $(BRANCH): cutil installs its
 # .pc as ghoti.io-cutil-dev.pc, so asking for "ghoti.io-cutil" never matches.
-CUTIL_PC ?= ghoti.io-cutil$(BRANCH)
+CUTIL_PC ?= ghoti.io-cutil-0
 CUTIL_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(CUTIL_PC) 2>/dev/null)
 CUTIL_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(CUTIL_PC) 2>/dev/null)
 # An empty answer means pkg-config could not find it. There is no second
@@ -406,7 +405,7 @@ INCLUDE += $(CUTIL_CFLAGS)
 # make two libraries out of one name, and the arm nobody builds is the arm that
 # does not compile (see documentation/development.md on unbuilt preprocessor
 # branches).
-COMPRESS_PC ?= ghoti.io-compress$(BRANCH)
+COMPRESS_PC ?= ghoti.io-compress-0
 COMPRESS_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(COMPRESS_PC) 2>/dev/null)
 COMPRESS_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(COMPRESS_PC) 2>/dev/null)
 ifeq ($(strip $(COMPRESS_CFLAGS)),)
@@ -420,7 +419,7 @@ INCLUDE += $(COMPRESS_CFLAGS)
 # font: its combining class, its canonical decomposition and composition, its
 # joining type and group, its Indic categories. Resolved exactly as cutil and
 # compress are, and unconditional for the reason compress's comment gives.
-UNICODE_PC ?= ghoti.io-unicode$(BRANCH)
+UNICODE_PC ?= ghoti.io-unicode-0
 UNICODE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(UNICODE_PC) 2>/dev/null)
 UNICODE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(UNICODE_PC) 2>/dev/null)
 ifeq ($(strip $(UNICODE_CFLAGS)),)
@@ -436,7 +435,7 @@ INCLUDE += $(UNICODE_CFLAGS)
 # not written a second time here. Resolved exactly as the others are, and
 # unconditional for the reason compress's comment gives. image does not depend on
 # font, so the order in suite/libraries.txt has no cycle.
-IMAGE_PC ?= ghoti.io-image$(BRANCH)
+IMAGE_PC ?= ghoti.io-image-0
 IMAGE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(IMAGE_PC) 2>/dev/null)
 IMAGE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(IMAGE_PC) 2>/dev/null)
 ifeq ($(strip $(IMAGE_CFLAGS)),)

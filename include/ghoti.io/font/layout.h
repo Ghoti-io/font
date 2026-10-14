@@ -205,6 +205,73 @@ typedef struct GFNT_TextSpan {
   GFNT_TextStyle style; ///< How it is set.
 } GFNT_TextSpan;
 
+/** @brief Kind of annotation attached to a source-text range. */
+typedef enum GFNT_AnnotationKind {
+  GFNT_ANNOTATION_RUBY = 0,
+  GFNT_ANNOTATION_EMPHASIS
+} GFNT_AnnotationKind;
+
+/** @brief Side of the base range on which an annotation is placed. */
+typedef enum GFNT_AnnotationPosition {
+  GFNT_ANNOTATION_OVER = 0,
+  GFNT_ANNOTATION_UNDER,
+  GFNT_ANNOTATION_INTER_CHARACTER
+} GFNT_AnnotationPosition;
+
+/** @brief How annotation advance is aligned to the base units. */
+typedef enum GFNT_AnnotationAlign {
+  GFNT_ANNOTATION_ALIGN_START = 0,
+  GFNT_ANNOTATION_ALIGN_CENTER,
+  GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN,
+  GFNT_ANNOTATION_ALIGN_SPACE_AROUND
+} GFNT_AnnotationAlign;
+
+/** @brief Ruby annotation overhang policy at an unannotated line neighbor. */
+typedef enum GFNT_RubyOverhang {
+  GFNT_RUBY_OVERHANG_NONE = 0,
+  GFNT_RUBY_OVERHANG_AUTO
+} GFNT_RubyOverhang;
+
+/** @brief Mark shape used when an emphasis annotation has no literal text. */
+typedef enum GFNT_EmphasisMarkKind {
+  GFNT_EMPHASIS_MARK_DEFAULT = 0, ///< Filled dot for Latin; filled sesame for CJK.
+  GFNT_EMPHASIS_MARK_DOT,
+  GFNT_EMPHASIS_MARK_CIRCLE,
+  GFNT_EMPHASIS_MARK_DOUBLE_CIRCLE,
+  GFNT_EMPHASIS_MARK_TRIANGLE,
+  GFNT_EMPHASIS_MARK_SESAME,
+  GFNT_EMPHASIS_MARK_STRING
+} GFNT_EmphasisMarkKind;
+
+/**
+ * @brief Ruby text or emphasis marks attached to a byte range in the paragraph.
+ *
+ * Ranges use UTF-8 byte offsets and must end on character boundaries. Siblings must be disjoint
+ * or have the same base range; children must be strictly contained in their parent's range.
+ * A non-empty UTF-8 @p text and its explicit byte length are required for ruby and STRING emphasis marks;
+ * preset emphasis marks use a zero length and NULL text. Text and child descriptors are copied
+ * during paragraph creation. The style's faces and feature data follow the same lifetime rules
+ * as a text span. Annotation run glyph clusters and byte ranges are relative to annotation text;
+ * GFNT_LineAnnotation maps them back to the source base range.
+ */
+typedef struct GFNT_Annotation {
+  size_t base_start;
+  size_t base_end;
+  GFNT_AnnotationKind kind;
+  GFNT_AnnotationPosition position; ///< INTER_CHARACTER is reserved and currently rejected.
+  GFNT_TextStyle style;
+  const char * text; ///< UTF-8 ruby text or the mark for each eligible emphasis cluster.
+  size_t text_length; ///< Explicit UTF-8 byte length; required for ruby and STRING marks.
+  GFNT_AnnotationAlign align;
+  bool merge;         ///< Reserved; true is rejected until ruby-merge is implemented.
+  bool group_break;   ///< Reserved; ruby base ranges are currently indivisible.
+  GFNT_RubyOverhang overhang; ///< Whether ruby may hang over plain neighbors; zero disables it.
+  const struct GFNT_Annotation * children;
+  size_t child_count;
+  GFNT_EmphasisMarkKind mark_kind;
+  bool filled; ///< Open circle/triangle/sesame when false; ignored for DOT and STRING.
+} GFNT_Annotation;
+
 /** @brief Where a line's slack goes. START and END follow the paragraph's direction. */
 typedef enum GFNT_Align {
   GFNT_ALIGN_START = 0, ///< The side the paragraph begins on.
@@ -378,6 +445,8 @@ typedef struct GFNT_ParagraphOptions {
   bool hanging_indent;
   /** Measure tab stops from the paragraph origin instead of each line's start. */
   bool tabs_from_container;
+  const GFNT_Annotation * annotations; ///< Optional nested ruby and emphasis descriptors.
+  size_t annotation_count;
 } GFNT_ParagraphOptions;
 
 /** @brief The one inline band available to a line at a given block position. */
@@ -490,6 +559,20 @@ typedef struct GFNT_LineRun {
   void * object; ///< Caller identity for an inline object; NULL for text. Object pixels are not ink.
 } GFNT_LineRun;
 
+/** @brief One positioned annotation on a line, with ordinary runs for painting. */
+typedef struct GFNT_LineAnnotation {
+  size_t base_start; ///< Base byte range; for children, offsets are in the parent annotation text.
+  size_t base_end;
+  GFNT_Rect box; ///< Physical bounds of the ruby text or emphasis mark.
+  const GFNT_LineRun * runs;
+  size_t run_count;
+  GFNT_AnnotationKind kind;
+  GFNT_AnnotationPosition position;
+  size_t annotation_index; ///< Index in the descriptor list for this paragraph (or parent track).
+  const struct GFNT_LineAnnotation * children; ///< Nested annotation tracks, in descriptor order.
+  size_t child_count;
+} GFNT_LineAnnotation;
+
 /**
  * @brief One line of a laid-out paragraph: a row, or in vertical text a column.
  *
@@ -526,6 +609,8 @@ typedef struct GFNT_Line {
   bool truncated;         ///< True when text was cut from its end and a mark may follow.
   bool justified;         ///< True when its spaces were widened to fill the room.
   GFNT_Rect ink;          ///< The box of the glyphs' outlines; all zero for a line with no ink.
+  const GFNT_LineAnnotation * annotations; ///< Ruby and emphasis tracks, in source order.
+  size_t annotation_count;
 } GFNT_Line;
 
 /** @brief A paragraph laid out at one width. Free with ::gfnt_layout_free(). */

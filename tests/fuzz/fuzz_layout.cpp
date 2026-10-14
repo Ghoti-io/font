@@ -262,6 +262,22 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   span.style.faces = faces;
   span.style.face_count = 1;
   span.style.size = 20 * 64;
+  GFNT_Annotation annotation{};
+  if (!(a & 0x80) && !text.empty() && (data[3] & 0x01)) {
+    annotation.base_start = 0;
+    annotation.base_end = text.size();
+    annotation.kind = (data[3] & 0x02) ? GFNT_ANNOTATION_EMPHASIS : GFNT_ANNOTATION_RUBY;
+    annotation.position = (data[3] & 0x04) ? GFNT_ANNOTATION_UNDER : GFNT_ANNOTATION_OVER;
+    annotation.style = span.style;
+    annotation.text = "A";
+    annotation.text_length = 1;
+    annotation.group_break = (data[3] & 0x08) != 0;
+    annotation.mark_kind = annotation.kind == GFNT_ANNOTATION_EMPHASIS
+        ? GFNT_EMPHASIS_MARK_DOT : GFNT_EMPHASIS_MARK_DEFAULT;
+    annotation.filled = true;
+    o.annotations = &annotation;
+    o.annotation_count = 1;
+  }
   GFNT_Paragraph * p = nullptr;
   const GFNT_Result created = gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o,
       nullptr, &p, nullptr);
@@ -297,6 +313,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     at = line.end;
     check(inside(line.box, l));
     check(line.extent >= 0);
+    check(line.annotation_count == again.lines[i].annotation_count);
+    for (size_t ai = 0; ai < line.annotation_count; ai++) {
+      check(line.annotations[ai].base_start <= line.annotations[ai].base_end);
+      check(line.annotations[ai].run_count > 0 && line.annotations[ai].runs != nullptr);
+      check(line.annotations[ai].kind == again.lines[i].annotations[ai].kind);
+    }
     for (size_t k = 0; k < line.run_count; ++k) {
       const GFNT_LineRun & run = line.runs[k];
       check(run.advance >= -64 * 1024 * 1024);
@@ -325,7 +347,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         && line.extent == repeated.extent && line.baseline == repeated.baseline
         && line.box.x == repeated.box.x && line.box.y == repeated.box.y
         && line.box.width == repeated.box.width && line.box.height == repeated.box.height
-        && line.run_count == repeated.run_count);
+        && line.run_count == repeated.run_count
+        && line.annotation_count == repeated.annotation_count);
     if (o.writing_mode == GFNT_WRITING_HORIZONTAL_TB) {
       const GFNT_F26Dot6 expected_start = ((line.box.y / (20 * 64)) & 1) ? 32 : 0;
       check(line.box.x == expected_start && line.box.width == flow_width);

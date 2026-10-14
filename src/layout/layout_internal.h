@@ -71,6 +71,16 @@ typedef struct {
   bool object;                 // one synthetic glyph stands for a caller-owned object
 } Unit;
 
+/** A measured annotation; its text is shaped in a child paragraph at creation. */
+typedef struct {
+  GFNT_Annotation descriptor;
+  char * text;
+  GFNT_Paragraph * shaped;
+  size_t cp_start, cp_end;
+  size_t unit_start, unit_end;
+  GFNT_F26Dot6 advance, ascent, descent;
+} PAnnotation;
+
 /** Where a word can be stretched: the units it is shaped as, and what a tatweel there measures. */
 typedef struct {
   size_t unit;                 // the unit after the place (the stroke goes before it)
@@ -106,6 +116,8 @@ struct GFNT_Paragraph {
   size_t glyph_count;
   Unit * units;
   size_t unit_count;
+  PAnnotation * annotations;
+  size_t annotation_count;
   GFNT_F26Dot6 * hyphen_width; // per span: the hyphen's width, or 0 when no point is in the span
   uint32_t * hyphen_cp;        // per span: the character it is set with
   size_t hyphen_glyphs;        // the most glyphs any span's hyphen shapes to

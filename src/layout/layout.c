@@ -294,16 +294,230 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
   }
   const GFNT_Allocator * allocator = p->allocator;
 
+  for (size_t i = 0; i < p->annotation_count; i++) {
+    gfnt_paragraph_free(p->annotations[i].shaped);
+    allocator->free_fn(allocator->ctx, p->annotations[i].text);
+  }
+
   allocator->free_fn(allocator->ctx, p->cp_byte);
   allocator->free_fn(allocator->ctx, p->cps);
   allocator->free_fn(allocator->ctx, p->styles);
   allocator->free_fn(allocator->ctx, p->runs);
   allocator->free_fn(allocator->ctx, p->glyphs);
   allocator->free_fn(allocator->ctx, p->units);
+  allocator->free_fn(allocator->ctx, p->annotations);
   allocator->free_fn(allocator->ctx, p->hyphen_width);
   allocator->free_fn(allocator->ctx, p->hyphen_cp);
   allocator->free_fn(allocator->ctx, p->kpoints);
   allocator->free_fn(allocator->ctx, p);
+}
+
+static bool annotation_tree_valid(const GFNT_Annotation * items, size_t count,
+    size_t text_length, size_t parent_start, size_t parent_end, size_t depth) {
+  if (depth > 64 || (count && !items)) return false;
+  for (size_t i = 0; i < count; i++) {
+    const GFNT_Annotation * a = &items[i];
+    const bool text_mark = a->kind == GFNT_ANNOTATION_RUBY
+        || (a->kind == GFNT_ANNOTATION_EMPHASIS
+            && a->mark_kind == GFNT_EMPHASIS_MARK_STRING);
+    if (a->base_start >= a->base_end || a->base_end > text_length
+        || a->base_start < parent_start || a->base_end > parent_end
+        || (unsigned)a->kind > GFNT_ANNOTATION_EMPHASIS
+        || (unsigned)a->position > GFNT_ANNOTATION_INTER_CHARACTER
+        || (unsigned)a->align > GFNT_ANNOTATION_ALIGN_SPACE_AROUND
+        || (unsigned)a->mark_kind > GFNT_EMPHASIS_MARK_STRING
+        || (unsigned)a->overhang > GFNT_RUBY_OVERHANG_AUTO
+        || !a->style.faces || !a->style.face_count || a->style.size <= 0
+        || a->merge || a->position == GFNT_ANNOTATION_INTER_CHARACTER
+        || (a->kind == GFNT_ANNOTATION_RUBY && a->mark_kind != GFNT_EMPHASIS_MARK_DEFAULT)
+        || (a->kind == GFNT_ANNOTATION_EMPHASIS && a->child_count)
+        || (text_mark ? (!a->text || !a->text_length) : (a->text || a->text_length))
+        || (a->child_count && !a->children)) return false;
+    for (size_t j = 0; j < i; j++) {
+      const GFNT_Annotation * b = &items[j];
+      const bool disjoint = a->base_end <= b->base_start || b->base_end <= a->base_start;
+      const bool coincident = a->base_start == b->base_start && a->base_end == b->base_end;
+      if (!disjoint && !coincident) return false;
+    }
+    if (!annotation_tree_valid(a->children, a->child_count,
+            a->text_length, 0, a->text_length, depth + 1)) return false;
+  }
+  return true;
+}
+
+static bool annotation_byte_cp(const GFNT_Paragraph * p, size_t byte, size_t * cp) {
+  size_t lo = 0, hi = p->length + 1;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (p->cp_byte[mid] < byte) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > p->length || p->cp_byte[lo] != byte) return false;
+  *cp = lo;
+  return true;
+}
+
+static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation * items,
+    size_t count, GFNT_Error * error) {
+  const GFNT_Allocator * allocator = p->allocator;
+  if (!count) return GFNT_OK;
+  p->annotations = allocator->calloc_fn(allocator->ctx, count, sizeof *p->annotations);
+  if (!p->annotations) return GFNT_ERR_OOM;
+  p->annotation_count = count;
+  for (size_t i = 0; i < count; i++) {
+    const GFNT_Annotation * source = &items[i];
+    PAnnotation * annotation = &p->annotations[i];
+    GFNT_TextSpan span;
+    GFNT_ParagraphOptions options = p->options;
+    GFNT_Error child_error;
+    GFNT_Layout annotation_layout = {0};
+    size_t text_length = source->text_length;
+    const char * text = source->text;
+    GFNT_Result r;
+
+    annotation->descriptor = *source;
+    if (!annotation_byte_cp(p, source->base_start, &annotation->cp_start)
+        || !annotation_byte_cp(p, source->base_end, &annotation->cp_end)) {
+      return gfnt_error_set(error, GFNT_ERR_INVALID, 0, source->base_start, GFNT_GLYPH_NONE,
+          "an annotation range ends inside a UTF-8 character");
+    }
+    if (source->kind == GFNT_ANNOTATION_EMPHASIS
+        && source->mark_kind != GFNT_EMPHASIS_MARK_STRING) {
+      static const char * const marks[] = {"•", "•", "◦", "◎", "▲", "﹅", ""};
+      size_t base = annotation->cp_start;
+      uint32_t cp = base < p->length ? p->cps[base] : 0;
+      bool cjk = cp >= 0x2E80 && cp <= 0x9FFF;
+      size_t mark = (size_t)source->mark_kind;
+      bool filled = source->filled;
+      if (source->mark_kind == GFNT_EMPHASIS_MARK_DEFAULT) {
+        mark = cjk && p->vertical ? GFNT_EMPHASIS_MARK_SESAME : GFNT_EMPHASIS_MARK_DOT;
+        filled = true;
+      }
+      text = !filled && mark == GFNT_EMPHASIS_MARK_DOT ? "◦"
+          : !filled && mark == GFNT_EMPHASIS_MARK_TRIANGLE ? "△" : marks[mark];
+      text_length = strlen(text);
+    }
+    annotation->unit_start = 0;
+    while (annotation->unit_start < p->unit_count
+        && p->units[annotation->unit_start].cp_end <= annotation->cp_start) {
+      annotation->unit_start++;
+    }
+    annotation->unit_end = annotation->unit_start;
+    while (annotation->unit_end < p->unit_count
+        && p->units[annotation->unit_end].cp_start < annotation->cp_end) {
+      const Unit * unit = &p->units[annotation->unit_end];
+      if (unit->cp_start < annotation->cp_start || unit->cp_end > annotation->cp_end) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, 0, source->base_start, GFNT_GLYPH_NONE,
+            "an annotation range splits a shaped cluster");
+      }
+      annotation->unit_end++;
+    }
+    if (annotation->unit_start == annotation->unit_end) {
+      return gfnt_error_set(error, GFNT_ERR_INVALID, 0, source->base_start, GFNT_GLYPH_NONE,
+          "an annotation range contains no shaped text");
+    }
+    annotation->text = allocator->calloc_fn(allocator->ctx, text_length + 1, 1);
+    if (!annotation->text) return GFNT_ERR_OOM;
+    if (text_length) memcpy(annotation->text, text, text_length);
+    annotation->descriptor.text = annotation->text;
+    annotation->descriptor.text_length = text_length;
+    memset(&span, 0, sizeof span);
+    span.length = text_length;
+    span.style = source->style;
+    options.direction = GFNT_BIDI_AUTO;
+    options.align = GFNT_ALIGN_START;
+    options.max_lines = 0;
+    options.ellipsis = NULL;
+    options.text_indent = 0;
+    options.hanging_indent = false;
+    options.annotations = source->children;
+    options.annotation_count = source->child_count;
+    r = gfnt_paragraph_create(annotation->text, text_length, &span, 1, &options,
+        allocator, &annotation->shaped, &child_error);
+    if (r != GFNT_OK) {
+      return gfnt_error_set(error, r, child_error.table, source->base_start,
+          child_error.glyph, "could not shape ruby annotation text");
+    }
+    if (gfnt_paragraph_max_content(annotation->shaped, &annotation->advance) != GFNT_OK) {
+      return gfnt_error_set(error, GFNT_ERR_INVALID, 0, source->base_start, GFNT_GLYPH_NONE,
+          "ruby annotation advance exceeds the supported range");
+    }
+    r = gfnt_paragraph_layout(annotation->shaped, GFNT_LAYOUT_UNBOUNDED,
+        &annotation_layout, &child_error);
+    if (r != GFNT_OK) {
+      return gfnt_error_set(error, r, child_error.table, source->base_start,
+          child_error.glyph, "could not measure ruby annotation text");
+    }
+    annotation->ascent = annotation_layout.lines[0].ascent;
+    annotation->descent = annotation_layout.lines[0].descent;
+    gfnt_layout_free(&annotation_layout);
+    if (source->kind == GFNT_ANNOTATION_EMPHASIS) continue;
+    for (size_t u = annotation->unit_start; u < annotation->unit_end; u++) {
+      if (p->units[u].hard) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, 0, source->base_start, GFNT_GLYPH_NONE,
+            "a ruby base range contains a hard line break");
+      }
+      if (u + 1 < annotation->unit_end) {
+        p->units[u].opportunity = false;
+        p->units[u].hyphen = false;
+      }
+    }
+  }
+  for (size_t i = 0; i < count; i++) {
+    PAnnotation * a = &p->annotations[i];
+    if (a->descriptor.kind != GFNT_ANNOTATION_RUBY) continue;
+    bool first = true;
+    GFNT_F26Dot6 base_width = 0, target = 0;
+    bool annotated_neighbor = false;
+    for (size_t j = 0; j < i; j++) {
+      if (p->annotations[j].descriptor.kind == GFNT_ANNOTATION_RUBY
+          && p->annotations[j].cp_start == a->cp_start && p->annotations[j].cp_end == a->cp_end) {
+        first = false;
+        break;
+      }
+    }
+    if (!first) continue;
+    for (size_t u = a->unit_start; u < a->unit_end; u++) base_width += p->units[u].width;
+    target = base_width;
+    for (size_t j = 0; j < count; j++) {
+      const PAnnotation * neighbor = &p->annotations[j];
+      if (j == i || neighbor->descriptor.kind != GFNT_ANNOTATION_RUBY) continue;
+      if (neighbor->cp_end == a->cp_start || neighbor->cp_start == a->cp_end) {
+        annotated_neighbor = true;
+      }
+    }
+    for (size_t j = i; j < count; j++) {
+      PAnnotation * b = &p->annotations[j];
+      if (b->descriptor.kind == GFNT_ANNOTATION_RUBY && b->cp_start == a->cp_start
+          && b->cp_end == a->cp_end) {
+        int64_t wanted = b->advance;
+        if (b->descriptor.overhang == GFNT_RUBY_OVERHANG_AUTO && !annotated_neighbor) {
+          wanted -= b->descriptor.style.size / 2;
+          if (wanted < base_width) wanted = base_width;
+        }
+        if (wanted > target) target = (GFNT_F26Dot6)wanted;
+      }
+    }
+    if (target > base_width && a->unit_end > a->unit_start) {
+      GFNT_F26Dot6 extra = target - base_width;
+      const size_t n_units = a->unit_end - a->unit_start;
+      const size_t divisor = a->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN
+          && n_units > 1 ? n_units - 1 : n_units;
+      GFNT_F26Dot6 each = extra / (GFNT_F26Dot6)divisor;
+      GFNT_F26Dot6 rem = extra % (GFNT_F26Dot6)divisor;
+      for (size_t u = 0; u < n_units; u++) {
+        size_t index = a->unit_start + u;
+        GFNT_F26Dot6 share = each + (rem > 0 ? 1 : 0);
+        if (rem > 0) rem--;
+        if (a->descriptor.align == GFNT_ANNOTATION_ALIGN_START && u + 1 < n_units) share = 0;
+        if (a->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN && u + 1 == n_units) share = 0;
+        Unit * unit = &p->units[index];
+        if (unit->g_hi > unit->g_lo) p->glyphs[unit->g_hi - 1].advance += share;
+        unit->width += share;
+      }
+    }
+  }
+  return GFNT_OK;
 }
 
 /** Append the units of one face run, in logical order. */
@@ -1176,6 +1390,12 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     p->cp_byte[n] = length;
     span_cp[span_count] = n;
   }
+  if (!annotation_tree_valid(options->annotations, options->annotation_count,
+          length, 0, length, 0)) {
+    r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "annotation ranges or descriptors are invalid");
+    goto done;
+  }
   p->length = n;
   p->cps = cps;
   cps_owned = true;
@@ -1581,6 +1801,12 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   if (r != GFNT_OK) {
     goto done;
   }
+  r = create_annotations(p, options->annotations, options->annotation_count, error);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  p->options.annotations = NULL;
+  p->options.annotation_count = 0;
   r = find_kashida(p, error);
   if (r != GFNT_OK) {
     goto done;
@@ -1704,9 +1930,29 @@ GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
 
 /* ------------------------------------------------------------------ layout */
 
+static void free_line_annotation_tree(const GFNT_Allocator * allocator,
+    GFNT_LineAnnotation * annotations, size_t count) {
+  if (!annotations) return;
+  for (size_t ai = 0; ai < count; ai++) {
+    GFNT_LineRun * runs = (GFNT_LineRun *)annotations[ai].runs;
+    for (size_t ri = 0; ri < annotations[ai].run_count; ri++) {
+      allocator->free_fn(allocator->ctx, (void *)runs[ri].glyphs);
+    }
+    allocator->free_fn(allocator->ctx, runs);
+    free_line_annotation_tree(allocator,
+        (GFNT_LineAnnotation *)annotations[ai].children, annotations[ai].child_count);
+  }
+  allocator->free_fn(allocator->ctx, annotations);
+}
+
 void gfnt_layout_free(GFNT_Layout * layout) {
   if (!layout || !layout->allocator) {
     return;
+  }
+  for (size_t li = 0; li < layout->line_count; li++) {
+    GFNT_Line * line = &layout->lines[li];
+    free_line_annotation_tree(layout->allocator,
+        (GFNT_LineAnnotation *)line->annotations, line->annotation_count);
   }
   layout->allocator->free_fn(layout->allocator->ctx, layout->lines);
   layout->allocator->free_fn(layout->allocator->ctx, layout->storage_);
@@ -2062,14 +2308,21 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
     GFNT_F26Dot6 * tabadv) {
   LayoutLineState state = {0};
   GFNT_F26Dot6 pos = 0;
+  int64_t annotation_over = 0, annotation_under = 0;
   bool inline_mode = p->options.strut;
-  bool inline_has_box = false;
+  bool inline_has_box = false, annotation_on_line = false;
 
   for (size_t j = start; j < end; j++) {
     const PRun * run = &p->runs[p->units[j].run];
     const GFNT_TextStyle * style = &p->styles[run->span];
     if (style->line_height.kind != GFNT_LINE_HEIGHT_NORMAL
         || run->vertical_align != GFNT_VERTICAL_ALIGN_BASELINE) inline_mode = true;
+  }
+  for (size_t i = 0; i < p->annotation_count; i++) {
+    if (p->annotations[i].unit_end > start && p->annotations[i].unit_start < end) {
+      inline_mode = true;
+      annotation_on_line = true;
+    }
   }
   if (inline_mode) {
     state.ascent = state.descent = INT32_MIN;
@@ -2131,6 +2384,26 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
     if (a > state.ascent) state.ascent = a;
     if (d > state.descent) state.descent = d;
   }
+  for (size_t i = 0; i < p->annotation_count; i++) {
+    const PAnnotation * annotation = &p->annotations[i];
+    int64_t height;
+    if (annotation->unit_end <= start || annotation->unit_start >= end) continue;
+    height = (int64_t)annotation->ascent + annotation->descent;
+    if (annotation->descriptor.position == GFNT_ANNOTATION_UNDER) annotation_under += height;
+    else annotation_over += height;
+  }
+  if (annotation_over > INT32_MAX || annotation_under > INT32_MAX) state.invalid = true;
+  if (annotation_over > 0) {
+    int64_t a = (int64_t)state.ascent + annotation_over;
+    if (a > INT32_MAX) state.invalid = true;
+    else state.ascent = (GFNT_F26Dot6)a;
+  }
+  if (annotation_under > 0) {
+    int64_t d = (int64_t)state.descent + annotation_under;
+    if (d > INT32_MAX) state.invalid = true;
+    else state.descent = (GFNT_F26Dot6)d;
+  }
+  if (annotation_on_line) inline_has_box = true;
   if (inline_mode && !inline_has_box && start < end) {
     const PRun * run = &p->runs[p->units[start].run];
     state.ascent = run->inline_ascent;
@@ -2787,6 +3060,12 @@ static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragra
 static void layout_state_free(LayoutState * state) {
   const GFNT_Allocator * allocator = state->allocator;
 
+  for (size_t li = 0; state->lines && li < state->line_count; li++) {
+    GFNT_Line * line = &state->lines[li];
+    free_line_annotation_tree(allocator,
+        (GFNT_LineAnnotation *)line->annotations, line->annotation_count);
+  }
+
   allocator->free_fn(allocator->ctx, state->starts);
   allocator->free_fn(allocator->ctx, state->band_starts);
   allocator->free_fn(allocator->ctx, state->band_widths);
@@ -2805,6 +3084,303 @@ static void layout_state_free(LayoutState * state) {
   allocator->free_fn(allocator->ctx, state->cand_fit);
   allocator->free_fn(allocator->ctx, state->lines);
   allocator->free_fn(allocator->ctx, state->storage);
+}
+
+static void free_annotation_runs(const GFNT_Allocator * allocator, GFNT_LineRun * runs,
+    size_t count) {
+  if (!runs) return;
+  for (size_t i = 0; i < count; i++) {
+    allocator->free_fn(allocator->ctx, (void *)runs[i].glyphs);
+  }
+  allocator->free_fn(allocator->ctx, runs);
+}
+
+static void free_annotation_tree(const GFNT_Allocator * allocator,
+    GFNT_LineAnnotation * annotation) {
+  free_annotation_runs(allocator, (GFNT_LineRun *)annotation->runs, annotation->run_count);
+  free_line_annotation_tree(allocator, (GFNT_LineAnnotation *)annotation->children,
+      annotation->child_count);
+  annotation->runs = NULL;
+  annotation->children = NULL;
+}
+
+static GFNT_Result clone_annotation_tree(const GFNT_Allocator * allocator,
+    const GFNT_LineAnnotation * source, GFNT_F26Dot6 dx, GFNT_F26Dot6 dy,
+    bool vertical, GFNT_LineAnnotation * out) {
+  *out = *source;
+  out->runs = NULL;
+  out->children = NULL;
+  out->box.x += dx;
+  out->box.y += dy;
+  GFNT_LineRun * runs = allocator->calloc_fn(allocator->ctx,
+      source->run_count ? source->run_count : 1, sizeof *runs);
+  if (!runs) return GFNT_ERR_OOM;
+  out->runs = runs;
+  for (size_t ri = 0; ri < source->run_count; ri++) {
+    const GFNT_LineRun * in = &source->runs[ri];
+    runs[ri] = *in;
+    GFNT_PlacedGlyph * glyphs = allocator->calloc_fn(allocator->ctx,
+        in->glyph_count ? in->glyph_count : 1, sizeof *glyphs);
+    if (!glyphs) {
+      out->run_count = ri;
+      free_annotation_tree(allocator, out);
+      return GFNT_ERR_OOM;
+    }
+    runs[ri].glyphs = glyphs;
+    for (size_t gi = 0; gi < in->glyph_count; gi++) {
+      glyphs[gi] = in->glyphs[gi];
+      glyphs[gi].pen_x += dx;
+      glyphs[gi].x += dx;
+      glyphs[gi].pen_y += dy;
+      glyphs[gi].y += dy;
+    }
+    runs[ri].pos += vertical ? dy : dx;
+  }
+  if (source->child_count) {
+    GFNT_LineAnnotation * children = allocator->calloc_fn(allocator->ctx,
+        source->child_count, sizeof *children);
+    if (!children) {
+      free_annotation_tree(allocator, out);
+      return GFNT_ERR_OOM;
+    }
+    out->children = children;
+    out->child_count = 0;
+    for (size_t ci = 0; ci < source->child_count; ci++) {
+      GFNT_Result r = clone_annotation_tree(allocator, &source->children[ci], dx, dy,
+          vertical, &children[ci]);
+      if (r != GFNT_OK) {
+        free_annotation_tree(allocator, out);
+        return r;
+      }
+      out->child_count++;
+    }
+  }
+  return GFNT_OK;
+}
+
+static bool line_base_extent(const GFNT_Line * line, size_t base_start, size_t base_end,
+    bool vertical, GFNT_F26Dot6 * lo, GFNT_F26Dot6 * hi) {
+  bool found = false;
+  for (size_t ri = 0; ri < line->run_count; ri++) {
+    const GFNT_LineRun * run = &line->runs[ri];
+    for (size_t gi = 0; gi < run->glyph_count; gi++) {
+      const GFNT_PlacedGlyph * glyph = &run->glyphs[gi];
+      if (glyph->cluster < base_start || glyph->cluster >= base_end) continue;
+      GFNT_F26Dot6 start = vertical ? glyph->pen_y : glyph->pen_x;
+      GFNT_F26Dot6 end = start + glyph->advance;
+      if (!found || start < *lo) *lo = start;
+      if (!found || end > *hi) *hi = end;
+      found = true;
+    }
+  }
+  return found;
+}
+
+static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnotation * source,
+    size_t index, GFNT_Line * base_line, size_t base_start, size_t base_end,
+    GFNT_LineAnnotation * out, GFNT_Error * error) {
+  GFNT_Layout shaped = {0};
+  const GFNT_Allocator * allocator = p->allocator;
+  const GFNT_Line * source_line;
+  GFNT_F26Dot6 lo = 0, hi = 0, target, shift_along, shift_across, dx, dy;
+  bool vertical = p->vertical;
+  bool rtl = source->unit_start < p->unit_count
+      && (p->runs[p->units[source->unit_start].run].level & 1);
+  GFNT_Result r;
+
+  r = gfnt_paragraph_layout(source->shaped, GFNT_LAYOUT_UNBOUNDED, &shaped, error);
+  if (r != GFNT_OK) return r;
+  if (!shaped.line_count) {
+    gfnt_layout_free(&shaped);
+    return GFNT_OK;
+  }
+  source_line = &shaped.lines[0];
+  if (!line_base_extent(base_line, base_start, base_end, vertical, &lo, &hi)) {
+    lo = vertical ? base_line->offset : base_line->offset;
+    hi = lo;
+  }
+  target = hi - lo;
+  if (source->descriptor.align == GFNT_ANNOTATION_ALIGN_START && rtl) {
+    lo = hi - source_line->extent;
+  }
+  else if (source->descriptor.align == GFNT_ANNOTATION_ALIGN_CENTER
+      || source->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_AROUND
+      || source->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN) {
+    lo += (target - source_line->extent) / 2;
+  }
+  if (source->descriptor.overhang == GFNT_RUBY_OVERHANG_AUTO) {
+    const GFNT_F26Dot6 line_start = vertical ? base_line->box.y : base_line->box.x;
+    const GFNT_F26Dot6 line_end = line_start + (vertical ? base_line->box.height : base_line->box.width);
+    if (lo < line_start) lo = line_start;
+    if (lo + source_line->extent > line_end && line_end - source_line->extent >= line_start) {
+      lo = line_end - source_line->extent;
+    }
+  }
+  if (vertical) {
+    shift_along = lo - source_line->offset;
+    shift_across = source->descriptor.position == GFNT_ANNOTATION_UNDER
+        ? base_line->baseline - base_line->descent + source->ascent
+        : base_line->baseline + base_line->ascent - source->ascent;
+    out->box = (GFNT_Rect){shift_across, lo, source->ascent + source->descent,
+        source_line->extent};
+  }
+  else {
+    shift_along = lo - source_line->offset;
+    shift_across = source->descriptor.position == GFNT_ANNOTATION_UNDER
+        ? base_line->baseline + base_line->descent - source->descent
+        : base_line->baseline - base_line->ascent + source->ascent;
+    out->box = (GFNT_Rect){lo, shift_across - source->ascent, source_line->extent,
+        source->ascent + source->descent};
+  }
+  dx = vertical ? shift_across - source_line->baseline : shift_along;
+  dy = vertical ? shift_along : shift_across - source_line->baseline;
+  if (source_line->ink.width > 0 && source_line->ink.height > 0) {
+    GFNT_Rect ink = source_line->ink;
+    ink.x += dx;
+    ink.y += dy;
+    if (base_line->ink.width <= 0 || base_line->ink.height <= 0) base_line->ink = ink;
+    else {
+      GFNT_F26Dot6 right = base_line->ink.x + base_line->ink.width;
+      GFNT_F26Dot6 bottom = base_line->ink.y + base_line->ink.height;
+      GFNT_F26Dot6 ink_right = ink.x + ink.width;
+      GFNT_F26Dot6 ink_bottom = ink.y + ink.height;
+      if (ink.x < base_line->ink.x) base_line->ink.x = ink.x;
+      if (ink.y < base_line->ink.y) base_line->ink.y = ink.y;
+      base_line->ink.width = (right > ink_right ? right : ink_right) - base_line->ink.x;
+      base_line->ink.height = (bottom > ink_bottom ? bottom : ink_bottom) - base_line->ink.y;
+    }
+  }
+  out->base_start = base_start;
+  out->base_end = base_end;
+  out->kind = source->descriptor.kind;
+  out->position = source->descriptor.position;
+  out->annotation_index = index;
+  out->run_count = source_line->run_count;
+  GFNT_LineRun * runs = allocator->calloc_fn(allocator->ctx,
+      out->run_count ? out->run_count : 1, sizeof *runs);
+  if (!runs) {
+    gfnt_layout_free(&shaped);
+    return GFNT_ERR_OOM;
+  }
+  out->runs = runs;
+  for (size_t ri = 0; ri < out->run_count; ri++) {
+    const GFNT_LineRun * in = &source_line->runs[ri];
+    runs[ri] = *in;
+    GFNT_PlacedGlyph * glyphs = allocator->calloc_fn(allocator->ctx,
+        in->glyph_count ? in->glyph_count : 1, sizeof *glyphs);
+    if (!glyphs) {
+      free_annotation_runs(allocator, runs, ri);
+      out->runs = NULL;
+      out->run_count = 0;
+      gfnt_layout_free(&shaped);
+      return GFNT_ERR_OOM;
+    }
+    runs[ri].glyphs = glyphs;
+    for (size_t gi = 0; gi < in->glyph_count; gi++) {
+      glyphs[gi] = in->glyphs[gi];
+      if (vertical) {
+        glyphs[gi].pen_y += shift_along;
+        glyphs[gi].y += shift_along;
+        glyphs[gi].pen_x = shift_across;
+        glyphs[gi].x += shift_across - source_line->baseline;
+      }
+      else {
+        glyphs[gi].pen_x += shift_along;
+        glyphs[gi].x += shift_along;
+        glyphs[gi].pen_y = shift_across;
+        glyphs[gi].y += shift_across - source_line->baseline;
+      }
+    }
+    runs[ri].pos += shift_along;
+  }
+  out->child_count = source_line->annotation_count;
+  if (out->child_count) {
+    GFNT_LineAnnotation * children = allocator->calloc_fn(allocator->ctx,
+        out->child_count, sizeof *children);
+    if (!children) {
+      free_annotation_runs(allocator, runs, out->run_count);
+      out->runs = NULL;
+      out->run_count = 0;
+      gfnt_layout_free(&shaped);
+      return GFNT_ERR_OOM;
+    }
+    out->children = children;
+    out->child_count = 0;
+    for (size_t ci = 0; ci < source_line->annotation_count; ci++) {
+      GFNT_Result child_result = clone_annotation_tree(allocator,
+          &source_line->annotations[ci], dx, dy, vertical, &children[ci]);
+      if (child_result != GFNT_OK) {
+        free_annotation_runs(allocator, runs, out->run_count);
+        out->runs = NULL;
+        out->run_count = 0;
+        free_line_annotation_tree(allocator, children, out->child_count);
+        out->children = NULL;
+        out->child_count = 0;
+        gfnt_layout_free(&shaped);
+        return child_result;
+      }
+      out->child_count++;
+    }
+  }
+  gfnt_layout_free(&shaped);
+  return GFNT_OK;
+}
+
+static GFNT_Result add_line_annotations(const GFNT_Paragraph * p, GFNT_Line * lines,
+    size_t line_count, GFNT_Error * error) {
+  const GFNT_Allocator * allocator = p->allocator;
+  for (size_t li = 0; li < line_count; li++) {
+    GFNT_Line * line = &lines[li];
+    size_t count = 0;
+    for (size_t ai = 0; ai < p->annotation_count; ai++) {
+      const PAnnotation * annotation = &p->annotations[ai];
+      size_t first = p->cp_byte[annotation->cp_start];
+      size_t last = p->cp_byte[annotation->cp_end];
+      if (annotation->descriptor.kind == GFNT_ANNOTATION_RUBY) {
+        if (line->end > first && line->start < last) count++;
+      }
+      else {
+        for (size_t u = annotation->unit_start; u < annotation->unit_end; u++) {
+          const Unit * unit = &p->units[u];
+          if (unit->cp_end <= annotation->cp_start || unit->cp_start >= annotation->cp_end
+              || unit->space || unit->tab || is_newline(p->cps[unit->cp_start])) continue;
+          if (p->cp_byte[unit->cp_start] >= line->start && p->cp_byte[unit->cp_start] < line->end) {
+            count++;
+          }
+        }
+      }
+    }
+    if (!count) continue;
+    GFNT_LineAnnotation * records = allocator->calloc_fn(allocator->ctx, count, sizeof *records);
+    if (!records) return GFNT_ERR_OOM;
+    line->annotations = records;
+    for (size_t ai = 0; ai < p->annotation_count; ai++) {
+      const PAnnotation * annotation = &p->annotations[ai];
+      const size_t first = p->cp_byte[annotation->cp_start];
+      const size_t last = p->cp_byte[annotation->cp_end];
+      if (annotation->descriptor.kind == GFNT_ANNOTATION_RUBY) {
+        if (line->end > first && line->start < last) {
+          GFNT_Result r = append_line_annotation(p, annotation, ai, line, first, last,
+              &records[line->annotation_count], error);
+          if (r != GFNT_OK) return r;
+          line->annotation_count++;
+        }
+      }
+      else {
+        for (size_t u = annotation->unit_start; u < annotation->unit_end; u++) {
+          const Unit * unit = &p->units[u];
+          size_t start = p->cp_byte[unit->cp_start], end = p->cp_byte[unit->cp_end];
+          if (unit->space || unit->tab || is_newline(p->cps[unit->cp_start])
+              || start < line->start || start >= line->end) continue;
+          GFNT_Result r = append_line_annotation(p, annotation, ai, line, start, end,
+              &records[line->annotation_count], error);
+          if (r != GFNT_OK) return r;
+          line->annotation_count++;
+        }
+      }
+    }
+  }
+  return GFNT_OK;
 }
 
 /** Transfer the completed buffers to the public result, then release scratch storage. */
@@ -3147,6 +3723,8 @@ static GFNT_Result paragraph_layout_internal(const GFNT_Paragraph * p, GFNT_F26D
       constraint, error);
   if (r != GFNT_OK) goto done;
   r = layout_process_lines(p, constraint ? 0 : width, vertical, para_rtl, &state, error);
+  if (r != GFNT_OK) goto done;
+  r = add_line_annotations(p, state.lines, state.line_count, error);
   if (r != GFNT_OK) goto done;
   if (constraint) {
     width = 0;

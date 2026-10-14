@@ -266,6 +266,169 @@ TEST(Layout, ALineOfLettersIsPlacedFromTheLeftOnTheBaseline) {
   }
 }
 
+TEST(LayoutAnnotation, RubyWidensItsBaseAndProducesASeparatePaintTrack) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = 2;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "ABC";
+  ruby.text_length = 3;
+  ruby.align = GFNT_ANNOTATION_ALIGN_CENTER;
+  ruby.group_break = true;
+  GFNT_Annotation nested{};
+  nested.base_start = 0;
+  nested.base_end = 1;
+  nested.kind = GFNT_ANNOTATION_RUBY;
+  nested.position = GFNT_ANNOTATION_UNDER;
+  nested.style = ruby.style;
+  nested.text = "A";
+  nested.text_length = 1;
+  ruby.children = &nested;
+  ruby.child_count = 1;
+  GFNT_ParagraphOptions options{};
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+  Para para("AB", {font.face}, options);
+
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_F26Dot6 minimum = 0;
+  ASSERT_EQ(gfnt_paragraph_min_content(para.p, &minimum), GFNT_OK);
+  EXPECT_EQ(minimum, 3 * kLetter);
+  ASSERT_EQ(para.lay(3 * kLetter), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(line.extent, 3 * kLetter);
+  ASSERT_EQ(line.annotation_count, 1u);
+  const GFNT_LineAnnotation & output = line.annotations[0];
+  EXPECT_EQ(output.kind, GFNT_ANNOTATION_RUBY);
+  EXPECT_EQ(output.base_start, 0u);
+  EXPECT_EQ(output.base_end, 2u);
+  EXPECT_EQ(output.box.width, 3 * kLetter);
+  ASSERT_EQ(output.child_count, 1u);
+  EXPECT_EQ(output.children[0].kind, GFNT_ANNOTATION_RUBY);
+  ASSERT_EQ(output.run_count, 1u);
+  ASSERT_EQ(output.runs[0].glyph_count, 3u);
+  EXPECT_EQ(output.runs[0].start, 0u);
+  EXPECT_EQ(output.runs[0].end, 3u);
+  EXPECT_LT(output.box.y + output.box.height, line.baseline);
+  GFNT_Hit hit{};
+  ASSERT_EQ(gfnt_layout_hit_test(para.p, &para.layout,
+      output.box.x + output.box.width / 2, output.box.y + output.box.height / 2, &hit), GFNT_OK);
+  EXPECT_EQ(hit.offset, 2u);
+  GFNT_Rect range{};
+  size_t range_count = 0;
+  ASSERT_EQ(gfnt_layout_range_rects(para.p, &para.layout, 0, 2, &range, 1, &range_count), GFNT_OK);
+  ASSERT_EQ(range_count, 1u);
+  EXPECT_GT(range.y, output.box.y);
+  EXPECT_LT(range.height, line.box.height);
+}
+
+TEST(LayoutAnnotation, EmphasisAddsOneMarkPerEligibleCluster) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation emphasis{};
+  emphasis.base_start = 0;
+  emphasis.base_end = 5;
+  emphasis.kind = GFNT_ANNOTATION_EMPHASIS;
+  emphasis.position = GFNT_ANNOTATION_OVER;
+  emphasis.style.faces = faces;
+  emphasis.style.face_count = 1;
+  emphasis.style.size = kSize;
+  emphasis.mark_kind = GFNT_EMPHASIS_MARK_DOT;
+  emphasis.filled = true;
+  GFNT_ParagraphOptions options{};
+  options.annotations = &emphasis;
+  options.annotation_count = 1;
+  Para para("A B C", {font.face}, options);
+
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  ASSERT_EQ(line.annotation_count, 3u);
+  EXPECT_GT(line.ascent, 512);
+  EXPECT_EQ(line.annotations[0].base_start, 0u);
+  EXPECT_EQ(line.annotations[1].base_start, 2u);
+  EXPECT_EQ(line.annotations[2].base_start, 4u);
+  EXPECT_EQ(line.annotations[0].kind, GFNT_ANNOTATION_EMPHASIS);
+}
+
+TEST(LayoutAnnotation, RubyOverhangCanKeepTheFollowingPlainTextOnTheLine) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = 2;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "ABC";
+  ruby.text_length = 3;
+  ruby.align = GFNT_ANNOTATION_ALIGN_CENTER;
+  ruby.overhang = GFNT_RUBY_OVERHANG_AUTO;
+  GFNT_ParagraphOptions options{};
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+  Para para("AB C", {font.face}, options);
+
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(7 * kLetter / 2), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].end, 4u);
+  EXPECT_EQ(para.layout.lines[0].annotation_count, 1u);
+}
+
+TEST(LayoutAnnotation, RejectsRangesInsideUtf8AndOverlappingSiblings) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 1;
+  ruby.base_end = 2;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "A";
+  ruby.text_length = 1;
+  GFNT_ParagraphOptions options{};
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+  Para split("éA", {font.face}, options);
+  EXPECT_EQ(split.created, GFNT_ERR_INVALID);
+
+  GFNT_Annotation siblings[2] = {ruby, ruby};
+  siblings[0].base_start = 0;
+  siblings[0].base_end = 2;
+  siblings[1].base_start = 1;
+  siblings[1].base_end = 3;
+  options.annotations = siblings;
+  options.annotation_count = 2;
+  Para overlap("ABC", {font.face}, options);
+  EXPECT_EQ(overlap.created, GFNT_ERR_INVALID);
+
+  siblings[0] = ruby;
+  siblings[0].base_start = 0;
+  siblings[0].base_end = 1;
+  siblings[0].merge = true;
+  options.annotations = siblings;
+  options.annotation_count = 1;
+  Para unsupported_merge("ABC", {font.face}, options);
+  EXPECT_EQ(unsupported_merge.created, GFNT_ERR_INVALID);
+
+  siblings[0].merge = false;
+  siblings[0].position = GFNT_ANNOTATION_INTER_CHARACTER;
+  Para unsupported_position("ABC", {font.face}, options);
+  EXPECT_EQ(unsupported_position.created, GFNT_ERR_INVALID);
+}
+
 TEST(LayoutFlow, FullWidthBandMatchesTheExistingLayout) {
   Font font(latin());
   Para para("AB CD EF", {font.face});

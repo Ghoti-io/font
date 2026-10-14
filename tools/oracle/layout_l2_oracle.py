@@ -134,7 +134,7 @@ def main():
     if problems:
         print("layout_l2_oracle: DIFFERENCES\n  " + "\n  ".join(problems))
         return 1
-    print("layout_l2_oracle: Chromium and Pango agree on U+FFFC advance, box and adjacent text")
+    print("layout_l2_oracle: Chromium, Pango and Firefox agree on U+FFFC advance, box and adjacent text")
     return 0
 
 if __name__ == "__main__":

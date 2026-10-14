@@ -699,7 +699,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-oracle-layout-l2 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -1205,6 +1205,9 @@ check-oracle-layout-l2: $(EXAMPLES)
 	  $(ORACLE_RUN) "$${GHOTI_LAYOUT_L2_ORACLES:-chrome,pango,firefox}" -- \
 	  python3 $(ORACLE)/layout_l2_oracle.py
 
+check-oracle-layout-l4: $(APP_DIR)/examples/font-layout-annotation$(EXE_EXTENSION)
+	@$(ORACLE_RUN) chrome,firefox -- python3 $(ORACLE)/layout_l4_oracle.py
+
 # The unit cases cover all five writing modes; the focused live object geometry is compared
 # with Chromium and Pango, then the established paragraph regressions and mutations run.
 check-layout-l2: check-layout-unit-snapshot check-layout-l2-mutations check-oracle-layout-l2 check-oracle-css check-oracle-pango check-oracle-orientation
@@ -1216,6 +1219,13 @@ check-oracle-flow: $(EXAMPLES) ## Compare float-constrained line rectangles with
 	@$(ORACLE_RUN) chrome -- python3 $(ORACLE)/css_layout_diff.py flow
 
 check-layout-l3: check-layout-unit-snapshot check-layout-l3-mutations check-oracle-flow check-oracle-css check-oracle-pango check-oracle-orientation
+
+check-layout-l4-mutations: $(APP_DIR)/testLayout_vertical$(EXE_EXTENSION)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/layout_l4_mutation_check.py
+
+check-layout-l4: check-layout-unit-snapshot check-layout-l4-mutations check-oracle-layout-l4 $(APP_DIR)/testLayout_vertical$(EXE_EXTENSION)
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/testLayout$(EXE_EXTENSION) --gtest_filter='LayoutAnnotation.*' --gtest_brief=1
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/testLayout_vertical$(EXE_EXTENSION) --gtest_filter='LayoutVertical.RubyAndEmphasisTracksUseTheColumnCrossAxis' --gtest_brief=1
 
 check-oracle-math: ## Read every MATH table through the public reader and hold it to fontTools
 check-oracle-math: $(EXAMPLES)

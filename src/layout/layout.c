@@ -313,6 +313,27 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
   allocator->free_fn(allocator->ctx, p);
 }
 
+static bool annotation_style_equal(const GFNT_TextStyle * a, const GFNT_TextStyle * b) {
+  return a->faces == b->faces && a->face_count == b->face_count && a->size == b->size
+      && a->language == b->language && a->features == b->features
+      && a->feature_count == b->feature_count && a->variation == b->variation
+      && a->line_metrics == b->line_metrics && a->letter_spacing == b->letter_spacing
+      && a->line_height.kind == b->line_height.kind
+      && a->line_height.value == b->line_height.value
+      && a->vertical_align == b->vertical_align
+      && a->vertical_align_value == b->vertical_align_value
+      && a->inline_object == b->inline_object;
+}
+
+static bool annotation_merge_compatible(const GFNT_Annotation * a, const GFNT_Annotation * b) {
+  return a->merge && b->merge && a->kind == GFNT_ANNOTATION_RUBY
+      && b->kind == GFNT_ANNOTATION_RUBY && a->base_end == b->base_start
+      && a->position == b->position && a->align == b->align
+      && a->group_break == b->group_break && a->overhang == b->overhang
+      && !a->child_count && !b->child_count
+      && annotation_style_equal(&a->style, &b->style);
+}
+
 static bool annotation_tree_valid(const GFNT_Annotation * items, size_t count,
     size_t text_length, size_t parent_start, size_t parent_end, size_t depth) {
   if (depth > 64 || (count && !items)) return false;
@@ -329,11 +350,14 @@ static bool annotation_tree_valid(const GFNT_Annotation * items, size_t count,
         || (unsigned)a->mark_kind > GFNT_EMPHASIS_MARK_STRING
         || (unsigned)a->overhang > GFNT_RUBY_OVERHANG_AUTO
         || !a->style.faces || !a->style.face_count || a->style.size <= 0
-        || a->merge || a->position == GFNT_ANNOTATION_INTER_CHARACTER
+        || (a->merge && a->kind != GFNT_ANNOTATION_RUBY)
+        || (a->kind == GFNT_ANNOTATION_RUBY && !a->group_break && a->child_count)
         || (a->kind == GFNT_ANNOTATION_RUBY && a->mark_kind != GFNT_EMPHASIS_MARK_DEFAULT)
         || (a->kind == GFNT_ANNOTATION_EMPHASIS && a->child_count)
         || (text_mark ? (!a->text || !a->text_length) : (a->text || a->text_length))
         || (a->child_count && !a->children)) return false;
+    if (a->merge && !((i && annotation_merge_compatible(&items[i - 1], a))
+            || (i + 1 < count && annotation_merge_compatible(a, &items[i + 1])))) return false;
     for (size_t j = 0; j < i; j++) {
       const GFNT_Annotation * b = &items[j];
       const bool disjoint = a->base_end <= b->base_start || b->base_end <= a->base_start;
@@ -368,9 +392,24 @@ static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation 
   p->annotations = allocator->calloc_fn(allocator->ctx, count, sizeof *p->annotations);
   if (!p->annotations) return GFNT_ERR_OOM;
   p->annotation_count = count;
+  size_t out_i = 0;
   for (size_t i = 0; i < count; i++) {
+    GFNT_Annotation merged_source;
     const GFNT_Annotation * source = &items[i];
-    PAnnotation * annotation = &p->annotations[i];
+    size_t group_end = i + 1;
+    size_t merged_text_length = source->text_length;
+    while (group_end < count && annotation_merge_compatible(&items[group_end - 1],
+            &items[group_end])) {
+      merged_text_length += items[group_end].text_length;
+      group_end++;
+    }
+    if (group_end > i + 1) {
+      merged_source = *source;
+      merged_source.base_end = items[group_end - 1].base_end;
+      merged_source.text_length = merged_text_length;
+      source = &merged_source;
+    }
+    PAnnotation * annotation = &p->annotations[out_i];
     GFNT_TextSpan span;
     GFNT_ParagraphOptions options = p->options;
     GFNT_Error child_error;
@@ -378,6 +417,11 @@ static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation 
     size_t text_length = source->text_length;
     const char * text = source->text;
     GFNT_Result r;
+
+    if (source->position == GFNT_ANNOTATION_INTER_CHARACTER && !p->vertical) {
+      return gfnt_error_set(error, GFNT_ERR_INVALID, 0, source->base_start, GFNT_GLYPH_NONE,
+          "inter-character ruby position requires vertical writing mode");
+    }
 
     annotation->descriptor = *source;
     if (!annotation_byte_cp(p, source->base_start, &annotation->cp_start)
@@ -422,7 +466,15 @@ static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation 
     }
     annotation->text = allocator->calloc_fn(allocator->ctx, text_length + 1, 1);
     if (!annotation->text) return GFNT_ERR_OOM;
-    if (text_length) memcpy(annotation->text, text, text_length);
+    if (group_end > i + 1) {
+      size_t at = 0;
+      for (size_t j = i; j < group_end; j++) {
+        memcpy(annotation->text + at, items[j].text, items[j].text_length);
+        at += items[j].text_length;
+      }
+      text = annotation->text;
+    }
+    else if (text_length) memcpy(annotation->text, text, text_length);
     annotation->descriptor.text = annotation->text;
     annotation->descriptor.text_length = text_length;
     memset(&span, 0, sizeof span);
@@ -467,6 +519,8 @@ static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation 
         annotation->alternate_ascent = alternate.ascent;
         annotation->alternate_descent = alternate.descent;
       }
+      out_i++;
+      i = group_end - 1;
       continue;
     }
     for (size_t u = annotation->unit_start; u < annotation->unit_end; u++) {
@@ -474,18 +528,22 @@ static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation 
         return gfnt_error_set(error, GFNT_ERR_INVALID, 0, source->base_start, GFNT_GLYPH_NONE,
             "a ruby base range contains a hard line break");
       }
-      if (u + 1 < annotation->unit_end) {
+      if (source->group_break && u + 1 < annotation->unit_end) {
         p->units[u].opportunity = false;
         p->units[u].hyphen = false;
       }
     }
+    out_i++;
+    i = group_end - 1;
   }
-  for (size_t i = 0; i < count; i++) {
+  p->annotation_count = out_i;
+  /* Reserve the full annotation advance for breaking. AUTO overhang is decided from the
+   * actual rendered line below; it must never reduce this paragraph-wide reservation. */
+  for (size_t i = 0; i < p->annotation_count; i++) {
     PAnnotation * a = &p->annotations[i];
     if (a->descriptor.kind != GFNT_ANNOTATION_RUBY) continue;
     bool first = true;
     GFNT_F26Dot6 base_width = 0, target = 0;
-    bool annotated_neighbor = false;
     for (size_t j = 0; j < i; j++) {
       if (p->annotations[j].descriptor.kind == GFNT_ANNOTATION_RUBY
           && p->annotations[j].cp_start == a->cp_start && p->annotations[j].cp_end == a->cp_end) {
@@ -496,39 +554,23 @@ static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation 
     if (!first) continue;
     for (size_t u = a->unit_start; u < a->unit_end; u++) base_width += p->units[u].width;
     target = base_width;
-    for (size_t j = 0; j < count; j++) {
-      const PAnnotation * neighbor = &p->annotations[j];
-      if (j == i || neighbor->descriptor.kind != GFNT_ANNOTATION_RUBY) continue;
-      if (neighbor->cp_end == a->cp_start || neighbor->cp_start == a->cp_end) {
-        annotated_neighbor = true;
-      }
-    }
-    for (size_t j = i; j < count; j++) {
+    for (size_t j = i; j < p->annotation_count; j++) {
       PAnnotation * b = &p->annotations[j];
       if (b->descriptor.kind == GFNT_ANNOTATION_RUBY && b->cp_start == a->cp_start
-          && b->cp_end == a->cp_end) {
-        int64_t wanted = b->advance;
-        if (b->descriptor.overhang == GFNT_RUBY_OVERHANG_AUTO && !annotated_neighbor) {
-          wanted -= b->descriptor.style.size / 2;
-          if (wanted < base_width) wanted = base_width;
-        }
-        if (wanted > target) target = (GFNT_F26Dot6)wanted;
-      }
+          && b->cp_end == a->cp_end && b->advance > target) target = b->advance;
     }
     if (target > base_width && a->unit_end > a->unit_start) {
-      GFNT_F26Dot6 extra = target - base_width;
       const size_t n_units = a->unit_end - a->unit_start;
       const size_t divisor = a->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN
           && n_units > 1 ? n_units - 1 : n_units;
-      GFNT_F26Dot6 each = extra / (GFNT_F26Dot6)divisor;
-      GFNT_F26Dot6 rem = extra % (GFNT_F26Dot6)divisor;
+      GFNT_F26Dot6 each = (target - base_width) / (GFNT_F26Dot6)divisor;
+      GFNT_F26Dot6 rem = (target - base_width) % (GFNT_F26Dot6)divisor;
       for (size_t u = 0; u < n_units; u++) {
-        size_t index = a->unit_start + u;
         GFNT_F26Dot6 share = each + (rem > 0 ? 1 : 0);
         if (rem > 0) rem--;
         if (a->descriptor.align == GFNT_ANNOTATION_ALIGN_START && u + 1 < n_units) share = 0;
         if (a->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN && u + 1 == n_units) share = 0;
-        Unit * unit = &p->units[index];
+        Unit * unit = &p->units[a->unit_start + u];
         if (unit->g_hi > unit->g_lo) p->glyphs[unit->g_hi - 1].advance += share;
         unit->width += share;
       }
@@ -3193,22 +3235,87 @@ static bool line_base_extent(const GFNT_Line * line, size_t base_start, size_t b
   return found;
 }
 
+static bool ruby_fragment_text_range(const PAnnotation * source, size_t cp_start,
+    size_t cp_end, size_t * byte_start, size_t * byte_end) {
+  size_t annotation_cps = 0, at = 0;
+  while (at < source->descriptor.text_length) {
+    uint32_t cp;
+    size_t used = guni_utf8_decode(source->text + at, source->descriptor.text_length - at, &cp, NULL);
+    if (!used) return false;
+    at += used;
+    annotation_cps++;
+  }
+  const size_t base_count = source->cp_end - source->cp_start;
+  const size_t first = (cp_start - source->cp_start) * annotation_cps / base_count;
+  const size_t last = (cp_end - source->cp_start) * annotation_cps / base_count;
+  if (first == last) return false;
+  *byte_start = *byte_end = 0;
+  size_t ordinal = 0;
+  at = 0;
+  while (at < source->descriptor.text_length) {
+    if (ordinal == first) *byte_start = at;
+    if (ordinal == last) { *byte_end = at; break; }
+    uint32_t cp;
+    size_t used = guni_utf8_decode(source->text + at, source->descriptor.text_length - at, &cp, NULL);
+    if (!used) return false;
+    at += used;
+    ordinal++;
+  }
+  if (last == annotation_cps) *byte_end = source->descriptor.text_length;
+  return *byte_end > *byte_start;
+}
+
 static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnotation * source,
     size_t index, GFNT_Line * base_line, size_t base_start, size_t base_end,
+    size_t base_cp_start, size_t base_cp_end,
     GFNT_LineAnnotation * out, GFNT_Error * error) {
   GFNT_Layout shaped = {0};
+  GFNT_Paragraph * fragment_paragraph = NULL;
+  PAnnotation fragment_source;
+  const PAnnotation * placement = source;
   const GFNT_Allocator * allocator = p->allocator;
   const GFNT_Line * source_line;
-  GFNT_F26Dot6 lo = 0, hi = 0, target, shift_along, shift_across, dx, dy;
+  GFNT_F26Dot6 lo = 0, hi = 0, target, base_lo, shift_along, shift_across, dx, dy;
   bool vertical = p->vertical;
   bool rtl = source->unit_start < p->unit_count
       && (p->runs[p->units[source->unit_start].run].level & 1);
   GFNT_Result r;
 
-  r = gfnt_paragraph_layout(source->shaped, GFNT_LAYOUT_UNBOUNDED, &shaped, error);
-  if (r != GFNT_OK) return r;
+  if (source->descriptor.kind == GFNT_ANNOTATION_RUBY
+      && (base_cp_start != source->cp_start || base_cp_end != source->cp_end)) {
+    size_t byte_first, byte_last;
+    if (!ruby_fragment_text_range(source, base_cp_start, base_cp_end,
+            &byte_first, &byte_last)) return GFNT_OK;
+    GFNT_TextSpan span = {0};
+    GFNT_ParagraphOptions options = p->options;
+    GFNT_Error child_error;
+    span.length = byte_last - byte_first;
+    span.style = source->descriptor.style;
+    options.direction = GFNT_BIDI_AUTO;
+    options.align = GFNT_ALIGN_START;
+    options.max_lines = 0;
+    options.ellipsis = NULL;
+    options.text_indent = 0;
+    options.hanging_indent = false;
+    options.annotations = NULL;
+    options.annotation_count = 0;
+    r = gfnt_paragraph_create(source->text + byte_first, span.length, &span, 1, &options,
+        allocator, &fragment_paragraph, &child_error);
+    if (r != GFNT_OK) return gfnt_error_set(error, r, child_error.table, base_start,
+        child_error.glyph, "could not shape a ruby line fragment");
+    fragment_source = *source;
+    fragment_source.shaped = fragment_paragraph;
+    if (gfnt_paragraph_max_content(fragment_paragraph, &fragment_source.advance) != GFNT_OK) {
+      gfnt_paragraph_free(fragment_paragraph);
+      return GFNT_ERR_INVALID;
+    }
+    placement = &fragment_source;
+  }
+  r = gfnt_paragraph_layout(placement->shaped, GFNT_LAYOUT_UNBOUNDED, &shaped, error);
+  if (r != GFNT_OK) { gfnt_paragraph_free(fragment_paragraph); return r; }
   if (!shaped.line_count) {
     gfnt_layout_free(&shaped);
+    gfnt_paragraph_free(fragment_paragraph);
     return GFNT_OK;
   }
   source_line = &shaped.lines[0];
@@ -3217,37 +3324,69 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
     hi = lo;
   }
   target = hi - lo;
-  if (source->descriptor.align == GFNT_ANNOTATION_ALIGN_START && rtl) {
+  base_lo = lo;
+  if (placement->descriptor.align == GFNT_ANNOTATION_ALIGN_START && rtl) {
     lo = hi - source_line->extent;
   }
-  else if (source->descriptor.align == GFNT_ANNOTATION_ALIGN_CENTER
-      || source->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_AROUND
-      || source->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN) {
+  else if (placement->descriptor.align == GFNT_ANNOTATION_ALIGN_CENTER
+      || placement->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_AROUND
+      || placement->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN) {
     lo += (target - source_line->extent) / 2;
   }
   if (source->descriptor.overhang == GFNT_RUBY_OVERHANG_AUTO) {
     const GFNT_F26Dot6 line_start = vertical ? base_line->box.y : base_line->box.x;
     const GFNT_F26Dot6 line_end = line_start + (vertical ? base_line->box.height : base_line->box.width);
-    if (lo < line_start) lo = line_start;
-    if (lo + source_line->extent > line_end && line_end - source_line->extent >= line_start) {
-      lo = line_end - source_line->extent;
+    GFNT_F26Dot6 left_room = 0, right_room = 0;
+    bool left_plain = false, right_plain = false;
+    if (source->unit_start > 0) {
+      const Unit * u = &p->units[source->unit_start - 1];
+      size_t byte = p->cp_byte[u->cp_start];
+      left_plain = !u->space && !u->tab && !u->hard && byte >= base_line->start && byte < base_line->end;
+      for (size_t ai = 0; ai < p->annotation_count && left_plain; ai++) {
+        const PAnnotation * a = &p->annotations[ai];
+        if (a->cp_start < u->cp_end && a->cp_end > u->cp_start) left_plain = false;
+      }
+      if (left_plain) left_room = u->width;
     }
+    if (source->unit_end < p->unit_count) {
+      const Unit * u = &p->units[source->unit_end];
+      size_t byte = p->cp_byte[u->cp_start];
+      right_plain = !u->space && !u->tab && !u->hard && byte >= base_line->start && byte < base_line->end;
+      for (size_t ai = 0; ai < p->annotation_count && right_plain; ai++) {
+        const PAnnotation * a = &p->annotations[ai];
+        if (a->cp_start < u->cp_end && a->cp_end > u->cp_start) right_plain = false;
+      }
+      if (right_plain) right_room = u->width;
+    }
+    if (!left_plain) left_room = 0;
+    if (!right_plain) right_room = 0;
+    /* Center alignment has already split excess equally. Restrict that centered placement to
+     * the neighbor space actually available; do not shift it a second time by the overhang. */
+    const GFNT_F26Dot6 min_lo = base_lo - left_room;
+    const GFNT_F26Dot6 max_lo = base_lo + target + right_room - source_line->extent;
+    if (lo < min_lo) lo = min_lo;
+    if (lo > max_lo) lo = max_lo;
+    if (lo < line_start) lo = line_start;
+    if (lo + source_line->extent > line_end) lo = line_end - source_line->extent;
+    if (lo < line_start) lo = line_start;
   }
   if (vertical) {
     shift_along = lo - source_line->offset;
     shift_across = source->descriptor.position == GFNT_ANNOTATION_UNDER
-        ? base_line->baseline - base_line->descent + source->ascent
-        : base_line->baseline + base_line->ascent - source->ascent;
-    out->box = (GFNT_Rect){shift_across, lo, source->ascent + source->descent,
+        ? base_line->baseline - base_line->descent + source_line->ascent
+        : source->descriptor.position == GFNT_ANNOTATION_INTER_CHARACTER
+            ? base_line->baseline + base_line->ascent
+            : base_line->baseline + base_line->ascent - source->ascent;
+    out->box = (GFNT_Rect){shift_across, lo, source_line->ascent + source_line->descent,
         source_line->extent};
   }
   else {
     shift_along = lo - source_line->offset;
     shift_across = source->descriptor.position == GFNT_ANNOTATION_UNDER
-        ? base_line->baseline + base_line->descent - source->descent
-        : base_line->baseline - base_line->ascent + source->ascent;
-    out->box = (GFNT_Rect){lo, shift_across - source->ascent, source_line->extent,
-        source->ascent + source->descent};
+        ? base_line->baseline + base_line->descent - source_line->descent
+        : base_line->baseline - base_line->ascent + source_line->ascent;
+    out->box = (GFNT_Rect){lo, shift_across - source_line->ascent, source_line->extent,
+        source_line->ascent + source_line->descent};
   }
   dx = vertical ? shift_across - source_line->baseline : shift_along;
   dy = vertical ? shift_along : shift_across - source_line->baseline;
@@ -3277,6 +3416,7 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       out->run_count ? out->run_count : 1, sizeof *runs);
   if (!runs) {
     gfnt_layout_free(&shaped);
+    gfnt_paragraph_free(fragment_paragraph);
     return GFNT_ERR_OOM;
   }
   out->runs = runs;
@@ -3290,6 +3430,7 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       out->runs = NULL;
       out->run_count = 0;
       gfnt_layout_free(&shaped);
+      gfnt_paragraph_free(fragment_paragraph);
       return GFNT_ERR_OOM;
     }
     runs[ri].glyphs = glyphs;
@@ -3319,6 +3460,7 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       out->runs = NULL;
       out->run_count = 0;
       gfnt_layout_free(&shaped);
+      gfnt_paragraph_free(fragment_paragraph);
       return GFNT_ERR_OOM;
     }
     out->children = children;
@@ -3334,12 +3476,14 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
         out->children = NULL;
         out->child_count = 0;
         gfnt_layout_free(&shaped);
+        gfnt_paragraph_free(fragment_paragraph);
         return child_result;
       }
       out->child_count++;
     }
   }
   gfnt_layout_free(&shaped);
+  gfnt_paragraph_free(fragment_paragraph);
   return GFNT_OK;
 }
 
@@ -3391,7 +3535,16 @@ static GFNT_Result add_line_annotations(const GFNT_Paragraph * p, GFNT_Line * li
       size_t first = p->cp_byte[annotation->cp_start];
       size_t last = p->cp_byte[annotation->cp_end];
       if (annotation->descriptor.kind == GFNT_ANNOTATION_RUBY) {
-        if (line->end > first && line->start < last) count++;
+        if (line->end > first && line->start < last) {
+          size_t cp_start = annotation->cp_start, cp_end = annotation->cp_end;
+          while (cp_start < cp_end && p->cp_byte[cp_start + 1] <= line->start) cp_start++;
+          while (cp_end > cp_start && p->cp_byte[cp_end - 1] >= line->end) cp_end--;
+          size_t fragment_start, fragment_end;
+          if ((annotation->descriptor.group_break || (cp_start == annotation->cp_start
+                      && cp_end == annotation->cp_end))
+              || ruby_fragment_text_range(annotation, cp_start, cp_end,
+                  &fragment_start, &fragment_end)) count++;
+        }
       }
       else {
         for (size_t u = annotation->unit_start; u < annotation->unit_end; u++) {
@@ -3414,7 +3567,19 @@ static GFNT_Result add_line_annotations(const GFNT_Paragraph * p, GFNT_Line * li
       const size_t last = p->cp_byte[annotation->cp_end];
       if (annotation->descriptor.kind == GFNT_ANNOTATION_RUBY) {
         if (line->end > first && line->start < last) {
-          GFNT_Result r = append_line_annotation(p, annotation, ai, line, first, last,
+          size_t cp_start = annotation->cp_start, cp_end = annotation->cp_end;
+          while (cp_start < cp_end && p->cp_byte[cp_start + 1] <= line->start) cp_start++;
+          while (cp_end > cp_start && p->cp_byte[cp_end - 1] >= line->end) cp_end--;
+          size_t fragment_start, fragment_end;
+          const bool full_group = annotation->descriptor.group_break
+              || (cp_start == annotation->cp_start && cp_end == annotation->cp_end);
+          if (!full_group && !ruby_fragment_text_range(annotation, cp_start, cp_end,
+                  &fragment_start, &fragment_end)) continue;
+          size_t base_start = full_group ? first : p->cp_byte[cp_start];
+          size_t base_end = full_group ? last : p->cp_byte[cp_end];
+          GFNT_Result r = append_line_annotation(p, annotation, ai, line, base_start, base_end,
+              full_group ? annotation->cp_start : cp_start,
+              full_group ? annotation->cp_end : cp_end,
               &records[line->annotation_count], error);
           if (r != GFNT_OK) return r;
           line->annotation_count++;
@@ -3440,7 +3605,7 @@ static GFNT_Result add_line_annotations(const GFNT_Paragraph * p, GFNT_Line * li
             emitted = &alternate_mark;
           }
           r = append_line_annotation(p, emitted, ai, line, start, end,
-              &records[line->annotation_count], error);
+              unit->cp_start, unit->cp_end, &records[line->annotation_count], error);
           if (r != GFNT_OK) return r;
           line->annotation_count++;
         }

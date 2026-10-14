@@ -42,7 +42,9 @@
  *
  * **What it does not do, stated rather than approximated:** kashida (a justified line
  * widens its spaces and its ideograph gaps, which is all Chromium and Pango do to Arabic as well),
- * hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), and ruby annotations.
+ * hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), and full CSS Ruby
+ * behavior. Ruby and emphasis annotations are supported for shaped over/under tracks; see
+ * ::GFNT_Annotation for the supported subset.
  * Per-line constraints use ::gfnt_paragraph_layout_flow(); ::GFNT_Exclusions supplies a built-in
  * callback for one-sided shapes. A caller may describe an atomic U+FFFC inline
  * object with ::GFNT_InlineObject; the library places its synthetic glyph and
@@ -258,13 +260,13 @@ typedef struct GFNT_Annotation {
   size_t base_start;
   size_t base_end;
   GFNT_AnnotationKind kind;
-  GFNT_AnnotationPosition position; ///< INTER_CHARACTER is reserved and currently rejected.
+  GFNT_AnnotationPosition position; ///< INTER_CHARACTER requires vertical writing mode.
   GFNT_TextStyle style;
   const char * text; ///< UTF-8 ruby text or the mark for each eligible emphasis cluster.
   size_t text_length; ///< Explicit UTF-8 byte length; required for ruby and STRING marks.
   GFNT_AnnotationAlign align;
-  bool merge;         ///< Reserved; true is rejected until ruby-merge is implemented.
-  bool group_break;   ///< Reserved; ruby base ranges are currently indivisible.
+  bool merge;         ///< Merge compatible adjacent ruby siblings (same style/placement, no children).
+  bool group_break;   ///< Make the ruby base indivisible; false leaves its normal break points.
   GFNT_RubyOverhang overhang; ///< Whether ruby may hang over plain neighbors; zero disables it.
   const struct GFNT_Annotation * children;
   size_t child_count;
@@ -788,7 +790,9 @@ GFNT_API GFNT_Result gfnt_layout_caret(const GFNT_Paragraph * paragraph,
  *
  * One range gives several rectangles when it spans lines, and also when
  * right-to-left text puts part of it on one side of a left-to-right run and part
- * on the other. Rectangles that touch are merged. Each is as thick as its line.
+ * on the other. Rectangles that touch are merged. Each is as thick as its line;
+ * when the selected byte range intersects an annotation, its rectangle includes
+ * the annotation's contribution to the line box.
  *
  * @param start The first byte of the range.
  * @param end One past the last; a range with @p end not after @p start is empty.

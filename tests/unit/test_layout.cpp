@@ -321,12 +321,88 @@ TEST(LayoutAnnotation, RubyWidensItsBaseAndProducesASeparatePaintTrack) {
   ASSERT_EQ(gfnt_layout_hit_test(para.p, &para.layout,
       output.box.x + output.box.width / 2, output.box.y + output.box.height / 2, &hit), GFNT_OK);
   EXPECT_EQ(hit.offset, 2u);
+  ASSERT_EQ(gfnt_layout_hit_test(para.p, &para.layout,
+      output.children[0].box.x + output.children[0].box.width / 2,
+      output.children[0].box.y + output.children[0].box.height / 2, &hit), GFNT_OK);
+  EXPECT_LE(hit.offset, 2u);
   GFNT_Rect range{};
   size_t range_count = 0;
   ASSERT_EQ(gfnt_layout_range_rects(para.p, &para.layout, 0, 2, &range, 1, &range_count), GFNT_OK);
   ASSERT_EQ(range_count, 1u);
   EXPECT_GT(range.y, output.box.y);
-  EXPECT_LT(range.height, line.box.height);
+  EXPECT_EQ(range.y, output.box.y + output.box.height);
+}
+
+TEST(LayoutAnnotation, RubyGroupBreakingIsControlledByTheDescriptor) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = 3;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "abc";
+  ruby.text_length = 3;
+  GFNT_ParagraphOptions options{};
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+
+  Para breakable("A B", {font.face}, options);
+  ASSERT_EQ(breakable.created, GFNT_OK);
+  ASSERT_EQ(breakable.lay(kLetter), GFNT_OK);
+  EXPECT_EQ(breakable.layout.line_count, 2u);
+  ASSERT_EQ(breakable.layout.lines[0].annotation_count, 1u);
+  ASSERT_EQ(breakable.layout.lines[1].annotation_count, 1u);
+  EXPECT_EQ(breakable.layout.lines[0].annotations[0].base_start, 0u);
+  EXPECT_EQ(breakable.layout.lines[0].annotations[0].base_end, 2u);
+  EXPECT_EQ(breakable.layout.lines[1].annotations[0].base_start, 2u);
+  EXPECT_EQ(breakable.layout.lines[1].annotations[0].base_end, 3u);
+  EXPECT_EQ(breakable.layout.lines[0].annotations[0].runs[0].glyph_count, 2u);
+  EXPECT_EQ(breakable.layout.lines[1].annotations[0].runs[0].glyph_count, 1u);
+
+  ruby.group_break = true;
+  Para grouped("A B", {font.face}, options);
+  ASSERT_EQ(grouped.created, GFNT_OK);
+  ASSERT_EQ(grouped.lay(kLetter), GFNT_OK);
+  ASSERT_EQ(grouped.layout.line_count, 1u);
+  EXPECT_GT(grouped.layout.lines[0].extent, kLetter);
+}
+
+TEST(LayoutAnnotation, MergeConcatenatesAdjacentCompatibleRubyRecords) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby[2]{};
+  for (size_t i = 0; i < 2; i++) {
+    ruby[i].base_start = i;
+    ruby[i].base_end = i + 1;
+    ruby[i].kind = GFNT_ANNOTATION_RUBY;
+    ruby[i].position = GFNT_ANNOTATION_OVER;
+    ruby[i].style.faces = faces;
+    ruby[i].style.face_count = 1;
+    ruby[i].style.size = kSize;
+    ruby[i].align = GFNT_ANNOTATION_ALIGN_CENTER;
+    ruby[i].merge = true;
+    ruby[i].group_break = true;
+  }
+  ruby[0].text = "x";
+  ruby[0].text_length = 1;
+  ruby[1].text = "y";
+  ruby[1].text_length = 1;
+  GFNT_ParagraphOptions options{};
+  options.annotations = ruby;
+  options.annotation_count = 2;
+  Para para("AB", {font.face}, options);
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(para.layout.lines[0].annotation_count, 1u);
+  const GFNT_LineAnnotation & merged = para.layout.lines[0].annotations[0];
+  EXPECT_EQ(merged.base_start, 0u);
+  EXPECT_EQ(merged.base_end, 2u);
+  ASSERT_EQ(merged.run_count, 1u);
+  EXPECT_EQ(merged.runs[0].glyph_count, 2u);
 }
 
 TEST(LayoutAnnotation, EmphasisAddsOneMarkPerEligibleCluster) {
@@ -388,7 +464,7 @@ TEST(LayoutAnnotation, DefaultEmphasisSelectsMarkPerVerticalScriptCluster) {
       line.annotations[1].runs[0].glyphs[0].glyph);
 }
 
-TEST(LayoutAnnotation, RubyOverhangCanKeepTheFollowingPlainTextOnTheLine) {
+TEST(LayoutAnnotation, RubyAutoOverhangDoesNotBorrowFromTheFollowingLine) {
   Font font(latin());
   const GFNT_Face * faces[] = {font.face};
   GFNT_Annotation ruby{};
@@ -410,9 +486,12 @@ TEST(LayoutAnnotation, RubyOverhangCanKeepTheFollowingPlainTextOnTheLine) {
 
   ASSERT_EQ(para.created, GFNT_OK);
   ASSERT_EQ(para.lay(7 * kLetter / 2), GFNT_OK);
-  ASSERT_EQ(para.layout.line_count, 1u);
-  EXPECT_EQ(para.layout.lines[0].end, 4u);
+  ASSERT_EQ(para.layout.line_count, 2u);
   EXPECT_EQ(para.layout.lines[0].annotation_count, 1u);
+  const GFNT_Rect ruby_box = para.layout.lines[0].annotations[0].box;
+  const GFNT_Rect line_box = para.layout.lines[0].box;
+  EXPECT_GE(ruby_box.x, line_box.x);
+  EXPECT_LE(ruby_box.x + ruby_box.width, line_box.x + line_box.width);
 }
 
 TEST(LayoutAnnotation, RejectsRangesInsideUtf8AndOverlappingSiblings) {
@@ -457,6 +536,18 @@ TEST(LayoutAnnotation, RejectsRangesInsideUtf8AndOverlappingSiblings) {
   siblings[0].position = GFNT_ANNOTATION_INTER_CHARACTER;
   Para unsupported_position("ABC", {font.face}, options);
   EXPECT_EQ(unsupported_position.created, GFNT_ERR_INVALID);
+
+  GFNT_Annotation child = ruby;
+  child.base_start = 0;
+  child.base_end = 1;
+  child.text = "B";
+  siblings[0].merge = false;
+  siblings[0].position = GFNT_ANNOTATION_OVER;
+  siblings[0].group_break = false;
+  siblings[0].children = &child;
+  siblings[0].child_count = 1;
+  Para breakable_nested("ABC", {font.face}, options);
+  EXPECT_EQ(breakable_nested.created, GFNT_ERR_INVALID);
 }
 
 TEST(LayoutFlow, FullWidthBandMatchesTheExistingLayout) {

@@ -33,6 +33,7 @@
 #include "failing_allocator.h"
 
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -740,6 +741,118 @@ TEST(LayoutVerticalHyphen, ASoftHyphenAfterAnIdeographIsInvisibleAndBreaksOnlyIn
     for (size_t k = 0; k < pango.layout.lines[i].run_count; ++k) {
       EXPECT_FALSE(pango.layout.lines[i].runs[k].hyphen);
     }
+  }
+}
+
+TEST(LayoutVertical, RubyAndEmphasisTracksUseTheColumnCrossAxis) {
+  Font font;
+  const GFNT_Face * faces[] = {font.face};
+  const std::string text = std::string(kJi) + "AB" + kHon;
+  GFNT_Annotation annotations[2]{};
+  annotations[0].base_start = 0;
+  annotations[0].base_end = text.size();
+  annotations[0].kind = GFNT_ANNOTATION_RUBY;
+  annotations[0].position = GFNT_ANNOTATION_OVER;
+  annotations[0].style.faces = faces;
+  annotations[0].style.face_count = 1;
+  annotations[0].style.size = px(40);
+  annotations[0].text = "R";
+  annotations[0].text_length = 1;
+  annotations[1] = annotations[0];
+  annotations[1].kind = GFNT_ANNOTATION_EMPHASIS;
+  annotations[1].position = GFNT_ANNOTATION_UNDER;
+  annotations[1].text = nullptr;
+  annotations[1].text_length = 0;
+  annotations[1].mark_kind = GFNT_EMPHASIS_MARK_DOT;
+  GFNT_TextSpan span{};
+  span.length = text.size();
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+
+  for (GFNT_WritingMode mode : {GFNT_WRITING_VERTICAL_RL, GFNT_WRITING_VERTICAL_LR,
+      GFNT_WRITING_SIDEWAYS_RL, GFNT_WRITING_SIDEWAYS_LR}) {
+    GFNT_ParagraphOptions options{};
+    options.writing_mode = mode;
+    options.text_orientation = GFNT_ORIENT_MIXED;
+    options.annotations = annotations;
+    options.annotation_count = 2;
+    GFNT_Paragraph * paragraph = nullptr;
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &options, nullptr,
+        &paragraph, nullptr), GFNT_OK) << mode;
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK)
+        << mode;
+    ASSERT_EQ(layout.line_count, 1u) << mode;
+    const GFNT_Line & line = layout.lines[0];
+    ASSERT_EQ(line.annotation_count, 5u) << mode;
+    EXPECT_GT(line.box.width, px(100)) << mode;
+    EXPECT_EQ(line.annotations[0].kind, GFNT_ANNOTATION_RUBY) << mode;
+    EXPECT_GT(line.annotations[0].box.height, 0) << mode;
+    for (size_t i = 1; i < line.annotation_count; ++i) {
+      EXPECT_EQ(line.annotations[i].kind, GFNT_ANNOTATION_EMPHASIS) << mode;
+      EXPECT_GT(line.annotations[i].box.height, 0) << mode;
+    }
+    GFNT_Hit hit{};
+    const GFNT_Rect ruby_box = line.annotations[0].box;
+    ASSERT_EQ(gfnt_layout_hit_test(paragraph, &layout,
+        ruby_box.x + ruby_box.width / 2, ruby_box.y + ruby_box.height / 2,
+        &hit), GFNT_OK) << mode;
+    EXPECT_LE(hit.offset, text.size()) << mode;
+    GFNT_Rect selection{};
+    size_t selection_count = 0;
+    ASSERT_EQ(gfnt_layout_range_rects(paragraph, &layout, 0, text.size(),
+        &selection, 1, &selection_count), GFNT_OK) << mode;
+    ASSERT_EQ(selection_count, 1u) << mode;
+    const bool disjoint = selection.x + selection.width <= ruby_box.x
+        || ruby_box.x + ruby_box.width <= selection.x
+        || selection.y + selection.height <= ruby_box.y
+        || ruby_box.y + ruby_box.height <= selection.y;
+    EXPECT_TRUE(disjoint) << "base selection should exclude ruby track in mode " << mode;
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
+  }
+}
+
+TEST(LayoutVertical, InterCharacterRubyUsesTheOuterSideOfTheColumn) {
+  Font font;
+  const GFNT_Face * faces[] = {font.face};
+  const std::string text = kJi;
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = text.size();
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_INTER_CHARACTER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = px(40);
+  ruby.text = "に";
+  ruby.text_length = std::strlen(ruby.text);
+  GFNT_TextSpan span{};
+  span.length = text.size();
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  for (GFNT_WritingMode mode : {GFNT_WRITING_VERTICAL_RL, GFNT_WRITING_VERTICAL_LR,
+      GFNT_WRITING_SIDEWAYS_RL, GFNT_WRITING_SIDEWAYS_LR}) {
+    GFNT_ParagraphOptions options{};
+    options.writing_mode = mode;
+    options.text_orientation = GFNT_ORIENT_MIXED;
+    options.annotations = &ruby;
+    options.annotation_count = 1;
+    GFNT_Paragraph * paragraph = nullptr;
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &options, nullptr,
+        &paragraph, nullptr), GFNT_OK) << mode;
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK)
+        << mode;
+    ASSERT_EQ(layout.line_count, 1u) << mode;
+    ASSERT_EQ(layout.lines[0].annotation_count, 1u) << mode;
+    const GFNT_Line & line = layout.lines[0];
+    EXPECT_GE(line.annotations[0].box.x, line.box.x + line.box.width) << mode;
+    EXPECT_GT(line.annotations[0].box.width, 0) << mode;
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
   }
 }
 

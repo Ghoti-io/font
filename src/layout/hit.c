@@ -217,8 +217,47 @@ static GFNT_Result line_boxes(const GFNT_Paragraph * p, const GFNT_Layout * layo
   return GFNT_OK;
 }
 
+/** Line metrics used for base-text selection exclude separately painted annotation tracks. */
+static void base_line_metrics(const GFNT_Paragraph * p, const GFNT_Line * line,
+    GFNT_F26Dot6 * ascent, GFNT_F26Dot6 * descent) {
+  int64_t over = 0, under = 0;
+  *ascent = line->ascent;
+  *descent = line->descent;
+  for (size_t i = 0; i < p->annotation_count; i++) {
+    const PAnnotation * annotation = &p->annotations[i];
+    const size_t start = p->cp_byte[annotation->cp_start];
+    const size_t end = p->cp_byte[annotation->cp_end];
+    if (end <= line->start || start >= line->end) continue;
+    const int64_t extent = (int64_t)annotation->ascent + annotation->descent;
+    if (annotation->descriptor.position == GFNT_ANNOTATION_UNDER) under += extent;
+    else over += extent;
+  }
+  if (over > *ascent) *ascent = 0;
+  else *ascent -= (GFNT_F26Dot6)over;
+  if (under > *descent) *descent = 0;
+  else *descent -= (GFNT_F26Dot6)under;
+}
+
 static bool valid(const GFNT_Paragraph * p, const GFNT_Layout * l) {
   return p && l && l->lines && l->line_count;
+}
+
+static bool annotation_contains(const GFNT_LineAnnotation * a, GFNT_F26Dot6 x, GFNT_F26Dot6 y) {
+  if (x >= a->box.x && x < a->box.x + a->box.width
+      && y >= a->box.y && y < a->box.y + a->box.height) return true;
+  for (size_t i = 0; i < a->child_count; i++) {
+    if (annotation_contains(&a->children[i], x, y)) return true;
+  }
+  return false;
+}
+
+static const GFNT_LineAnnotation * annotation_at(const GFNT_LineAnnotation * annotations,
+    size_t count, GFNT_F26Dot6 x, GFNT_F26Dot6 y) {
+  for (size_t i = 0; i < count; i++) {
+    const GFNT_LineAnnotation * a = &annotations[i];
+    if (annotation_contains(a, x, y)) return a;
+  }
+  return NULL;
 }
 
 GFNT_Result gfnt_layout_hit_test(const GFNT_Paragraph * p, const GFNT_Layout * l,
@@ -256,13 +295,16 @@ GFNT_Result gfnt_layout_hit_test(const GFNT_Paragraph * p, const GFNT_Layout * l
   hit.line = li;
   hit.offset = l->lines[li].start;
   hit.affinity = GFNT_AFFINITY_DOWNSTREAM;
-  for (size_t ai = 0; ai < l->lines[li].annotation_count; ai++) {
-    const GFNT_LineAnnotation * annotation = &l->lines[li].annotations[ai];
+  {
+    const GFNT_LineAnnotation * annotation = annotation_at(l->lines[li].annotations,
+        l->lines[li].annotation_count, x, y);
+    if (annotation) {
     const GFNT_Rect box = annotation->box;
-    if (x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height) {
       const GFNT_F26Dot6 along = is_vertical(l) ? y : x;
       const GFNT_F26Dot6 start = is_vertical(l) ? box.y : box.x;
       const GFNT_F26Dot6 extent = is_vertical(l) ? box.height : box.width;
+      /* Nested annotation offsets belong to the parent annotation text. Until that text has
+       * a source mapping, a hit on any descendant resolves to the top-level base range. */
       hit.offset = along < start + extent / 2 ? annotation->base_start : annotation->base_end;
       hit.affinity = hit.offset == annotation->base_start
           ? GFNT_AFFINITY_DOWNSTREAM : GFNT_AFFINITY_UPSTREAM;
@@ -404,26 +446,14 @@ GFNT_Result gfnt_layout_range_rects(const GFNT_Paragraph * p,
     Box * boxes = NULL;
     size_t n = 0;
     bool open = false;
+    GFNT_F26Dot6 base_ascent, base_descent;
     GFNT_Rect cur = {0, 0, 0, 0};   // x and width: the span along the line, in the boxes' frame
-    int64_t ann_over = 0, ann_under = 0;
     GFNT_Result r;
 
     if (line->end <= start || line->start >= end) {
       continue;
     }
-    for (size_t ai = 0; ai < p->annotation_count; ai++) {
-      const PAnnotation * annotation = &p->annotations[ai];
-      const size_t annotation_start = p->cp_byte[annotation->cp_start];
-      const size_t annotation_end = p->cp_byte[annotation->cp_end];
-      if (annotation_end <= start || annotation_start >= end
-          || annotation_end <= line->start || annotation_start >= line->end) continue;
-      if (annotation->descriptor.position == GFNT_ANNOTATION_UNDER) {
-        ann_under += (int64_t)annotation->ascent + annotation->descent;
-      }
-      else {
-        ann_over += (int64_t)annotation->ascent + annotation->descent;
-      }
-    }
+    base_line_metrics(p, line, &base_ascent, &base_descent);
     r = line_boxes(p, l, line, &boxes, &n);
     if (r != GFNT_OK) {
       return r;
@@ -439,14 +469,15 @@ GFNT_Result gfnt_layout_range_rects(const GFNT_Paragraph * p,
         GFNT_Rect rect = cur;
 
         if (is_vertical(l)) {
-          rect.x = line->box.x + (GFNT_F26Dot6)ann_over;
+          const GFNT_F26Dot6 cross_extent = base_ascent + base_descent;
+          rect.x = line->baseline - cross_extent / 2;
           rect.y = is_flipped(l) ? l->height - (cur.x + cur.width) : cur.x;
-          rect.width = (GFNT_F26Dot6)(line->ascent + line->descent - ann_over - ann_under);
+          rect.width = cross_extent;
           rect.height = cur.width;
         }
         else {
-          rect.y = line->baseline - line->ascent + (GFNT_F26Dot6)ann_over;
-          rect.height = (GFNT_F26Dot6)(line->ascent + line->descent - ann_over - ann_under);
+          rect.y = line->baseline - base_ascent;
+          rect.height = base_ascent + base_descent;
         }
         if (out && total < capacity) {
           out[total] = rect;

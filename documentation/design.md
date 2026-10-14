@@ -1701,15 +1701,26 @@ testing.
 
 **Annotation tracks (L4, partial).** `GFNT_ParagraphOptions.annotations` accepts
 UTF-8 byte ranges for ruby text and emphasis marks. Ruby text is shaped once in
-its own style, reserves advance before line breaking, and currently keeps its
-base range indivisible. Over/under tracks contribute to line metrics and emit
-`GFNT_LineAnnotation` runs and boxes in the paragraph coordinate frame. Nested
-descriptors are copied and emitted recursively. A point hit on a top-level track
-maps to an edge of its base range; range rectangles over base text exclude the
-annotation, matching Chromium and Firefox. Preset emphasis chooses its default
-mark from the first base character and writing mode. `merge=true` and
-`INTER_CHARACTER` are rejected until implemented. Ruby overhang is approximate;
-there is not yet a browser oracle target for annotation geometry.
+its own style, can keep its base range indivisible with `group_break`, and is
+placed against the rendered line. Over/under tracks contribute to line metrics and
+emit `GFNT_LineAnnotation` runs and boxes in the paragraph coordinate frame.
+Nested descriptors are copied and emitted recursively; nested descriptors on
+breakable ruby are rejected because their child ranges cannot yet be mapped
+through a split. When a breakable ruby range crosses lines, the annotation text
+is split at UTF-8 codepoint boundaries in proportion to each line fragment's
+base codepoint count. A point hit on a
+top-level track maps to an edge of its base range; range rectangles cover selected
+base text and exclude annotation text, matching DOM Range selection geometry.
+Preset emphasis marks
+are emitted per eligible cluster, with defaults selected from each cluster's
+script and writing mode.
+`merge=true` concatenates consecutive adjacent ruby siblings when both records
+request merging, have no children, and have identical style, position, alignment,
+overhang, and group-breaking descriptors. Inter-character positioning is supported only for
+vertical writing, on the right side of the base. AUTO overhang placement uses
+only adjacent plain units that remain on the rendered line and is clamped to
+the line box; the full annotation advance remains reserved during breaking, so
+it does not yet let a following unit move up from the next line.
 
 Letter-spacing (`GFNT_TextStyle.letter_spacing`) is added to the advance of the
 last glyph of every cluster, in reading order, before any line is broken, so it
@@ -1819,15 +1830,19 @@ which the patch does not read either. `make check-oracle-kashida` holds all this
 screenshots of the patch's published page (23 words and phrases in Amiri, and the three
 `text-kashida-space` settings), which agree to within one tatweel at every stroke.
 
-Not done: ruby merge, inter-character positioning, per-cluster default emphasis,
-accurate line-specific overhang, and Chromium/Firefox annotation geometry oracles.
+Remaining L4 limits: merge applies only to consecutive compatible ruby siblings;
+breakable nested ruby is rejected; proportional annotation fragments are an
+approximation; line-specific AUTO overhang does not reclaim reserved advance;
+and the browser oracle does not yet compare all annotation geometry or emphasis
+ink between Chromium and Firefox.
 
 ### 10.7 Deliberately not here
 
 Hyphenation data (the `GFNT_Hyphenator` seam is built), dictionary word breaking
 for the `SA` scripts (a caller-supplied `unicode` break provider is supported),
-Knuth-Plass optimal breaking, ruby, and flow around non-text boxes are outside
-the current implementation. Inline objects are supported as described in §10.8.
+Knuth-Plass optimal breaking, full CSS Ruby behavior, and flow around non-text
+boxes are outside the current implementation. Inline objects and partial ruby
+and emphasis geometry are supported as described in §10.8.
 Vertical writing modes are implemented; see §10.8.
 
 ---

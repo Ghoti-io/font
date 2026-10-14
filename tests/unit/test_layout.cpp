@@ -476,8 +476,10 @@ TEST(LayoutAnnotation, DefaultEmphasisSelectsMarkPerVerticalScriptCluster) {
   ASSERT_EQ(line.annotations[1].run_count, 1u);
   ASSERT_EQ(line.annotations[0].runs[0].glyph_count, 1u);
   ASSERT_EQ(line.annotations[1].runs[0].glyph_count, 1u);
-  EXPECT_NE(line.annotations[0].runs[0].glyphs[0].glyph,
-      line.annotations[1].runs[0].glyphs[0].glyph);
+  EXPECT_EQ(line.annotations[0].runs[0].glyphs[0].glyph, 3u)
+      << "the Latin cluster must use the configured filled dot glyph";
+  EXPECT_EQ(line.annotations[1].runs[0].glyphs[0].glyph, 4u)
+      << "the vertical CJK cluster must use the configured filled sesame glyph";
 }
 
 TEST(LayoutAnnotation, RubyAutoOverhangStaysWithinTheRenderedLine) {
@@ -1739,6 +1741,52 @@ TEST(LayoutLineBox, BaselineShiftMovesGlyphsAcrossTheLineAxisInEveryWritingMode)
     if (mode == GFNT_WRITING_HORIZONTAL_TB) EXPECT_EQ(std::abs(a.y - b.y), 64);
     else EXPECT_EQ(std::abs(b.pen_x - a.pen_x), 64);
   }
+}
+
+TEST(LayoutLineBox, RangeRectPreservesNegativeDescentFromLargeBaselineShift) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan raised{};
+  raised.length = 2;
+  raised.style.faces = faces;
+  raised.style.face_count = 1;
+  raised.style.size = kSize;
+  raised.style.vertical_align = GFNT_VERTICAL_ALIGN_LENGTH;
+  raised.style.vertical_align_value = 30 * 64;
+  Para para("AB", {raised});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_LT(para.layout.lines[0].descent, 0);
+
+  GFNT_Rect rect{};
+  size_t count = 0;
+  ASSERT_EQ(gfnt_layout_range_rects(para.p, &para.layout, 0, 2, &rect, 1, &count), GFNT_OK);
+  ASSERT_EQ(count, 1u);
+  EXPECT_EQ(rect.y, para.layout.lines[0].box.y);
+  EXPECT_EQ(rect.height, para.layout.lines[0].box.height);
+}
+
+TEST(LayoutLineBox, RangeRectPreservesNegativeAscentFromLargeBaselineShift) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan lowered{};
+  lowered.length = 2;
+  lowered.style.faces = faces;
+  lowered.style.face_count = 1;
+  lowered.style.size = kSize;
+  lowered.style.vertical_align = GFNT_VERTICAL_ALIGN_LENGTH;
+  lowered.style.vertical_align_value = -30 * 64;
+  Para para("AB", {lowered});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_LT(para.layout.lines[0].ascent, 0);
+
+  GFNT_Rect rect{};
+  size_t count = 0;
+  ASSERT_EQ(gfnt_layout_range_rects(para.p, &para.layout, 0, 2, &rect, 1, &count), GFNT_OK);
+  ASSERT_EQ(count, 1u);
+  EXPECT_EQ(rect.y, para.layout.lines[0].box.y);
+  EXPECT_EQ(rect.height, para.layout.lines[0].box.height);
 }
 
 TEST(LayoutLineBox, InvalidSelectorsAreRejectedAtParagraphCreation) {

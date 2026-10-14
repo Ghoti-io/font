@@ -22,6 +22,17 @@ SCRATCH = ROOT / "build/oracle/layout-l4"
 TEXT = "日本語"
 RT = "日本"
 TOLERANCE = 1.5
+EMPHASIS_STYLES = {
+    "emphasis": "filled circle",
+    # Omitting the shape asks CSS to choose its writing-mode default.
+    "emphasis-default": "filled",
+    "emphasis-dot": "filled dot",
+    "emphasis-open-circle": "open circle",
+    "emphasis-double-circle": "filled double-circle",
+    "emphasis-triangle": "filled triangle",
+    "emphasis-open-sesame": "open sesame",
+    "emphasis-string": '"x"',
+}
 
 
 def driver(mode: str, scenario: str = "simple") -> tuple[float, ...] | dict:
@@ -149,16 +160,19 @@ for(let i=0;i<n.length;i++){const r=document.createRange();r.setStart(n,i);r.set
 const b=r.getBoundingClientRect();out.push({t:n.data[i],x:b.x,y:b.y,w:b.width,h:b.height});}return out;};
 document.querySelector('#out').textContent=JSON.stringify({base:chars('#base'),reading:chars('#reading')});});'''
         width = "width:300px;"
-    elif scenario in ("overhang", "overhang-none"):
+    elif scenario in ("overhang", "overhang-none", "overhang-wrap", "overhang-wrap-none"):
         markup = '''<ruby id="ruby"><span id="base">日</span><rt id="rt">日本語</rt></ruby><span id="next">本語</span>'''
         script = '''document.fonts.ready.then(()=>{
 const box=e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height]};
+const n=document.querySelector('#next').firstChild, q=document.createRange();
+q.setStart(n,0);q.setEnd(n,1);const nr=q.getBoundingClientRect();
 document.querySelector('#out').textContent=JSON.stringify({base:box(document.querySelector('#base')),
 rt:box(document.querySelector('#rt')),next:box(document.querySelector('#next')),
+nextFirst:[nr.x,nr.y,nr.width,nr.height],
 supported:CSS.supports('ruby-overhang','auto')});});'''
-        overhang_rule = "#ruby { ruby-overhang:auto; }" if scenario == "overhang" else "#ruby { ruby-overhang:none; }"
-        width = ""
-    elif scenario == "emphasis":
+        overhang_rule = "#ruby { ruby-overhang:auto; }" if scenario in ("overhang", "overhang-wrap") else "#ruby { ruby-overhang:none; }"
+        width = "width:210px; white-space:normal;" if scenario.startswith("overhang-wrap") else ""
+    elif scenario in EMPHASIS_STYLES:
         markup = '''<span id="base">日本語</span>'''
         script = '''document.fonts.ready.then(()=>{
 const r=document.querySelector('#base').getBoundingClientRect();
@@ -175,8 +189,8 @@ writing-mode:{writing_mode}; text-orientation:mixed; }}
 #double {{ ruby-position:under; }} #double > ruby {{ ruby-position:over; }}
 rt {{ writing-mode:{annotation_writing_mode}; text-orientation:mixed; }}
 {'#fixture { color:transparent; } rt { color:white; }' if firefox else ''}
-{overhang_rule if scenario in ('overhang','overhang-none') else ''}
-{('#base { color:white; text-emphasis:filled circle; text-emphasis-position:over right; text-emphasis-color:black; }' if scenario == 'emphasis' else '')}
+{overhang_rule if scenario in ('overhang','overhang-none','overhang-wrap','overhang-wrap-none') else ''}
+{('#base { color:white; text-emphasis:' + EMPHASIS_STYLES[scenario] + '; text-emphasis-position:over right; text-emphasis-color:black; }' if scenario in EMPHASIS_STYLES else '')}
 rt {{ display:ruby-text; font:40px T; line-height:40px; }} rtc {{ display:ruby-text-container; }} #out {{ display:none; }}
 </style><div id="fixture">{markup}</div><pre id="out"></pre><script>{script}</script>'''
 
@@ -196,15 +210,15 @@ def chromium_scenario(scenario: str, mode: str = "horizontal") -> dict:
     return json.loads(html.unescape(match.group(1)))
 
 
-def chromium_emphasis_boxes(mode: str = "horizontal") -> list[tuple[int, int, int, int]]:
+def chromium_emphasis_boxes(mode: str = "horizontal", scenario: str = "emphasis") -> list[tuple[int, int, int, int]]:
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    path = SCRATCH / f"chrome-emphasis-ink-{mode}.html"
-    shot = SCRATCH / f"chrome-emphasis-ink-{mode}.png"
-    path.write_text(scenario_page("emphasis", mode))
+    path = SCRATCH / f"chrome-emphasis-ink-{scenario}-{mode}.html"
+    shot = SCRATCH / f"chrome-emphasis-ink-{scenario}-{mode}.png"
+    path.write_text(scenario_page(scenario, mode))
     argv = oracle_env.command("chrome", ["chromium", "--headless=new", "--no-sandbox",
         "--disable-gpu", "--allow-file-access-from-files", "--disable-dev-shm-usage",
         "--window-size=800,400", "--screenshot=" + str(shot),
-        "--user-data-dir=" + str(SCRATCH / f"chrome-emphasis-profile-{mode}"),
+        "--user-data-dir=" + str(SCRATCH / f"chrome-emphasis-profile-{scenario}-{mode}"),
         "--virtual-time-budget=5000", "file://" + str(path)], scratch=str(SCRATCH))
     result = subprocess.run(argv, capture_output=True, text=True)
     if result.returncode or not shot.exists():
@@ -466,23 +480,56 @@ def compare_implementation_scenarios() -> None:
                            f"(layout shift={impl_following / 64:g}px, "
                            f"Chromium shift={browser_following:g}px)")
 
+    # Under a constrained width, the full ruby reservation makes the first
+    # following ideograph wrap. AUTO can reclaim reserved advance and keep it
+    # with the base. The UA chooses the allowed overhang amount, so compare the
+    # line-break decision rather than demanding identical coordinates.
+    wrap_auto = driver("horizontal", "overhang-wrap")
+    wrap_none = driver("horizontal", "overhang-wrap-none")
+    browser_wrap_auto = chromium_scenario("overhang-wrap")
+    browser_wrap_none = chromium_scenario("overhang-wrap-none")
+    if wrap_auto["lines"][0]["end"] <= 3 or wrap_none["lines"][0]["end"] > 3:
+        raise RuntimeError("library AUTO overhang did not change the constrained line break: "
+                           f"auto={wrap_auto['lines']}, none={wrap_none['lines']}")
+    if (abs(browser_wrap_auto["nextFirst"][1] - browser_wrap_auto["base"][1]) > TOLERANCE
+            or abs(browser_wrap_none["nextFirst"][1] - browser_wrap_none["base"][1]) <= TOLERANCE):
+        raise RuntimeError("Chromium AUTO overhang did not change the constrained line break: "
+                           f"auto={browser_wrap_auto}, none={browser_wrap_none}")
+
     for mode in ("horizontal", "vertical-rl", "vertical-lr"):
-        emphasis = driver(mode, "emphasis")
-        impl_marks = emphasis["lines"][0]["annotations"]
-        browser_marks = chromium_emphasis_boxes(mode)
-        if len(impl_marks) != 3 or len(browser_marks) != 3:
-            raise RuntimeError(f"{mode} emphasis mark count differs: layout={len(impl_marks)}, "
-                               f"Chromium ink components={len(browser_marks)}")
-        impl_centers = sorted((a["box"][0] / 64 + a["box"][2] / 128,
-                               a["box"][1] / 64 + a["box"][3] / 128)
-                              for a in impl_marks)
-        browser_centers = sorted(((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
-                                 for b in browser_marks)
-        emphasis_tolerance = 12 if mode != "horizontal" else 8
-        if any(max(abs(ix - bx), abs(iy - by)) > emphasis_tolerance
-               for (ix, iy), (bx, by) in zip(impl_centers, browser_centers)):
-            raise RuntimeError(f"{mode} emphasis mark centers differ: layout={impl_centers}, "
-                               f"Chromium ink={browser_centers}")
+        for scenario in EMPHASIS_STYLES:
+            emphasis = driver(mode, scenario)
+            impl_marks = emphasis["lines"][0]["annotations"]
+            browser_marks = chromium_emphasis_boxes(mode, scenario)
+            if scenario == "emphasis-double-circle" and len(browser_marks) == 6:
+                axis = 1 if mode != "horizontal" else 0
+                browser_marks.sort(key=lambda b: (b[axis] + b[axis + 2]) / 2)
+                browser_marks = [(
+                    min(a[0], b[0]), min(a[1], b[1]),
+                    max(a[2], b[2]), max(a[3], b[3]))
+                    for a, b in zip(browser_marks[::2], browser_marks[1::2])]
+            if len(impl_marks) != 3 or len(browser_marks) != 3:
+                raise RuntimeError(f"{mode} {scenario} mark count differs: "
+                                   f"layout={len(impl_marks)}, Chromium ink={len(browser_marks)}")
+            impl_centers = [(a["box"][0] / 64 + a["box"][2] / 128,
+                             a["box"][1] / 64 + a["box"][3] / 128)
+                            for a in impl_marks]
+            browser_centers = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+                               for b in browser_marks]
+            inline_axis = 0 if mode == "horizontal" else 1
+            impl_centers.sort(key=lambda center: center[inline_axis])
+            browser_centers.sort(key=lambda center: center[inline_axis])
+            emphasis_tolerance = 12 if mode != "horizontal" else 8
+            # Mark ink and font-glyph boxes can have different cross-axis metrics
+               # across user agents. The filled-circle control keeps the existing
+               # cross-axis tolerance; the style matrix checks count and inline
+               # placement for each supported mark shape.
+            axes = (0, 1) if scenario == "emphasis" else ((0,) if mode == "horizontal" else (1,))
+            if any(max(abs(impl[axis] - browser[axis]) for axis in axes)
+                   > emphasis_tolerance
+                   for impl, browser in zip(impl_centers, browser_centers)):
+                raise RuntimeError(f"{mode} {scenario} mark centers differ: "
+                                   f"layout={impl_centers}, Chromium ink={browser_centers}")
 
 
 def main() -> int:

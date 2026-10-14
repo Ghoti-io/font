@@ -232,10 +232,11 @@ static void base_line_metrics(const GFNT_Paragraph * p, const GFNT_Line * line,
     if (annotation->descriptor.position == GFNT_ANNOTATION_UNDER) under += extent;
     else over += extent;
   }
-  if (over > *ascent) *ascent = 0;
-  else *ascent -= (GFNT_F26Dot6)over;
-  if (under > *descent) *descent = 0;
-  else *descent -= (GFNT_F26Dot6)under;
+  /* Line metrics include annotation tracks. Recover the base metrics with
+   * signed arithmetic: a large baseline shift can legitimately put either
+   * edge beyond the line box, and clamping would enlarge selection geometry. */
+  *ascent -= (GFNT_F26Dot6)over;
+  *descent -= (GFNT_F26Dot6)under;
 }
 
 static bool valid(const GFNT_Paragraph * p, const GFNT_Layout * l) {

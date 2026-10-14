@@ -25,8 +25,19 @@ int main(int argc, char ** argv) {
   bool fragments = strcmp(scenario, "fragments") == 0;
   bool nested = strcmp(scenario, "nested") == 0;
   bool overhang = strcmp(scenario, "overhang") == 0
-      || strcmp(scenario, "overhang-none") == 0;
-  bool emphasis = strcmp(scenario, "emphasis") == 0;
+      || strcmp(scenario, "overhang-none") == 0
+      || strcmp(scenario, "overhang-wrap") == 0
+      || strcmp(scenario, "overhang-wrap-none") == 0;
+  bool wrap_overhang = strcmp(scenario, "overhang-wrap") == 0
+      || strcmp(scenario, "overhang-wrap-none") == 0;
+  bool emphasis = strcmp(scenario, "emphasis") == 0
+      || strcmp(scenario, "emphasis-default") == 0
+      || strcmp(scenario, "emphasis-dot") == 0
+      || strcmp(scenario, "emphasis-open-circle") == 0
+      || strcmp(scenario, "emphasis-double-circle") == 0
+      || strcmp(scenario, "emphasis-triangle") == 0
+      || strcmp(scenario, "emphasis-open-sesame") == 0
+      || strcmp(scenario, "emphasis-string") == 0;
   bool double_side = strcmp(scenario, "double-side") == 0;
   bool triple_side = strcmp(scenario, "triple-side") == 0;
   if (!fragments && !nested && !overhang && !emphasis && !double_side && !triple_side
@@ -75,9 +86,34 @@ int main(int argc, char ** argv) {
     ruby.text_length = 0;
     ruby.mark_kind = GFNT_EMPHASIS_MARK_CIRCLE;
     ruby.filled = true;
+    if (strcmp(scenario, "emphasis-default") == 0) {
+      ruby.mark_kind = GFNT_EMPHASIS_MARK_DEFAULT;
+    }
+    else if (strcmp(scenario, "emphasis-dot") == 0) {
+      ruby.mark_kind = GFNT_EMPHASIS_MARK_DOT;
+    }
+    else if (strcmp(scenario, "emphasis-open-circle") == 0) {
+      ruby.filled = false;
+    }
+    else if (strcmp(scenario, "emphasis-double-circle") == 0) {
+      ruby.mark_kind = GFNT_EMPHASIS_MARK_DOUBLE_CIRCLE;
+    }
+    else if (strcmp(scenario, "emphasis-triangle") == 0) {
+      ruby.mark_kind = GFNT_EMPHASIS_MARK_TRIANGLE;
+    }
+    else if (strcmp(scenario, "emphasis-open-sesame") == 0) {
+      ruby.mark_kind = GFNT_EMPHASIS_MARK_SESAME;
+      ruby.filled = false;
+    }
+    else if (strcmp(scenario, "emphasis-string") == 0) {
+      ruby.mark_kind = GFNT_EMPHASIS_MARK_STRING;
+      ruby.text = "x";
+      ruby.text_length = 1;
+    }
   }
   ruby.group_break = true;
-  if (strcmp(scenario, "overhang") == 0) ruby.overhang = GFNT_RUBY_OVERHANG_AUTO;
+  if (strcmp(scenario, "overhang") == 0 || strcmp(scenario, "overhang-wrap") == 0)
+    ruby.overhang = GFNT_RUBY_OVERHANG_AUTO;
   GFNT_Annotation child = {0};
   if (nested) {
     child.base_start = 0;
@@ -114,7 +150,8 @@ int main(int argc, char ** argv) {
   options.annotation_count = triple_side ? 3 : double_side ? 2 : 1;
   if (gfnt_paragraph_create(source, source_length, &span, 1, &options, NULL,
           &paragraph, &error) != GFNT_OK
-      || gfnt_paragraph_layout(paragraph, fragments ? 300 * 64 : GFNT_LAYOUT_UNBOUNDED,
+      || gfnt_paragraph_layout(paragraph, fragments ? 300 * 64
+              : wrap_overhang ? 210 * 64 : GFNT_LAYOUT_UNBOUNDED,
           &layout, &error) != GFNT_OK || !layout.line_count) {
     gfnt_error_dump(&error, stderr);
     gfnt_layout_free(&layout);

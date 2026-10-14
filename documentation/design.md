@@ -1883,12 +1883,23 @@ track while this API reports its shaped glyph advance. These comparisons use a
 1.5px tolerance. For AUTO overhang, the oracle compares the annotation box to
 1.5px and checks that both the library and Chromium pull the following text
 toward the ruby; CSS leaves the amount of overhang to the user agent, so the
-amount is not compared. Filled-circle emphasis is checked for mark count and
-center placement within 8px between outline geometry and Chromium's rendered
-pixels in horizontal writing, and within 12px in vertical writing. Double-sided ruby and vertical annotation sides are checked in
+amount is not compared. A constrained-width case also compares the line-break
+decision: AUTO reclaims reserved ruby advance so the first following ideograph
+stays on the base line, while `none` wraps it. Chromium checks count and inline
+placement for fixtures using filled circle, shape-omitted default, dot, open
+circle, double circle, triangle, open sesame and literal-string emphasis marks
+in horizontal, vertical-rl and vertical-lr writing; that geometry comparison
+does not infer the emitted mark shape from ink. The unit test checks the API's
+default glyph choice for Latin and vertical CJK text. The filled-circle control compares both
+axes within 8px horizontally and 12px vertically; the style matrix compares
+inline placement because browser ink bounds and font-glyph boxes have different
+cross-axis metrics. Firefox does not yet provide an emphasis-mark geometry
+comparison. Double-sided ruby and vertical annotation sides are checked in
 Chromium and Firefox; Chromium supplies comparable track geometry, while the
 Firefox screenshot oracle checks that the tracks remain separate on the correct
-sides. Complex emphasis marks are not covered in both engines.
+sides. Both pinned browser oracles report `ruby-merge` and
+`ruby-position:inter-character` unsupported, so those behaviors are covered by
+library unit tests rather than browser comparison.
 
 ### 10.7 Deliberately not here
 

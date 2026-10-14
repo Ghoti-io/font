@@ -28,10 +28,11 @@ with the one predicted from this library's placed glyphs and their orientation. 
 of the first phase are line boxes and advances; they cannot show a glyph drawn off its axis or
 turned the wrong way, and the ink can.
 
-**What it cannot see**, stated so the absence is a statement: one face and one size, no
-justification (Chromium justifies CJK between characters and this library does not yet), no
-fallback fonts, and a character Chromium gives no rectangle (a collapsed or hung space) is
-compared only when it has one.
+**What it cannot see**, stated so the absence is a statement: one face and one size, no fallback
+fonts, and a character Chromium gives no rectangle (a collapsed or hung space) is compared only
+when it has one. The rectangle matrix includes horizontal, vertical and sideways writing,
+wrapping, bidi, line-height, inline-object and flow cases, plus inter-word and inter-character
+justification in both directions. It does not cover kashida shaping; that has its own oracle.
 
 Usage: css_layout_diff.py [-v] [case-name...]
 """
@@ -147,6 +148,16 @@ for _shape in ("rect", "circle", "polygon"):
             # the float is active, unlike an unbreakable word that simply clears the float.
             CASES.append((_name, "AA " * 40, "horizontal", "mixed", 300,
                           "start", "ltr", "auto", {"flow": _flow, "driver": _driver}))
+
+# A circle is already partway through its lower half at paragraph top. This
+# unbreakable word cannot fit in the current band; Chromium clears it to the
+# float's bottom rather than searching for a lower, wider slice within the shape.
+CASES.append(("flow-circle-tapered-clear", "AAAAA", "horizontal", "mixed", 300,
+              "start", "ltr", "auto", {"flow": {"left": 160, "top": -80, "height": 160,
+              "shape": "circle", "side": "left"},
+              "driver": ("--flow-left", "160", "--flow-top", "-80", "--flow-depth", "160",
+                         "--flow-shape", "circle", "--flow-side", "left")}))
+FLOW_CASES.append("flow-circle-tapered-clear")
 
 # Explicit line-height rectangles, including a requested height below the font metrics.
 for _name, _text, _css, _driver in (
@@ -611,13 +622,18 @@ def main():
         if case[0] in FLOW_CASES:
             flow = case[8]["flow"]
             chars = [r for r in theirs["chars"] if r is not None]
-            rows = {round(r[1], 2) for r in chars}
-            inset_rows = [r for r in chars if r[1] < flow["height"]]
-            active_side = [r for r in inset_rows
-                           if (r[0] >= flow["left"] - 1 if flow["side"] == "left"
-                               else r[0] + r[2] <= 300 - flow["left"] + 1)]
-            if len(rows) < 2 or not active_side:
-                raise RuntimeError("%s does not wrap into its narrowed float band" % case[0])
+            if case[0] == "flow-circle-tapered-clear":
+                bottom = flow["top"] + flow["height"]
+                if any(r[1] < bottom - 1 for r in chars):
+                    raise RuntimeError("unbreakable circle flow should clear to the float bottom")
+            else:
+                rows = {round(r[1], 2) for r in chars}
+                inset_rows = [r for r in chars if r[1] < flow["height"]]
+                active_side = [r for r in inset_rows
+                               if (r[0] >= flow["left"] - 1 if flow["side"] == "left"
+                                   else r[0] + r[2] <= 300 - flow["left"] + 1)]
+                if len(rows) < 2 or not active_side:
+                    raise RuntimeError("%s does not wrap into its narrowed float band" % case[0])
         mine = ours(case)
         problems = compare(case, theirs, mine, verbose)
         compared += sum(1 for c in theirs["chars"] if c is not None)

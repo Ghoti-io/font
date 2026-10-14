@@ -214,21 +214,23 @@ def chromium_emphasis_boxes(mode: str = "horizontal") -> list[tuple[int, int, in
             if box[2] - box[0] > 1 and box[3] - box[1] > 1]
 
 
-def firefox_double_side_boxes(mode: str) -> list[tuple[int, int, int, int]]:
+def firefox_double_side_boxes(mode: str, track: str | None = None) -> list[tuple[int, int, int, int]]:
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    path = SCRATCH / f"firefox-double-side-{mode}.html"
-    shot = SCRATCH / f"firefox-double-side-{mode}.png"
+    suffix = "all" if track is None else track
+    path = SCRATCH / f"firefox-double-side-{mode}-{suffix}.html"
+    shot = SCRATCH / f"firefox-double-side-{mode}-{suffix}.png"
     page_source = scenario_page("double-side", mode, firefox=True)
     marker = '''document.fonts.ready.then(()=>{
 const box=e=>{const r=e.getBoundingClientRect();return [r.x,r.y,r.width,r.height]};
 document.querySelector('#out').textContent=JSON.stringify({base:box(document.querySelector('#base')),
 over:box(document.querySelector('#over')),under:box(document.querySelector('#under'))});});'''
     overlay = '''window.addEventListener("load",()=>{
-for(const id of ['over','under']){const r=document.querySelector('#'+id).getBoundingClientRect();
+for(const id of TRACKS){const r=document.querySelector('#'+id).getBoundingClientRect();
 const e=document.createElement('span');e.style.cssText=`position:absolute;left:${r.x}px;top:${r.y}px;`+
 `width:${r.width}px;height:${r.height}px;background:black;z-index:1000`;document.body.append(e);}});'''
     if marker not in page_source:
         raise RuntimeError("Firefox double-sided fixture script marker was not found")
+    overlay = overlay.replace("TRACKS", json.dumps([track] if track else ["over", "under"]))
     path.write_text(page_source.replace(marker, overlay))
     argv = oracle_env.command("firefox", ["firefox-esr", "--headless", "--no-remote",
         "--window-size=1000,600", "--screenshot", str(shot), "file://" + str(path)],
@@ -492,22 +494,26 @@ def main() -> int:
     for mode in ("sideways-rl", "sideways-lr"):
         expected = driver(mode, "double-side")
         browser = chromium_scenario("double-side", mode)
-        firefox_boxes = firefox_double_side_boxes(mode)
-        if len(firefox_boxes) != 2:
-            raise RuntimeError(f"Firefox {mode} expected two ruby tracks: {firefox_boxes}")
-        firefox_boxes.sort(key=lambda box: box[0])
-        firefox_order = ("over", "under") if mode == "sideways-lr" else ("under", "over")
-        if firefox_boxes[0][0] + firefox_boxes[0][2] > firefox_boxes[1][0]:
-            raise RuntimeError(f"Firefox {mode} ruby tracks overlap: {firefox_boxes}")
-        # Firefox exposes separate track rectangles in its screenshot fixture. Compare
-        # their physical ordering with the library; exact widths differ because engines
-        # size the annotation boxes differently.
+        firefox_tracks = {}
+        for side in ("over", "under"):
+            boxes = firefox_double_side_boxes(mode, side)
+            if len(boxes) != 1:
+                raise RuntimeError(f"Firefox {mode} expected one {side} track: {boxes}")
+            firefox_tracks[side] = boxes[0]
+        if (firefox_tracks["over"][0] < firefox_tracks["under"][0]
+                and firefox_tracks["over"][0] + firefox_tracks["over"][2] > firefox_tracks["under"][0]
+                or firefox_tracks["under"][0] < firefox_tracks["over"][0]
+                and firefox_tracks["under"][0] + firefox_tracks["under"][2] > firefox_tracks["over"][0]):
+            raise RuntimeError(f"Firefox {mode} ruby tracks overlap: {firefox_tracks}")
+        firefox_order = tuple(sorted((box[0], side) for side, box in firefox_tracks.items()))
+        # The screenshot fixture overlays each named Firefox track separately, preserving
+        # over/under identity while comparing physical order.
         impl_tracks = expected["lines"][0]["annotations"]
         impl_order = sorted((track["box"][0] / 64, side)
                             for track, side in zip(impl_tracks, ("over", "under")))
-        if tuple(side for _, side in impl_order) != firefox_order:
+        if tuple(side for _, side in impl_order) != tuple(side for _, side in firefox_order):
             raise RuntimeError(f"library {mode} track order {impl_order} differs from Firefox "
-                               f"physical order {firefox_order}: {firefox_boxes}")
+                               f"physical order {firefox_order}: {firefox_tracks}")
         for index, side in enumerate(("over", "under")):
             impl_box = expected["lines"][0]["annotations"][index]["box"]
             browser_box = browser[side]

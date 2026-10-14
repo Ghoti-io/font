@@ -23,6 +23,11 @@
 #       tools/oracle/containers/fonttools
 # `make oracle-build` does exactly that.
 
+# EVO has no container engine in its build container. Transfer prebuilt oracle
+# images with `tools/evo image load TAG`; do not build them inside an EVO job.
+# The host-after phase runs oracle scripts directly after the build container
+# exits, using those images on EVO's Docker daemon.
+
 # fontTools, and the real fonts. Both halves are deliberate: this is the
 # reference for every table's fields (ttx_diff) and for every codepoint's glyph
 # (cmap_diff), *and* the image the fixture generator will run in, so that a
@@ -57,8 +62,7 @@ freetype	localhost/ghoti-font-oracle-freetype:2.14.3	FreeType 2.14.3	EBLC/EBDT s
 # materialises the fontTools image's, as for FreeType.
 harfbuzz	localhost/ghoti-font-oracle-harfbuzz:10.2.0	HarfBuzz 10.2.0	What a string shapes to: GSUB and GPOS applied in the order every browser applies them, held to the glyph, the cluster, the advance and the offset - and, drawn by hb-view, the second rendering of a line of text
 
-# Not here yet, and each is a phase rather than an afternoon:
-#   pango      pango-view, for paragraph layout (phase 3b)
+# Still future oracle work, each a phase rather than an afternoon:
 #   xfonts     bdftopcf and psftools: a *second* reading of PCF, and the only
 #              reading of PSF and `.hex` there is. Pillow covers PCF's bitmaps
 #              and BDF outright, so what is still missing is PSF, `.hex`, and an

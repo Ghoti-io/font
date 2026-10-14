@@ -915,7 +915,24 @@ check-seeds: ## Fail if a fuzz seed is named so that .gitignore swallows it
 # The predicate is the spelling, because the spelling is what was wrong: a file
 # under a corpus directory whose name begins with `seed` is a seed somebody
 # meant to commit and named so that it could not be.
-	@bad=$$(find tests/fuzz/corpus -type f -name 'seed*' 2>/dev/null); 	if [ -n "$$bad" ]; then 		printf "check-seeds: these are seeds named so that .gitignore hides them;\n"; 		printf "  the committed spelling is <name>.seed:\n"; 		printf "    %s\n" $$bad; 		exit 1; 	fi; 	tracked=$$(git ls-files 'tests/fuzz/corpus/*.seed' | wc -l); 	if [ "$$tracked" -lt 20 ]; then 		printf "check-seeds: only %s seed(s) are tracked, which is fewer than any\n" "$$tracked"; 		printf "  harness here has ever had - the corpus has lost its seeds.\n"; 		exit 1; 	fi; 	printf "check-seeds: %s committed seed(s), none named out of reach\n" "$$tracked"
+	@bad=$$(find tests/fuzz/corpus -type f -name 'seed*' 2>/dev/null); \
+	if [ -n "$$bad" ]; then \
+		printf "check-seeds: these are seeds named so that .gitignore hides them;\n"; \
+		printf "  the committed spelling is <name>.seed:\n"; \
+		printf "    %s\n" $$bad; \
+		exit 1; \
+	fi; \
+	if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		printf "check-seeds: skipped tracked-count check (no Git work tree)\n"; \
+		exit 0; \
+	fi; \
+	tracked=$$(git ls-files 'tests/fuzz/corpus/*.seed' | wc -l); \
+	if [ "$$tracked" -lt 20 ]; then \
+		printf "check-seeds: only %s seed(s) are tracked, which is fewer than any\n" "$$tracked"; \
+		printf "  harness here has ever had - the corpus has lost its seeds.\n"; \
+		exit 1; \
+	fi; \
+	printf "check-seeds: %s committed seed(s), none named out of reach\n" "$$tracked"
 
 check-reader: ## Fail if anything under src/ reads font bytes around the reader
 # documentation/design.md section 6: every read of file data goes through

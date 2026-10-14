@@ -4,9 +4,12 @@
 # Built here, like the other images, so what is pinned is everything the build reads: the base
 # by digest (the same one the HarfBuzz and FreeType images use, so the three share its layers)
 # and Debian's chromium by full apt version. The run-time version check in oracle_env.py is
-# the real guarantee. The apt pin will eventually fail to resolve when the archive moves past
-# it; that is the intended failure: a newer Chromium is new answers, and a new answer that
-# disagrees is a finding to triage rather than a regression to fix.
+# the real guarantee. Debian no longer serves this exact package from its
+# current archive. Keep the exact pin: changing Chromium changes oracle answers.
+# Until a durable source is selected and verified, rebuilds may fail at apt-get;
+# use the already-built pinned image where available (or transfer it with
+# `tools/evo image load`). A Debian snapshot is a candidate, not a verified
+# reproducible build input.
 #
 # No fonts are installed (no Recommends), so a page can only draw with the font it names in an
 # @font-face from the mounted corpus, and a probe that forgets to name one fails loudly on a

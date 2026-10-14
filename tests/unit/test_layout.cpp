@@ -236,6 +236,11 @@ GFNT_Result flow_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6 height,
   return bands.result;
 }
 
+GFNT_Result negative_start_band(void *, GFNT_F26Dot6, GFNT_F26Dot6, GFNT_Band * out) {
+  *out = {-128, 800, 0};
+  return GFNT_OK;
+}
+
 TEST(Layout, ALineOfLettersIsPlacedFromTheLeftOnTheBaseline) {
   Font font(latin());
   Para para("ABC", {font.face});
@@ -320,6 +325,8 @@ TEST(LayoutAnnotation, RubyWidensItsBaseAndProducesASeparatePaintTrack) {
   GFNT_Hit hit{};
   ASSERT_EQ(gfnt_layout_hit_test(para.p, &para.layout,
       output.box.x + output.box.width / 2, output.box.y + output.box.height / 2, &hit), GFNT_OK);
+  EXPECT_GE(hit.offset, output.base_start);
+  EXPECT_LE(hit.offset, output.base_end);
   EXPECT_EQ(hit.offset, 2u);
   ASSERT_EQ(gfnt_layout_hit_test(para.p, &para.layout,
       output.children[0].box.x + output.children[0].box.width / 2,
@@ -406,7 +413,7 @@ TEST(LayoutAnnotation, MergeConcatenatesAdjacentCompatibleRubyRecords) {
 }
 
 TEST(LayoutAnnotation, EmphasisAddsOneMarkPerEligibleCluster) {
-  Font font(latin());
+  Font font({'A', 'B', 'C', 'D', 'E', 'F', ' ', 0x2022}, true);
   const GFNT_Face * faces[] = {font.face};
   GFNT_Annotation emphasis{};
   emphasis.base_start = 0;
@@ -415,16 +422,19 @@ TEST(LayoutAnnotation, EmphasisAddsOneMarkPerEligibleCluster) {
   emphasis.position = GFNT_ANNOTATION_OVER;
   emphasis.style.faces = faces;
   emphasis.style.face_count = 1;
-  emphasis.style.size = kSize;
+  emphasis.style.size = 2 * kSize;
   emphasis.mark_kind = GFNT_EMPHASIS_MARK_DOT;
   emphasis.filled = true;
   GFNT_ParagraphOptions options{};
   options.annotations = &emphasis;
   options.annotation_count = 1;
   Para para("A B C", {font.face}, options);
+  Para plain("A B C", {font.face});
 
   ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(plain.created, GFNT_OK);
   ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(plain.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
   const GFNT_Line & line = para.layout.lines[0];
   ASSERT_EQ(line.annotation_count, 3u);
   EXPECT_GT(line.ascent, 512);
@@ -432,6 +442,12 @@ TEST(LayoutAnnotation, EmphasisAddsOneMarkPerEligibleCluster) {
   EXPECT_EQ(line.annotations[1].base_start, 2u);
   EXPECT_EQ(line.annotations[2].base_start, 4u);
   EXPECT_EQ(line.annotations[0].kind, GFNT_ANNOTATION_EMPHASIS);
+  EXPECT_EQ(para.layout.ink.x, line.ink.x);
+  EXPECT_EQ(para.layout.ink.y, line.ink.y);
+  EXPECT_EQ(para.layout.ink.width, line.ink.width);
+  EXPECT_EQ(para.layout.ink.height, line.ink.height);
+  EXPECT_GT(para.layout.ink.height, plain.layout.ink.height)
+      << "larger emphasis glyphs must contribute to aggregate ink bounds";
 }
 
 TEST(LayoutAnnotation, DefaultEmphasisSelectsMarkPerVerticalScriptCluster) {
@@ -464,7 +480,7 @@ TEST(LayoutAnnotation, DefaultEmphasisSelectsMarkPerVerticalScriptCluster) {
       line.annotations[1].runs[0].glyphs[0].glyph);
 }
 
-TEST(LayoutAnnotation, RubyAutoOverhangDoesNotBorrowFromTheFollowingLine) {
+TEST(LayoutAnnotation, RubyAutoOverhangStaysWithinTheRenderedLine) {
   Font font(latin());
   const GFNT_Face * faces[] = {font.face};
   GFNT_Annotation ruby{};
@@ -492,6 +508,161 @@ TEST(LayoutAnnotation, RubyAutoOverhangDoesNotBorrowFromTheFollowingLine) {
   const GFNT_Rect line_box = para.layout.lines[0].box;
   EXPECT_GE(ruby_box.x, line_box.x);
   EXPECT_LE(ruby_box.x + ruby_box.width, line_box.x + line_box.width);
+}
+
+TEST(LayoutAnnotation, RubyAutoOverhangReclaimsAdvanceAndPullsFollowingTextUp) {
+  Font font({0x4E00, 0x4E8C});
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = 3;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "二二";
+  ruby.text_length = 6;
+  ruby.align = GFNT_ANNOTATION_ALIGN_CENTER;
+  ruby.overhang = GFNT_RUBY_OVERHANG_AUTO;
+  GFNT_ParagraphOptions options{};
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+  Para para("一二", {font.face}, options);
+
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(700), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(line.end, 6u);
+  EXPECT_EQ(line.extent, 2 * kLetter);
+  ASSERT_EQ(line.run_count, 1u);
+  ASSERT_EQ(line.runs[0].glyph_count, 2u);
+  EXPECT_EQ(line.runs[0].glyphs[0].pen_x, 0);
+  EXPECT_EQ(line.runs[0].glyphs[1].pen_x, kLetter);
+  ASSERT_EQ(line.annotation_count, 1u);
+  EXPECT_EQ(line.annotations[0].box.width, 2 * kLetter);
+}
+
+TEST(LayoutAnnotation, RubyAutoOverhangReclaimsAdvanceFromVisualLeftInRtl) {
+  Font font({0x05D0, 0x05D1});
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = 2;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "אב";
+  ruby.text_length = 4;
+  ruby.align = GFNT_ANNOTATION_ALIGN_CENTER;
+  ruby.overhang = GFNT_RUBY_OVERHANG_AUTO;
+  GFNT_ParagraphOptions options{};
+  options.direction = GFNT_BIDI_RTL;
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+  Para para("אב", {font.face}, options);
+
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(700), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(line.end, 4u);
+  EXPECT_EQ(line.extent, 2 * kLetter);
+  ASSERT_EQ(line.run_count, 1u);
+  ASSERT_EQ(line.runs[0].glyph_count, 2u);
+  const GFNT_PlacedGlyph * base_glyph = nullptr;
+  const GFNT_PlacedGlyph * following_glyph = nullptr;
+  for (size_t i = 0; i < line.runs[0].glyph_count; i++) {
+    const GFNT_PlacedGlyph & glyph = line.runs[0].glyphs[i];
+    if (glyph.cluster == 0) base_glyph = &glyph;
+    else if (glyph.cluster == 2) following_glyph = &glyph;
+  }
+  ASSERT_NE(base_glyph, nullptr);
+  ASSERT_NE(following_glyph, nullptr);
+  EXPECT_EQ(following_glyph->pen_x + following_glyph->advance, base_glyph->pen_x);
+  ASSERT_EQ(line.annotation_count, 1u);
+  EXPECT_EQ(line.annotations[0].box.width, 2 * kLetter);
+}
+
+TEST(LayoutAnnotation, RubyAutoOverhangUsesAdjacentMixedBidiText) {
+  Font font(latin_and_hebrew());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = 4;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "אבאב";
+  ruby.text_length = 8;
+  ruby.align = GFNT_ANNOTATION_ALIGN_CENTER;
+  ruby.overhang = GFNT_RUBY_OVERHANG_AUTO;
+  GFNT_ParagraphOptions options{};
+  options.direction = GFNT_BIDI_RTL;
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+  // The LTR A is logically after the Hebrew ruby base and visually adjacent to its left edge.
+  Para para("אבAג", {font.face}, options);
+
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  const GFNT_Line & line = para.layout.lines[0];
+  ASSERT_GE(line.run_count, 2u);
+  ASSERT_EQ(line.annotation_count, 1u);
+  EXPECT_EQ(line.extent, 4 * kLetter);
+
+  const GFNT_PlacedGlyph * a_glyph = nullptr;
+  const GFNT_PlacedGlyph * base_edge_glyph = nullptr;
+  for (size_t ri = 0; ri < line.run_count; ri++) {
+    for (size_t gi = 0; gi < line.runs[ri].glyph_count; gi++) {
+      const GFNT_PlacedGlyph & glyph = line.runs[ri].glyphs[gi];
+      if (glyph.cluster == 4) a_glyph = &glyph;
+      if (glyph.cluster == 2) base_edge_glyph = &glyph;
+    }
+  }
+  ASSERT_NE(a_glyph, nullptr);
+  ASSERT_NE(base_edge_glyph, nullptr);
+  EXPECT_EQ(a_glyph->pen_x + a_glyph->advance, base_edge_glyph->pen_x)
+      << "logical successor must remain the visual neighbor at this bidi boundary";
+  EXPECT_EQ(line.annotations[0].box.x, a_glyph->pen_x + a_glyph->advance)
+      << "the over-wide ruby stays attached to its adjacent visual neighbor";
+  EXPECT_EQ(line.annotations[0].box.width, line.box.width);
+  EXPECT_GT(line.annotations[0].box.x + line.annotations[0].box.width,
+      line.box.x + line.box.width);
+}
+
+TEST(LayoutAnnotation, RubyAutoOverhangReservesTabAdvanceWithoutRejectingLayout) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 1;
+  ruby.base_end = 2;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "AB";
+  ruby.text_length = 2;
+  ruby.align = GFNT_ANNOTATION_ALIGN_CENTER;
+  ruby.overhang = GFNT_RUBY_OVERHANG_AUTO;
+  GFNT_ParagraphOptions options{};
+  options.tab_width = kLetter;
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+  Para para("A\tB", {font.face}, options);
+
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(1600), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].end, 3u);
+  EXPECT_EQ(para.layout.lines[0].extent, 3 * kLetter);
 }
 
 TEST(LayoutAnnotation, RejectsRangesInsideUtf8AndOverlappingSiblings) {
@@ -539,15 +710,153 @@ TEST(LayoutAnnotation, RejectsRangesInsideUtf8AndOverlappingSiblings) {
 
   GFNT_Annotation child = ruby;
   child.base_start = 0;
-  child.base_end = 1;
-  child.text = "B";
+  child.base_end = 3;
+  child.text = "A";
+  child.text_length = 1;
+  GFNT_Annotation grandchild = child;
+  grandchild.base_start = 0;
+  grandchild.base_end = 1;
+  grandchild.text = "B";
+  grandchild.position = GFNT_ANNOTATION_UNDER;
+  child.children = &grandchild;
+  child.child_count = 1;
   siblings[0].merge = false;
   siblings[0].position = GFNT_ANNOTATION_OVER;
   siblings[0].group_break = false;
+  siblings[0].base_start = 0;
+  siblings[0].base_end = 3;
+  siblings[0].text = "ABC";
+  siblings[0].text_length = 3;
   siblings[0].children = &child;
   siblings[0].child_count = 1;
-  Para breakable_nested("ABC", {font.face}, options);
-  EXPECT_EQ(breakable_nested.created, GFNT_ERR_INVALID);
+  Para breakable_nested("A B", {font.face}, options);
+  ASSERT_EQ(breakable_nested.created, GFNT_OK);
+  grandchild.text = nullptr;
+  child.children = nullptr;
+  child.text = nullptr;
+  siblings[0].children = nullptr;
+  siblings[0].style.faces = nullptr;
+  ASSERT_EQ(breakable_nested.lay(kLetter), GFNT_OK);
+  ASSERT_EQ(breakable_nested.layout.line_count, 2u);
+  ASSERT_EQ(breakable_nested.layout.lines[0].annotation_count, 1u);
+  EXPECT_EQ(breakable_nested.layout.lines[0].annotations[0].child_count, 0u);
+  ASSERT_EQ(breakable_nested.layout.lines[1].annotation_count, 1u);
+  ASSERT_EQ(breakable_nested.layout.lines[1].annotations[0].child_count, 1u);
+  EXPECT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].base_start, 0u);
+  EXPECT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].base_end, 1u);
+  ASSERT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].run_count, 1u);
+  ASSERT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].runs[0].glyph_count, 1u);
+  EXPECT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].runs[0].glyphs[0].glyph, 1u);
+  ASSERT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].child_count, 1u);
+  EXPECT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].children[0].base_start, 0u);
+  EXPECT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].children[0].base_end, 1u);
+  ASSERT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].children[0].run_count, 1u);
+  ASSERT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].children[0].runs[0].glyph_count, 1u);
+  EXPECT_EQ(breakable_nested.layout.lines[1].annotations[0].children[0].children[0].runs[0].glyphs[0].glyph, 2u);
+}
+
+TEST(LayoutAnnotation, DoubleSidedRubyAndVerticalTracksUseOppositeSides) {
+  Font font({0x65e5, 0x672c, 0x306b, 0x307b, 0x3093, 0x006e, 0x0069, 0x0068, 0x006f});
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation tracks[3]{};
+  for (size_t i = 0; i < 3; i++) {
+    tracks[i].base_start = 0;
+    tracks[i].base_end = 6;
+    tracks[i].kind = GFNT_ANNOTATION_RUBY;
+    tracks[i].position = i == 1 ? GFNT_ANNOTATION_UNDER : GFNT_ANNOTATION_OVER;
+    tracks[i].style.faces = faces;
+    tracks[i].style.face_count = 1;
+    tracks[i].style.size = kSize;
+    tracks[i].text = i == 1 ? "nihon" : i == 2 ? "に" : "にほん";
+    tracks[i].text_length = i == 1 ? 5 : i == 2 ? 3 : 9;
+    tracks[i].align = GFNT_ANNOTATION_ALIGN_CENTER;
+    tracks[i].group_break = true;
+  }
+
+  GFNT_ParagraphOptions options{};
+  options.annotations = tracks;
+  options.annotation_count = 3;
+  Para horizontal("日本", {font.face}, options);
+  ASSERT_EQ(horizontal.created, GFNT_OK);
+  ASSERT_EQ(horizontal.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(horizontal.layout.lines[0].annotation_count, 3u);
+  GFNT_Rect base{};
+  size_t rect_count = 0;
+  ASSERT_EQ(gfnt_layout_range_rects(horizontal.p, &horizontal.layout, 0, 6,
+      &base, 1, &rect_count), GFNT_OK);
+  ASSERT_EQ(rect_count, 1u);
+  EXPECT_LE(horizontal.layout.lines[0].annotations[0].box.y
+      + horizontal.layout.lines[0].annotations[0].box.height, base.y);
+  EXPECT_GE(horizontal.layout.lines[0].annotations[1].box.y, base.y + base.height);
+  EXPECT_LE(horizontal.layout.lines[0].annotations[2].box.y
+      + horizontal.layout.lines[0].annotations[2].box.height,
+      horizontal.layout.lines[0].annotations[0].box.y);
+
+  for (GFNT_WritingMode mode : {GFNT_WRITING_VERTICAL_RL, GFNT_WRITING_VERTICAL_LR}) {
+    options.writing_mode = mode;
+    Para vertical("日本", {font.face}, options);
+    ASSERT_EQ(vertical.created, GFNT_OK);
+    ASSERT_EQ(vertical.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+    ASSERT_EQ(vertical.layout.lines[0].annotation_count, 3u);
+    rect_count = 0;
+    ASSERT_EQ(gfnt_layout_range_rects(vertical.p, &vertical.layout, 0, 6,
+        &base, 1, &rect_count), GFNT_OK);
+    ASSERT_EQ(rect_count, 1u);
+    EXPECT_GE(vertical.layout.lines[0].annotations[2].box.x,
+        base.x + base.width);
+    EXPECT_LE(vertical.layout.lines[0].annotations[1].box.x
+        + vertical.layout.lines[0].annotations[1].box.width, base.x);
+    EXPECT_LE(vertical.layout.lines[0].annotations[0].box.x
+        + vertical.layout.lines[0].annotations[0].box.width,
+        vertical.layout.lines[0].annotations[2].box.x);
+  }
+}
+
+TEST(LayoutAnnotation, WrappedSameSideRubyStacksOnlyEmittedFragments) {
+  Font font({0x65e5, 0x672c, 0x8a9e, 0x306b, 0x307b, 0x3093});
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation tracks[2]{};
+  for (auto & track : tracks) {
+    track.base_start = 0;
+    track.base_end = 9;
+    track.kind = GFNT_ANNOTATION_RUBY;
+    track.position = GFNT_ANNOTATION_OVER;
+    track.style.faces = faces;
+    track.style.face_count = 1;
+    track.style.size = kSize;
+    track.align = GFNT_ANNOTATION_ALIGN_CENTER;
+    track.group_break = false;
+  }
+  tracks[0].text = "にほん";
+  tracks[0].text_length = 9;
+  tracks[1].text = "日本";
+  tracks[1].text_length = 6;
+  GFNT_ParagraphOptions options{};
+  options.annotations = tracks;
+  options.annotation_count = 2;
+  for (GFNT_WritingMode mode : {GFNT_WRITING_HORIZONTAL_TB,
+          GFNT_WRITING_VERTICAL_RL, GFNT_WRITING_VERTICAL_LR}) {
+    options.writing_mode = mode;
+    Para para("日本語", {font.face}, options);
+    ASSERT_EQ(para.created, GFNT_OK);
+    ASSERT_EQ(para.lay(kLetter), GFNT_OK);
+    ASSERT_EQ(para.layout.line_count, 3u);
+    ASSERT_EQ(para.layout.lines[0].annotation_count, 1u);
+    ASSERT_EQ(para.layout.lines[1].annotation_count, 2u);
+    ASSERT_EQ(para.layout.lines[2].annotation_count, 2u);
+    for (size_t li = 1; li < 3; li++) {
+      const GFNT_Rect first = para.layout.lines[li].annotations[0].box;
+      const GFNT_Rect second = para.layout.lines[li].annotations[1].box;
+      if (mode == GFNT_WRITING_HORIZONTAL_TB) {
+        EXPECT_TRUE(first.y + first.height <= second.y
+            || second.y + second.height <= first.y);
+      }
+      else {
+        EXPECT_TRUE(first.x + first.width <= second.x
+            || second.x + second.width <= first.x);
+      }
+    }
+  }
 }
 
 TEST(LayoutFlow, FullWidthBandMatchesTheExistingLayout) {
@@ -603,6 +912,33 @@ TEST(LayoutFlow, BandOffsetMovesLineBoxAndGlyphs) {
   size_t rect_count = 0;
   EXPECT_EQ(gfnt_layout_range_rects(para.p, &para.layout, 0, 2, nullptr, 0, &rect_count), GFNT_OK);
   EXPECT_GT(rect_count, 0u);
+}
+
+TEST(LayoutFlow, NegativeBandStartFlowsThroughPlacementAndInteractionGeometry) {
+  Font font(latin());
+  Para para("AB", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_LineConstraint constraint{nullptr, negative_start_band};
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(line.box.x, -128);
+  ASSERT_GT(line.run_count, 0u);
+  ASSERT_GT(line.runs[0].glyph_count, 0u);
+  EXPECT_EQ(line.runs[0].glyphs[0].pen_x, -128);
+  GFNT_Hit hit{};
+  ASSERT_EQ(gfnt_layout_hit_test(para.p, &para.layout, -100, line.baseline, &hit), GFNT_OK);
+  EXPECT_EQ(hit.offset, 0u);
+  GFNT_Caret caret{};
+  ASSERT_EQ(gfnt_layout_caret(para.p, &para.layout, 0, GFNT_AFFINITY_DOWNSTREAM, &caret),
+      GFNT_OK);
+  EXPECT_EQ(caret.x, -128);
+  GFNT_Rect rect{};
+  size_t rect_count = 0;
+  ASSERT_EQ(gfnt_layout_range_rects(para.p, &para.layout, 0, 1, &rect, 1, &rect_count),
+      GFNT_OK);
+  ASSERT_EQ(rect_count, 1u);
+  EXPECT_EQ(rect.x, -128);
 }
 
 TEST(LayoutFlow, RebreaksWhenMeasuredHeightChangesTheBand) {
@@ -780,6 +1116,436 @@ TEST(LayoutFlow, BuiltInExclusionsRechecksAtNearestBlockerBoundary) {
   ASSERT_EQ(gfnt_exclusions_band(&exclusions, band.next_top, 10, &band), GFNT_OK);
   EXPECT_EQ(band.start, 50);
   EXPECT_EQ(band.next_top, 40);
+}
+
+TEST(LayoutFlow, ParagraphClearsSuccessiveTooNarrowExclusionBands) {
+  GFNT_Exclusion items[2]{};
+  items[0].shape = GFNT_EXCLUSION_RECTANGLE;
+  items[0].side = GFNT_EXCLUSION_TEXT_RIGHT;
+  items[0].geometry.rectangle = {0, 0, 750, 800};
+  items[1].shape = GFNT_EXCLUSION_RECTANGLE;
+  items[1].side = GFNT_EXCLUSION_TEXT_RIGHT;
+  items[1].geometry.rectangle = {0, 800, 750, 800};
+  GFNT_Exclusions exclusions{items, 2, 0, 1000};
+  GFNT_LineConstraint constraint{&exclusions, gfnt_exclusions_band};
+  Font font(latin());
+  Para para("AB", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].box.y, 1600);
+  EXPECT_EQ(para.layout.lines[0].start, 0u);
+  EXPECT_EQ(para.layout.lines[0].end, 2u);
+}
+
+TEST(LayoutColumns, BalanceSplitsWholeLinesAcrossEqualColumns) {
+  Font font(latin());
+  Para para("A\nB\nC\nD", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 1280;
+  options.count = 2;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  EXPECT_TRUE(columns.complete);
+  EXPECT_EQ(columns.next_byte, 7u);
+  EXPECT_EQ(columns.column_count, 2u);
+  ASSERT_EQ(columns.layout.line_count, 4u);
+  ASSERT_NE(columns.column_line_starts, nullptr);
+  EXPECT_EQ(columns.column_line_starts[0], 0u);
+  EXPECT_EQ(columns.column_line_starts[1], 2u);
+  EXPECT_EQ(columns.column_line_starts[2], 4u);
+  EXPECT_EQ(columns.layout.lines[0].box.x, 0);
+  EXPECT_EQ(columns.layout.lines[0].box.y, 0);
+  EXPECT_EQ(columns.layout.lines[1].box.y, 640);
+  EXPECT_EQ(columns.layout.lines[2].box.x, 640);
+  EXPECT_EQ(columns.layout.lines[2].box.y, 0);
+  EXPECT_EQ(columns.layout.width, 1280);
+  EXPECT_EQ(columns.layout.height, 1280);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, BalanceMinimizesUnequalLineBoxHeights) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan spans[4]{};
+  const size_t lengths[] = {2, 2, 2, 1};
+  const GFNT_F26Dot6 heights[] = {10 * 64, 30 * 64, 10 * 64, 30 * 64};
+  for (size_t i = 0; i < 4; i++) {
+    spans[i].length = lengths[i];
+    spans[i].style.faces = faces;
+    spans[i].style.face_count = 1;
+    spans[i].style.size = kSize;
+    spans[i].style.line_height.kind = GFNT_LINE_HEIGHT_LENGTH;
+    spans[i].style.line_height.value = heights[i];
+  }
+  Para para("A\nB\nC\nD", {spans[0], spans[1], spans[2], spans[3]});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 100 * 64;
+  options.count = 2;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  ASSERT_TRUE(columns.complete);
+  ASSERT_EQ(columns.layout.line_count, 4u);
+  EXPECT_EQ(columns.column_line_starts[1], 2u);
+  EXPECT_EQ(columns.column_line_starts[2], 4u);
+  EXPECT_EQ(columns.layout.lines[0].box.height, 10 * 64);
+  EXPECT_EQ(columns.layout.lines[1].box.height, 30 * 64);
+  EXPECT_EQ(columns.layout.lines[2].box.height, 10 * 64);
+  EXPECT_EQ(columns.layout.lines[3].box.height, 30 * 64);
+  gfnt_column_layout_free(&columns);
+
+  const GFNT_F26Dot6 minimax_heights[] = {40 * 64, 10 * 64, 10 * 64, 10 * 64};
+  for (size_t i = 0; i < 4; i++) spans[i].style.line_height.value = minimax_heights[i];
+  Para minimax("A\nB\nC\nD", {spans[0], spans[1], spans[2], spans[3]});
+  ASSERT_EQ(minimax.created, GFNT_OK);
+  options.orphans = 1;
+  options.widows = 1;
+  options.block_extent = 100 * 64;
+  ASSERT_EQ(gfnt_paragraph_layout_columns(minimax.p, &options, &columns, nullptr), GFNT_OK);
+  ASSERT_TRUE(columns.complete);
+  ASSERT_EQ(columns.column_line_starts[1], 1u);
+  ASSERT_EQ(columns.column_line_starts[2], 4u);
+  EXPECT_EQ(columns.layout.lines[0].box.height, 40 * 64);
+  EXPECT_EQ(columns.layout.lines[1].box.height + columns.layout.lines[2].box.height
+      + columns.layout.lines[3].box.height, 30 * 64);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, HorizontalRtlProgressesFromTheRightmostColumn) {
+  Font font(latin());
+  GFNT_ParagraphOptions paragraph_options{};
+  paragraph_options.direction = GFNT_BIDI_RTL;
+  Para para("A\nB\nC\nD", {font.face}, paragraph_options);
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 1280;
+  options.inline_gap = 64;
+  options.count = 2;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  ASSERT_TRUE(columns.complete);
+  ASSERT_EQ(columns.layout.line_count, 4u);
+  EXPECT_EQ(columns.layout.lines[0].box.x, 704);
+  EXPECT_EQ(columns.layout.lines[1].box.x, 704);
+  EXPECT_EQ(columns.layout.lines[2].box.x, 0);
+  EXPECT_EQ(columns.layout.lines[3].box.x, 0);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, BalanceDoesNotTreatOversizedLineProgressAsAValidSmallerExtent) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan span{};
+  span.length = 3;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = 2 * kSize;
+  Para para("A\nB", {span});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 640;
+  options.count = 2;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  ASSERT_TRUE(columns.complete);
+  ASSERT_EQ(columns.layout.line_count, 2u);
+  EXPECT_GT(columns.layout.lines[0].box.height, options.block_extent);
+  EXPECT_GT(columns.layout.lines[1].box.height, options.block_extent);
+  EXPECT_EQ(columns.column_line_starts[1], 1u);
+  EXPECT_EQ(columns.column_line_starts[2], 2u);
+  gfnt_column_layout_free(&columns);
+
+  /* Balance may choose a smaller extent only when every line box fits that
+   * extent. Overflow=error continues to judge against the configured extent. */
+  options.overflow = GFNT_COLUMN_OVERFLOW_ERROR;
+  EXPECT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_ERR_LIMIT);
+  EXPECT_EQ(columns.layout.line_count, 0u);
+}
+
+TEST(LayoutColumns, BalanceKeepsConfiguredExtentWhenContentNeedsContinuation) {
+  Font font(latin());
+  Para para("A\nB\nC\nD\nE", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 640;
+  options.count = 2;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  EXPECT_FALSE(columns.complete);
+  ASSERT_EQ(columns.layout.line_count, 2u);
+  EXPECT_EQ(columns.column_line_starts[0], 0u);
+  EXPECT_EQ(columns.column_line_starts[1], 1u);
+  EXPECT_EQ(columns.column_line_starts[2], 2u);
+  EXPECT_EQ(columns.next_byte, 4u);
+  EXPECT_EQ(columns.layout.height, options.block_extent);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, NestedRubyCoordinatesShiftWithTheirSecondColumnBase) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 2;
+  ruby.base_end = 3;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "A";
+  ruby.text_length = 1;
+  ruby.group_break = true;
+  GFNT_Annotation nested{};
+  nested.base_start = 0;
+  nested.base_end = 1;
+  nested.kind = GFNT_ANNOTATION_RUBY;
+  nested.position = GFNT_ANNOTATION_UNDER;
+  nested.style = ruby.style;
+  nested.text = "B";
+  nested.text_length = 1;
+  ruby.children = &nested;
+  ruby.child_count = 1;
+  GFNT_ParagraphOptions paragraph_options{};
+  paragraph_options.annotations = &ruby;
+  paragraph_options.annotation_count = 1;
+  Para para("A\nB", {font.face}, paragraph_options);
+  ASSERT_EQ(para.created, GFNT_OK);
+
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 3 * 640;
+  options.count = 2;
+  options.fill = GFNT_COLUMN_FILL_AUTO;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  ASSERT_TRUE(columns.complete);
+  ASSERT_EQ(columns.column_line_starts[1], 1u);
+  const GFNT_Line & line = columns.layout.lines[1];
+  ASSERT_EQ(line.annotation_count, 1u);
+  const GFNT_LineAnnotation & top = line.annotations[0];
+  ASSERT_EQ(top.child_count, 1u);
+  ASSERT_EQ(top.run_count, 1u);
+  ASSERT_EQ(top.runs[0].glyph_count, 1u);
+  const GFNT_LineAnnotation & child = top.children[0];
+  ASSERT_EQ(child.run_count, 1u);
+  ASSERT_EQ(child.runs[0].glyph_count, 1u);
+  EXPECT_EQ(top.box.x, options.inline_size);
+  EXPECT_EQ(top.runs[0].pos, options.inline_size);
+  EXPECT_EQ(top.runs[0].glyphs[0].x, options.inline_size);
+  EXPECT_EQ(child.box.x, options.inline_size);
+  EXPECT_EQ(child.runs[0].pos, options.inline_size);
+  EXPECT_EQ(child.runs[0].glyphs[0].x, options.inline_size);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, AutoReportsTheFirstByteThatDidNotFit) {
+  Font font(latin());
+  Para para("A\nB\nC\nD", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 640;
+  options.count = 2;
+  options.fill = GFNT_COLUMN_FILL_AUTO;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  EXPECT_FALSE(columns.complete);
+  EXPECT_EQ(columns.next_byte, 4u);
+  ASSERT_EQ(columns.layout.line_count, 2u);
+  EXPECT_EQ(columns.column_line_starts[1], 1u);
+  EXPECT_EQ(columns.column_line_starts[2], 2u);
+  EXPECT_EQ(columns.layout.lines[1].box.x, 640);
+  EXPECT_EQ(columns.layout.lines[1].box.y, 0);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, AutoHonorsWidowsWhenAWholeLineCanMove) {
+  Font font(latin());
+  Para para("A\nB\nC\nD", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 3 * 640;
+  options.count = 2;
+  options.fill = GFNT_COLUMN_FILL_AUTO;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  ASSERT_TRUE(columns.complete);
+  EXPECT_EQ(columns.column_line_starts[1], 2u);
+  EXPECT_EQ(columns.column_line_starts[2], 4u);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, AutoHonorsConfiguredOrphansAndWidows) {
+  Font font(latin());
+  Para para("A\nB\nC\nD\nE", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 3 * 640;
+  options.count = 2;
+  options.fill = GFNT_COLUMN_FILL_AUTO;
+  options.orphans = 3;
+  options.widows = 2;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  ASSERT_TRUE(columns.complete);
+  EXPECT_EQ(columns.column_line_starts[1], 3u);
+  EXPECT_EQ(columns.column_line_starts[2], 5u);
+  gfnt_column_layout_free(&columns);
+
+  Para impossible("A\nB\nC\nD", {font.face});
+  ASSERT_EQ(impossible.created, GFNT_OK);
+  options.block_extent = 3 * 640;
+  GFNT_ColumnLayout conflict{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(impossible.p, &options, &conflict, nullptr), GFNT_OK);
+  ASSERT_TRUE(conflict.complete);
+  EXPECT_EQ(conflict.column_line_starts[1], 3u)
+      << "preserve the configured orphan count when four lines cannot satisfy 3/2";
+  EXPECT_EQ(conflict.column_line_starts[2], 4u);
+  gfnt_column_layout_free(&conflict);
+}
+
+TEST(LayoutColumns, OversizedFirstLineMakesProgressUnlessConfiguredToError) {
+  Font font(latin());
+  Para para("A", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 100;
+  options.count = 1;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  EXPECT_TRUE(columns.complete);
+  ASSERT_EQ(columns.layout.line_count, 1u);
+  EXPECT_GT(columns.layout.lines[0].box.height, options.block_extent);
+  gfnt_column_layout_free(&columns);
+  options.overflow = GFNT_COLUMN_OVERFLOW_ERROR;
+  EXPECT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_ERR_LIMIT);
+  EXPECT_EQ(columns.layout.line_count, 0u);
+}
+
+TEST(LayoutColumns, OverflowErrorIgnoresLinesThatWillNotBePlaced) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan spans[2]{};
+  spans[0].length = 2;
+  spans[0].style.faces = faces;
+  spans[0].style.face_count = 1;
+  spans[0].style.size = kSize;
+  spans[1].length = 1;
+  spans[1].style.faces = faces;
+  spans[1].style.face_count = 1;
+  spans[1].style.size = 30 * 64;
+  Para para("A\nB", {spans[0], spans[1]});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 640;
+  options.count = 1;
+  options.fill = GFNT_COLUMN_FILL_AUTO;
+  options.overflow = GFNT_COLUMN_OVERFLOW_ERROR;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  EXPECT_FALSE(columns.complete);
+  ASSERT_EQ(columns.layout.line_count, 1u);
+  EXPECT_EQ(columns.next_byte, 2u);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, MaxLinesIsAllowedUnlessItActuallyTruncates) {
+  Font font(latin());
+  GFNT_ParagraphOptions paragraph_options{};
+  paragraph_options.max_lines = 4;
+  Para fits("A", {font.face}, paragraph_options);
+  ASSERT_EQ(fits.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 640;
+  options.count = 1;
+  GFNT_ColumnLayout columns{};
+  EXPECT_EQ(gfnt_paragraph_layout_columns(fits.p, &options, &columns, nullptr), GFNT_OK);
+  gfnt_column_layout_free(&columns);
+
+  paragraph_options.max_lines = 1;
+  Para truncates("A\nB", {font.face}, paragraph_options);
+  ASSERT_EQ(truncates.created, GFNT_OK);
+  EXPECT_EQ(gfnt_paragraph_layout_columns(truncates.p, &options, &columns, nullptr),
+      GFNT_ERR_INVALID);
+}
+
+TEST(LayoutColumns, RejectsUnknownPoliciesWithoutWritingOutput) {
+  Font font(latin());
+  Para para("A", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 640;
+  options.count = 1;
+  options.fill = static_cast<GFNT_ColumnFill>(-1);
+  GFNT_ColumnLayout output{};
+  output.next_byte = 123;
+  EXPECT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &output, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(output.next_byte, 123u);
+  options.fill = GFNT_COLUMN_FILL_BALANCE;
+  options.overflow = static_cast<GFNT_ColumnOverflow>(-1);
+  EXPECT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &output, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(output.next_byte, 123u);
+}
+
+TEST(LayoutColumns, VerticalWritingKeepsInlineProgressionAcrossFragments) {
+  Font font({0x4E00, 0x4E8C, 0x4E09, 0x56DB});
+  GFNT_ParagraphOptions paragraph_options{};
+  paragraph_options.writing_mode = GFNT_WRITING_VERTICAL_RL;
+  Para para("一二三四", {font.face}, paragraph_options);
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 640;
+  options.block_extent = 640;
+  options.count = 4;
+  options.fill = GFNT_COLUMN_FILL_AUTO;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  EXPECT_TRUE(columns.complete);
+  ASSERT_EQ(columns.layout.line_count, 4u);
+  EXPECT_EQ(columns.column_line_starts[1], 1u);
+  EXPECT_EQ(columns.column_line_starts[4], 4u);
+  EXPECT_EQ(columns.layout.lines[1].box.y - columns.layout.lines[0].box.y, 640);
+  EXPECT_EQ(columns.layout.width, 640);
+  EXPECT_EQ(columns.layout.height, 640);
+  gfnt_column_layout_free(&columns);
+}
+
+TEST(LayoutColumns, VerticalRlRestartsBlockPositionsInEachInlineFragment) {
+  Font font({0x4E00, 0x4E8C, 0x4E09, 0x56DB});
+  GFNT_ParagraphOptions paragraph_options{};
+  paragraph_options.writing_mode = GFNT_WRITING_VERTICAL_RL;
+  Para para("一\n二\n三\n四", {font.face}, paragraph_options);
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_ColumnOptions options{};
+  options.inline_size = 40 * 64;
+  options.block_extent = 40 * 64;
+  options.count = 2;
+  options.fill = GFNT_COLUMN_FILL_BALANCE;
+  GFNT_ColumnLayout columns{};
+  ASSERT_EQ(gfnt_paragraph_layout_columns(para.p, &options, &columns, nullptr), GFNT_OK);
+  ASSERT_EQ(columns.layout.line_count, 4u);
+  ASSERT_EQ(columns.column_line_starts[1], 2u);
+  EXPECT_GT(columns.layout.lines[0].box.x, columns.layout.lines[1].box.x);
+  EXPECT_EQ(columns.layout.lines[0].box.y / 64, 0);
+  EXPECT_EQ(columns.layout.lines[1].box.y / 64, 0);
+  EXPECT_EQ(columns.layout.lines[2].box.x, columns.layout.lines[0].box.x);
+  EXPECT_EQ(columns.layout.lines[3].box.x, columns.layout.lines[1].box.x);
+  EXPECT_EQ(columns.layout.lines[2].box.y / 64, 40);
+  EXPECT_EQ(columns.layout.lines[3].box.y / 64, 40);
+  gfnt_column_layout_free(&columns);
 }
 
 TEST(LayoutFlow, BuiltInExclusionsClearAtTheirExactBottomEdge) {

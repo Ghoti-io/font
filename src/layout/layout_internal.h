@@ -61,7 +61,7 @@ typedef struct {
   size_t cp_start, cp_end;     // the code points it stands for
   size_t run;                  // index into the paragraph's runs
   size_t g_lo, g_hi;           // its glyphs in the paragraph's glyph array
-  GFNT_F26Dot6 width;
+  GFNT_F26Dot6 width, base_width, ruby_added;
   bool space;                  // hangs at the end of a line
   bool opportunity;            // a line may break after it
   bool hyphen;                 // ... and then a hyphen is added to the line
@@ -79,7 +79,7 @@ typedef struct {
   GFNT_Paragraph * alternate_shaped;
   size_t cp_start, cp_end;
   size_t unit_start, unit_end;
-  GFNT_F26Dot6 advance, ascent, descent;
+  GFNT_F26Dot6 advance, ascent, descent, break_extra;
   GFNT_F26Dot6 alternate_advance, alternate_ascent, alternate_descent;
 } PAnnotation;
 

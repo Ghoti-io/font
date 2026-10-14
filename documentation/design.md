@@ -1688,6 +1688,36 @@ intersection across the complete line height, and `next_top` moves an
 unbreakable line past the active exclusions. Polygon margins conservatively
 expand the clipped horizontal extent.
 
+When several active exclusions narrow a band, `next_top` is the nearest block
+edge at which the returned band can change; layout asks again there and can
+continue clearing until the line fits. Static consumers obtain the font
+library's math dependency through `Libs.private` in its pkg-config metadata.
+
+`gfnt_paragraph_layout_columns()` lays out one multicol row. It uses complete
+line boxes as break points, applies the CSS initial `orphans` and `widows`
+values of two, and defaults to balanced filling (`column-fill: balance`);
+`GFNT_COLUMN_FILL_AUTO` fills the supplied columns in order. A line taller
+than an empty column overflows by default to guarantee progress, as CSS
+Fragmentation requires when no lower break point can make progress. Callers
+may select `GFNT_COLUMN_OVERFLOW_ERROR` to reject an over-tall line only when
+that line would be placed. If a break cannot satisfy both configured orphan
+and widow counts, the layout preserves the orphan count and lets the widow
+count yield, matching Chromium's 3/1 split for four lines with `orphans: 3` and
+`widows: 2`. The result identifies each column's line range and
+the byte offset where any remaining text can resume. A `max_lines` paragraph
+is accepted unless layout actually truncates it; a truncated paragraph cannot
+provide an unambiguous continuation offset.
+In vertical writing, fragment columns progress down the inline axis. Each
+fragment restarts its block-axis line positions at the right edge for
+`vertical-rl` or at the left edge for `vertical-lr`. Horizontal RTL changes
+the direction in which columns advance across x; vertical writing keeps column
+advancement down y and uses the writing mode to place each fragment's lines.
+The L3b Chromium oracle checks forced line positions in both vertical modes,
+including the block-axis reset at each fragment boundary. Its balance cases
+include unequal 10px and 30px lines and a discriminating 40/10/10/10px case.
+The latter requires a 1/3 partition (40px and 30px column extents), distinguishing
+minimax balancing from a 2/2 split by line count.
+
 Justification (`GFNT_ALIGN_JUSTIFY`) widens the spaces of a line, sharing the
 slack out in whole 1/64 pixels; a line that ends a paragraph or a newline, a
 truncated one, one with no space but a hanging one, and every line of an
@@ -1704,11 +1734,12 @@ UTF-8 byte ranges for ruby text and emphasis marks. Ruby text is shaped once in
 its own style, can keep its base range indivisible with `group_break`, and is
 placed against the rendered line. Over/under tracks contribute to line metrics and
 emit `GFNT_LineAnnotation` runs and boxes in the paragraph coordinate frame.
-Nested descriptors are copied and emitted recursively; nested descriptors on
-breakable ruby are rejected because their child ranges cannot yet be mapped
-through a split. When a breakable ruby range crosses lines, the annotation text
-is split at UTF-8 codepoint boundaries in proportion to each line fragment's
-base codepoint count. A point hit on a
+Nested descriptors are copied and emitted recursively, including on breakable
+ruby. When a breakable ruby range crosses lines, annotation text is split at
+UTF-8 codepoint boundaries in proportion to each line fragment's base codepoint
+count; a fragment assigned zero reading codepoints has no ruby track. Nested
+ranges are clipped to the fragment and a nested ruby whose reading text maps to
+no codepoints on that fragment is also omitted. A point hit on a
 top-level track maps to an edge of its base range; range rectangles cover selected
 base text and exclude annotation text, matching DOM Range selection geometry.
 Preset emphasis marks
@@ -1718,9 +1749,17 @@ script and writing mode.
 request merging, have no children, and have identical style, position, alignment,
 overhang, and group-breaking descriptors. Inter-character positioning is supported only for
 vertical writing, on the right side of the base. AUTO overhang placement uses
-only adjacent plain units that remain on the rendered line and is clamped to
-the line box; the full annotation advance remains reserved during breaking, so
-it does not yet let a following unit move up from the next line.
+only adjacent plain units that remain on the rendered line. It is clamped to
+the line box when the track fits; an over-wide track stays attached to its
+visual neighbor and may overflow the line box, matching Chromium. When a plain
+following unit fits on that same line, its presence allows the corresponding
+reserved ruby advance to be reclaimed during breaking; otherwise the full
+annotation advance remains reserved. Tabs include ruby reservation in their
+position-dependent stop advance.
+In vertical writing, `over` ruby is on the right and `under` ruby is on the left
+in both `vertical-rl` and `vertical-lr`, following CSS Ruby. A base can carry
+several tracks on either side; tracks on each side stack outward in descriptor
+order.
 
 Letter-spacing (`GFNT_TextStyle.letter_spacing`) is added to the advance of the
 last glyph of every cluster, in reading order, before any line is broken, so it
@@ -1733,7 +1772,7 @@ once per character of an item that none of the span's faces maps (spaces and
 controls excepted) and a face it returns is appended to that item's list, so the
 run is flagged as a fallback and the item is split at face boundaries by the
 fallback shaping already there. The **ink box** (`GFNT_Line.ink`,
-`GFNT_Layout.ink`) is the union of the glyphs' exact outline bounds
+`GFNT_Layout.ink`) is the union of the main-text and annotation glyphs' exact outline bounds
 (`gfnt_outline_bounds`) at their placed positions, read once per glyph when the
 paragraph is made and never by rasterising; a glyph with no outline (a space, a
 bitmap strike) has none.
@@ -1830,11 +1869,26 @@ which the patch does not read either. `make check-oracle-kashida` holds all this
 screenshots of the patch's published page (23 words and phrases in Amiri, and the three
 `text-kashida-space` settings), which agree to within one tatweel at every stroke.
 
-Remaining L4 limits: merge applies only to consecutive compatible ruby siblings;
-breakable nested ruby is rejected; proportional annotation fragments are an
-approximation; line-specific AUTO overhang does not reclaim reserved advance;
-and the browser oracle does not yet compare all annotation geometry or emphasis
-ink between Chromium and Firefox.
+Nested ruby survives fragmentation with its containing ruby text. Ruby text is
+currently divided among line fragments by code-point proportions; CSS Ruby
+recommends proportional balancing but permits user-agent choice. The Chromium
+oracle compares nested track cross-axis placement and size; for the outer nested
+track it also compares inline center. The nested child inline geometry is not
+compared: Chromium lays it out inside an outer `rt` box expanded to the base width,
+while this API reports paragraph-frame coordinates for the shaped child track.
+For wrapped ruby it compares base-fragment inline start and advance, and reading
+fragment inline center plus cross-axis placement and size. Reading-fragment width
+is not compared because Chromium distributes the reading over the allocated base
+track while this API reports its shaped glyph advance. These comparisons use a
+1.5px tolerance. For AUTO overhang, the oracle compares the annotation box to
+1.5px and checks that both the library and Chromium pull the following text
+toward the ruby; CSS leaves the amount of overhang to the user agent, so the
+amount is not compared. Filled-circle emphasis is checked for mark count and
+center placement within 8px between outline geometry and Chromium's rendered
+pixels in horizontal writing, and within 12px in vertical writing. Double-sided ruby and vertical annotation sides are checked in
+Chromium and Firefox; Chromium supplies comparable track geometry, while the
+Firefox screenshot oracle checks that the tracks remain separate on the correct
+sides. Complex emphasis marks are not covered in both engines.
 
 ### 10.7 Deliberately not here
 

@@ -638,6 +638,41 @@ typedef struct GFNT_Layout {
   void * storage_;       ///< Internal: the runs and glyphs.
 } GFNT_Layout;
 
+/** @brief How a fixed set of columns is filled. */
+typedef enum GFNT_ColumnFill {
+  GFNT_COLUMN_FILL_BALANCE = 0, ///< Balance all columns as evenly as possible; CSS initial value.
+  GFNT_COLUMN_FILL_AUTO         ///< Fill each column sequentially to its block extent.
+} GFNT_ColumnFill;
+
+/** @brief Policy for a line taller than an otherwise empty column. */
+typedef enum GFNT_ColumnOverflow {
+  GFNT_COLUMN_OVERFLOW_PROGRESS = 0, ///< Place the line and overflow so content always advances.
+  GFNT_COLUMN_OVERFLOW_ERROR         ///< Return ::GFNT_ERR_LIMIT instead of overflowing the line.
+} GFNT_ColumnOverflow;
+
+/** @brief Constraints for laying a paragraph into a fixed set of equal columns. */
+typedef struct GFNT_ColumnOptions {
+  GFNT_F26Dot6 inline_size; ///< Width in horizontal writing; height in vertical writing.
+  GFNT_F26Dot6 inline_gap; ///< Gap between columns, zero when omitted.
+  GFNT_F26Dot6 block_extent; ///< Height in horizontal writing; width in vertical writing.
+  size_t count; ///< Number of columns.
+  GFNT_ColumnFill fill; ///< Zero selects balanced filling, the CSS initial value.
+  GFNT_ColumnOverflow overflow; ///< Zero guarantees progress through over-tall lines.
+  uint32_t orphans; ///< Minimum lines before a break; zero selects the CSS initial value, 2.
+  uint32_t widows; ///< Minimum lines after a break; zero selects the CSS initial value, 2.
+} GFNT_ColumnOptions;
+
+/** @brief A paragraph placed into columns. Free with ::gfnt_column_layout_free(). */
+typedef struct GFNT_ColumnLayout {
+  GFNT_Layout layout; ///< All placed lines in reading order, in physical column positions.
+  size_t column_count;
+  /** `column_count + 1` indexes into layout.lines; horizontal RTL starts at the rightmost column. */
+  const size_t * column_line_starts;
+  size_t next_byte; ///< Resume offset, or the paragraph length when complete.
+  bool complete; ///< True when all paragraph text fits in the requested columns.
+  void * storage_; ///< Internal: column_line_starts allocation.
+} GFNT_ColumnLayout;
+
 /**
  * @brief Itemise and shape a paragraph.
  *
@@ -679,6 +714,32 @@ GFNT_API void gfnt_paragraph_free(GFNT_Paragraph * paragraph);
  */
 GFNT_API GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * paragraph,
     GFNT_F26Dot6 width, GFNT_Layout * out, GFNT_Error * error);
+
+/**
+ * @brief Lay out a paragraph across a fixed set of equal columns.
+ *
+ * Lines are first broken at @p inline_size, then assigned to columns whose block extent is
+ * @p block_extent and separated by @p inline_gap (zero by default). In vertical writing, line
+ * boxes keep their block-axis progression and are aligned to the requested block extent.
+ * BALANCE (the zero/default
+ * value) minimizes the maximum column height when all text fits; AUTO fills columns sequentially.
+ * `orphans` and `widows` default to two. If a line is taller than an empty column and would be
+ * placed in the result, the default places it and overflows to guarantee progress; the ERROR
+ * policy returns ::GFNT_ERR_LIMIT. The output layout uses physical coordinates and reports each
+ * column's line range in `column_line_starts`; `next_byte` resumes incomplete output. A
+ * `max_lines` paragraph is accepted if it is not truncated; a truncated layout is rejected
+ * because it cannot provide a continuation offset.
+ * @param out Receives the result; written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID for invalid options or truncated input,
+ *   ::GFNT_ERR_LIMIT for an over-tall placed line under the ERROR policy, or
+ *   ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_paragraph_layout_columns(const GFNT_Paragraph * paragraph,
+    const GFNT_ColumnOptions * options, GFNT_ColumnLayout * out, GFNT_Error * error);
+
+/** @brief Release a column layout; a zeroed one, or one already freed, is harmless. */
+GFNT_API void gfnt_column_layout_free(GFNT_ColumnLayout * layout);
 
 /**
  * @brief Lay out a paragraph against a callback-provided band for each line.

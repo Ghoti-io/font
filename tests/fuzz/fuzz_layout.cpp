@@ -263,6 +263,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   span.style.face_count = 1;
   span.style.size = 20 * 64;
   GFNT_Annotation annotation{};
+  GFNT_Annotation nested{};
+  GFNT_Annotation nested_child{};
   if (!(a & 0x80) && !text.empty() && (data[3] & 0x01)) {
     annotation.base_start = 0;
     annotation.base_end = text.size();
@@ -272,6 +274,28 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     if (annotation.kind == GFNT_ANNOTATION_RUBY) {
       annotation.text = "A";
       annotation.text_length = 1;
+      if (data[3] & 0x10) {
+        annotation.text = "AB";
+        annotation.text_length = 2;
+        nested.base_end = 2;
+        nested.kind = GFNT_ANNOTATION_RUBY;
+        nested.position = GFNT_ANNOTATION_UNDER;
+        nested.style = span.style;
+        nested.text = "A";
+        nested.text_length = 1;
+        if (data[3] & 0x20) {
+          nested_child.base_end = 1;
+          nested_child.kind = GFNT_ANNOTATION_RUBY;
+          nested_child.position = GFNT_ANNOTATION_OVER;
+          nested_child.style = span.style;
+          nested_child.text = "B";
+          nested_child.text_length = 1;
+          nested.children = &nested_child;
+          nested.child_count = 1;
+        }
+        annotation.children = &nested;
+        annotation.child_count = 1;
+      }
     }
     annotation.group_break = (data[3] & 0x08) != 0;
     annotation.mark_kind = annotation.kind == GFNT_ANNOTATION_EMPHASIS
@@ -306,6 +330,49 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   check(flow.line_count >= 1 && flow.width >= 0 && flow.height >= 0);
   check(flow.line_count == flow_again.line_count && flow.width == flow_again.width
       && flow.height == flow_again.height);
+
+  GFNT_ColumnOptions column_options{};
+  column_options.inline_size = std::max<GFNT_F26Dot6>(64, flow_width);
+  column_options.inline_gap = static_cast<GFNT_F26Dot6>(data[3] & 0x1F) * 32;
+  column_options.block_extent = static_cast<GFNT_F26Dot6>(1 + ((data[3] >> 2) & 0x3F)) * 32;
+  column_options.count = 1 + ((data[3] >> 1) & 0x03);
+  column_options.fill = (data[3] & 0x40) ? GFNT_COLUMN_FILL_AUTO : GFNT_COLUMN_FILL_BALANCE;
+  column_options.overflow = (data[3] & 0x80)
+      ? GFNT_COLUMN_OVERFLOW_ERROR : GFNT_COLUMN_OVERFLOW_PROGRESS;
+  column_options.orphans = 1 + ((a >> 3) & 0x03);
+  column_options.widows = 1 + ((b >> 3) & 0x03);
+  GFNT_ColumnLayout columns{}, columns_again{};
+  const GFNT_Result column_result = gfnt_paragraph_layout_columns(p, &column_options,
+      &columns, nullptr);
+  if (column_result == GFNT_OK) {
+    check(columns.column_count <= column_options.count);
+    check(columns.column_line_starts != nullptr);
+    check(columns.column_line_starts[0] == 0);
+    check(columns.column_line_starts[columns.column_count] == columns.layout.line_count);
+    check(columns.next_byte <= text.size());
+    check(columns.complete ? columns.next_byte == text.size() : columns.next_byte <= text.size());
+    check(gfnt_paragraph_layout_columns(p, &column_options, &columns_again, nullptr) == GFNT_OK);
+    check(columns.column_count == columns_again.column_count
+        && columns.next_byte == columns_again.next_byte && columns.complete == columns_again.complete
+        && columns.layout.line_count == columns_again.layout.line_count);
+    for (size_t ci = 0; ci <= columns.column_count; ci++) {
+      check(columns.column_line_starts[ci] == columns_again.column_line_starts[ci]);
+    }
+    for (size_t li = 0; li < columns.layout.line_count; li++) {
+      const GFNT_Line & line = columns.layout.lines[li];
+      const GFNT_Line & repeated = columns_again.layout.lines[li];
+      check(line.start == repeated.start && line.end == repeated.end
+          && line.extent == repeated.extent && line.baseline == repeated.baseline
+          && line.box.x == repeated.box.x && line.box.y == repeated.box.y
+          && line.box.width == repeated.box.width && line.box.height == repeated.box.height);
+    }
+  }
+  else {
+    check(column_result == GFNT_ERR_LIMIT || column_result == GFNT_ERR_INVALID
+        || column_result == GFNT_ERR_OOM);
+  }
+  gfnt_column_layout_free(&columns_again);
+  gfnt_column_layout_free(&columns);
 
   size_t at = 0;
   for (size_t i = 0; i < l.line_count; ++i) {

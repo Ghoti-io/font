@@ -127,6 +127,10 @@ for _align_last in ("start", "end", "left", "right", "center", "justify"):
     CASES.append(("align-last-" + _align_last, "AB ab ca AB", "horizontal", "mixed", 200,
                   "start", "ltr", "auto",
                   {"alignLast": _align_last, "driver": ("--align-last", _align_last)}))
+for _wrap in ("anywhere", "break-word"):
+    CASES.append(("overflow-wrap-" + _wrap, "ABABABABABAB", "horizontal", "mixed", 140,
+                  "start", "ltr", "auto",
+                  {"overflowWrap": _wrap, "driver": ("--overflow-wrap", _wrap)}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
@@ -223,6 +227,7 @@ function measure(c) {
   d.style.textOrientation = c.orient;
   d.style.textAlign = c.align;
   if (c.alignLast) d.style.textAlignLast = c.alignLast;
+  if (c.overflowWrap) d.style.overflowWrap = c.overflowWrap;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
@@ -285,7 +290,17 @@ function measure(c) {
     i += ch.length;
   }
   const b = d.getBoundingClientRect();
-  const out = {name: c.name, box: [b.x, b.y, b.width, b.height], chars: chars};
+  let minContent = null;
+  if (c.overflowWrap) {
+    const intrinsic = d.cloneNode(true);
+    intrinsic.style.width = 'min-content';
+    intrinsic.style.whiteSpace = 'normal';
+    document.body.appendChild(intrinsic);
+    minContent = intrinsic.getBoundingClientRect().width;
+    intrinsic.remove();
+  }
+  const out = {name: c.name, box: [b.x, b.y, b.width, b.height], chars: chars,
+               minContent: minContent};
   d.remove();
   return out;
 }
@@ -307,7 +322,8 @@ def chrome_rects(cases):
                  secondSpan=(c[8].get("secondSpan") if len(c) > 8 else None),
                  flow=(c[8].get("flow") if len(c) > 8 else None),
                  wordSpacing=(c[8].get("wordSpacing") if len(c) > 8 else None),
-                 alignLast=(c[8].get("alignLast") if len(c) > 8 else None))
+                 alignLast=(c[8].get("alignLast") if len(c) > 8 else None),
+                 overflowWrap=(c[8].get("overflowWrap") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
@@ -349,6 +365,12 @@ def compare(case, theirs, mine, verbose):
     name, text = case[0], case[1]
     tolerance = TOLERANCE_JUSTIFIED if case[5] == "justify" else TOLERANCE
     problems = []
+    if len(case) > 8 and "overflowWrap" in case[8]:
+        css_min = theirs.get("minContent")
+        ours_min = mine["min"] / 64.0
+        if css_min is None or abs(css_min - ours_min) > TOLERANCE:
+            problems.append("min-content width: chromium %s, this %.2f"
+                            % (css_min, ours_min))
     chars = list(text)
     word_spacing_case = len(case) > 8 and "wordSpacing" in case[8]
     if word_spacing_case:

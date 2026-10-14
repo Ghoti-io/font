@@ -348,6 +348,13 @@ typedef enum GFNT_LineBreak {
   GFNT_LINE_BREAK_ANYWHERE    ///< Breaks between any two characters.
 } GFNT_LineBreak;
 
+/** @brief Emergency word wrapping, after CSS `overflow-wrap`. */
+typedef enum GFNT_OverflowWrap {
+  GFNT_OVERFLOW_WRAP_NORMAL = 0, ///< Only the ordinary line-break and hyphenation opportunities.
+  GFNT_OVERFLOW_WRAP_ANYWHERE,   ///< Emergency grapheme breaks reduce min-content width.
+  GFNT_OVERFLOW_WRAP_BREAK_WORD  ///< Emergency grapheme breaks do not reduce min-content width.
+} GFNT_OverflowWrap;
+
 /** @brief What hyphenation a paragraph does, after CSS `hyphens`. */
 typedef enum GFNT_Hyphens {
   /**
@@ -463,6 +470,7 @@ typedef struct GFNT_ParagraphOptions {
   const GFNT_Annotation * annotations; ///< Optional nested ruby and emphasis descriptors.
   size_t annotation_count;
   GFNT_AlignLast align_last; ///< CSS `text-align-last`; zero preserves the default `auto` behavior.
+  GFNT_OverflowWrap overflow_wrap; ///< CSS `overflow-wrap`; zero preserves `normal`.
 } GFNT_ParagraphOptions;
 
 /** @brief The one inline band available to a line at a given block position. */

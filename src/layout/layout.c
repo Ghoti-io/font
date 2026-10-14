@@ -1358,6 +1358,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   size_t * span_cp = NULL;      // span_count + 1 code point starts
   bool * edge = NULL;           // item boundaries
   bool * opp = NULL;
+  bool * emergency_opp = NULL;
   size_t * breaks = NULL;
   GUNI_ScriptItem * scripts = NULL;
   size_t n = 0;
@@ -1378,6 +1379,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   if ((unsigned)options->direction > GFNT_BIDI_AUTO
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
       || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
+      || (unsigned)options->overflow_wrap > GFNT_OVERFLOW_WRAP_BREAK_WORD
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
@@ -1532,7 +1534,11 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   ori = ALLOC(ori, n);
   edge = ALLOC(edge, n + 1);
   opp = ALLOC(opp, n + 1);
-  if (!levels || !ori || !edge || !opp) {
+  if (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL) {
+    emergency_opp = ALLOC(emergency_opp, n + 1);
+  }
+  if (!levels || !ori || !edge || !opp
+      || (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL && !emergency_opp)) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the paragraph");
     goto done;
@@ -1626,6 +1632,26 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         for (size_t i = 0; i < break_count; i++) {
           if (breaks[i] <= n) {
             opp[breaks[i]] = true;
+          }
+        }
+      }
+    }
+    if (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL) {
+      bo.kind = GUNI_BREAK_GRAPHEME;
+      (void)guni_break_all_codepoints(&bo, cps, n, NULL, 0, &break_count);
+      allocator->free_fn(allocator->ctx, breaks);
+      breaks = NULL;
+      if (break_count) {
+        breaks = ALLOC(breaks, break_count);
+        if (!breaks) {
+          r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+              "no memory for the paragraph");
+          goto done;
+        }
+        if (guni_break_all_codepoints(&bo, cps, n, breaks, break_count,
+                &break_count) == GUNI_OK) {
+          for (size_t i = 0; i < break_count; i++) {
+            if (breaks[i] > 0 && breaks[i] < n) emergency_opp[breaks[i]] = true;
           }
         }
       }
@@ -1901,6 +1927,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       uint32_t last = cps[u->cp_end - 1];
 
       u->opportunity = opp[u->cp_end];
+      u->emergency = emergency_opp && emergency_opp[u->cp_end];
       u->hard = is_newline(last)
           && !(last == 0x0D && u->cp_end < n && cps[u->cp_end] == 0x0A);
       if (u->object) {
@@ -1962,6 +1989,7 @@ done:
   allocator->free_fn(allocator->ctx, span_cp);
   allocator->free_fn(allocator->ctx, edge);
   allocator->free_fn(allocator->ctx, opp);
+  allocator->free_fn(allocator->ctx, emergency_opp);
   allocator->free_fn(allocator->ctx, breaks);
   allocator->free_fn(allocator->ctx, scripts);
   gfnt_paragraph_free(p);
@@ -1996,7 +2024,8 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     if (shown > widest) {
       widest = shown;
     }
-    if (u->hard || u->opportunity) {
+    if (u->hard || u->opportunity
+        || (p->options.overflow_wrap == GFNT_OVERFLOW_WRAP_ANYWHERE && u->emergency)) {
       total = fit = 0;
     }
   }
@@ -2197,7 +2226,10 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
   BreakResult result = {p->unit_count, false};
   size_t i = start;
   GFNT_F26Dot6 total = 0, fit = 0;
+  size_t emergency_at = 0;
+  GFNT_F26Dot6 emergency_fit = 0;
   size_t cands = 0;
+  bool have_emergency = false;
   bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
 
   for (size_t j = i; j < p->unit_count; j++) {
@@ -2212,6 +2244,11 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
       result.end = j + 1;
       break;
     }
+    if (bounded && u->emergency && j + 1 < p->unit_count && fit <= width) {
+      emergency_at = j;
+      emergency_fit = fit;
+      have_emergency = true;
+    }
     if (bounded && fit > width && cands) {
       size_t k = cands;
 
@@ -2224,9 +2261,17 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
         }
         k--;
       }
+      if (!k && have_emergency && emergency_at < j && emergency_fit <= width) {
+        result.end = emergency_at + 1;
+        break;
+      }
       k = k ? k - 1 : 0;
       result.end = cand_at[k] + 1;
       result.hyphen = p->units[cand_at[k]].hyphen;
+      break;
+    }
+    if (bounded && fit > width && !cands && have_emergency && emergency_at < j) {
+      result.end = emergency_at + 1;
       break;
     }
     if (u->opportunity && j + 1 < p->unit_count) {

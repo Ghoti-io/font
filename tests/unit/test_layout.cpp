@@ -2404,6 +2404,26 @@ TEST(LayoutContent, MinIsTheWidestUnbreakableStretchAndMaxIsTheWidestLine) {
   EXPECT_EQ(gfnt_paragraph_min_content(nullptr, &min), GFNT_ERR_INVALID);
 }
 
+TEST(LayoutContent, OverflowWrapCreatesEmergencyBreaksWithSpecifiedMinContent) {
+  Font font(latin());
+  GFNT_F26Dot6 anywhere_min = 0, break_word_min = 0;
+  GFNT_ParagraphOptions anywhere{};
+  anywhere.overflow_wrap = GFNT_OVERFLOW_WRAP_ANYWHERE;
+  GFNT_ParagraphOptions break_word{};
+  break_word.overflow_wrap = GFNT_OVERFLOW_WRAP_BREAK_WORD;
+  Para wrap_anywhere("ABCD", {font.face}, anywhere);
+  Para wrap_word("ABCD", {font.face}, break_word);
+
+  ASSERT_EQ(gfnt_paragraph_min_content(wrap_anywhere.p, &anywhere_min), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_min_content(wrap_word.p, &break_word_min), GFNT_OK);
+  EXPECT_EQ(anywhere_min, kLetter);
+  EXPECT_EQ(break_word_min, 4 * kLetter);
+  ASSERT_EQ(wrap_anywhere.lay(2 * kLetter), GFNT_OK);
+  ASSERT_EQ(wrap_word.lay(2 * kLetter), GFNT_OK);
+  EXPECT_EQ(wrap_anywhere.layout.line_count, 2u);
+  EXPECT_EQ(wrap_word.layout.line_count, 2u);
+}
+
 TEST(LayoutContent, NoLineIsWiderThanTheMaxOrNarrowerThanItsMinimumAllows) {
   Font font(latin());
   Para para("AB CDE F ABCDEF AB C\nDE FABC D", {font.face});

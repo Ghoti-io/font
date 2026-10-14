@@ -64,6 +64,7 @@ typedef struct {
   GFNT_F26Dot6 width, base_width, ruby_added;
   bool space;                  // hangs at the end of a line
   bool opportunity;            // a line may break after it
+  bool emergency;              // an overflow-wrap grapheme break may follow it
   bool hyphen;                 // ... and then a hyphen is added to the line
   bool hard;                   // a line must break after it
   bool tab;                    // one tab character

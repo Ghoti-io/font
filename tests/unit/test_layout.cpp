@@ -2437,6 +2437,19 @@ TEST(LayoutContent, WordBreakBreakAllTurnsLetterBoundariesIntoOrdinaryBreaks) {
   EXPECT_EQ(para.layout.line_count, 2u);
 }
 
+TEST(LayoutContent, WordBreakBreakWordAliasesAnywhereIncludingMinContent) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.word_break = GFNT_WORD_BREAK_BREAK_WORD;
+  Para para("ABCD", {font.face}, options);
+  GFNT_F26Dot6 minimum = 0;
+
+  ASSERT_EQ(gfnt_paragraph_min_content(para.p, &minimum), GFNT_OK);
+  EXPECT_EQ(minimum, kLetter);
+  ASSERT_EQ(para.lay(2 * kLetter), GFNT_OK);
+  EXPECT_EQ(para.layout.line_count, 2u);
+}
+
 TEST(LayoutContent, WhiteSpacePreKeepsSoftLineBreaksAndTrailingSpaces) {
   Font font(latin());
   GFNT_ParagraphOptions options{};

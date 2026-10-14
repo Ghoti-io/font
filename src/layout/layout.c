@@ -1383,7 +1383,8 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   bool * opp = NULL;
   bool * emergency_opp = NULL;
   const bool emergency_breaks = options && (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL
-      || options->word_break == GFNT_WORD_BREAK_BREAK_ALL);
+      || options->word_break == GFNT_WORD_BREAK_BREAK_ALL
+      || options->word_break == GFNT_WORD_BREAK_BREAK_WORD);
   size_t * breaks = NULL;
   GUNI_ScriptItem * scripts = NULL;
   size_t n = 0;
@@ -1405,7 +1406,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
       || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
       || (unsigned)options->overflow_wrap > GFNT_OVERFLOW_WRAP_BREAK_WORD
-      || (unsigned)options->word_break > GFNT_WORD_BREAK_KEEP_ALL
+      || (unsigned)options->word_break > GFNT_WORD_BREAK_BREAK_WORD
       || (unsigned)options->white_space > GFNT_WHITE_SPACE_PRE
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
@@ -2070,7 +2071,9 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     }
     if (u->hard || (p->options.white_space != GFNT_WHITE_SPACE_PRE
             && (u->opportunity
-                || (p->options.overflow_wrap == GFNT_OVERFLOW_WRAP_ANYWHERE && u->emergency)))) {
+                || ((p->options.overflow_wrap == GFNT_OVERFLOW_WRAP_ANYWHERE
+                     || p->options.word_break == GFNT_WORD_BREAK_BREAK_WORD)
+                    && u->emergency)))) {
       total = fit = 0;
     }
   }

@@ -479,7 +479,8 @@ int main(int argc, char ** argv) {
       const char * v = argv[++a];
 
       options.word_break = strcmp(v, "break-all") == 0 ? GFNT_WORD_BREAK_BREAK_ALL
-          : strcmp(v, "keep-all") == 0 ? GFNT_WORD_BREAK_KEEP_ALL : GFNT_WORD_BREAK_NORMAL;
+          : strcmp(v, "keep-all") == 0 ? GFNT_WORD_BREAK_KEEP_ALL
+          : strcmp(v, "break-word") == 0 ? GFNT_WORD_BREAK_BREAK_WORD : GFNT_WORD_BREAK_NORMAL;
     }
     else if (strcmp(argv[a], "--white-space") == 0 && a + 1 < argc) {
       options.white_space = strcmp(argv[++a], "pre") == 0

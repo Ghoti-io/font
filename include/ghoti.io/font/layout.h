@@ -359,7 +359,8 @@ typedef enum GFNT_OverflowWrap {
 typedef enum GFNT_WordBreak {
   GFNT_WORD_BREAK_NORMAL = 0,
   GFNT_WORD_BREAK_BREAK_ALL, ///< Emergency breaks between typographic units are ordinary breaks.
-  GFNT_WORD_BREAK_KEEP_ALL   ///< Suppress implicit breaks between adjacent CJK letter units.
+  GFNT_WORD_BREAK_KEEP_ALL,  ///< Suppress implicit breaks between adjacent CJK letter units.
+  GFNT_WORD_BREAK_BREAK_WORD ///< Legacy CSS alias for normal plus overflow-wrap:anywhere.
 } GFNT_WordBreak;
 
 /** @brief Whether preserved text may soft-wrap, after the supported CSS `white-space` values. */

@@ -134,6 +134,9 @@ for _wrap in ("anywhere", "break-word"):
 CASES.append(("word-break-break-all", "ABABABABABAB", "horizontal", "mixed", 140,
               "start", "ltr", "auto",
               {"wordBreak": "break-all", "driver": ("--word-break", "break-all")}))
+CASES.append(("word-break-break-word", "ABABABABABAB", "horizontal", "mixed", 140,
+              "start", "ltr", "auto",
+              {"wordBreak": "break-word", "driver": ("--word-break", "break-word")}))
 CASES.append(("word-break-keep-all-korean", "가나다라마바사", "horizontal", "mixed", 70,
               "start", "ltr", "auto",
               {"wordBreak": "keep-all", "lineStructureOnly": True,
@@ -307,7 +310,8 @@ function measure(c) {
   }
   const b = d.getBoundingClientRect();
   let minContent = null;
-  if (c.overflowWrap || c.wordBreak === 'break-all' || c.whiteSpace === 'pre') {
+  if (c.overflowWrap || c.wordBreak === 'break-all' || c.wordBreak === 'break-word'
+      || c.whiteSpace === 'pre') {
     const intrinsic = d.cloneNode(true);
     intrinsic.style.width = 'min-content';
     if (c.whiteSpace !== 'pre') intrinsic.style.whiteSpace = 'normal';
@@ -392,6 +396,12 @@ def compare(case, theirs, mine, verbose):
             problems.append("min-content width: chromium %s, this %.2f"
                             % (css_min, ours_min))
     if len(case) > 8 and case[8].get("wordBreak") == "break-all":
+        css_min = theirs.get("minContent")
+        ours_min = mine["min"] / 64.0
+        if css_min is None or abs(css_min - ours_min) > TOLERANCE:
+            problems.append("min-content width: chromium %s, this %.2f"
+                            % (css_min, ours_min))
+    if len(case) > 8 and case[8].get("wordBreak") == "break-word":
         css_min = theirs.get("minContent")
         ours_min = mine["min"] / 64.0
         if css_min is None or abs(css_min - ours_min) > TOLERANCE:

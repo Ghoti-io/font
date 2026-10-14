@@ -145,6 +145,13 @@ CASES.append(("word-break-keep-all-cjk", "日本語日本語", "horizontal", "mi
               "start", "ltr", "auto",
               {"wordBreak": "keep-all", "lineStructureOnly": True,
                "driver": ("--word-break", "keep-all")}))
+CASES.append(("line-break-anywhere-punctuation", "日本語（AB）日本語", "horizontal", "mixed", 50,
+              "start", "ltr", "auto",
+              {"lineBreak": "anywhere", "driver": ("--line-break", "anywhere")}))
+CASES.append(("line-break-anywhere-overrides-keep-all", "日本語日本語", "horizontal", "mixed", 50,
+              "start", "ltr", "auto",
+              {"lineBreak": "anywhere", "wordBreak": "keep-all",
+               "driver": ("--line-break", "anywhere", "--word-break", "keep-all")}))
 CASES.append(("white-space-pre", "AB AB  \nAB AB", "horizontal", "mixed", 100,
               "start", "ltr", "auto",
               {"whiteSpace": "pre", "driver": ("--white-space", "pre")}))
@@ -246,6 +253,7 @@ function measure(c) {
   if (c.alignLast) d.style.textAlignLast = c.alignLast;
   if (c.overflowWrap) d.style.overflowWrap = c.overflowWrap;
   if (c.wordBreak) d.style.wordBreak = c.wordBreak;
+  if (c.lineBreak) d.style.lineBreak = c.lineBreak;
   if (c.whiteSpace) d.style.whiteSpace = c.whiteSpace;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
@@ -311,6 +319,7 @@ function measure(c) {
   const b = d.getBoundingClientRect();
   let minContent = null;
   if (c.overflowWrap || c.wordBreak === 'break-all' || c.wordBreak === 'break-word'
+      || c.lineBreak === 'anywhere'
       || c.whiteSpace === 'pre') {
     const intrinsic = d.cloneNode(true);
     intrinsic.style.width = 'min-content';
@@ -345,6 +354,7 @@ def chrome_rects(cases):
                  alignLast=(c[8].get("alignLast") if len(c) > 8 else None),
                  overflowWrap=(c[8].get("overflowWrap") if len(c) > 8 else None),
                  wordBreak=(c[8].get("wordBreak") if len(c) > 8 else None),
+                 lineBreak=(c[8].get("lineBreak") if len(c) > 8 else None),
                  lineStructureOnly=(c[8].get("lineStructureOnly", False) if len(c) > 8 else False),
                  whiteSpace=(c[8].get("whiteSpace") if len(c) > 8 else None))
             for c in cases]
@@ -402,6 +412,12 @@ def compare(case, theirs, mine, verbose):
             problems.append("min-content width: chromium %s, this %.2f"
                             % (css_min, ours_min))
     if len(case) > 8 and case[8].get("wordBreak") == "break-word":
+        css_min = theirs.get("minContent")
+        ours_min = mine["min"] / 64.0
+        if css_min is None or abs(css_min - ours_min) > TOLERANCE:
+            problems.append("min-content width: chromium %s, this %.2f"
+                            % (css_min, ours_min))
+    if len(case) > 8 and case[8].get("lineBreak") == "anywhere":
         css_min = theirs.get("minContent")
         ours_min = mine["min"] / 64.0
         if css_min is None or abs(css_min - ours_min) > TOLERANCE:

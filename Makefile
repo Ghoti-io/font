@@ -700,7 +700,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -1193,6 +1193,14 @@ check-layout-l1-mutations: $(APP_DIR)/testLayout$(EXE_EXTENSION)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/layout_l1_mutation_check.py
 
 check-layout-l1: check-layout-unit-snapshot check-layout-l1-mutations check-oracle-css-l1 check-oracle-css check-oracle-pango check-oracle-orientation
+
+check-layout-l2-mutations: $(APP_DIR)/testLayout$(EXE_EXTENSION)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/layout_l2_mutation_check.py
+
+# L2's focused unit/mutation checks sit alongside the established browser and Pango
+# paragraph regressions; the object-specific geometry and all five writing modes are
+# asserted in testLayout and exercised by fuzz-run-layout.
+check-layout-l2: check-layout-unit-snapshot check-layout-l2-mutations check-oracle-css check-oracle-pango check-oracle-orientation
 
 check-oracle-math: ## Read every MATH table through the public reader and hold it to fontTools
 check-oracle-math: $(EXAMPLES)

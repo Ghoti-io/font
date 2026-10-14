@@ -93,6 +93,7 @@ PROBE = {
     # others: the binary that answers is the claim, not the package that was asked for.
     "chrome": (["chrome-version"], "Chrome "),
     "pango": (["pango-version"], "Pango "),
+    "firefox": (["firefox-version"], "Firefox "),
 }
 
 _pins = None

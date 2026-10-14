@@ -1,0 +1,8 @@
+# Pinned Firefox ESR, used as an independent CSS inline object oracle.
+FROM docker.io/library/debian@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 MOZ_DISABLE_CONTENT_SANDBOX=1
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends firefox-esr=153.4.0esr-1~deb13u1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY firefox-version /usr/local/bin/
+RUN chmod +x /usr/local/bin/firefox-version

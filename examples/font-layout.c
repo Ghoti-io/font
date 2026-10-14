@@ -30,7 +30,9 @@
  *                    [--justify auto|inter-word|inter-character|kashida|none]
  *                    [--justify-last] [--space-share 0..1] [--line-height-normal|--line-height-multiple N|--line-height-length PX]
  *                    [--vertical-align KIND[:VALUE]] [--split-at BYTE --second-size PX]
- *                    [--second-vertical-align KIND[:VALUE]] [--strut] [--fallback <font>]
+ *                    [--second-vertical-align KIND[:VALUE]]
+ *                    [--object-at BYTE --object-advance PX --object-ascent PX --object-descent PX]
+ *                    [--strut] [--fallback <font>]
  *                    [--hyphens manual|manual-pango|none] <font>
  *
  * Reads one request per line from standard input: `<width>\t<hex>`, where the
@@ -75,9 +77,10 @@ static void print_rect(GFNT_Rect r) {
 static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char * text, size_t length,
     GFNT_F26Dot6 width, GFNT_F26Dot6 size, const GFNT_ParagraphOptions * options,
     const GFNT_TextStyle * style_options, size_t split_at, GFNT_F26Dot6 second_size,
-    const GFNT_TextStyle * second_style_options) {
+    const GFNT_TextStyle * second_style_options, size_t object_at,
+    GFNT_InlineObject * inline_object) {
   const GFNT_Face * faces[2] = {face, fallback};
-  GFNT_TextSpan spans[2];
+  GFNT_TextSpan spans[3];
   GFNT_Paragraph * p = NULL;
   GFNT_Layout l;
   GFNT_Error error;
@@ -101,6 +104,25 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     spans[1].style.vertical_align = second_style_options->vertical_align;
     spans[1].style.vertical_align_value = second_style_options->vertical_align_value;
     span_count = 2;
+  }
+  if (inline_object) {
+    if (object_at > length || object_at + 3 > length) {
+      printf("{\"error\":\"object range is outside text\"}\n");
+      return 0;
+    }
+    span_count = 0;
+    if (object_at) {
+      spans[span_count] = spans[0];
+      spans[span_count++].length = object_at;
+    }
+    spans[span_count] = spans[0];
+    spans[span_count].length = 3;
+    spans[span_count].style.inline_object = inline_object;
+    span_count++;
+    if (object_at + 3 < length) {
+      spans[span_count] = spans[0];
+      spans[span_count++].length = length - object_at - 3;
+    }
   }
   gfnt_error_clear(&error);
   if (gfnt_paragraph_create(text, length, spans, span_count, options, NULL, &p, &error)
@@ -135,10 +157,11 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     for (size_t k = 0; k < line->run_count; k++) {
       const GFNT_LineRun * run = &line->runs[k];
 
-      printf("%s{\"span\":%zu,\"face_index\":%zu,\"fallback\":%s,\"ellipsis\":%s,"
+      printf("%s{\"span\":%zu,\"face_index\":%zu,\"fallback\":%s,\"object\":%s,\"ellipsis\":%s,"
              "\"hyphen\":%s,\"l\":%u,\"o\":%d,\"start\":%zu,\"end\":%zu,"
              "\"pos\":%d,\"advance\":%d,\"g\":[",
           k ? "," : "", run->span, run->face_index, run->fallback ? "true" : "false",
+          !run->face && run->glyph_count ? "true" : "false",
           run->ellipsis ? "true" : "false", run->hyphen ? "true" : "false", run->level,
           (int)run->orientation, run->start, run->end, run->pos, run->advance);
       for (size_t g = 0; g < run->glyph_count; g++) {
@@ -159,7 +182,7 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
         GFNT_Box box;
 
         printf("%s", g ? "," : "");
-        if (gfnt_face_glyph_outline(run->face, run->glyphs[g].glyph, NULL, NULL, &outline, NULL)
+        if (run->face && gfnt_face_glyph_outline(run->face, run->glyphs[g].glyph, NULL, NULL, &outline, NULL)
                 == GFNT_OK) {
           if (gfnt_outline_bounds(outline, &box) == GFNT_OK && !gfnt_box_is_empty(&box)) {
             printf("[%d,%d,%d,%d]", box.x_min, box.y_min, box.x_max, box.y_max);
@@ -258,6 +281,9 @@ int main(int argc, char ** argv) {
   GFNT_TextStyle second_style_options;
   GFNT_F26Dot6 second_size = 0;
   size_t split_at = 0;
+  size_t object_at = 0;
+  GFNT_InlineObject inline_object;
+  int have_object = 0;
   GFNT_Blob * blob = NULL;
   GFNT_Blob * fallback_blob = NULL;
   GFNT_Face * face = NULL;
@@ -270,6 +296,7 @@ int main(int argc, char ** argv) {
   memset(&options, 0, sizeof options);
   memset(&style_options, 0, sizeof style_options);
   memset(&second_style_options, 0, sizeof second_style_options);
+  memset(&inline_object, 0, sizeof inline_object);
   for (int a = 1; a < argc; a++) {
     if (strcmp(argv[a], "--size") == 0 && a + 1 < argc) {
       size = (GFNT_F26Dot6)(atof(argv[++a]) * 64);
@@ -279,6 +306,19 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[a], "--second-size") == 0 && a + 1 < argc) {
       second_size = (GFNT_F26Dot6)(atof(argv[++a]) * 64);
+    }
+    else if (strcmp(argv[a], "--object-at") == 0 && a + 1 < argc) {
+      object_at = (size_t)strtoul(argv[++a], NULL, 10);
+      have_object = 1;
+    }
+    else if (strcmp(argv[a], "--object-advance") == 0 && a + 1 < argc) {
+      inline_object.advance = (GFNT_F26Dot6)(atof(argv[++a]) * 64.0 + 0.5);
+    }
+    else if (strcmp(argv[a], "--object-ascent") == 0 && a + 1 < argc) {
+      inline_object.ascent = (GFNT_F26Dot6)(atof(argv[++a]) * 64.0 + 0.5);
+    }
+    else if (strcmp(argv[a], "--object-descent") == 0 && a + 1 < argc) {
+      inline_object.descent = (GFNT_F26Dot6)(atof(argv[++a]) * 64.0 + 0.5);
     }
     else if (strcmp(argv[a], "--face") == 0 && a + 1 < argc) {
       index = (uint32_t)atoi(argv[++a]);
@@ -442,7 +482,7 @@ int main(int argc, char ** argv) {
       text[n++] = (char)(hexval(hex[0]) * 16 + hexval(hex[1]));
     }
     answer(face, fallback, text, n, width, size, &options, &style_options,
-        split_at, second_size, &second_style_options);
+        split_at, second_size, &second_style_options, object_at, have_object ? &inline_object : NULL);
     free(text);
   }
   free(line);

@@ -59,7 +59,18 @@ for j in jobs:
         attrs.insert(Pango.attr_line_height_new(float(j['line_height'])))
     if j.get('rise') is not None:
         attrs.insert(Pango.attr_rise_new(int(round(j['rise'] * Pango.SCALE))))
-    if j.get('line_height') is not None or j.get('rise') is not None:
+    if j.get('shape') is not None:
+        shape = j['shape']
+        rect = Pango.Rectangle()
+        rect.x = 0
+        rect.y = -int(round(shape['ascent'] * Pango.SCALE))
+        rect.width = int(round(shape['advance'] * Pango.SCALE))
+        rect.height = int(round((shape['ascent'] + shape['descent']) * Pango.SCALE))
+        attr = Pango.attr_shape_new(rect, rect)
+        attr.start_index = int(shape['start'])
+        attr.end_index = int(shape['end'])
+        attrs.insert(attr)
+    if j.get('line_height') is not None or j.get('rise') is not None or j.get('shape') is not None:
         lay.set_attributes(attrs)
     if j.get('room'):
         lay.set_width(int(j['room'] * Pango.SCALE))

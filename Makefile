@@ -698,9 +698,9 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: fuzz-run-sfnt fuzz-run-cmap fuzz-run-glyf fuzz-run-raster
 .PHONY: fuzz-run-cff fuzz-run-charstring fuzz-run-type1
 # Oracle commands
-.PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
+.PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-oracle-layout-l2 check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -968,6 +968,10 @@ oracle-build: ## Build the oracle images from their pinned Containerfiles
 	podman build -t ghoti-font-oracle-pango:1.56.3 \
 		-f $(ORACLE)/containers/pango/Containerfile \
 		$(ORACLE)/containers/pango
+	@printf "\n### Building the Firefox ESR oracle image ###\n"
+	podman build -t ghoti-font-oracle-firefox:153.4.0 \
+		-f $(ORACLE)/containers/firefox/Containerfile \
+		$(ORACLE)/containers/firefox
 
 oracle-version: ## Print which references would answer, and fail if one would not
 oracle-version:
@@ -1197,10 +1201,12 @@ check-layout-l1: check-layout-unit-snapshot check-layout-l1-mutations check-orac
 check-layout-l2-mutations: $(APP_DIR)/testLayout$(EXE_EXTENSION)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/layout_l2_mutation_check.py
 
-# L2's focused unit/mutation checks sit alongside the established browser and Pango
-# paragraph regressions; the object-specific geometry and all five writing modes are
-# asserted in testLayout and exercised by fuzz-run-layout.
-check-layout-l2: check-layout-unit-snapshot check-layout-l2-mutations check-oracle-css check-oracle-pango check-oracle-orientation
+check-oracle-layout-l2: $(EXAMPLES)
+	@$(ORACLE_RUN) chrome,pango,firefox -- python3 $(ORACLE)/layout_l2_oracle.py
+
+# The unit cases cover all five writing modes; the focused live object geometry is compared
+# with Chromium and Pango, then the established paragraph regressions and mutations run.
+check-layout-l2: check-layout-unit-snapshot check-layout-l2-mutations check-oracle-layout-l2 check-oracle-css check-oracle-pango check-oracle-orientation
 
 check-oracle-math: ## Read every MATH table through the public reader and hold it to fontTools
 check-oracle-math: $(EXAMPLES)
@@ -2277,3 +2283,8 @@ $(FUZZ_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
 	@printf '%s\n' '$(FUZZ_CC) $(FUZZ_CXX) $(FUZZ_SAN) $(FUZZ_LIB_FLAGS) $(FUZZ_BIN_FLAGS) $(INCLUDE) $(DEP_LIBS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
+
+oracle-build-firefox: ## Build the pinned Firefox ESR oracle image
+	podman build -t ghoti-font-oracle-firefox:153.4.0 \
+		-f $(ORACLE)/containers/firefox/Containerfile \
+		$(ORACLE)/containers/firefox

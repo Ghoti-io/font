@@ -80,7 +80,9 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     const GFNT_TextStyle * second_style_options, size_t object_at,
     GFNT_InlineObject * inline_object) {
   const GFNT_Face * faces[2] = {face, fallback};
-  GFNT_TextSpan spans[3];
+  GFNT_TextSpan spans[4];
+  GFNT_TextSpan base_span;
+  GFNT_TextSpan second_span;
   GFNT_Paragraph * p = NULL;
   GFNT_Layout l;
   GFNT_Error error;
@@ -96,32 +98,51 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
   spans[0].style.line_height = style_options->line_height;
   spans[0].style.vertical_align = style_options->vertical_align;
   spans[0].style.vertical_align_value = style_options->vertical_align_value;
+  base_span = spans[0];
+  second_span = base_span;
   size_t span_count = 1;
   if (split_at && split_at < length) {
-    spans[1] = spans[0];
+    spans[1] = base_span;
     spans[1].length = length - split_at;
     spans[1].style.size = second_size ? second_size : size;
     spans[1].style.vertical_align = second_style_options->vertical_align;
     spans[1].style.vertical_align_value = second_style_options->vertical_align_value;
+    second_span = spans[1];
     span_count = 2;
   }
   if (inline_object) {
-    if (object_at > length || object_at + 3 > length) {
+    if (object_at > length || length - object_at < 3) {
       printf("{\"error\":\"object range is outside text\"}\n");
       return 0;
     }
-    span_count = 0;
-    if (object_at) {
-      spans[span_count] = spans[0];
-      spans[span_count++].length = object_at;
+    if (split_at > object_at && split_at < object_at + 3) {
+      printf("{\"error\":\"split falls inside inline object\"}\n");
+      return 0;
     }
-    spans[span_count] = spans[0];
-    spans[span_count].length = 3;
-    spans[span_count].style.inline_object = inline_object;
-    span_count++;
-    if (object_at + 3 < length) {
-      spans[span_count] = spans[0];
-      spans[span_count++].length = length - object_at - 3;
+    size_t boundaries[] = {0, length, object_at, object_at + 3, split_at};
+    size_t boundary_count = split_at && split_at < length ? 5 : 4;
+    for (size_t i = 0; i < boundary_count; i++) {
+      for (size_t j = i + 1; j < boundary_count; j++) {
+        if (boundaries[j] < boundaries[i]) {
+          size_t swap = boundaries[i];
+          boundaries[i] = boundaries[j];
+          boundaries[j] = swap;
+        }
+      }
+    }
+    span_count = 0;
+    for (size_t i = 0; i + 1 < boundary_count; i++) {
+      size_t begin = boundaries[i];
+      size_t end = boundaries[i + 1];
+      GFNT_TextSpan part;
+
+      if (begin == end) continue;
+      part = split_at && begin >= split_at ? second_span : base_span;
+      part.length = end - begin;
+      if (begin == object_at && end == object_at + 3) {
+        part.style.inline_object = inline_object;
+      }
+      spans[span_count++] = part;
     }
   }
   gfnt_error_clear(&error);

@@ -1202,7 +1202,9 @@ check-layout-l2-mutations: $(APP_DIR)/testLayout$(EXE_EXTENSION)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/layout_l2_mutation_check.py
 
 check-oracle-layout-l2: $(EXAMPLES)
-	@$(ORACLE_RUN) chrome,pango,firefox -- python3 $(ORACLE)/layout_l2_oracle.py
+	@GHOTI_LAYOUT_L2_ORACLES="$${GHOTI_LAYOUT_L2_ORACLES:-chrome,pango,firefox}" \
+	  $(ORACLE_RUN) "$${GHOTI_LAYOUT_L2_ORACLES:-chrome,pango,firefox}" -- \
+	  python3 $(ORACLE)/layout_l2_oracle.py
 
 # The unit cases cover all five writing modes; the focused live object geometry is compared
 # with Chromium and Pango, then the established paragraph regressions and mutations run.

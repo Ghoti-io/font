@@ -456,6 +456,7 @@ TEST(LayoutInlineObject, OneReplacementCharacterBecomesAnAtomicCallerOwnedRun) {
   ASSERT_EQ(layout.line_count, 1u);
   ASSERT_EQ(layout.lines[0].run_count, 1u);
   const GFNT_LineRun & run = layout.lines[0].runs[0];
+  const GFNT_F26Dot6 baseline_y = run.glyphs[0].y;
   EXPECT_EQ(run.face, nullptr);
   EXPECT_EQ(run.object, &identity);
   ASSERT_EQ(run.glyph_count, 1u);
@@ -477,6 +478,21 @@ TEST(LayoutInlineObject, OneReplacementCharacterBecomesAnAtomicCallerOwnedRun) {
       GFNT_OK);
   ASSERT_EQ(count, 1u);
   EXPECT_EQ(rect.width, object.advance);
+  gfnt_layout_free(&layout);
+  gfnt_paragraph_free(paragraph);
+
+  object.align = GFNT_VERTICAL_ALIGN_LENGTH;
+  object.align_value = 64;
+  paragraph = nullptr;
+  ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, nullptr, nullptr,
+                  &paragraph, nullptr), GFNT_OK);
+  layout = {};
+  ASSERT_EQ(gfnt_paragraph_layout(paragraph, 1200, &layout, nullptr), GFNT_OK);
+  ASSERT_EQ(layout.lines[0].run_count, 1u);
+  EXPECT_EQ(layout.lines[0].baseline, baseline_y + 64);
+  EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].y, baseline_y);
+  EXPECT_EQ(layout.lines[0].ascent, object.ascent + 64);
+  EXPECT_EQ(layout.lines[0].descent, object.descent - 64);
   gfnt_layout_free(&layout);
   gfnt_paragraph_free(paragraph);
 }
@@ -501,6 +517,34 @@ TEST(LayoutInlineObject, InvalidDescriptorOrRangeIsRejected) {
   span.length = wrong.size();
   EXPECT_EQ(gfnt_paragraph_create(wrong.data(), wrong.size(), &span, 1, nullptr, nullptr,
                   &paragraph, nullptr), GFNT_ERR_INVALID);
+}
+
+TEST(LayoutInlineObject, RejectsAccumulatedAdvanceOutsideCoordinateRange) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_InlineObject objects[2]{};
+  GFNT_TextSpan spans[2]{};
+  const std::string text = "\xEF\xBF\xBC\xEF\xBF\xBC";
+  for (size_t i = 0; i < 2; i++) {
+    objects[i].advance = INT32_MAX / 2 + 1;
+    objects[i].ascent = 32;
+    spans[i].length = 3;
+    spans[i].style.faces = faces;
+    spans[i].style.face_count = 1;
+    spans[i].style.size = kSize;
+    spans[i].style.inline_object = &objects[i];
+  }
+  GFNT_Paragraph * paragraph = nullptr;
+  ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), spans, 2, nullptr, nullptr,
+                  &paragraph, nullptr), GFNT_OK);
+  GFNT_F26Dot6 width = 0;
+  EXPECT_EQ(gfnt_paragraph_max_content(paragraph, &width), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_paragraph_min_content(paragraph, &width), GFNT_ERR_INVALID);
+  GFNT_Layout layout{};
+  EXPECT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr),
+      GFNT_ERR_INVALID);
+  gfnt_layout_free(&layout);
+  gfnt_paragraph_free(paragraph);
 }
 
 TEST(LayoutInlineObject, ReplacementCharacterWithoutDescriptorStaysText) {
@@ -550,19 +594,34 @@ TEST(LayoutInlineObject, PlacedInEveryWritingModeAndKeepsBaseByteGeometry) {
     ASSERT_EQ(gfnt_paragraph_layout(paragraph, 1000, &layout, nullptr), GFNT_OK);
     ASSERT_EQ(layout.lines[0].run_count, 1u);
     EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].advance, object.advance);
+    if (mode == GFNT_WRITING_HORIZONTAL_TB) {
+      EXPECT_EQ(layout.lines[0].ascent, object.ascent);
+      EXPECT_EQ(layout.lines[0].descent, object.descent);
+    }
     GFNT_Rect rect{};
     size_t count = 0;
     ASSERT_EQ(gfnt_layout_range_rects(paragraph, &layout, 0, text.size(), &rect, 1, &count),
         GFNT_OK);
     ASSERT_EQ(count, 1u);
-    if (mode == GFNT_WRITING_HORIZONTAL_TB) EXPECT_EQ(rect.width, object.advance);
-    else EXPECT_EQ(rect.height, object.advance);
+    if (mode == GFNT_WRITING_HORIZONTAL_TB) {
+      EXPECT_EQ(rect.width, object.advance);
+      EXPECT_EQ(rect.height, object.ascent + object.descent);
+      EXPECT_EQ(rect.y, layout.lines[0].box.y);
+      EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].y, layout.lines[0].baseline);
+    }
+    else {
+      EXPECT_EQ(rect.height, object.advance);
+      EXPECT_EQ(rect.width, object.ascent + object.descent);
+      EXPECT_EQ(rect.x, layout.lines[0].box.x);
+      EXPECT_EQ(rect.y, layout.lines[0].runs[0].pos);
+      EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].x, layout.lines[0].baseline);
+    }
     gfnt_layout_free(&layout);
     gfnt_paragraph_free(paragraph);
   }
 }
 
-TEST(LayoutInlineObject, DescriptorBreakFlagsCreateOpportunitiesOnBothSides) {
+TEST(LayoutInlineObject, BreakBeforeOverridesWordJoinerIndependently) {
   Font font(latin());
   const GFNT_Face * faces[] = {font.face};
   GFNT_InlineObject object{};
@@ -570,27 +629,56 @@ TEST(LayoutInlineObject, DescriptorBreakFlagsCreateOpportunitiesOnBothSides) {
   object.ascent = 320;
   object.descent = 160;
   object.break_before = true;
-  object.break_after = true;
-  const std::string text = std::string("A") + "\xEF\xBF\xBC" + "B";
-  GFNT_TextSpan spans[3]{};
-  spans[0].length = spans[2].length = 1;
-  spans[1].length = 3;
+  object.break_after = false;
+  const std::string word_joiner = "\xE2\x81\xA0";
+  const std::string text = std::string("A") + word_joiner + "\xEF\xBF\xBC" + word_joiner + "B";
+  GFNT_TextSpan spans[5]{};
+  spans[0].length = spans[4].length = 1;
+  spans[1].length = spans[3].length = 3;
+  spans[2].length = 3;
   for (GFNT_TextSpan & span : spans) {
     span.style.faces = faces;
     span.style.face_count = 1;
     span.style.size = kSize;
   }
-  spans[1].style.inline_object = &object;
-  Para para(text, {spans[0], spans[1], spans[2]});
+  spans[2].style.inline_object = &object;
+  Para para(text, {spans[0], spans[1], spans[2], spans[3], spans[4]});
   ASSERT_EQ(para.created, GFNT_OK);
   ASSERT_EQ(gfnt_paragraph_layout(para.p, 350, &para.layout, nullptr), GFNT_OK);
-  ASSERT_EQ(para.layout.line_count, 3u);
+  ASSERT_EQ(para.layout.line_count, 2u);
   EXPECT_EQ(para.layout.lines[0].start, 0u);
-  EXPECT_EQ(para.layout.lines[0].end, 1u);
-  EXPECT_EQ(para.layout.lines[1].start, 1u);
-  EXPECT_EQ(para.layout.lines[1].end, 4u);
-  EXPECT_EQ(para.layout.lines[2].start, 4u);
-  EXPECT_EQ(para.layout.lines[2].end, 5u);
+  EXPECT_EQ(para.layout.lines[0].end, 4u);
+  EXPECT_EQ(para.layout.lines[1].start, 4u);
+}
+
+TEST(LayoutInlineObject, BreakAfterCreatesAnOpportunityIndependently)
+{
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_InlineObject object{};
+  object.advance = 400;
+  object.ascent = 320;
+  object.descent = 160;
+  object.break_after = true;
+  const std::string word_joiner = "\xE2\x81\xA0";
+  const std::string text = std::string("A") + word_joiner + "\xEF\xBF\xBC" + word_joiner + "B";
+  GFNT_TextSpan spans[5]{};
+  spans[0].length = spans[4].length = 1;
+  spans[1].length = spans[3].length = 3;
+  spans[2].length = 3;
+  for (GFNT_TextSpan & span : spans) {
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+  }
+  spans[2].style.inline_object = &object;
+  Para para(text, {spans[0], spans[1], spans[2], spans[3], spans[4]});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, 350, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].start, 0u);
+  EXPECT_EQ(para.layout.lines[0].end, 7u);
+  EXPECT_EQ(para.layout.lines[1].start, 7u);
 }
 
 TEST(LayoutInlineObject, GapAfterObjectJustifiesOnlyInterCharacter) {

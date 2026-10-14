@@ -100,8 +100,7 @@ static uint8_t string_orientation(const GFNT_Paragraph * p, size_t span, uint32_
 static int hyphen_orientation(const GFNT_Paragraph * p);
 
 /** The width of a unit that starts @p pos from the line's start: a tab goes to the next stop. */
-static GFNT_F26Dot6 eff_width(const GFNT_Paragraph * p, const Unit * u,
-    GFNT_F26Dot6 pos) {
+static int64_t eff_width(const GFNT_Paragraph * p, const Unit * u, int64_t pos) {
   if (!u->tab || p->tab_width <= 0) {
     return u->width;
   }
@@ -1623,7 +1622,7 @@ done:
 
 GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     GFNT_F26Dot6 * out) {
-  GFNT_F26Dot6 total = 0, fit = 0, widest = 0;
+  int64_t total = 0, fit = 0, widest = 0;
 
   if (!p || !out) {
     return GFNT_ERR_INVALID;
@@ -1631,15 +1630,19 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
   for (size_t j = 0; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
 
-    GFNT_F26Dot6 shown;
+    int64_t shown;
 
     total += eff_width(p, u, total);
     if (!u->space) {
       fit = total;
     }
+    if (total > INT32_MAX || total < INT32_MIN || fit > INT32_MAX || fit < INT32_MIN) {
+      return GFNT_ERR_INVALID;
+    }
     // A stretch that ends at a hyphenation point ends in the hyphen; the end of the text is not one.
     shown = fit + (u->hyphen && u->opportunity && j + 1 < p->unit_count
                        ? p->hyphen_width[p->runs[u->run].span] : 0);
+    if (shown > INT32_MAX || shown < INT32_MIN) return GFNT_ERR_INVALID;
     if (shown > widest) {
       widest = shown;
     }
@@ -1653,7 +1656,8 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     // which the line does not wrap needs no more than the line.
     GFNT_F26Dot6 max = 0;
 
-    if (gfnt_paragraph_max_content(p, &max) == GFNT_OK && widest > max) {
+    if (gfnt_paragraph_max_content(p, &max) != GFNT_OK) return GFNT_ERR_INVALID;
+    if (widest > max) {
       widest = max;
     }
   }
@@ -1663,7 +1667,7 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
 
 GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
     GFNT_F26Dot6 * out) {
-  GFNT_F26Dot6 total = 0, fit = 0, widest = 0;
+  int64_t total = 0, fit = 0, widest = 0;
 
   if (!p || !out) {
     return GFNT_ERR_INVALID;
@@ -1675,6 +1679,9 @@ GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
     if (!u->space) {
       fit = total;
     }
+    if (total > INT32_MAX || total < INT32_MIN || fit > INT32_MAX || fit < INT32_MIN) {
+      return GFNT_ERR_INVALID;
+    }
     if (fit > widest) {
       widest = fit;
     }
@@ -1682,7 +1689,7 @@ GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
       total = fit = 0;
     }
   }
-  *out = widest;
+  *out = (GFNT_F26Dot6)widest;
   return GFNT_OK;
 }
 
@@ -2514,6 +2521,12 @@ typedef struct {
 static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragraph * p,
     GFNT_F26Dot6 width, GFNT_Error * error) {
   const GFNT_Allocator * allocator = state->allocator;
+  GFNT_F26Dot6 max_content;
+
+  if (gfnt_paragraph_max_content(p, &max_content) != GFNT_OK) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "paragraph content width exceeds the 26.6 coordinate range");
+  }
 
   state->starts = allocator->calloc_fn(allocator->ctx, p->unit_count + 2,
       sizeof *state->starts);

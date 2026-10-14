@@ -30,20 +30,20 @@ def rejects_object_mutant() -> None:
     replacement = "if (end == start + 1 && cps[start] == 0xFFFC && !style->inline_object) {"
     if original.count(needle) != 1:
         raise RuntimeError(f"expected one mutation site, found {original.count(needle)}")
+    artifacts = (APP, APP.parent / "libghoti.io-font-0.a",
+        ROOT / "build" / BUILD / "objects/layout/layout.o")
     try:
         SOURCE.write_text(original.replace(needle, replacement))
-        for artifact in (APP, APP.parent / "libghoti.io-font-0.a",
-                ROOT / "build" / BUILD / "objects/layout/layout.o"):
+        for artifact in artifacts:
             artifact.unlink(missing_ok=True)
         run(["make", f"PREFIX={PREFIX}", f"BUILD={MAKE_BUILD}", str(APP.relative_to(ROOT))])
         run([str(APP), "--gtest_filter=LayoutInlineObject.OneReplacementCharacterBecomesAnAtomicCallerOwnedRun",
              "--gtest_brief=1"], expect_failure=True)
     finally:
         SOURCE.write_text(original)
-    for artifact in (APP, APP.parent / "libghoti.io-font-0.a",
-            ROOT / "build" / BUILD / "objects/layout/layout.o"):
-        artifact.unlink(missing_ok=True)
-    run(["make", f"PREFIX={PREFIX}", f"BUILD={MAKE_BUILD}", str(APP.relative_to(ROOT))])
+        for artifact in artifacts:
+            artifact.unlink(missing_ok=True)
+        run(["make", f"PREFIX={PREFIX}", f"BUILD={MAKE_BUILD}", str(APP.relative_to(ROOT))])
 
 
 def main() -> int:

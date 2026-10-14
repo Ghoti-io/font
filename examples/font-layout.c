@@ -27,7 +27,8 @@
  *                    [--align start|end|left|right|center|justify] [--face N]
  *                    [--mode horizontal|vertical-rl|vertical-lr|sideways-rl|sideways-lr]
  *                    [--orient mixed|mixed-pango|upright|sideways]
- *                    [--justify auto|inter-word|inter-character|none]
+ *                    [--justify auto|inter-word|inter-character|kashida|none]
+ *                    [--justify-last] [--space-share 0..1] [--fallback <font>]
  *                    [--hyphens manual|manual-pango|none] <font>
  *
  * Reads one request per line from standard input: `<width>\t<hex>`, where the
@@ -69,9 +70,9 @@ static void print_rect(GFNT_Rect r) {
   printf("[%d,%d,%d,%d]", r.x, r.y, r.width, r.height);
 }
 
-static int answer(const GFNT_Face * face, const char * text, size_t length,
+static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char * text, size_t length,
     GFNT_F26Dot6 width, GFNT_F26Dot6 size, const GFNT_ParagraphOptions * options) {
-  const GFNT_Face * faces[1] = {face};
+  const GFNT_Face * faces[2] = {face, fallback};
   GFNT_TextSpan span;
   GFNT_Paragraph * p = NULL;
   GFNT_Layout l;
@@ -82,7 +83,7 @@ static int answer(const GFNT_Face * face, const char * text, size_t length,
   memset(&l, 0, sizeof l);
   span.length = length;
   span.style.faces = faces;
-  span.style.face_count = 1;
+  span.style.face_count = fallback ? 2 : 1;
   span.style.size = size;
   gfnt_error_clear(&error);
   if (gfnt_paragraph_create(text, length, &span, 1, options, NULL, &p, &error)
@@ -95,16 +96,21 @@ static int answer(const GFNT_Face * face, const char * text, size_t length,
     gfnt_paragraph_free(p);
     return 0;
   }
-  printf("{\"min\":%d,\"max\":%d,\"w\":%d,\"h\":%d,\"ink\":", min, max, l.width,
-      l.height);
+  printf("{\"min\":%d,\"max\":%d,\"w\":%d,\"h\":%d,\"mode\":%d,"
+         "\"truncated\":%s,\"ink\":", min, max, l.width, l.height,
+      (int)l.writing_mode, l.truncated ? "true" : "false");
   print_rect(l.ink);
   printf(",\"lines\":[");
   for (size_t i = 0; i < l.line_count; i++) {
     const GFNT_Line * line = &l.lines[i];
 
-    printf("%s{\"s\":%zu,\"e\":%zu,\"x\":%d,\"w\":%d,\"t\":%d,\"hh\":%d,\"box\":",
+    printf("%s{\"s\":%zu,\"e\":%zu,\"x\":%d,\"w\":%d,\"t\":%d,\"hh\":%d,"
+           "\"baseline\":%d,\"ascent\":%d,\"descent\":%d,\"justified\":%s,"
+           "\"truncated\":%s,\"box\":",
         i ? "," : "", line->start, line->end, line->offset, line->extent, line->box.y,
-        line->box.height);
+        line->box.height, line->baseline, line->ascent, line->descent,
+        line->justified ? "true" : "false",
+        line->truncated ? "true" : "false");
     print_rect(line->box);
     printf(",\"ink\":");
     print_rect(line->ink);
@@ -112,8 +118,12 @@ static int answer(const GFNT_Face * face, const char * text, size_t length,
     for (size_t k = 0; k < line->run_count; k++) {
       const GFNT_LineRun * run = &line->runs[k];
 
-      printf("%s{\"l\":%u,\"o\":%d,\"g\":[", k ? "," : "", run->level,
-          (int)run->orientation);
+      printf("%s{\"span\":%zu,\"face_index\":%zu,\"fallback\":%s,\"ellipsis\":%s,"
+             "\"hyphen\":%s,\"l\":%u,\"o\":%d,\"start\":%zu,\"end\":%zu,"
+             "\"pos\":%d,\"advance\":%d,\"g\":[",
+          k ? "," : "", run->span, run->face_index, run->fallback ? "true" : "false",
+          run->ellipsis ? "true" : "false", run->hyphen ? "true" : "false", run->level,
+          (int)run->orientation, run->start, run->end, run->pos, run->advance);
       for (size_t g = 0; g < run->glyph_count; g++) {
         const GFNT_PlacedGlyph * pg = &run->glyphs[g];
 
@@ -223,11 +233,14 @@ static int answer(const GFNT_Face * face, const char * text, size_t length,
 
 int main(int argc, char ** argv) {
   const char * path = NULL;
+  const char * fallback_path = NULL;
   GFNT_F26Dot6 size = 16 * 64;
   uint32_t index = 0;
   GFNT_ParagraphOptions options;
   GFNT_Blob * blob = NULL;
+  GFNT_Blob * fallback_blob = NULL;
   GFNT_Face * face = NULL;
+  GFNT_Face * fallback = NULL;
   GFNT_Error error;
   char * line = NULL;
   size_t cap = 0;
@@ -292,6 +305,9 @@ int main(int argc, char ** argv) {
           : strcmp(v, "sideways") == 0 ? GFNT_ORIENT_SIDEWAYS
           : strcmp(v, "mixed-pango") == 0 ? GFNT_ORIENT_MIXED_PANGO : GFNT_ORIENT_MIXED;
     }
+    else if (strcmp(argv[a], "--fallback") == 0 && a + 1 < argc) {
+      fallback_path = argv[++a];
+    }
     else if (argv[a][0] != '-') {
       path = argv[a];
     }
@@ -309,6 +325,15 @@ int main(int argc, char ** argv) {
       || gfnt_face_load(blob, index, NULL, NULL, &face, &error) != GFNT_OK) {
     gfnt_error_dump(&error, stderr);
     gfnt_blob_destroy(blob);
+    return 1;
+  }
+  if (fallback_path
+      && (gfnt_blob_create_file(fallback_path, NULL, NULL, &fallback_blob, &error) != GFNT_OK
+          || gfnt_face_load(fallback_blob, 0, NULL, NULL, &fallback, &error) != GFNT_OK)) {
+    gfnt_error_dump(&error, stderr);
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+    gfnt_blob_destroy(fallback_blob);
     return 1;
   }
   while ((got = getline(&line, &cap, stdin)) >= 0) {
@@ -331,11 +356,13 @@ int main(int argc, char ** argv) {
     for (; hexval(hex[0]) >= 0 && hexval(hex[1]) >= 0; hex += 2) {
       text[n++] = (char)(hexval(hex[0]) * 16 + hexval(hex[1]));
     }
-    answer(face, text, n, width, size, &options);
+    answer(face, fallback, text, n, width, size, &options);
     free(text);
   }
   free(line);
   gfnt_face_free(face);
+  gfnt_face_free(fallback);
   gfnt_blob_destroy(blob);
+  gfnt_blob_destroy(fallback_blob);
   return 0;
 }

@@ -28,6 +28,7 @@ Usage: kashida_compare.py [--fetch] [-v]
 """
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -35,6 +36,8 @@ import urllib.request
 
 import numpy as np
 from PIL import Image
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import layout_snapshot
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA = os.path.join(ROOT, "build", "oracle", "kashida")
@@ -135,6 +138,19 @@ def main():
     for ident, text, direction, share in cases:
         theirs = np.array(Image.open(os.path.join(DATA, "img", ident + ".png")).convert("L"))
         w = theirs.shape[1]
+        if os.environ.get("GHOTI_LAYOUT_SNAPSHOT_MODE"):
+            font_layout = os.environ.get("GHOTI_LAYOUT_DRIVER")
+            if not font_layout:
+                raise SystemExit("kashida_compare: GHOTI_LAYOUT_DRIVER must name font-layout when snapshots are enabled")
+            request = "%d\t%s\n" % ((w - PADDING) * 64, text.encode("utf-8").hex())
+            argv = [font_layout, "--size", str(SIZE), "--align", "justify", "--justify-last",
+                    "--justify", "kashida", "--space-share", str(share), "--bidi", direction,
+                    "--fallback", os.path.join(DATA, "amiri-latin.woff2"),
+                    os.path.join(DATA, "amiri-arabic.woff2")]
+            finished = subprocess.run(argv, input=request, capture_output=True, text=True,
+                                      check=True)
+            answer = json.loads(finished.stdout.splitlines()[0])
+            layout_snapshot.record("kashida", ident, answer)
         mine = render(text, w - PADDING, direction, share)
         # The same window: the box's row range does not matter, the columns do.
         pt = profile(theirs[8:-8, :])
@@ -152,6 +168,8 @@ def main():
             print("%-11s %s  edges %+3d %+3d  profile %.3f" % (
                 ident, "agrees" if ok else "DIFFERS", dl, dr, score))
     print("kashida_compare: %d cases, %d differ (worst profile %.3f)" % (len(cases), differ, worst))
+    if os.environ.get("GHOTI_LAYOUT_SNAPSHOT_MODE"):
+        layout_snapshot.finish("kashida")
     return 1 if differ else 0
 
 

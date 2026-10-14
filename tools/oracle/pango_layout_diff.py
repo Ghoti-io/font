@@ -39,6 +39,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import oracle_env
+import layout_snapshot
 
 ROOT = oracle_env.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples", "font-layout")
@@ -94,6 +95,7 @@ def ours(case):
     finished = subprocess.run(argv, input="%d\t%s\n" % (room * 64, text.encode().hex()),
                               capture_output=True, text=True)
     answer = json.loads(finished.stdout.splitlines()[0])
+    layout_snapshot.record("pango", name, answer)
     if "error" in answer:
         raise RuntimeError("%s: %s" % (name, answer["error"]))
     lines = answer["lines"]
@@ -157,6 +159,7 @@ def main():
             print("  %s: agrees" % name)
     print("pango_layout_diff: %d cases, %d characters compared, %d cases differ"
           % (len(CASES), compared, differ))
+    layout_snapshot.finish("pango")
     return 1 if differ else 0
 
 

@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,6 +28,53 @@ namespace {
 constexpr GFNT_F26Dot6 kSize = 10 * 64;
 constexpr GFNT_F26Dot6 kLetter = 320;
 constexpr GFNT_F26Dot6 kSpace = 160;
+
+void snapshot_layout(const std::string & text, GFNT_F26Dot6 width, const GFNT_Layout & layout) {
+  const char * path = std::getenv("GHOTI_UNIT_LAYOUT_SNAPSHOT");
+  if (!path || !*path) return;
+  std::ofstream out(path, std::ios::app);
+  if (!out) return;
+  out << "{\"text\":\"";
+  for (unsigned char c : text) out << "0123456789abcdef"[c >> 4] << "0123456789abcdef"[c & 15];
+  out << "\",\"width\":" << width << ",\"result\":{\"w\":" << layout.width
+      << ",\"h\":" << layout.height << ",\"truncated\":" << (layout.truncated ? "true" : "false")
+      << ",\"mode\":" << static_cast<int>(layout.writing_mode) << ",\"ink\":["
+      << layout.ink.x << ',' << layout.ink.y << ',' << layout.ink.width << ',' << layout.ink.height
+      << "],\"lines\":[";
+  for (size_t i = 0; i < layout.line_count; ++i) {
+    const GFNT_Line & line = layout.lines[i];
+    if (i) out << ',';
+    out << "{\"s\":" << line.start << ",\"e\":" << line.end << ",\"offset\":"
+        << line.offset << ",\"extent\":" << line.extent << ",\"baseline\":" << line.baseline
+        << ",\"ascent\":" << line.ascent << ",\"descent\":" << line.descent
+        << ",\"justified\":" << (line.justified ? "true" : "false")
+        << ",\"truncated\":" << (line.truncated ? "true" : "false") << ",\"box\":["
+        << line.box.x << ',' << line.box.y << ',' << line.box.width << ',' << line.box.height
+        << "],\"ink\":[" << line.ink.x << ',' << line.ink.y << ',' << line.ink.width << ','
+        << line.ink.height << "],\"runs\":[";
+    for (size_t j = 0; j < line.run_count; ++j) {
+      const GFNT_LineRun & run = line.runs[j];
+      if (j) out << ',';
+      out << "{\"span\":" << run.span << ",\"face_index\":" << run.face_index
+          << ",\"fallback\":" << (run.fallback ? "true" : "false")
+          << ",\"ellipsis\":" << (run.ellipsis ? "true" : "false")
+          << ",\"hyphen\":" << (run.hyphen ? "true" : "false") << ",\"level\":"
+          << static_cast<unsigned>(run.level) << ",\"orientation\":"
+          << static_cast<int>(run.orientation) << ",\"start\":" << run.start << ",\"end\":"
+          << run.end << ",\"pos\":" << run.pos << ",\"advance\":" << run.advance
+          << ",\"glyphs\":[";
+      for (size_t k = 0; k < run.glyph_count; ++k) {
+        const GFNT_PlacedGlyph & glyph = run.glyphs[k];
+        if (k) out << ',';
+        out << '[' << glyph.glyph << ',' << glyph.cluster << ',' << glyph.pen_x << ','
+            << glyph.pen_y << ',' << glyph.x << ',' << glyph.y << ',' << glyph.advance << ']';
+      }
+      out << "]}";
+    }
+    out << "]}";
+  }
+  out << "]}}\n";
+}
 
 /** A font whose glyph n (from 1) is the n-th code point of `chars`. */
 struct Font {
@@ -109,9 +157,11 @@ struct Para {
   const GFNT_Face * faces[2] = {nullptr, nullptr};
   std::vector<GFNT_TextSpan> spans;
   GFNT_Result created = GFNT_ERR_INTERNAL;
+  std::string text;
 
   Para(const std::string & text, std::vector<const GFNT_Face *> list,
-      const GFNT_ParagraphOptions & options = {}, GFNT_F26Dot6 size = kSize) {
+      const GFNT_ParagraphOptions & options = {}, GFNT_F26Dot6 size = kSize)
+      : text(text) {
     GFNT_TextSpan span{};
     span.length = text.size();
     for (size_t i = 0; i < list.size() && i < 2; ++i) {
@@ -126,13 +176,15 @@ struct Para {
   }
   Para(const std::string & text, std::vector<GFNT_TextSpan> given,
       const GFNT_ParagraphOptions & options = {})
-      : spans(std::move(given)) {
+      : spans(std::move(given)), text(text) {
     created = gfnt_paragraph_create(text.data(), text.size(), spans.data(),
         spans.size(), &options, nullptr, &p, nullptr);
   }
   GFNT_Result lay(GFNT_F26Dot6 width) {
     gfnt_layout_free(&layout);
-    return gfnt_paragraph_layout(p, width, &layout, nullptr);
+    GFNT_Result result = gfnt_paragraph_layout(p, width, &layout, nullptr);
+    if (result == GFNT_OK) snapshot_layout(text, width, layout);
+    return result;
   }
   ~Para() {
     gfnt_layout_free(&layout);

@@ -55,6 +55,7 @@ Usage:
 """
 
 import json
+import gzip
 import os
 import subprocess
 import sys
@@ -278,6 +279,26 @@ def pieces_of(cps, a, b):
     if b > start:
         out.append((start, b))
     return out
+
+
+def snapshot_fields(layout):
+    """Keep the public layout fields required for field-by-field regression."""
+    top = {key: layout[key] for key in ("min", "max", "w", "h", "mode", "truncated", "ink")
+           if key in layout}
+    if "error" in layout:
+        return {"error": layout["error"]}
+    top["lines"] = []
+    for line in layout.get("lines", []):
+        item = {key: line[key] for key in ("s", "e", "x", "w", "t", "hh", "baseline",
+                                           "ascent", "descent", "justified", "truncated", "box", "ink")
+                if key in line}
+        item["runs"] = []
+        for run in line.get("runs", []):
+            item["runs"].append({key: run[key] for key in (
+                "span", "face_index", "fallback", "ellipsis", "hyphen", "l", "o", "start",
+                "end", "pos", "advance", "g", "py", "b") if key in run})
+        top["lines"].append(item)
+    return top
 
 
 def build_units(cps, info, shaped, upem):
@@ -601,6 +622,8 @@ def main(argv):
     listing = "--list" in argv
     everything = "--all" in argv
     limit = 40
+    snapshot_write = None
+    snapshot_check = None
     rest = []
     skip = False
     for i, a in enumerate(argv[1:], start=1):
@@ -608,6 +631,18 @@ def main(argv):
             skip = False
         elif a == "--fonts":
             limit = int(argv[i + 1])
+            skip = True
+        elif a == "--snapshot-write":
+            if i + 1 >= len(argv):
+                print("layout_diff: --snapshot-write requires a path", file=sys.stderr)
+                return 2
+            snapshot_write = argv[i + 1]
+            skip = True
+        elif a == "--snapshot-check":
+            if i + 1 >= len(argv):
+                print("layout_diff: --snapshot-check requires a path", file=sys.stderr)
+                return 2
+            snapshot_check = argv[i + 1]
             skip = True
         elif not a.startswith("--"):
             rest.append(a)
@@ -722,6 +757,34 @@ def main(argv):
                         for run in line["runs"]:
                             for g in run["g"]:
                                 gids.setdefault(font, set()).add(g[0])
+    if snapshot_write or snapshot_check:
+        records = []
+        for font, table in mine_of.items():
+            for (name, direction, align, width), (answer, *_rest) in table.items():
+                records.append({
+                    "font": os.path.relpath(font, ROOT), "case": name,
+                    "direction": direction, "align": align, "width": width,
+                    "layout": snapshot_fields(answer),
+                })
+        records.sort(key=lambda r: (r["font"], r["case"], r["direction"],
+                                    r["align"], -1 if r["width"] is None else r["width"]))
+        actual = "".join(json.dumps(r, ensure_ascii=False, sort_keys=True,
+                                    separators=(",", ":")) + "\n" for r in records)
+        if snapshot_write:
+            opener = gzip.open if snapshot_write.endswith(".gz") else open
+            with opener(snapshot_write, "wt", encoding="utf-8") as h:
+                h.write(actual)
+        if snapshot_check:
+            try:
+                opener = gzip.open if snapshot_check.endswith(".gz") else open
+                with opener(snapshot_check, "rt", encoding="utf-8") as h:
+                    expected = h.read()
+            except OSError as why:
+                print("layout snapshot unavailable: %s" % why, file=sys.stderr)
+                return 1
+            if actual != expected:
+                print("layout snapshot differs: %s" % snapshot_check, file=sys.stderr)
+                return 1
     # ICU: the visual runs of every reference line.
     run_reqs, run_keys = [], []
     layouts = {}
@@ -820,6 +883,10 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    for option in ("--snapshot-write", "--snapshot-check"):
+        if option in sys.argv[1:] and sys.argv.index(option) == len(sys.argv) - 1:
+            sys.stderr.write("layout_diff: %s requires a path\n" % option)
+            sys.exit(2)
     try:
         oracle_env.provenance(["icu", "harfbuzz", "fonttools"])   # the pins, checked
         sys.exit(main(sys.argv))

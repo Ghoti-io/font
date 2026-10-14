@@ -48,6 +48,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import oracle_env
+import layout_snapshot
 
 ROOT = oracle_env.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples", "font-layout")
@@ -215,6 +216,7 @@ def ours(case):
     request = "%s\t%s\n" % (width, text.encode("utf-8").hex())
     finished = subprocess.run(argv, input=request, capture_output=True, text=True)
     answer = json.loads(finished.stdout.splitlines()[0])
+    layout_snapshot.record("css", name, answer)
     if "error" in answer:
         raise RuntimeError("%s: %s" % (name, answer["error"]))
     return answer
@@ -400,6 +402,7 @@ def ink_case(case):
     request = "%d\t%s\n" % (room * 64, text.encode("utf-8").hex())
     finished = subprocess.run(argv, input=request, capture_output=True, text=True)
     mine = json.loads(finished.stdout.splitlines()[0])
+    layout_snapshot.record("css", name + "/ink", mine)
     width = int(math.ceil(mine["w"] / 64.0)) + 2 * INK_MARGIN
     height = int(math.ceil(mine["h"] / 64.0)) + 2 * INK_MARGIN
     side = "width" if mode == "horizontal" else "height"
@@ -472,6 +475,7 @@ def main():
             print("  %s: agrees" % case[0])
     print("css_layout_diff ink: %d cases, %d glyphs placed, %d cases differ"
           % (len(ink_cases), ink_glyphs, ink_differ))
+    layout_snapshot.finish("css")
     return 1 if differ or ink_differ else 0
 
 

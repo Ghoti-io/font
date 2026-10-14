@@ -1540,6 +1540,61 @@ typedef struct {
  * @p cand_at and @p cand_fit are scratch for the places a line could break so far, each as many
  * as there are units.
  */
+typedef struct {
+  size_t end;
+  bool hyphen;
+} BreakResult;
+
+/** Choose one line end without mutating paragraph state. */
+static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
+    GFNT_F26Dot6 width, size_t * cand_at, GFNT_F26Dot6 * cand_fit) {
+  BreakResult result = {p->unit_count, false};
+  size_t i = start;
+  GFNT_F26Dot6 total = 0, fit = 0;
+  size_t cands = 0;
+  bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
+
+  for (size_t j = i; j < p->unit_count; j++) {
+    const Unit * u = &p->units[j];
+
+    total += eff_width(p, u, total);
+    if (!u->space) {
+      fit = total;
+    }
+    if (u->hard) {
+      result.end = j + 1;
+      break;
+    }
+    if (bounded && fit > width && cands) {
+      size_t k = cands;
+
+      while (k > 0) {
+        const Unit * c = &p->units[cand_at[k - 1]];
+
+        if (!c->hyphen
+            || cand_fit[k - 1] + p->hyphen_width[p->runs[c->run].span] <= width) {
+          break;
+        }
+        k--;
+      }
+      k = k ? k - 1 : 0;
+      result.end = cand_at[k] + 1;
+      result.hyphen = p->units[cand_at[k]].hyphen;
+      break;
+    }
+    if (u->opportunity && j + 1 < p->unit_count) {
+      if (bounded && fit > width) {
+        result.end = j + 1;
+        result.hyphen = u->hyphen;
+        break;
+      }
+      cand_at[cands] = j;
+      cand_fit[cands++] = fit;
+    }
+  }
+  return result;
+}
+
 static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     size_t * starts, bool * hyphened, size_t * cand_at, GFNT_F26Dot6 * cand_fit) {
   size_t lines = 0;
@@ -1551,56 +1606,12 @@ static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     return 1;
   }
   while (i < p->unit_count) {
-    GFNT_F26Dot6 total = 0, fit = 0;
-    size_t cands = 0;
-    size_t end = p->unit_count;
-    bool hyphen = false;
-    bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
+    BreakResult result;
 
-    hyphened[lines] = false;
-    starts[lines++] = i;
-    for (size_t j = i; j < p->unit_count; j++) {
-      const Unit * u = &p->units[j];
-
-      total += eff_width(p, u, total);
-      if (!u->space) {
-        fit = total;
-      }
-      if (u->hard) {
-        end = j + 1;
-        break;
-      }
-      if (bounded && fit > width && cands) {
-        // Over the width: break at the last place where what stays, and the hyphen if that place
-        // wants one, fit; failing that at the first place, which overflows the least.
-        size_t k = cands;
-
-        while (k > 0) {
-          const Unit * c = &p->units[cand_at[k - 1]];
-
-          if (!c->hyphen
-              || cand_fit[k - 1] + p->hyphen_width[p->runs[c->run].span] <= width) {
-            break;
-          }
-          k--;
-        }
-        k = k ? k - 1 : 0;
-        end = cand_at[k] + 1;
-        hyphen = p->units[cand_at[k]].hyphen;
-        break;
-      }
-      if (u->opportunity && j + 1 < p->unit_count) {
-        if (bounded && fit > width) {
-          end = j + 1;
-          hyphen = u->hyphen;
-          break;
-        }
-        cand_at[cands] = j;
-        cand_fit[cands++] = fit;
-      }
-    }
-    hyphened[lines - 1] = hyphen;
-    i = end;
+    starts[lines] = i;
+    result = break_one_line(p, i, width, cand_at, cand_fit);
+    hyphened[lines++] = result.hyphen;
+    i = result.end;
   }
   // A text ending in a newline has an empty last line.
   if (p->units[p->unit_count - 1].hard) {
@@ -1747,112 +1758,706 @@ typedef struct {
 /** Marks a glyph a stroke's new glyphs replace, other than the first of them. */
 #define KASHIDA_SKIP 0xFFFFFFFFu
 
-GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
-    GFNT_Layout * out, GFNT_Error * error) {
+/** Per-line measurements and inputs shared by placement and alignment. */
+typedef struct {
+  size_t unit_start, unit_end, hang_from;
+  GFNT_F26Dot6 start_offset, available_width, top_y, thickness;
+  GFNT_F26Dot6 natural, ascent, descent, gap;
+} LayoutLineState;
+
+typedef struct {
+  const GFNT_Paragraph * paragraph;
+  Slice * slices;
+  size_t * order;
+  GFNT_LineRun * runs;
+  size_t * run_used;
+  GFNT_PlacedGlyph * placed;
+  size_t * glyph_used;
+  uint8_t * gjf;
+  uint32_t * gk;
+  KReshape * kres;
+  PGlyph * spool;
+  GFNT_F26Dot6 * tabadv;
+  GFNT_F26Dot6 extra, extra_rem, cursor, lead;
+  size_t expanded;
+  bool vertical, seen_text, ink_set;
+  GFNT_F26Dot6 ink_l, ink_t, ink_r, ink_b;
+} PlacementState;
+
+typedef struct {
+  const GFNT_Paragraph * paragraph;
   const GFNT_Allocator * allocator;
-  size_t * starts = NULL;
-  Slice * slices = NULL;
-  size_t * order = NULL;
-  uint8_t * slice_levels = NULL;
-  GFNT_F26Dot6 * ew = NULL;       // each unit's width in its line, tabs resolved
-  GFNT_F26Dot6 * tabadv = NULL;   // a tab glyph's advance, by glyph index
-  uint8_t * gjf = NULL;           // per glyph: the justification space it takes, before and after
-  uint32_t * gk = NULL;           // per glyph: 1 + the stroke that replaces it from here, or SKIP
-  KReshape * kres = NULL;         // per kashida point: its stroke on this layout
-  PGlyph * spool = NULL;          // the new glyphs of the strokes
-  size_t spool_len = 0, spool_cap = 0;
-  bool * hyphened = NULL;         // whether each line ends at a hyphenation point
-  size_t * cand_at = NULL;        // scratch for break_lines
-  GFNT_F26Dot6 * cand_fit = NULL;
-  GFNT_Rect ink_all = {0, 0, 0, 0};
-  GFNT_Line * lines = NULL;
-  uint8_t * storage = NULL;
+  uint8_t * gjf;
+  uint32_t * gk;
+  KReshape * kres;
+  PGlyph ** spool;
+  size_t * spool_len, * spool_cap;
+} JustificationState;
+
+/** Measure the shaped units that will be placed on one line. */
+static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size_t end,
+    GFNT_F26Dot6 width, GFNT_F26Dot6 top_y, GFNT_F26Dot6 * ew,
+    GFNT_F26Dot6 * tabadv) {
+  LayoutLineState state = {0};
+  GFNT_F26Dot6 pos = 0;
+
+  state.unit_start = start;
+  state.unit_end = end;
+  state.available_width = width;
+  state.top_y = top_y;
+  for (size_t j = start; j < end; j++) {
+    const Unit * unit = &p->units[j];
+    const PRun * run = &p->runs[unit->run];
+
+    ew[j] = eff_width(p, unit, pos);
+    pos += ew[j];
+    if (unit->tab) {
+      tabadv[unit->g_lo] = ew[j];
+    }
+    if (run->ascent > state.ascent) state.ascent = run->ascent;
+    if (run->descent > state.descent) state.descent = run->descent;
+    if (run->gap > state.gap) state.gap = run->gap;
+    if (run->ascent + run->descent + run->gap > state.thickness) {
+      state.thickness = run->ascent + run->descent + run->gap;
+    }
+  }
+  state.hang_from = end;
+  while (state.hang_from > start && p->units[state.hang_from - 1].space) {
+    state.hang_from--;
+  }
+  for (size_t j = start; j < state.hang_from; j++) {
+    state.natural += ew[j];
+  }
+  if (start == end) {
+    const PRun * run = start < p->unit_count ? &p->runs[p->units[start].run]
+                                              : &p->fallback_metrics;
+    const PRun * source = p->run_count ? (start > 0 ? &p->runs[p->units[start - 1].run] : run)
+                                        : run;
+
+    state.ascent = source->ascent;
+    state.descent = source->descent;
+    state.gap = source->gap;
+    state.thickness = state.ascent + state.descent + state.gap;
+  }
+  return state;
+}
+
+/** Distribute line slack through spaces and any eligible Arabic joining strokes. */
+static GFNT_Result justify_line(JustificationState * state, GFNT_Line * line,
+    size_t ua, size_t ub, size_t hang_from, GFNT_F26Dot6 natural, GFNT_F26Dot6 width,
+    size_t li, size_t total_lines, bool bounded, bool truncated,
+    GFNT_F26Dot6 * extra, GFNT_F26Dot6 * extra_rem, GFNT_Error * error) {
+  const GFNT_Paragraph * p = state->paragraph;
+
+  if (p->options.align == GFNT_ALIGN_JUSTIFY && bounded && !truncated
+      && ub > ua && (p->options.justify_last
+          || (li + 1 < total_lines && !p->units[ub - 1].hard))) {
+    const size_t opportunities = mark_justification(p, ua, hang_from, state->gjf);
+    GFNT_F26Dot6 slack = width - natural;
+    size_t strokes = 0;
+
+    if (p->kcount && slack > 0) {
+      for (size_t j = ua; j + 1 < hang_from; j++) {
+        const Unit * unit = &p->units[j];
+
+        if (unit->kashida && p->kpoints[unit->kashida - 1].lo >= ua
+            && p->kpoints[unit->kashida - 1].hi < hang_from) {
+          strokes++;
+        }
+      }
+    }
+    if ((opportunities || strokes) && slack > 0) {
+      GFNT_F26Dot6 spaced = slack;
+
+      if (strokes) {
+        GFNT_F26Dot6 want = opportunities
+            ? (GFNT_F26Dot6)((int64_t)slack * (0x10000 - p->options.space_share) / 0x10000)
+            : slack;
+        GFNT_F26Dot6 each = want / (GFNT_F26Dot6)strokes;
+        GFNT_F26Dot6 rem = want % (GFNT_F26Dot6)strokes;
+        GFNT_F26Dot6 carry = 0;
+
+        for (size_t j = ua; j + 1 < hang_from; j++) {
+          const Unit * unit = &p->units[j];
+          const KPoint * point;
+          GFNT_F26Dot6 share;
+          PGlyph fit_glyphs[KASHIDA_PROBE];
+          KReshape fit;
+          bool fits;
+          GFNT_Result r;
+
+          if (!unit->kashida) continue;
+          point = &p->kpoints[unit->kashida - 1];
+          if (point->lo < ua || point->hi >= hang_from) continue;
+          share = each + (rem > 0 ? 1 : 0) + carry;
+          if (rem > 0) rem--;
+          r = kashida_fit(p, point, share, fit_glyphs, &fit, &fits, error);
+          if (r != GFNT_OK) return r;
+          if (!fits) {
+            carry = share;
+            continue;
+          }
+          carry = share - fit.growth;
+          if (*state->spool_len + fit.count > *state->spool_cap) {
+            size_t cap2 = *state->spool_cap ? *state->spool_cap * 2 : 256;
+            PGlyph * grown;
+
+            while (cap2 < *state->spool_len + fit.count) cap2 *= 2;
+            grown = state->allocator->realloc_fn(state->allocator->ctx, *state->spool,
+                cap2 * sizeof *grown);
+            if (!grown) {
+              return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+                  "no memory for the layout");
+            }
+            *state->spool = grown;
+            *state->spool_cap = cap2;
+          }
+          fit.first = *state->spool_len;
+          for (size_t q = 0; q < fit.count; q++) {
+            (*state->spool)[(*state->spool_len)++] = fit_glyphs[q];
+          }
+          state->kres[unit->kashida - 1] = fit;
+          state->gk[fit.g_lo] = unit->kashida;
+          for (size_t g = fit.g_lo + 1; g < fit.g_hi; g++) state->gk[g] = KASHIDA_SKIP;
+          spaced -= fit.growth;
+        }
+      }
+      if (opportunities) {
+        *extra = spaced / (GFNT_F26Dot6)opportunities;
+        *extra_rem = spaced % (GFNT_F26Dot6)opportunities;
+      }
+      line->justified = true;
+    }
+    else {
+      for (size_t j = ua; j < hang_from; j++) {
+        for (size_t g = p->units[j].g_lo; g < p->units[j].g_hi; g++) state->gjf[g] = 0;
+      }
+    }
+  }
+  return GFNT_OK;
+}
+
+/** Place the visual slices of a measured line, including glyph ink and justification. */
+static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_count) {
+  const GFNT_Paragraph * p = state->paragraph;
+
+  line->runs = &state->runs[*state->run_used];
+  line->run_count = slice_count;
+  for (size_t v = 0; v < slice_count; v++) {
+    const Slice * slice = &state->slices[state->order[v]];
+    const PRun * pr = slice->pr;
+    GFNT_LineRun * run = &state->runs[(*state->run_used)++];
+    const size_t run_first = *state->glyph_used;
+
+    run->face = pr->face;
+    run->span = pr->span;
+    run->face_index = pr->face_index;
+    run->fallback = pr->face_index != 0;
+    run->ellipsis = slice->ellipsis;
+    run->hyphen = slice->hyphen;
+    run->level = slice->level;
+    run->orientation = (GFNT_Orientation)pr->orient;
+    run->glyphs = &state->placed[*state->glyph_used];
+    run->pos = state->cursor;
+    for (size_t g = slice->g_lo; g < slice->g_hi; g++) {
+      const PGlyph * glyphs = &slice->src[g];
+      size_t glyph_count = 1;
+
+      if (line->justified && !slice->hang && slice->src == p->glyphs
+          && p->kcount && state->gk[g]) {
+        if (state->gk[g] == KASHIDA_SKIP) continue;
+        glyphs = &state->spool[state->kres[state->gk[g] - 1].first];
+        glyph_count = state->kres[state->gk[g] - 1].count;
+      }
+      for (size_t q = 0; q < glyph_count; q++) {
+        const PGlyph * pg = &glyphs[q];
+        GFNT_PlacedGlyph * placed = &state->placed[(*state->glyph_used)++];
+        GFNT_F26Dot6 advance = pg->tab && slice->src == p->glyphs
+            ? state->tabadv[g] : pg->advance;
+        GFNT_F26Dot6 before = 0, after = 0, origin, l, t, r, b;
+
+        if (line->justified && !slice->hang && slice->src == p->glyphs
+            && glyphs == &slice->src[g]) {
+          if (state->gjf[g] & 1) {
+            before = state->extra + (state->expanded < (size_t)state->extra_rem ? 1 : 0);
+            state->expanded++;
+          }
+          if (state->gjf[g] & 2) {
+            after = state->extra + (state->expanded < (size_t)state->extra_rem ? 1 : 0);
+            state->expanded++;
+          }
+        }
+        origin = state->cursor + before;
+        placed->glyph = pg->glyph;
+        placed->cluster = pg->cluster;
+        placed->advance = before + advance + after;
+        if (!state->vertical) {
+          placed->pen_x = state->cursor;
+          placed->pen_y = line->baseline;
+          placed->x = origin + pg->dx;
+          placed->y = line->baseline - pg->dy;
+          l = placed->x + pg->ix0; t = placed->y - pg->iy1;
+          r = placed->x + pg->ix1; b = placed->y - pg->iy0;
+        }
+        else if (pr->orient == GFNT_ORIENT_RUN_UPRIGHT) {
+          placed->pen_x = 0;
+          placed->pen_y = state->cursor;
+          placed->x = pg->dx;
+          placed->y = origin - pg->dy;
+          l = placed->x + pg->ix0; t = placed->y - pg->iy1;
+          r = placed->x + pg->ix1; b = placed->y - pg->iy0;
+        }
+        else {
+          placed->pen_x = -(pr->ascent - pr->descent) / 2;
+          placed->pen_y = state->cursor;
+          placed->x = placed->pen_x + pg->dy;
+          placed->y = origin + pg->dx;
+          l = placed->x + pg->iy0; t = placed->y + pg->ix0;
+          r = placed->x + pg->iy1; b = placed->y + pg->ix1;
+        }
+        state->cursor += before + advance + after;
+        if (pg->has_ink) {
+          if (!state->ink_set) {
+            state->ink_l = l; state->ink_t = t; state->ink_r = r; state->ink_b = b;
+            state->ink_set = true;
+          }
+          else {
+            if (l < state->ink_l) state->ink_l = l;
+            if (t < state->ink_t) state->ink_t = t;
+            if (r > state->ink_r) state->ink_r = r;
+            if (b > state->ink_b) state->ink_b = b;
+          }
+        }
+      }
+    }
+    run->glyph_count = *state->glyph_used - run_first;
+    run->advance = state->cursor - run->pos;
+    run->start = slice->b_lo;
+    run->end = slice->b_hi;
+    if (slice->hang && !state->seen_text) state->lead += run->advance;
+    if (!slice->hang) {
+      state->seen_text = true;
+      line->extent += run->advance;
+    }
+  }
+  if (state->ink_set) {
+    line->ink.x = state->ink_l;
+    line->ink.y = state->ink_t;
+    line->ink.width = state->ink_r - state->ink_l;
+    line->ink.height = state->ink_b - state->ink_t;
+  }
+}
+
+/** Apply paragraph alignment and convert a line from line-relative to physical coordinates. */
+static void align_line(const GFNT_Paragraph * p, GFNT_Line * line,
+    GFNT_F26Dot6 available, GFNT_F26Dot6 block_extent, bool para_rtl, bool vertical) {
+  GFNT_F26Dot6 slack = available - line->extent;
+  GFNT_F26Dot6 off;
+  GFNT_Align align = p->options.align;
+  GFNT_F26Dot6 shift;
+  GFNT_F26Dot6 across = 0;
+
+  if (align == GFNT_ALIGN_JUSTIFY) {
+    align = GFNT_ALIGN_START;
+  }
+  if (align == GFNT_ALIGN_START) {
+    align = para_rtl ? GFNT_ALIGN_RIGHT : GFNT_ALIGN_LEFT;
+  }
+  else if (align == GFNT_ALIGN_END) {
+    align = para_rtl ? GFNT_ALIGN_LEFT : GFNT_ALIGN_RIGHT;
+  }
+  if (slack < 0) {
+    off = para_rtl ? slack : 0;
+  }
+  else {
+    off = align == GFNT_ALIGN_RIGHT ? slack
+        : align == GFNT_ALIGN_CENTER ? slack / 2 : 0;
+  }
+  shift = off + line->offset;
+  line->offset = off;
+  if (vertical) {
+    const GFNT_F26Dot6 before = line->box.x;
+
+    line->box.x = p->mode == GFNT_WRITING_VERTICAL_LR
+        ? before : block_extent - before - line->box.width;
+    line->box.y = 0;
+    line->box.height = available;
+    across = line->box.x + line->box.width / 2;
+    line->baseline = across;
+  }
+  else {
+    line->box.x = 0;
+    line->box.width = available;
+  }
+  if (line->ink.width || line->ink.height) {
+    if (vertical) {
+      line->ink.x += across;
+      line->ink.y += shift;
+    }
+    else {
+      line->ink.x += shift;
+    }
+  }
+  for (size_t k = 0; k < line->run_count; k++) {
+    GFNT_LineRun * run = (GFNT_LineRun *)&line->runs[k];
+
+    run->pos += shift;
+    for (size_t g = 0; g < run->glyph_count; g++) {
+      GFNT_PlacedGlyph * glyph = (GFNT_PlacedGlyph *)&run->glyphs[g];
+
+      if (vertical) {
+        glyph->pen_x += across;
+        glyph->x += across;
+        glyph->pen_y += shift;
+        glyph->y += shift;
+      }
+      else {
+        glyph->pen_x += shift;
+        glyph->x += shift;
+      }
+    }
+  }
+  if (p->mode == GFNT_WRITING_SIDEWAYS_LR) {
+    const GFNT_F26Dot6 bw = block_extent, bh = available;
+
+    line->box.x = bw - (line->box.x + line->box.width);
+    line->offset = bh - (line->offset + line->extent);
+    line->baseline = bw - line->baseline;
+    if (line->ink.width || line->ink.height) {
+      line->ink.x = bw - (line->ink.x + line->ink.width);
+      line->ink.y = bh - (line->ink.y + line->ink.height);
+    }
+    for (size_t k = 0; k < line->run_count; k++) {
+      GFNT_LineRun * run = (GFNT_LineRun *)&line->runs[k];
+
+      run->pos = bh - (run->pos + run->advance);
+      if (run->orientation == GFNT_ORIENT_RUN_CW) {
+        run->orientation = GFNT_ORIENT_RUN_CCW;
+      }
+      for (size_t g = 0; g < run->glyph_count; g++) {
+        GFNT_PlacedGlyph * glyph = (GFNT_PlacedGlyph *)&run->glyphs[g];
+
+        glyph->pen_x = bw - glyph->pen_x;
+        glyph->pen_y = bh - glyph->pen_y;
+        glyph->x = bw - glyph->x;
+        glyph->y = bh - glyph->y;
+      }
+    }
+  }
+}
+
+/** Align every line and union the placed glyph ink boxes. */
+static GFNT_Rect align_lines(const GFNT_Paragraph * p, GFNT_Line * lines, size_t line_count,
+    GFNT_F26Dot6 available, GFNT_F26Dot6 block_extent, bool para_rtl, bool vertical) {
+  GFNT_Rect ink = {0, 0, 0, 0};
+  bool ink_any = false;
+
+  for (size_t li = 0; li < line_count; li++) {
+    GFNT_Line * line = &lines[li];
+
+    align_line(p, line, available, block_extent, para_rtl, vertical);
+    if (line->ink.width || line->ink.height) {
+      if (ink_any) {
+        GFNT_F26Dot6 r1 = ink.x + ink.width, b1 = ink.y + ink.height;
+        GFNT_F26Dot6 r2 = line->ink.x + line->ink.width;
+        GFNT_F26Dot6 b2 = line->ink.y + line->ink.height;
+
+        if (line->ink.x < ink.x) ink.x = line->ink.x;
+        if (line->ink.y < ink.y) ink.y = line->ink.y;
+        ink.width = (r2 > r1 ? r2 : r1) - ink.x;
+        ink.height = (b2 > b1 ? b2 : b1) - ink.y;
+      }
+      else {
+        ink = line->ink;
+        ink_any = true;
+      }
+    }
+  }
+  return ink;
+}
+
+typedef struct {
+  const GFNT_Paragraph * paragraph;
+  Slice * slices;
+  uint8_t * levels;
+  size_t * order;
+  GFNT_Line * line;
+  size_t unit_start, unit_end, hang_from, slice_count;
+  bool hyphenated, truncated, vertical;
+  PGlyph * hyphen_glyphs, * ellipsis_glyphs;
+  size_t hyphen_count, ellipsis_count;
+  PRun * hyphen_run, * ellipsis_run;
+  LayoutLineState * measured;
+  GFNT_F26Dot6 top_y;
+} LineBuildState;
+
+/** Storage and bounded scratch for one complete paragraph layout operation. */
+typedef struct {
+  const GFNT_Allocator * allocator;
+  size_t * starts, * order, * cand_at;
+  Slice * slices;
+  uint8_t * slice_levels, * gjf;
+  GFNT_F26Dot6 * ew, * tabadv, * cand_fit;
+  uint32_t * gk;
+  KReshape * kres;
+  PGlyph * spool;
+  size_t spool_len, spool_cap;
+  bool * hyphened;
+  GFNT_Line * lines;
+  uint8_t * storage;
   GFNT_LineRun * runs;
   GFNT_PlacedGlyph * placed;
-  size_t line_count, total_lines, run_used = 0, glyph_used = 0;
-  bool more = false, any_truncated = false;
-  size_t runs_bytes, total_bytes, stroke_room;
-  GFNT_F26Dot6 y = 0, widest = 0;
-  bool para_rtl;
-  const bool vertical = p ? p->vertical : false;
-  GFNT_Result r = GFNT_OK;
+  size_t line_count, total_lines, runs_bytes, total_bytes, stroke_room;
+  size_t run_used, glyph_used;
+  bool more, any_truncated;
+  GFNT_F26Dot6 y, widest;
+  GFNT_Rect ink;
+} LayoutState;
 
-  gfnt_error_clear(error);
-  if (!p || !out || width < 0) {
-    return GFNT_ERR_INVALID;
-  }
-  allocator = p->allocator;
-  para_rtl = (p->para_level & 1) != 0;
-  starts = allocator->calloc_fn(allocator->ctx, p->unit_count + 2, sizeof *starts);
-  slices = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *slices);
-  order = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *order);
-  slice_levels = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, 1);
-  ew = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *ew);
-  tabadv = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, sizeof *tabadv);
-  gjf = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, 1);
-  hyphened = allocator->calloc_fn(allocator->ctx, p->unit_count + 2, sizeof *hyphened);
-  gk = allocator->calloc_fn(allocator->ctx, p->kcount ? p->glyph_count + 1 : 1, sizeof *gk);
-  kres = allocator->calloc_fn(allocator->ctx, p->kcount + 1, sizeof *kres);
-  cand_at = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *cand_at);
-  cand_fit = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *cand_fit);
-  if (!starts || !slices || !order || !slice_levels || !ew || !tabadv || !gjf || !hyphened
-      || !gk || !kres
-      || !cand_at || !cand_fit) {
-    r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+/** Reserve every paragraph and output buffer before placement begins. */
+static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragraph * p,
+    GFNT_F26Dot6 width, GFNT_Error * error) {
+  const GFNT_Allocator * allocator = state->allocator;
+
+  state->starts = allocator->calloc_fn(allocator->ctx, p->unit_count + 2,
+      sizeof *state->starts);
+  state->slices = allocator->calloc_fn(allocator->ctx, p->unit_count + 1,
+      sizeof *state->slices);
+  state->order = allocator->calloc_fn(allocator->ctx, p->unit_count + 1,
+      sizeof *state->order);
+  state->slice_levels = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, 1);
+  state->ew = allocator->calloc_fn(allocator->ctx, p->unit_count + 1, sizeof *state->ew);
+  state->tabadv = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1,
+      sizeof *state->tabadv);
+  state->gjf = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, 1);
+  state->hyphened = allocator->calloc_fn(allocator->ctx, p->unit_count + 2,
+      sizeof *state->hyphened);
+  state->gk = allocator->calloc_fn(allocator->ctx, p->kcount ? p->glyph_count + 1 : 1,
+      sizeof *state->gk);
+  state->kres = allocator->calloc_fn(allocator->ctx, p->kcount + 1, sizeof *state->kres);
+  state->cand_at = allocator->calloc_fn(allocator->ctx, p->unit_count + 1,
+      sizeof *state->cand_at);
+  state->cand_fit = allocator->calloc_fn(allocator->ctx, p->unit_count + 1,
+      sizeof *state->cand_fit);
+  if (!state->starts || !state->slices || !state->order || !state->slice_levels
+      || !state->ew || !state->tabadv || !state->gjf || !state->hyphened || !state->gk
+      || !state->kres || !state->cand_at || !state->cand_fit) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the layout");
-    goto done;
   }
-  line_count = break_lines(p, width, starts, hyphened, cand_at, cand_fit);
-  starts[line_count] = p->unit_count;
-  total_lines = line_count;
-  if (p->options.max_lines && line_count > p->options.max_lines) {
-    line_count = p->options.max_lines;
-    more = true;
+  state->line_count = break_lines(p, width, state->starts, state->hyphened,
+      state->cand_at, state->cand_fit);
+  state->starts[state->line_count] = p->unit_count;
+  state->total_lines = state->line_count;
+  if (p->options.max_lines && state->line_count > p->options.max_lines) {
+    state->line_count = p->options.max_lines;
+    state->more = true;
   }
-  // A line's runs are its units' (at most one each) and the hyphen it may end in; the last line
-  // may instead end in the truncation mark.
-  runs_bytes = (p->unit_count + line_count + 2) * sizeof *runs;
-  // The glyphs of the strokes: a point has at most KASHIDA_COPIES_MAX, and a line cannot hold
-  // more than its width in the shortest tatweel, one more to a point on it.
-  stroke_room = p->kcount * (KASHIDA_COPIES_MAX + 4);
+  state->runs_bytes = (p->unit_count + state->line_count + 2) * sizeof *state->runs;
+  state->stroke_room = p->kcount * (KASHIDA_COPIES_MAX + 4);
   if (p->kcount && width != GFNT_LAYOUT_UNBOUNDED) {
     const size_t per_line = (size_t)(width / p->kmin_adv) + 1;
 
-    if (line_count <= (SIZE_MAX / 8) / per_line
-        && line_count * per_line + 4 * p->kcount < stroke_room) {
-      stroke_room = line_count * per_line + 4 * p->kcount;
+    if (state->line_count <= (SIZE_MAX / 8) / per_line
+        && state->line_count * per_line + 4 * p->kcount < state->stroke_room) {
+      state->stroke_room = state->line_count * per_line + 4 * p->kcount;
     }
   }
-  // The glyphs of the text, those of the hyphen each line but the last may end in, and the
-  // truncation mark.
-  total_bytes = runs_bytes
-      + (p->glyph_count + line_count * p->hyphen_glyphs + ELL_GLYPHS + 1 + stroke_room)
-         * sizeof *placed;
-  lines = allocator->calloc_fn(allocator->ctx, line_count, sizeof *lines);
-  storage = allocator->calloc_fn(allocator->ctx, total_bytes, 1);
-  if (!lines || !storage) {
-    r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+  state->total_bytes = state->runs_bytes
+      + (p->glyph_count + state->line_count * p->hyphen_glyphs + ELL_GLYPHS + 1
+          + state->stroke_room) * sizeof *state->placed;
+  state->lines = allocator->calloc_fn(allocator->ctx, state->line_count, sizeof *state->lines);
+  state->storage = allocator->calloc_fn(allocator->ctx, state->total_bytes, 1);
+  if (!state->lines || !state->storage) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the layout");
-    goto done;
   }
-  runs = (GFNT_LineRun *)storage;
-  placed = (GFNT_PlacedGlyph *)(storage + runs_bytes);
+  state->runs = (GFNT_LineRun *)state->storage;
+  state->placed = (GFNT_PlacedGlyph *)(state->storage + state->runs_bytes);
+  return GFNT_OK;
+}
+
+static void layout_state_free(LayoutState * state) {
+  const GFNT_Allocator * allocator = state->allocator;
+
+  allocator->free_fn(allocator->ctx, state->starts);
+  allocator->free_fn(allocator->ctx, state->slices);
+  allocator->free_fn(allocator->ctx, state->order);
+  allocator->free_fn(allocator->ctx, state->slice_levels);
+  allocator->free_fn(allocator->ctx, state->ew);
+  allocator->free_fn(allocator->ctx, state->tabadv);
+  allocator->free_fn(allocator->ctx, state->gjf);
+  allocator->free_fn(allocator->ctx, state->gk);
+  allocator->free_fn(allocator->ctx, state->kres);
+  allocator->free_fn(allocator->ctx, state->spool);
+  allocator->free_fn(allocator->ctx, state->hyphened);
+  allocator->free_fn(allocator->ctx, state->cand_at);
+  allocator->free_fn(allocator->ctx, state->cand_fit);
+  allocator->free_fn(allocator->ctx, state->lines);
+  allocator->free_fn(allocator->ctx, state->storage);
+}
+
+/** Transfer the completed buffers to the public result, then release scratch storage. */
+static void layout_state_finish(LayoutState * state, GFNT_Layout * out,
+    const GFNT_Paragraph * p, GFNT_F26Dot6 width, bool vertical, GFNT_F26Dot6 y,
+    GFNT_F26Dot6 widest, size_t line_count, bool truncated, GFNT_Rect ink) {
+  out->lines = state->lines;
+  out->line_count = line_count;
+  out->writing_mode = p->mode;
+  out->width = vertical ? y : width == GFNT_LAYOUT_UNBOUNDED ? widest : width;
+  out->height = vertical ? (width == GFNT_LAYOUT_UNBOUNDED ? widest : width) : y;
+  out->truncated = truncated;
+  out->ink = ink;
+  out->allocator = state->allocator;
+  out->storage_ = state->storage;
+  state->lines = NULL;
+  state->storage = NULL;
+  layout_state_free(state);
+}
+
+/** Assemble logical units into bidi-reordered visual run slices and establish the line box. */
+static GFNT_Result build_line_slices(LineBuildState * state, GFNT_Error * error) {
+  const GFNT_Paragraph * p = state->paragraph;
+  const size_t ua = state->unit_start, ub = state->unit_end;
+  GFNT_Line * line = state->line;
+  size_t ns = 0;
+
+  for (size_t j = ua; j < ub; j++) {
+    const Unit * unit = &p->units[j];
+    const PRun * run = &p->runs[unit->run];
+    bool hang = j >= state->hang_from;
+    uint8_t level = hang ? p->para_level : run->level;
+    Slice * slice = ns ? &state->slices[ns - 1] : NULL;
+
+    if (!slice || slice->pr != run || slice->level != level || slice->hang != hang) {
+      slice = &state->slices[ns++];
+      slice->pr = run;
+      slice->src = p->glyphs;
+      slice->ellipsis = false;
+      slice->hyphen = false;
+      slice->level = level;
+      slice->hang = hang;
+      slice->g_lo = unit->g_lo;
+      slice->g_hi = unit->g_hi;
+      slice->b_lo = p->cp_byte[unit->cp_start];
+      slice->b_hi = p->cp_byte[unit->cp_end];
+      slice->advance = 0;
+    }
+    if (p->cp_byte[unit->cp_start] < slice->b_lo) slice->b_lo = p->cp_byte[unit->cp_start];
+    if (p->cp_byte[unit->cp_end] > slice->b_hi) slice->b_hi = p->cp_byte[unit->cp_end];
+    if (unit->g_lo < slice->g_lo) slice->g_lo = unit->g_lo;
+    if (unit->g_hi > slice->g_hi) slice->g_hi = unit->g_hi;
+  }
+  if (state->hyphenated) {
+    const size_t at = p->cp_byte[p->units[ub - 1].cp_end];
+    Slice * slice = &state->slices[ns++];
+
+    for (size_t g = 0; g < state->hyphen_count; g++) {
+      state->hyphen_glyphs[g].cluster = (uint32_t)at;
+    }
+    slice->pr = state->hyphen_run;
+    slice->src = state->hyphen_glyphs;
+    slice->ellipsis = false;
+    slice->hyphen = true;
+    slice->level = state->hyphen_run->level;
+    slice->hang = false;
+    slice->g_lo = 0;
+    slice->g_hi = state->hyphen_count;
+    slice->b_lo = slice->b_hi = at;
+    slice->advance = 0;
+  }
+  if (state->truncated) {
+    size_t at = ub > ua ? p->cp_byte[p->units[ub - 1].cp_end]
+        : (ua < p->unit_count ? p->cp_byte[p->units[ua].cp_start] : p->cp_byte[p->length]);
+    Slice * slice = &state->slices[ns++];
+
+    for (size_t g = 0; g < state->ellipsis_count; g++) {
+      state->ellipsis_glyphs[g].cluster = (uint32_t)at;
+    }
+    slice->pr = state->ellipsis_run;
+    slice->src = state->ellipsis_glyphs;
+    slice->ellipsis = true;
+    slice->hyphen = false;
+    slice->level = p->para_level;
+    slice->hang = false;
+    slice->g_lo = 0;
+    slice->g_hi = state->ellipsis_count;
+    slice->b_lo = slice->b_hi = at;
+    slice->advance = 0;
+  }
+  for (size_t k = 0; k < ns; k++) state->levels[k] = state->slices[k].level;
+  if (ns && guni_bidi_reorder(state->levels, ns, state->order, p->unit_count + 1) != GUNI_OK) {
+    return gfnt_error_set(error, GFNT_ERR_INTERNAL, 0, 0, GFNT_GLYPH_NONE,
+        "the line could not be put in visual order");
+  }
+  line->start = ua < p->unit_count ? p->cp_byte[p->units[ua].cp_start] : p->cp_byte[p->length];
+  line->end = ub > ua ? p->cp_byte[p->units[ub - 1].cp_end] : line->start;
+  if (state->vertical) {
+    line->box.x = state->measured->top_y;
+    line->box.width = state->measured->thickness;
+    line->ascent = line->descent = state->measured->thickness / 2;
+  }
+  else {
+    line->box.y = state->measured->top_y;
+    line->box.height = state->measured->ascent + state->measured->descent + state->measured->gap;
+    line->ascent = state->measured->ascent;
+    line->descent = state->measured->descent;
+    line->baseline = state->top_y + state->measured->gap / 2 + state->measured->ascent;
+  }
+  state->slice_count = ns;
+  return GFNT_OK;
+}
+
+/** Record the phase results and apply physical alignment to every line. */
+static void layout_process_finish(LayoutState * state, const GFNT_Paragraph * p,
+    GFNT_F26Dot6 width, bool vertical, bool para_rtl, PGlyph * spool,
+    size_t spool_len, size_t spool_cap, size_t run_used, size_t glyph_used,
+    bool truncated, GFNT_F26Dot6 y, GFNT_F26Dot6 widest) {
+  state->spool = spool;
+  state->spool_len = spool_len;
+  state->spool_cap = spool_cap;
+  state->run_used = run_used;
+  state->glyph_used = glyph_used;
+  state->any_truncated = truncated;
+  state->y = y;
+  state->widest = widest;
+  state->ink = align_lines(p, state->lines, state->line_count,
+      width == GFNT_LAYOUT_UNBOUNDED ? widest : width, y, para_rtl, vertical);
+}
+
+/** Run measurement, justification, visual-run construction, placement, then alignment. */
+static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
+    bool vertical, bool para_rtl, LayoutState * state, GFNT_Error * error) {
+  const GFNT_Allocator * allocator = state->allocator;
+  size_t * starts = state->starts, * order = state->order;
+  Slice * slices = state->slices;
+  uint8_t * slice_levels = state->slice_levels, * gjf = state->gjf;
+  GFNT_F26Dot6 * ew = state->ew, * tabadv = state->tabadv;
+  uint32_t * gk = state->gk;
+  KReshape * kres = state->kres;
+  PGlyph * spool = state->spool;
+  size_t spool_len = state->spool_len, spool_cap = state->spool_cap;
+  bool * hyphened = state->hyphened;
+  GFNT_Line * lines = state->lines;
+  GFNT_LineRun * runs = state->runs;
+  GFNT_PlacedGlyph * placed = state->placed;
+  size_t line_count = state->line_count, total_lines = state->total_lines;
+  size_t run_used = state->run_used, glyph_used = state->glyph_used;
+  bool more = state->more, any_truncated = false;
+  GFNT_F26Dot6 y = 0, widest = 0;
+  GFNT_Result r = GFNT_OK;
 
   for (size_t li = 0; li < line_count; li++) {
     size_t ua = starts[li];
     size_t ub = starts[li + 1];
     GFNT_Line * line = &lines[li];
+    LayoutLineState line_state = measure_line(p, ua, ub, width, y, ew, tabadv);
     size_t hang_from;
     size_t ns = 0;
-    GFNT_F26Dot6 asc = 0, desc = 0, gap = 0, thick = 0;
-    GFNT_F26Dot6 cursor = 0, lead = 0;
-    bool seen_text = false;
-    bool ink_set = false;
-    GFNT_F26Dot6 ink_l = 0, ink_t = 0, ink_r = 0, ink_b = 0;
+    PlacementState placement = {0};
     PGlyph ell_g[ELL_GLYPHS];
     size_t ell_n = 0;
     GFNT_F26Dot6 ell_w = 0, natural = 0, extra = 0, extra_rem = 0;
-    size_t expanded = 0;
     PRun ell_run;
     PGlyph hy_g[ELL_GLYPHS];
     size_t hy_n = 0;
@@ -1862,24 +2467,8 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     bool trunc_line = false;
     bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
 
-    {
-      GFNT_F26Dot6 pos = 0;
-
-      for (size_t j = ua; j < ub; j++) {
-        ew[j] = eff_width(p, &p->units[j], pos);
-        pos += ew[j];
-        if (p->units[j].tab) {
-          tabadv[p->units[j].g_lo] = ew[j];
-        }
-      }
-    }
-    hang_from = ub;
-    while (hang_from > ua && p->units[hang_from - 1].space) {
-      hang_from--;
-    }
-    for (size_t j = ua; j < hang_from; j++) {
-      natural += ew[j];
-    }
+    hang_from = line_state.hang_from;
+    natural = line_state.natural;
     if (hyphened[li] && ub > ua) {
       // The line ends inside a word: a hyphen follows its last letter, and takes room.
       const PRun * last = &p->runs[p->units[ub - 1].run];
@@ -1887,7 +2476,10 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       r = shape_string(p, last->span, &p->hyphen_cp[last->span], 1, hy_g, &hy_n, &hy_w,
           &hy_run, hyphen_orientation(p), error);
       if (r != GFNT_OK) {
-        goto done;
+        state->spool = spool;
+        state->spool_len = spool_len;
+        state->spool_cap = spool_cap;
+        return r;
       }
       hy_run.level = last->level;
       hy_line = true;
@@ -1902,7 +2494,10 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
       r = shape_string(p, span, p->ell, p->ell_count, ell_g, &ell_n, &ell_w,
           &ell_run, -1, error);
       if (r != GFNT_OK) {
-        goto done;
+        state->spool = spool;
+        state->spool_len = spool_len;
+        state->spool_cap = spool_cap;
+        return r;
       }
       if (bounded) {
         GFNT_F26Dot6 room = width - ell_w, used = 0;
@@ -1925,480 +2520,84 @@ GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     if (more && li + 1 == line_count) {
       any_truncated = true;
     }
-    if (p->options.align == GFNT_ALIGN_JUSTIFY && bounded && !trunc_line
-        && ub > ua && (p->options.justify_last
-            || (li + 1 < total_lines && !p->units[ub - 1].hard))) {
-      const size_t opportunities = mark_justification(p, ua, hang_from, gjf);
-      GFNT_F26Dot6 slack = width - natural;
-      size_t strokes = 0;
+    {
+      JustificationState justification = {
+        p, allocator, gjf, gk, kres, &spool, &spool_len, &spool_cap
+      };
 
-      if (p->kcount && slack > 0) {
-        // The words of this line that can take a stroke: every unit it replaces is on it.
-        for (size_t j = ua; j + 1 < hang_from; j++) {
-          const Unit * u = &p->units[j];
-
-          if (u->kashida && p->kpoints[u->kashida - 1].lo >= ua
-              && p->kpoints[u->kashida - 1].hi < hang_from) {
-            strokes++;
-          }
-        }
-      }
-      if ((opportunities || strokes) && slack > 0) {
-        GFNT_F26Dot6 spaced = slack;
-
-        if (strokes) {
-          // The strokes' part of the slack, shared equally. Each takes as many whole tatweels as
-          // fit, and what it cannot take falls to the spaces.
-          GFNT_F26Dot6 want = opportunities
-              ? (GFNT_F26Dot6)((int64_t)slack * (0x10000 - p->options.space_share) / 0x10000)
-              : slack;
-          GFNT_F26Dot6 each = want / (GFNT_F26Dot6)strokes;
-          GFNT_F26Dot6 rem = want % (GFNT_F26Dot6)strokes;
-          GFNT_F26Dot6 carry = 0;      // what a word could not use goes to the next
-
-          for (size_t j = ua; j + 1 < hang_from; j++) {
-            const Unit * u = &p->units[j];
-            const KPoint * kp;
-            GFNT_F26Dot6 share;
-            PGlyph fit_glyphs[KASHIDA_PROBE];
-            KReshape fit;
-            bool fits;
-
-            if (!u->kashida) {
-              continue;
-            }
-            kp = &p->kpoints[u->kashida - 1];
-            if (kp->lo < ua || kp->hi >= hang_from) {
-              continue;
-            }
-            share = each + (rem > 0 ? 1 : 0) + carry;
-            if (rem > 0) {
-              rem--;
-            }
-            r = kashida_fit(p, kp, share, fit_glyphs, &fit, &fits, error);
-            if (r != GFNT_OK) {
-              goto done;
-            }
-            if (!fits) {
-              carry = share;           // less than one tatweel: the word keeps its letters
-              continue;
-            }
-            carry = share - fit.growth;
-            if (spool_len + fit.count > spool_cap) {
-              size_t cap2 = spool_cap ? spool_cap * 2 : 256;
-              PGlyph * grown;
-
-              while (cap2 < spool_len + fit.count) {
-                cap2 *= 2;
-              }
-              grown = allocator->realloc_fn(allocator->ctx, spool, cap2 * sizeof *grown);
-              if (!grown) {
-                r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-                    "no memory for the layout");
-                goto done;
-              }
-              spool = grown;
-              spool_cap = cap2;
-            }
-            fit.first = spool_len;
-            for (size_t q = 0; q < fit.count; q++) {
-              spool[spool_len++] = fit_glyphs[q];
-            }
-            kres[u->kashida - 1] = fit;
-            gk[fit.g_lo] = u->kashida;
-            for (size_t g = fit.g_lo + 1; g < fit.g_hi; g++) {
-              gk[g] = KASHIDA_SKIP;
-            }
-            spaced -= fit.growth;
-          }
-        }
-        if (opportunities) {
-          extra = spaced / (GFNT_F26Dot6)opportunities;
-          extra_rem = spaced % (GFNT_F26Dot6)opportunities;
-        }
-        line->justified = true;
-      }
-      else {
-        for (size_t j = ua; j < hang_from; j++) {
-          for (size_t g = p->units[j].g_lo; g < p->units[j].g_hi; g++) {
-            gjf[g] = 0;
-          }
-        }
+      r = justify_line(&justification, line, ua, ub, hang_from, natural,
+          line_state.available_width, li, total_lines, bounded, trunc_line,
+          &extra, &extra_rem, error);
+      if (r != GFNT_OK) {
+        state->spool = spool;
+        state->spool_len = spool_len;
+        state->spool_cap = spool_cap;
+        return r;
       }
     }
-    // Slices: a run of units of one face and level.
-    for (size_t j = ua; j < ub; j++) {
-      const Unit * u = &p->units[j];
-      const PRun * pr = &p->runs[u->run];
-      bool hang = j >= hang_from;
-      uint8_t level = hang ? p->para_level : pr->level;
-      Slice * s = ns ? &slices[ns - 1] : NULL;
+    {
+      LineBuildState build = {
+        p, slices, slice_levels, order, line, ua, ub, hang_from, 0,
+        hy_line, trunc_line, vertical, hy_g, ell_g, hy_n, ell_n,
+        &hy_run, &ell_run, &line_state, y
+      };
 
-      if (pr->ascent > asc) asc = pr->ascent;
-      if (pr->descent > desc) desc = pr->descent;
-      if (pr->gap > gap) gap = pr->gap;
-      if (pr->ascent + pr->descent + pr->gap > thick) thick = pr->ascent + pr->descent + pr->gap;
-      if (!s || s->pr != pr || s->level != level || s->hang != hang) {
-        s = &slices[ns++];
-        s->pr = pr;
-        s->src = p->glyphs;
-        s->ellipsis = false;
-        s->hyphen = false;
-        s->level = level;
-        s->hang = hang;
-        s->g_lo = u->g_lo;
-        s->g_hi = u->g_hi;
-        s->b_lo = p->cp_byte[u->cp_start];
-        s->b_hi = p->cp_byte[u->cp_end];
-        s->advance = 0;
+      r = build_line_slices(&build, error);
+      if (r != GFNT_OK) {
+        state->spool = spool;
+        state->spool_len = spool_len;
+        state->spool_cap = spool_cap;
+        return r;
       }
-      if (p->cp_byte[u->cp_start] < s->b_lo) s->b_lo = p->cp_byte[u->cp_start];
-      if (p->cp_byte[u->cp_end] > s->b_hi) s->b_hi = p->cp_byte[u->cp_end];
-      if (u->g_lo < s->g_lo) s->g_lo = u->g_lo;
-      if (u->g_hi > s->g_hi) s->g_hi = u->g_hi;
+      ns = build.slice_count;
     }
-    if (hy_line) {
-      const size_t at = p->cp_byte[p->units[ub - 1].cp_end];
-      Slice * s = &slices[ns++];
-
-      for (size_t g = 0; g < hy_n; g++) {
-        hy_g[g].cluster = (uint32_t)at;
-      }
-      s->pr = &hy_run;
-      s->src = hy_g;
-      s->ellipsis = false;
-      s->hyphen = true;
-      s->level = hy_run.level;
-      s->hang = false;
-      s->g_lo = 0;
-      s->g_hi = hy_n;
-      s->b_lo = s->b_hi = at;
-      s->advance = 0;
-    }
-    if (trunc_line) {
-      size_t at = ub > ua ? p->cp_byte[p->units[ub - 1].cp_end]
-                          : (ua < p->unit_count ? p->cp_byte[p->units[ua].cp_start]
-                                                : p->cp_byte[p->length]);
-      Slice * s = &slices[ns++];
-
-      for (size_t g = 0; g < ell_n; g++) {
-        ell_g[g].cluster = (uint32_t)at;
-      }
-      s->pr = &ell_run;
-      s->src = ell_g;
-      s->ellipsis = true;
-      s->hyphen = false;
-      s->level = p->para_level;
-      s->hang = false;
-      s->g_lo = 0;
-      s->g_hi = ell_n;
-      s->b_lo = s->b_hi = at;
-      s->advance = 0;
-    }
-    if (ua == ub) {
-      const PRun * pr = ua < p->unit_count ? &p->runs[p->units[ua].run]
-                                           : &p->fallback_metrics;
-      const PRun * src = p->run_count ? (ua > 0 ? &p->runs[p->units[ua - 1].run] : pr)
-                                      : pr;
-
-      asc = src->ascent;
-      desc = src->descent;
-      gap = src->gap;
-      thick = asc + desc + gap;
-    }
-    for (size_t k = 0; k < ns; k++) {
-      slice_levels[k] = slices[k].level;
-    }
-    if (ns && guni_bidi_reorder(slice_levels, ns, order, p->unit_count + 1)
-            != GUNI_OK) {
-      r = gfnt_error_set(error, GFNT_ERR_INTERNAL, 0, 0, GFNT_GLYPH_NONE,
-          "the line could not be put in visual order");
-      goto done;
-    }
-    line->runs = &runs[run_used];
-    line->run_count = ns;
-    line->start = ua < p->unit_count ? p->cp_byte[p->units[ua].cp_start]
-                                     : p->cp_byte[p->length];
-    line->end = ub > ua ? p->cp_byte[p->units[ub - 1].cp_end] : line->start;
-    if (vertical) {
-      // A column is as thick as its thickest box: every box is centred on the same axis.
-      line->box.x = y;   // the block offset so far; made absolute below
-      line->box.width = thick;
-      line->ascent = line->descent = thick / 2;
-    }
-    else {
-      line->box.y = y;
-      line->box.height = asc + desc + gap;
-      line->ascent = asc;
-      line->descent = desc;
-      line->baseline = y + gap / 2 + asc;
-    }
-    for (size_t v = 0; v < ns; v++) {
-      const Slice * s = &slices[order[v]];
-      const PRun * pr = s->pr;
-      GFNT_LineRun * lr = &runs[run_used++];
-
-      lr->face = pr->face;
-      lr->span = pr->span;
-      lr->face_index = pr->face_index;
-      lr->fallback = pr->face_index != 0;
-      lr->ellipsis = s->ellipsis;
-      lr->hyphen = s->hyphen;
-      lr->level = s->level;
-      lr->orientation = (GFNT_Orientation)pr->orient;
-      const size_t run_first = glyph_used;
-
-      lr->glyphs = &placed[glyph_used];
-      lr->pos = cursor;
-      for (size_t g = s->g_lo; g < s->g_hi; g++) {
-        const PGlyph * list = &s->src[g];
-        size_t list_n = 1;
-
-        if (line->justified && !s->hang && s->src == p->glyphs && p->kcount && gk[g]) {
-          // A stroke: the glyphs shaped with its tatweels stand for those of its units.
-          if (gk[g] == KASHIDA_SKIP) {
-            continue;
-          }
-          list = &spool[kres[gk[g] - 1].first];
-          list_n = kres[gk[g] - 1].count;
-        }
-        for (size_t q = 0; q < list_n; q++) {
-          const PGlyph * pg = &list[q];
-          GFNT_PlacedGlyph * pl = &placed[glyph_used++];
-          GFNT_F26Dot6 adv = pg->tab && s->src == p->glyphs ? tabadv[g] : pg->advance;
-
-          GFNT_F26Dot6 lead = 0, trail = 0, org, l, t, rr, b;
-
-          if (line->justified && !s->hang && s->src == p->glyphs && list == &s->src[g]) {
-            // The space a justified line gives this glyph, before it and after it as placed.
-            if (gjf[g] & 1) {
-              lead = extra + (expanded < (size_t)extra_rem ? 1 : 0);
-              expanded++;
-            }
-            if (gjf[g] & 2) {
-              trail = extra + (expanded < (size_t)extra_rem ? 1 : 0);
-              expanded++;
-            }
-          }
-          org = cursor + lead;
-          pl->glyph = pg->glyph;
-          pl->cluster = pg->cluster;
-          pl->advance = lead + adv + trail;
-          if (!vertical) {
-            pl->pen_x = cursor;
-            pl->pen_y = line->baseline;
-            pl->x = org + pg->dx;
-            pl->y = line->baseline - pg->dy;
-            l = pl->x + pg->ix0; t = pl->y - pg->iy1;
-            rr = pl->x + pg->ix1; b = pl->y - pg->iy0;
-          }
-          else if (pr->orient == GFNT_ORIENT_RUN_UPRIGHT) {
-            // On the axis (x = 0 here; the column's own axis is added below): the shaper's offset
-            // centres the glyph's advance on it.
-            pl->pen_x = 0;
-            pl->pen_y = cursor;
-            pl->x = pg->dx;
-            pl->y = org - pg->dy;
-            l = pl->x + pg->ix0; t = pl->y - pg->iy1;
-            rr = pl->x + pg->ix1; b = pl->y - pg->iy0;
-          }
-          else {
-            // Turned a quarter clockwise: the glyph's up is the page's right and its advance is
-            // down. The alphabetic baseline lies half of (ascent - descent) before the axis, so the
-            // em box is centred on it.
-            pl->pen_x = -(pr->ascent - pr->descent) / 2;
-            pl->pen_y = cursor;
-            pl->x = pl->pen_x + pg->dy;
-            pl->y = org + pg->dx;
-            l = pl->x + pg->iy0; t = pl->y + pg->ix0;
-            rr = pl->x + pg->iy1; b = pl->y + pg->ix1;
-          }
-          cursor += lead + adv + trail;
-          if (pg->has_ink) {
-
-            if (!ink_set) {
-              ink_l = l; ink_t = t; ink_r = rr; ink_b = b;
-              ink_set = true;
-            }
-            else {
-              if (l < ink_l) ink_l = l;
-              if (t < ink_t) ink_t = t;
-              if (rr > ink_r) ink_r = rr;
-              if (b > ink_b) ink_b = b;
-            }
-          }
-        }
-      }
-      lr->glyph_count = glyph_used - run_first;
-      lr->advance = cursor - lr->pos;
-      lr->start = s->b_lo;
-      lr->end = s->b_hi;
-      if (s->hang && !seen_text) {
-        lead += lr->advance;
-      }
-      if (!s->hang) {
-        seen_text = true;
-        line->extent += lr->advance;
-      }
-    }
+    placement.paragraph = p;
+    placement.slices = slices;
+    placement.order = order;
+    placement.runs = runs;
+    placement.run_used = &run_used;
+    placement.placed = placed;
+    placement.glyph_used = &glyph_used;
+    placement.gjf = gjf;
+    placement.gk = gk;
+    placement.kres = kres;
+    placement.spool = spool;
+    placement.tabadv = tabadv;
+    placement.extra = extra;
+    placement.extra_rem = extra_rem;
+    placement.vertical = vertical;
+    place_line(&placement, line, ns);
     line->truncated = trunc_line;
-    if (ink_set) {
-      line->ink.x = ink_l;
-      line->ink.y = ink_t;
-      line->ink.width = ink_r - ink_l;
-      line->ink.height = ink_b - ink_t;
-    }
-    line->offset = -lead;   // made absolute by the alignment pass
+    line->offset = line_state.start_offset - placement.lead;
     if (line->extent > widest) {
       widest = line->extent;
     }
     y += vertical ? line->box.width : line->box.height;
   }
-  {
-    GFNT_F26Dot6 avail = width == GFNT_LAYOUT_UNBOUNDED ? widest : width;
-    const bool flip = p->mode == GFNT_WRITING_SIDEWAYS_LR;
-    bool ink_any = false;
+  layout_process_finish(state, p, width, vertical, para_rtl, spool, spool_len,
+      spool_cap, run_used, glyph_used, any_truncated, y, widest);
+  return GFNT_OK;
+}
 
-    for (size_t li = 0; li < line_count; li++) {
-      GFNT_Line * line = &lines[li];
-      GFNT_F26Dot6 slack = avail - line->extent;
-      GFNT_F26Dot6 off;
-      GFNT_Align a = p->options.align;
-      GFNT_F26Dot6 shift;
-      GFNT_F26Dot6 across = 0;   // added to what lies across the line: a column's axis
+GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
+    GFNT_Layout * out, GFNT_Error * error) {
+  LayoutState state = {0};
+  bool para_rtl;
+  const bool vertical = p ? p->vertical : false;
+  GFNT_Result r = GFNT_OK;
 
-      if (a == GFNT_ALIGN_JUSTIFY) {
-        a = GFNT_ALIGN_START;
-      }
-      if (a == GFNT_ALIGN_START) {
-        a = para_rtl ? GFNT_ALIGN_RIGHT : GFNT_ALIGN_LEFT;
-      }
-      else if (a == GFNT_ALIGN_END) {
-        a = para_rtl ? GFNT_ALIGN_LEFT : GFNT_ALIGN_RIGHT;
-      }
-      if (slack < 0) {
-        off = para_rtl ? slack : 0;
-      }
-      else {
-        off = a == GFNT_ALIGN_RIGHT ? slack : a == GFNT_ALIGN_CENTER ? slack / 2 : 0;
-      }
-      shift = off + line->offset;   // line->offset held minus the leading hang
-      line->offset = off;
-      if (vertical) {
-        // Columns stack from the right (rl) or from the left (lr); line->box.x held the
-        // thickness before this one.
-        const GFNT_F26Dot6 before = line->box.x;
-
-        line->box.x = p->mode == GFNT_WRITING_VERTICAL_LR ? before : y - before - line->box.width;
-        line->box.y = 0;
-        line->box.height = avail;
-        across = line->box.x + line->box.width / 2;
-        line->baseline = across;
-      }
-      else {
-        line->box.x = 0;
-        line->box.width = avail;
-      }
-      if (line->ink.width || line->ink.height) {
-        if (vertical) {
-          line->ink.x += across;
-          line->ink.y += shift;
-        }
-        else {
-          line->ink.x += shift;
-        }
-      }
-      for (size_t k = 0; k < line->run_count; k++) {
-        GFNT_LineRun * lr = (GFNT_LineRun *)&line->runs[k];
-
-        lr->pos += shift;
-        for (size_t g = 0; g < lr->glyph_count; g++) {
-          GFNT_PlacedGlyph * pl = (GFNT_PlacedGlyph *)&lr->glyphs[g];
-
-          if (vertical) {
-            pl->pen_x += across;
-            pl->x += across;
-            pl->pen_y += shift;
-            pl->y += shift;
-          }
-          else {
-            pl->pen_x += shift;
-            pl->x += shift;
-          }
-        }
-      }
-      if (flip) {
-        // sideways-lr is sideways-rl turned half a turn about the box.
-        const GFNT_F26Dot6 bw = y, bh = avail;
-
-        line->box.x = bw - (line->box.x + line->box.width);
-        line->offset = bh - (line->offset + line->extent);
-        line->baseline = bw - line->baseline;
-        if (line->ink.width || line->ink.height) {
-          line->ink.x = bw - (line->ink.x + line->ink.width);
-          line->ink.y = bh - (line->ink.y + line->ink.height);
-        }
-        for (size_t k = 0; k < line->run_count; k++) {
-          GFNT_LineRun * lr = (GFNT_LineRun *)&line->runs[k];
-
-          lr->pos = bh - (lr->pos + lr->advance);
-          if (lr->orientation == GFNT_ORIENT_RUN_CW) {
-            lr->orientation = GFNT_ORIENT_RUN_CCW;
-          }
-          for (size_t g = 0; g < lr->glyph_count; g++) {
-            GFNT_PlacedGlyph * pl = (GFNT_PlacedGlyph *)&lr->glyphs[g];
-
-            pl->pen_x = bw - pl->pen_x;
-            pl->pen_y = bh - pl->pen_y;
-            pl->x = bw - pl->x;
-            pl->y = bh - pl->y;
-          }
-        }
-      }
-      if (line->ink.width || line->ink.height) {
-        if (ink_any) {
-          GFNT_F26Dot6 r1 = ink_all.x + ink_all.width, b1 = ink_all.y + ink_all.height;
-          GFNT_F26Dot6 r2 = line->ink.x + line->ink.width;
-          GFNT_F26Dot6 b2 = line->ink.y + line->ink.height;
-
-          if (line->ink.x < ink_all.x) ink_all.x = line->ink.x;
-          if (line->ink.y < ink_all.y) ink_all.y = line->ink.y;
-          ink_all.width = (r2 > r1 ? r2 : r1) - ink_all.x;
-          ink_all.height = (b2 > b1 ? b2 : b1) - ink_all.y;
-        }
-        else {
-          ink_all = line->ink;
-          ink_any = true;
-        }
-      }
-    }
-  }
-  out->lines = lines;
-  out->line_count = line_count;
-  out->writing_mode = p->mode;
-  out->width = vertical ? y : width == GFNT_LAYOUT_UNBOUNDED ? widest : width;
-  out->height = vertical ? (width == GFNT_LAYOUT_UNBOUNDED ? widest : width) : y;
-  out->truncated = any_truncated;
-  out->ink = ink_all;
-  out->allocator = allocator;
-  out->storage_ = storage;
-  lines = NULL;
-  storage = NULL;
+  gfnt_error_clear(error);
+  if (!p || !out || width < 0) return GFNT_ERR_INVALID;
+  para_rtl = (p->para_level & 1) != 0;
+  state.allocator = p->allocator;
+  r = layout_state_allocate(&state, p, width, error);
+  if (r != GFNT_OK) goto done;
+  r = layout_process_lines(p, width, vertical, para_rtl, &state, error);
+  if (r != GFNT_OK) goto done;
+  layout_state_finish(&state, out, p, width, vertical, state.y, state.widest,
+      state.line_count, state.any_truncated, state.ink);
+  return GFNT_OK;
 done:
-  allocator->free_fn(allocator->ctx, starts);
-  allocator->free_fn(allocator->ctx, slices);
-  allocator->free_fn(allocator->ctx, order);
-  allocator->free_fn(allocator->ctx, slice_levels);
-  allocator->free_fn(allocator->ctx, ew);
-  allocator->free_fn(allocator->ctx, tabadv);
-  allocator->free_fn(allocator->ctx, gjf);
-  allocator->free_fn(allocator->ctx, gk);
-  allocator->free_fn(allocator->ctx, kres);
-  allocator->free_fn(allocator->ctx, spool);
-  allocator->free_fn(allocator->ctx, hyphened);
-  allocator->free_fn(allocator->ctx, cand_at);
-  allocator->free_fn(allocator->ctx, cand_fit);
-  allocator->free_fn(allocator->ctx, lines);
-  allocator->free_fn(allocator->ctx, storage);
+  layout_state_free(&state);
   return r;
 }

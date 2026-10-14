@@ -469,7 +469,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
-	check-reader check-seeds
+	check-reader check-seeds check-layout-unit-snapshot
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -700,7 +700,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-layout-unit-snapshot check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -1175,15 +1175,16 @@ check-oracle-hb: $(EXAMPLES)
 
 check-oracle-layout: ## Lay out paragraphs in every corpus font and hold them to ICU, HarfBuzz and fontTools
 check-oracle-layout: $(EXAMPLES)
-	@$(ORACLE_RUN) icu,harfbuzz,fonttools -- python3 $(ORACLE)/layout_diff.py --all --quiet
+	@$(ORACLE_RUN) icu,harfbuzz,fonttools -- python3 $(ORACLE)/layout_diff.py --all --quiet \
+		--snapshot-check tests/data/golden/layout-snapshot.jsonl.gz
 
 check-oracle-css: ## Lay out vertical and horizontal paragraphs and hold them to Chromium (CSS Writing Modes)
 check-oracle-css: $(EXAMPLES)
-	@$(ORACLE_RUN) chrome -- python3 $(ORACLE)/css_layout_diff.py
+	@GHOTI_LAYOUT_SNAPSHOT_MODE=check $(ORACLE_RUN) chrome -- python3 $(ORACLE)/css_layout_diff.py
 
 check-oracle-pango: ## Lay out paragraphs, vertical ones included, and hold the Pango options to Pango
 check-oracle-pango: $(EXAMPLES)
-	@$(ORACLE_RUN) pango -- python3 $(ORACLE)/pango_layout_diff.py
+	@GHOTI_LAYOUT_SNAPSHOT_MODE=check $(ORACLE_RUN) pango -- python3 $(ORACLE)/pango_layout_diff.py
 
 check-oracle-math: ## Read every MATH table through the public reader and hold it to fontTools
 check-oracle-math: $(EXAMPLES)
@@ -1195,14 +1196,23 @@ check-oracle-instances: $(EXAMPLES)
 
 check-oracle-orientation: ## Set every BMP character as Pango does in vertical text (GFNT_ORIENT_MIXED_PANGO)
 check-oracle-orientation: $(EXAMPLES)
-	@$(ORACLE_RUN) fonttools,pango -- python3 $(ORACLE)/orientation_survey.py --pango
+	@GHOTI_LAYOUT_SNAPSHOT_MODE=check $(ORACLE_RUN) fonttools,pango -- python3 $(ORACLE)/orientation_survey.py --pango
 
 # Not in check-oracle: its oracle is a set of screenshots of an unmerged Chromium patch, fetched
 # over the network by `tools/oracle/kashida_compare.py --fetch` (pinned by the hash of the font
 # they were made with), and read with the host's numpy and Pillow, not from a pinned image.
 check-oracle-kashida: ## Hold kashida justification to the screenshots of the Chromium patch (after --fetch)
 check-oracle-kashida: $(EXAMPLES)
-	@python3 $(ORACLE)/kashida_compare.py
+	@GHOTI_LAYOUT_SNAPSHOT_MODE=check \
+		GHOTI_LAYOUT_DRIVER=$(APP_DIR)/examples/font-layout$(EXE_EXTENSION) \
+		python3 $(ORACLE)/kashida_compare.py
+
+check-layout-unit-snapshot: $(APP_DIR)/testLayout$(EXE_EXTENSION) ## Compare unit layout cases field by field with their baseline snapshot
+	@mkdir -p build/oracle/layout
+	@: > build/oracle/layout/unit-layout-snapshot.jsonl
+	@GHOTI_UNIT_LAYOUT_SNAPSHOT=build/oracle/layout/unit-layout-snapshot.jsonl \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/testLayout$(EXE_EXTENSION) --gtest_brief=1
+	@cmp tests/data/golden/unit-layout-snapshot.jsonl build/oracle/layout/unit-layout-snapshot.jsonl
 
 check-oracle-color: ## Read every CPAL palette and COLR layer of the color fixtures and diff against fontTools
 check-oracle-color: $(EXAMPLES)

@@ -34,6 +34,7 @@ import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import oracle_env
+import layout_snapshot
 
 ROOT = oracle_env.ROOT
 SCRATCH = os.path.join(ROOT, "build", "oracle", "orientation")
@@ -125,6 +126,9 @@ def main():
                                "--orient", orient, font],
                               input="\n".join(requests) + "\n", capture_output=True, text=True)
     answers = [json.loads(line) for line in finished.stdout.splitlines()]
+    for i, cp in enumerate(cps):
+        layout_snapshot.record("orientation", "alone-%d" % cp, answers[2 * i])
+        layout_snapshot.record("orientation", "between-%d" % cp, answers[2 * i + 1])
 
     def pango_way(job, result, between):
         adv = result["chars"][1 if between else 0][2]
@@ -168,7 +172,9 @@ def main():
     if "--pango" in sys.argv:
         left = len(differ["alone"]) + len(differ["between"])
         print("orientation_survey --pango: %d characters differ from Pango" % left)
+        layout_snapshot.finish("orientation")
         return 1 if left else 0
+    layout_snapshot.finish("orientation")
     return 0
 
 

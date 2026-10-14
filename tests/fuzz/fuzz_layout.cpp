@@ -269,8 +269,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     annotation.kind = (data[3] & 0x02) ? GFNT_ANNOTATION_EMPHASIS : GFNT_ANNOTATION_RUBY;
     annotation.position = (data[3] & 0x04) ? GFNT_ANNOTATION_UNDER : GFNT_ANNOTATION_OVER;
     annotation.style = span.style;
-    annotation.text = "A";
-    annotation.text_length = 1;
+    if (annotation.kind == GFNT_ANNOTATION_RUBY) {
+      annotation.text = "A";
+      annotation.text_length = 1;
+    }
     annotation.group_break = (data[3] & 0x08) != 0;
     annotation.mark_kind = annotation.kind == GFNT_ANNOTATION_EMPHASIS
         ? GFNT_EMPHASIS_MARK_DOT : GFNT_EMPHASIS_MARK_DEFAULT;
@@ -447,6 +449,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     object_span.style.inline_object = &object;
     object_options.max_lines = 0;
     object_options.ellipsis = nullptr;
+    object_options.annotations = nullptr;
+    object_options.annotation_count = 0;
     check(gfnt_paragraph_create(marker, 3, &object_span, 1, &object_options, nullptr,
         &object_paragraph, nullptr) == GFNT_OK);
     check(gfnt_paragraph_layout(object_paragraph, room, &object_layout, nullptr) == GFNT_OK);

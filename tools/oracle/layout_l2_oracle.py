@@ -107,34 +107,40 @@ font:50px "Vertical Text"; color:white; }
 
 
 def main():
-    print(oracle_env.provenance(["chrome", "pango", "firefox"]))
+    names = [n for n in os.environ.get("GHOTI_LAYOUT_L2_ORACLES", "chrome,pango,firefox").split(",") if n]
+    if not names or any(n not in ("chrome", "pango", "firefox") for n in names):
+        raise RuntimeError("GHOTI_LAYOUT_L2_ORACLES must name chrome, pango, and/or firefox")
+    print(oracle_env.provenance(names))
     mine = ours()
     lib = [[v / 64 for v in r] for r in mine["chars"]]
-    c = browser()
-    p = pango()
-    f = firefox()
+    c = browser() if "chrome" in names else None
+    p = pango() if "pango" in names else None
+    f = firefox() if "firefox" in names else None
     problems = []
     # The synthetic object must have the requested advance and ascent/descent box. Its baseline
     # is shared with the two text neighbors, so compare all three inline positions.
-    if abs(c["o"][2] - ADVANCE) > TOL or abs(lib[1][0] - c["o"][0]) > 1.1:
+    if c and (abs(c["o"][2] - ADVANCE) > TOL or abs(lib[1][0] - c["o"][0]) > 1.1):
         problems.append("Chromium object x/advance %s, library %s" % (c["o"], lib[1]))
     if abs(lib[1][2] - ADVANCE) > TOL:
         problems.append("library object advance %.2f, expected %d" % (lib[1][2], ADVANCE))
-    pchars = p["chars"]
-    if abs(pchars[1][2] - ADVANCE) > TOL or abs(pchars[1][3] - (ASCENT + DESCENT)) > TOL:
-        problems.append("Pango shape rectangle %s differs from expected [%d,%d]" %
-                        (pchars[1], ADVANCE, ASCENT + DESCENT))
-    if f[2] - f[0] != ADVANCE or f[3] - f[1] != ASCENT + DESCENT:
+    if p:
+        pchars = p["chars"]
+        if abs(pchars[1][2] - ADVANCE) > TOL or abs(pchars[1][3] - (ASCENT + DESCENT)) > TOL:
+            problems.append("Pango shape rectangle %s differs from expected [%d,%d]" %
+                            (pchars[1], ADVANCE, ASCENT + DESCENT))
+    if f and (f[2] - f[0] != ADVANCE or f[3] - f[1] != ASCENT + DESCENT):
         problems.append("Firefox rendered object box %s, expected %dx%d" %
                         (f, ADVANCE, ASCENT + DESCENT))
     # Neighbor advances before and after the object must not be swallowed or counted twice.
-    for idx, raw in ((0, c["a"]), (2, c["b"])):
+    for idx, raw in (((0, c["a"]), (2, c["b"])) if c else ()):
         if abs(lib[idx][0] - raw[0]) > 1.1:
             problems.append("neighbor %d Chromium start %.2f, library %s" % (idx, raw[0], lib[idx]))
     if problems:
         print("layout_l2_oracle: DIFFERENCES\n  " + "\n  ".join(problems))
         return 1
-    print("layout_l2_oracle: Chromium, Pango and Firefox agree on U+FFFC advance, box and adjacent text")
+    labels = {"chrome": "Chromium", "pango": "Pango", "firefox": "Firefox"}
+    print("layout_l2_oracle: %s agree on U+FFFC advance, box and adjacent text"
+          % ", ".join(labels[n] for n in names))
     return 0
 
 if __name__ == "__main__":

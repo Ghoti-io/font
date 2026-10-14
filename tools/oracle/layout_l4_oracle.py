@@ -228,6 +228,62 @@ def chromium_emphasis_boxes(mode: str = "horizontal", scenario: str = "emphasis"
             if box[2] - box[0] > 1 and box[3] - box[1] > 1]
 
 
+def firefox_emphasis_boxes(mode: str, scenario: str) -> list[tuple[int, int, int, int]]:
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    path = SCRATCH / f"firefox-emphasis-ink-{scenario}-{mode}.html"
+    shot = SCRATCH / f"firefox-emphasis-ink-{scenario}-{mode}.png"
+    page_source = scenario_page(scenario, mode, firefox=True)
+    css_style = json.dumps(EMPHASIS_STYLES[scenario])
+    support_probe = f'''<style>#oracle-support {{ position:fixed; right:4px; bottom:4px;
+width:8px; height:8px; background:white; }}</style><span id="oracle-support"></span>
+<script>if(CSS.supports('text-emphasis-style',{css_style}))
+document.querySelector('#oracle-support').style.background='black';</script>'''
+    marker = '<pre id="out"></pre><script>'
+    if marker not in page_source:
+        raise RuntimeError("Firefox emphasis fixture support-probe marker was not found")
+    path.write_text(page_source.replace(marker, support_probe + marker))
+    argv = oracle_env.command("firefox", ["firefox-esr", "--headless", "--no-remote",
+        "--window-size=1000,600", "--screenshot", str(shot), "file://" + str(path)],
+        scratch=str(SCRATCH))
+    result = subprocess.run(argv, capture_output=True, text=True)
+    if result.returncode or not shot.exists():
+        raise RuntimeError(f"Firefox {mode} {scenario} emphasis screenshot failed: "
+                           + result.stderr[-500:])
+    width, height, dark = read_png(shot)
+    support_region = [dark[y][x]
+                      for y in range(max(0, height - 16), height - 2)
+                      for x in range(max(0, width - 16), width - 2)]
+    if not any(support_region):
+        raise RuntimeError(f"Firefox does not support text-emphasis-style: "
+                           f"{EMPHASIS_STYLES[scenario]!r} ({mode}, {scenario})")
+    return [box for box in components(dark, width, height)
+            if box[0] < width - 20 and box[1] < height - 20
+            if box[2] - box[0] > 1 and box[3] - box[1] > 1]
+
+
+def group_inline_ink(boxes: list[tuple[int, int, int, int]], axis: int,
+                     count: int = 3) -> list[tuple[int, int, int, int]]:
+    """Merge disconnected pixels for each mark, split at the largest inter-mark gaps."""
+    ordered = sorted(boxes, key=lambda box: (box[axis] + box[axis + 2]) / 2)
+    if len(ordered) < count:
+        return []
+    gaps = [((ordered[i + 1][axis] + ordered[i + 1][axis + 2]) / 2
+             - (ordered[i][axis] + ordered[i][axis + 2]) / 2, i)
+            for i in range(len(ordered) - 1)]
+    cuts = sorted(index for _, index in sorted(gaps, reverse=True)[:count - 1])
+    groups = []
+    first = 0
+    for cut in cuts:
+        groups.append(ordered[first:cut + 1])
+        first = cut + 1
+    groups.append(ordered[first:])
+    if len(groups) != count or any(not group for group in groups):
+        return []
+    return [(min(box[0] for box in group), min(box[1] for box in group),
+             max(box[2] for box in group), max(box[3] for box in group))
+            for group in groups]
+
+
 def firefox_double_side_boxes(mode: str, track: str | None = None) -> list[tuple[int, int, int, int]]:
     SCRATCH.mkdir(parents=True, exist_ok=True)
     suffix = "all" if track is None else track
@@ -500,36 +556,31 @@ def compare_implementation_scenarios() -> None:
         for scenario in EMPHASIS_STYLES:
             emphasis = driver(mode, scenario)
             impl_marks = emphasis["lines"][0]["annotations"]
-            browser_marks = chromium_emphasis_boxes(mode, scenario)
-            if scenario == "emphasis-double-circle" and len(browser_marks) == 6:
-                axis = 1 if mode != "horizontal" else 0
-                browser_marks.sort(key=lambda b: (b[axis] + b[axis + 2]) / 2)
-                browser_marks = [(
-                    min(a[0], b[0]), min(a[1], b[1]),
-                    max(a[2], b[2]), max(a[3], b[3]))
-                    for a, b in zip(browser_marks[::2], browser_marks[1::2])]
-            if len(impl_marks) != 3 or len(browser_marks) != 3:
-                raise RuntimeError(f"{mode} {scenario} mark count differs: "
-                                   f"layout={len(impl_marks)}, Chromium ink={len(browser_marks)}")
+            if len(impl_marks) != 3:
+                raise RuntimeError(f"{mode} {scenario} library mark count differs: {len(impl_marks)}")
             impl_centers = [(a["box"][0] / 64 + a["box"][2] / 128,
                              a["box"][1] / 64 + a["box"][3] / 128)
                             for a in impl_marks]
-            browser_centers = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
-                               for b in browser_marks]
             inline_axis = 0 if mode == "horizontal" else 1
             impl_centers.sort(key=lambda center: center[inline_axis])
-            browser_centers.sort(key=lambda center: center[inline_axis])
             emphasis_tolerance = 12 if mode != "horizontal" else 8
-            # Mark ink and font-glyph boxes can have different cross-axis metrics
-               # across user agents. The filled-circle control keeps the existing
-               # cross-axis tolerance; the style matrix checks count and inline
-               # placement for each supported mark shape.
             axes = (0, 1) if scenario == "emphasis" else ((0,) if mode == "horizontal" else (1,))
-            if any(max(abs(impl[axis] - browser[axis]) for axis in axes)
-                   > emphasis_tolerance
-                   for impl, browser in zip(impl_centers, browser_centers)):
-                raise RuntimeError(f"{mode} {scenario} mark centers differ: "
-                                   f"layout={impl_centers}, Chromium ink={browser_centers}")
+            for browser_name, capture in (("Chromium", chromium_emphasis_boxes),
+                                          ("Firefox", firefox_emphasis_boxes)):
+                browser_marks = capture(mode, scenario)
+                browser_marks = group_inline_ink(browser_marks, inline_axis)
+                if len(browser_marks) != 3:
+                    raise RuntimeError(f"{browser_name} {mode} {scenario} emphasis ink "
+                                       f"count differs: {len(browser_marks)}; expected 3 "
+                                       "(unsupported CSS styles need an explicit skip)")
+                browser_centers = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+                                   for b in browser_marks]
+                browser_centers.sort(key=lambda center: center[inline_axis])
+                if any(max(abs(impl[axis] - browser[axis]) for axis in axes)
+                       > emphasis_tolerance
+                       for impl, browser in zip(impl_centers, browser_centers)):
+                    raise RuntimeError(f"{browser_name} {mode} {scenario} mark centers differ: "
+                                       f"layout={impl_centers}, browser ink={browser_centers}")
 
 
 def main() -> int:

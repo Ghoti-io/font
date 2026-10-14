@@ -1893,11 +1893,11 @@ does not infer the emitted mark shape from ink. The unit test checks the API's
 default glyph choice for Latin and vertical CJK text. The filled-circle control compares both
 axes within 8px horizontally and 12px vertically; the style matrix compares
 inline placement because browser ink bounds and font-glyph boxes have different
-cross-axis metrics. Firefox does not yet provide an emphasis-mark geometry
-comparison. Double-sided ruby and vertical annotation sides are checked in
-Chromium and Firefox; Chromium supplies comparable track geometry, while the
-Firefox screenshot oracle checks that the tracks remain separate on the correct
-sides. Both pinned browser oracles report `ruby-merge` and
+cross-axis metrics. Firefox checks the same emphasis-style matrix and reports a
+style as unsupported when its CSS support probe fails. Double-sided ruby and
+vertical annotation sides are checked in Chromium and Firefox; Chromium supplies
+comparable track geometry, while the Firefox screenshot oracle checks that the
+tracks remain separate on the correct sides. Both pinned browser oracles report `ruby-merge` and
 `ruby-position:inter-character` unsupported, so those behaviors are covered by
 library unit tests rather than browser comparison.
 

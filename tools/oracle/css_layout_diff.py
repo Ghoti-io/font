@@ -152,6 +152,11 @@ CASES.append(("line-break-anywhere-overrides-keep-all", "日本語日本語", "h
               "start", "ltr", "auto",
               {"lineBreak": "anywhere", "wordBreak": "keep-all",
                "driver": ("--line-break", "anywhere", "--word-break", "keep-all")}))
+for _line_break in ("strict", "loose"):
+    CASES.append(("line-break-%s-small-kana" % _line_break, "あぁあぁあぁあぁ", "horizontal",
+                  "mixed", 55, "start", "ltr", "auto",
+                  {"lineBreak": _line_break, "lang": "ja",
+                   "driver": ("--line-break", _line_break)}))
 CASES.append(("white-space-pre", "AB AB  \nAB AB", "horizontal", "mixed", 100,
               "start", "ltr", "auto",
               {"whiteSpace": "pre", "driver": ("--white-space", "pre")}))
@@ -247,6 +252,7 @@ const cases = %(cases)s;
 function measure(c) {
   const d = document.createElement('div');
   d.className = 't';
+  if (c.lang) d.lang = c.lang;
   d.style.writingMode = c.mode === 'horizontal' ? 'horizontal-tb' : c.mode;
   d.style.textOrientation = c.orient;
   d.style.textAlign = c.align;
@@ -355,6 +361,7 @@ def chrome_rects(cases):
                  overflowWrap=(c[8].get("overflowWrap") if len(c) > 8 else None),
                  wordBreak=(c[8].get("wordBreak") if len(c) > 8 else None),
                  lineBreak=(c[8].get("lineBreak") if len(c) > 8 else None),
+                 lang=(c[8].get("lang") if len(c) > 8 else None),
                  lineStructureOnly=(c[8].get("lineStructureOnly", False) if len(c) > 8 else False),
                  whiteSpace=(c[8].get("whiteSpace") if len(c) > 8 else None))
             for c in cases]

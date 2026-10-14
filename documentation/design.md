@@ -1919,8 +1919,9 @@ explicitly excluded. These limits identify missing oracle evidence.
 
 `text-align-last` now has an explicit paragraph option and six Chromium 154
 cases for start, end, left, right, center and justify; all six agree in the
-163-case CSS matrix. Chromium also checks `line-break: anywhere` around
-punctuation and its precedence over `word-break: keep-all`. `overflow-wrap:
+165-case CSS matrix. Chromium also checks `line-break: anywhere` around
+punctuation and its precedence over `word-break: keep-all`, and compares
+`line-break: strict` and `loose` for small-kana wrapping. `overflow-wrap:
 anywhere` and `break-word` now have
 emergency grapheme-boundary wrapping at shaped-unit boundaries. Chromium
 checks their line geometry and intrinsic min-content width; only `anywhere`

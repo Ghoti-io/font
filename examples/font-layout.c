@@ -469,8 +469,11 @@ int main(int argc, char ** argv) {
           : strcmp(v, "justify") == 0 ? GFNT_ALIGN_LAST_JUSTIFY : GFNT_ALIGN_LAST_AUTO;
     }
     else if (strcmp(argv[a], "--line-break") == 0 && a + 1 < argc) {
-      options.line_break = strcmp(argv[++a], "anywhere") == 0
-          ? GFNT_LINE_BREAK_ANYWHERE : GFNT_LINE_BREAK_NORMAL;
+      const char * v = argv[++a];
+
+      options.line_break = strcmp(v, "anywhere") == 0 ? GFNT_LINE_BREAK_ANYWHERE
+          : strcmp(v, "strict") == 0 ? GFNT_LINE_BREAK_STRICT
+          : strcmp(v, "loose") == 0 ? GFNT_LINE_BREAK_LOOSE : GFNT_LINE_BREAK_NORMAL;
     }
     else if (strcmp(argv[a], "--overflow-wrap") == 0 && a + 1 < argc) {
       const char * v = argv[++a];

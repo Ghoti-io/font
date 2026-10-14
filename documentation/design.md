@@ -1621,6 +1621,25 @@ split half above and half below the glyphs. Every placed glyph carries its byte
 offset in the text, the pen position and the draw position. Each run records
 which face of the span's list shaped it, and flags a fallback face (M8).
 
+**Line-height and baseline alignment (L1).** `GFNT_TextStyle.line_height` is
+zero-default `normal` (the legacy metrics path), a nonnegative 16.16 multiple
+of the style's font size, or a nonnegative 26.6 pixel length. Explicit
+values form a per-run inline box centered around its baseline; half-leading is
+split above and below, including negative half-leading when the requested
+height is below the face metrics. The half is rounded toward zero to whole
+pixels to match Chromium; any remaining leading stays below the box. `vertical_align` selects baseline, sub, super,
+signed length, signed percentage of that style's computed line-height,
+text-top, text-bottom, middle, top or bottom. Positive lengths and percentages
+raise horizontal text. The line box is the union of shifted inline boxes;
+top/bottom runs align to the final line-box edges. `GFNT_ParagraphOptions.strut`
+is off by default. When enabled, the first span's style (the root style)
+contributes its inline box to every line, including empty lines. In vertical
+writing the same shifts affect the cross axis and line thickness. This API takes
+resolved values and does not parse CSS or perform cascade. Sub/super and
+font-relative alignment follow Chromium measurements for the bundled oracle
+font; other fonts may differ because those offsets are not fully specified by
+CSS 2.1.
+
 `gfnt_paragraph_min_content()` is the widest unbreakable stretch and
 `_max_content()` the widest line when only newlines break; no line of any layout
 is wider than the larger of the width and the min-content, or than the max. Hit

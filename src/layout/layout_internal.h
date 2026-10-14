@@ -49,6 +49,10 @@ typedef struct {
   uint8_t level;
   uint8_t orient;                      // a GFNT_Orientation: how its glyphs sit
   GFNT_F26Dot6 ascent, descent, gap;   // positive, 26.6
+  GFNT_F26Dot6 inline_ascent, inline_descent, half_leading, shift; // line box relative to baseline
+  GFNT_F26Dot6 x_height; // parent baseline to x-height, from OS/2 or half ascent fallback
+  GFNT_F26Dot6 line_height;
+  GFNT_VerticalAlign vertical_align;
 } PRun;
 
 /** The glyphs of one cluster. */

@@ -48,8 +48,19 @@ for j in jobs:
     desc = Pango.FontDescription()
     desc.set_family(j['family'])
     desc.set_absolute_size(j['size'] * Pango.SCALE)
+    font = ctx.load_font(desc)
+    if font is None:
+        raise RuntimeError('could not load pinned oracle font: %s' % j['family'])
+    metrics = font.get_metrics(ctx.get_language())
     lay.set_font_description(desc)
     lay.set_text(j['text'], -1)
+    attrs = Pango.AttrList()
+    if j.get('line_height') is not None:
+        attrs.insert(Pango.attr_line_height_new(float(j['line_height'])))
+    if j.get('rise') is not None:
+        attrs.insert(Pango.attr_rise_new(int(round(j['rise'] * Pango.SCALE))))
+    if j.get('line_height') is not None or j.get('rise') is not None:
+        lay.set_attributes(attrs)
     if j.get('room'):
         lay.set_width(int(j['room'] * Pango.SCALE))
     lay.set_wrap(Pango.WrapMode.WORD)   # a word wider than the room overflows, as in a paragraph here
@@ -61,6 +72,7 @@ for j in jobs:
         pos += len(ch.encode('utf-8'))
     ink, logical = lay.get_extents()
     out.append({'name': j['name'], 'chars': chars,
+                'ascent': metrics.get_ascent() / Pango.SCALE,
                 'logical': [logical.x / Pango.SCALE, logical.y / Pango.SCALE, logical.width / Pango.SCALE, logical.height / Pango.SCALE],
                 'lines': lay.get_line_count()})
 json.dump(out, open(sys.argv[2], 'w'))

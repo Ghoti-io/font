@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <ghoti.io/font/layout.h>
@@ -82,7 +83,8 @@ struct Font {
   GFNT_Blob * blob = nullptr;
   GFNT_Face * face = nullptr;
 
-  explicit Font(const std::vector<uint32_t> & chars, bool outlines = false) {
+  explicit Font(const std::vector<uint32_t> & chars, bool outlines = false,
+      int16_t x_height = 0, int16_t line_gap = 0) {
     std::vector<gfnttest::Segment4> segments;
     std::vector<std::pair<uint32_t, uint16_t>> order;
     for (size_t i = 0; i < chars.size(); ++i) {
@@ -121,12 +123,18 @@ struct Font {
     }
     std::vector<gfnttest::Table> tables = {
         {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(1000, loca_format)},
-        {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 0, glyphs)},
+        {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, line_gap, glyphs)},
         {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics)},
         {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(glyphs)},
         {GFNT_TAG('c', 'm', 'a', 'p'),
             gfnttest::build_cmap({{3, 1, gfnttest::build_cmap_format4(segments)}})},
     };
+    if (x_height > 0) {
+      gfnttest::Os2Spec os2;
+      os2.version = 2;
+      os2.x_height = x_height;
+      tables.push_back({GFNT_TAG('O', 'S', '/', '2'), gfnttest::build_os2(os2)});
+    }
     tables.insert(tables.end(), extra.begin(), extra.end());
     bytes = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
     GFNT_Error error;
@@ -222,6 +230,206 @@ TEST(Layout, ALineOfLettersIsPlacedFromTheLeftOnTheBaseline) {
     EXPECT_EQ(run.glyphs[i].pen_x, static_cast<GFNT_F26Dot6>(i) * kLetter);
     EXPECT_EQ(run.glyphs[i].y, 512);
   }
+}
+
+TEST(LayoutLineBox, ExplicitLengthLineHeightCentersLeadingAroundTheBaseline) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan span{};
+  span.length = 1;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = 20 * 64;
+  span.style.line_height = {GFNT_LINE_HEIGHT_LENGTH, 20 * 64 + 3};
+  Para para("A", {span});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, GFNT_LAYOUT_UNBOUNDED, &para.layout, nullptr), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  EXPECT_EQ(line.box.height, 20 * 64 + 3);
+  EXPECT_EQ(line.ascent + line.descent, line.box.height);
+  EXPECT_EQ(line.ascent, 16 * 64);
+  EXPECT_EQ(line.descent, 4 * 64 + 3);
+  EXPECT_EQ(line.runs[0].glyphs[0].y, line.baseline);
+}
+
+TEST(LayoutLineBox, MultipleLineHeightUsesFontSizeDespiteLineGap) {
+  Font font(latin(), false, 0, 300);
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_LineMetrics metrics{};
+  ASSERT_EQ(gfnt_face_line_metrics(font.face, GFNT_LINE_METRICS_FONT, nullptr,
+              &metrics, nullptr), GFNT_OK);
+  ASSERT_GT(metrics.line_gap, 0);
+  GFNT_TextSpan span{};
+  span.length = 1;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = 20 * 64;
+  span.style.line_metrics = GFNT_LINE_METRICS_FONT;
+  span.style.line_height = {GFNT_LINE_HEIGHT_MULTIPLE, 0x18000};
+  Para para("A", {span});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, GFNT_LAYOUT_UNBOUNDED, &para.layout, nullptr), GFNT_OK);
+  EXPECT_EQ(para.layout.lines[0].box.height, 30 * 64);
+}
+
+TEST(LayoutLineBox, StrutContributesToSmallAndEmptyLines) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan large{}, small{};
+  large.length = 1;
+  large.style.faces = faces;
+  large.style.face_count = 1;
+  large.style.size = 20 * 64;
+  large.style.line_height = {GFNT_LINE_HEIGHT_LENGTH, 60 * 64};
+  small = large;
+  small.length = 4;
+  small.style.size = 10 * 64;
+  small.style.line_height = {GFNT_LINE_HEIGHT_LENGTH, 10 * 64};
+  GFNT_ParagraphOptions options{};
+  options.strut = true;
+  Para para("A\n\nB\n", {large, small}, options);
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, GFNT_LAYOUT_UNBOUNDED, &para.layout, nullptr), GFNT_OK);
+  GFNT_ParagraphOptions no_strut{};
+  Para without("A\n\nB\n", {large, small}, no_strut);
+  ASSERT_EQ(without.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(without.p, GFNT_LAYOUT_UNBOUNDED, &without.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 4u);
+  EXPECT_EQ(para.layout.lines[1].box.height, 60 * 64);
+  EXPECT_EQ(para.layout.lines[2].box.height, 60 * 64);
+  EXPECT_EQ(para.layout.lines[3].box.height, 60 * 64);
+  EXPECT_GT(para.layout.lines[1].box.height, without.layout.lines[1].box.height);
+  EXPECT_GT(para.layout.lines[2].box.height, without.layout.lines[2].box.height);
+  EXPECT_GT(para.layout.lines[3].box.height, without.layout.lines[3].box.height);
+  const GFNT_PlacedGlyph * strut_glyph = nullptr, * plain_glyph = nullptr;
+  for (size_t r = 0; r < para.layout.lines[2].run_count; r++) {
+    for (size_t g = 0; g < para.layout.lines[2].runs[r].glyph_count; g++) {
+      if (para.layout.lines[2].runs[r].glyphs[g].cluster == 3) {
+        strut_glyph = &para.layout.lines[2].runs[r].glyphs[g];
+      }
+    }
+  }
+  for (size_t r = 0; r < without.layout.lines[2].run_count; r++) {
+    for (size_t g = 0; g < without.layout.lines[2].runs[r].glyph_count; g++) {
+      if (without.layout.lines[2].runs[r].glyphs[g].cluster == 3) {
+        plain_glyph = &without.layout.lines[2].runs[r].glyphs[g];
+      }
+    }
+  }
+  ASSERT_NE(strut_glyph, nullptr);
+  ASSERT_NE(plain_glyph, nullptr);
+  EXPECT_NE(strut_glyph->y, plain_glyph->y);
+}
+
+TEST(LayoutLineBox, TopAndBottomAlignmentUnionMixedSizeInlineBoxes) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan small{}, large{};
+  small.length = large.length = 1;
+  small.style.faces = large.style.faces = faces;
+  small.style.face_count = large.style.face_count = 1;
+  small.style.size = 10 * 64;
+  large.style.size = 20 * 64;
+  for (const auto & [align, expected_shift] : {
+           std::pair{GFNT_VERTICAL_ALIGN_TOP, 8 * 64},
+           std::pair{GFNT_VERTICAL_ALIGN_BOTTOM, -2 * 64}}) {
+    large.style.vertical_align = align;
+    Para para("AB", {small, large});
+    ASSERT_EQ(para.created, GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(para.p, GFNT_LAYOUT_UNBOUNDED, &para.layout, nullptr), GFNT_OK);
+    const GFNT_Line & line = para.layout.lines[0];
+    ASSERT_EQ(line.run_count, 2u);
+    EXPECT_EQ(line.box.height, 20 * 64);
+    EXPECT_EQ(line.runs[1].glyphs[0].y - line.runs[0].glyphs[0].y, expected_shift);
+  }
+}
+
+TEST(LayoutLineBox, MiddleUsesOs2XHeightRatherThanParentAscent) {
+  Font font(latin(), false, 300);
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan baseline{}, middle{};
+  baseline.length = middle.length = 1;
+  baseline.style.faces = middle.style.faces = faces;
+  baseline.style.face_count = middle.style.face_count = 1;
+  baseline.style.size = middle.style.size = 20 * 64;
+  middle.style.vertical_align = GFNT_VERTICAL_ALIGN_MIDDLE;
+  Para para("AB", {baseline, middle});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, GFNT_LAYOUT_UNBOUNDED, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.lines[0].run_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].runs[1].glyphs[0].y
+      - para.layout.lines[0].runs[0].glyphs[0].y, 3 * 64);
+}
+
+TEST(LayoutLineBox, BaselineShiftMovesGlyphsAcrossTheLineAxisInEveryWritingMode) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan base{}, raised{};
+  base.length = raised.length = 1;
+  base.style.faces = raised.style.faces = faces;
+  base.style.face_count = raised.style.face_count = 1;
+  base.style.size = raised.style.size = kSize;
+  raised.style.vertical_align = GFNT_VERTICAL_ALIGN_LENGTH;
+  raised.style.vertical_align_value = 64;
+  for (GFNT_WritingMode mode : {GFNT_WRITING_HORIZONTAL_TB, GFNT_WRITING_VERTICAL_RL,
+           GFNT_WRITING_VERTICAL_LR, GFNT_WRITING_SIDEWAYS_RL, GFNT_WRITING_SIDEWAYS_LR}) {
+    GFNT_ParagraphOptions options{};
+    options.writing_mode = mode;
+    Para para("AB", {base, raised}, options);
+    ASSERT_EQ(para.created, GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(para.p, GFNT_LAYOUT_UNBOUNDED, &para.layout, nullptr), GFNT_OK);
+    const GFNT_PlacedGlyph & a = para.layout.lines[0].runs[0].glyphs[0];
+    const GFNT_PlacedGlyph & b = para.layout.lines[0].runs[1].glyphs[0];
+    if (mode == GFNT_WRITING_HORIZONTAL_TB) EXPECT_EQ(std::abs(a.y - b.y), 64);
+    else EXPECT_EQ(std::abs(b.pen_x - a.pen_x), 64);
+  }
+}
+
+TEST(LayoutLineBox, InvalidSelectorsAreRejectedAtParagraphCreation) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan span{};
+  span.length = 1;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  span.style.line_height.kind = static_cast<GFNT_LineHeightKind>(99);
+  GFNT_Paragraph * paragraph = nullptr;
+  EXPECT_EQ(gfnt_paragraph_create("A", 1, &span, 1, nullptr, nullptr, &paragraph, nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(paragraph, nullptr);
+  span.style.line_height = {GFNT_LINE_HEIGHT_LENGTH, -1};
+  EXPECT_EQ(gfnt_paragraph_create("A", 1, &span, 1, nullptr, nullptr, &paragraph, nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(paragraph, nullptr);
+  span.style.line_height = {GFNT_LINE_HEIGHT_NORMAL, 0};
+  span.style.vertical_align = static_cast<GFNT_VerticalAlign>(99);
+  EXPECT_EQ(gfnt_paragraph_create("A", 1, &span, 1, nullptr, nullptr, &paragraph, nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(paragraph, nullptr);
+}
+
+TEST(LayoutLineBox, ComputedMetricsOutsidePublicRangeAreRejected) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan spans[2]{};
+  spans[0].length = spans[1].length = 1;
+  spans[0].style.faces = spans[1].style.faces = faces;
+  spans[0].style.face_count = spans[1].style.face_count = 1;
+  spans[0].style.size = spans[1].style.size = kSize;
+  spans[1].style.line_height = {GFNT_LINE_HEIGHT_MULTIPLE, INT32_MAX};
+  spans[1].style.size = 65537;
+  GFNT_Paragraph * paragraph = nullptr;
+  EXPECT_EQ(gfnt_paragraph_create("AB", 2, spans, 2, nullptr, nullptr, &paragraph, nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(paragraph, nullptr);
+
+  paragraph = nullptr;
+  spans[1].style.line_height = {GFNT_LINE_HEIGHT_NORMAL, 0};
+  spans[1].style.size = INT32_MAX;
+  EXPECT_EQ(gfnt_paragraph_create("AB", 2, spans, 2, nullptr, nullptr, &paragraph, nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(paragraph, nullptr);
 }
 
 TEST(Layout, LinesBreakAfterSpacesAndTheSpacesHang) {

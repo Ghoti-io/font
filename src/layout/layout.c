@@ -169,6 +169,78 @@ static void scale_metrics(const GFNT_Face * face, const GFNT_TextStyle * style,
   run->ascent = gfnt_units_to_pixels(m.ascent, scale);
   run->descent = gfnt_units_to_pixels(-m.descent, scale);
   run->gap = gfnt_units_to_pixels(m.line_gap, scale);
+  const GFNT_Os2 * os2 = NULL;
+  if (gfnt_face_os2(face, &os2, NULL) == GFNT_OK && os2->x_height > 0) {
+    run->x_height = gfnt_units_to_pixels(os2->x_height, scale);
+  }
+  else {
+    /* Fonts without an OS/2 x-height use half the ascent as a conservative fallback. */
+    run->x_height = run->ascent / 2;
+  }
+}
+
+/* Prepare the per-run inline box. Arithmetic is kept in 64 bits until range checked. */
+static bool set_inline_metrics(PRun * run, const GFNT_TextStyle * style) {
+  int64_t content = (int64_t)run->ascent + run->descent;
+  int64_t natural = content + run->gap;
+  int64_t height = natural;
+  int64_t leading;
+  int64_t shift = 0;
+  int64_t inline_ascent, inline_descent;
+
+  run->vertical_align = style->vertical_align;
+  switch (style->line_height.kind) {
+    case GFNT_LINE_HEIGHT_NORMAL:
+      break;
+    case GFNT_LINE_HEIGHT_MULTIPLE:
+      height = ((int64_t)style->size * style->line_height.value) / 0x10000;
+      break;
+    case GFNT_LINE_HEIGHT_LENGTH:
+      height = style->line_height.value;
+      break;
+    default:
+      return false;
+  }
+  if (height < 0 || height > INT32_MAX || natural > INT32_MAX) return false;
+  leading = height - content;
+  int64_t half_leading = (leading / 2 / GFNT_F26DOT6_ONE) * GFNT_F26DOT6_ONE;
+  if (half_leading < INT32_MIN || half_leading > INT32_MAX) return false;
+  run->half_leading = (GFNT_F26Dot6)half_leading;
+  run->line_height = (GFNT_F26Dot6)height;
+  inline_ascent = (int64_t)run->ascent + run->half_leading;
+  inline_descent = height - inline_ascent;
+  if (inline_ascent < INT32_MIN || inline_ascent > INT32_MAX
+      || inline_descent < INT32_MIN || inline_descent > INT32_MAX) return false;
+  run->inline_ascent = (GFNT_F26Dot6)inline_ascent;
+  run->inline_descent = (GFNT_F26Dot6)inline_descent;
+  switch (style->vertical_align) {
+    case GFNT_VERTICAL_ALIGN_BASELINE:
+    case GFNT_VERTICAL_ALIGN_TEXT_TOP:
+    case GFNT_VERTICAL_ALIGN_TEXT_BOTTOM:
+    case GFNT_VERTICAL_ALIGN_MIDDLE:
+    case GFNT_VERTICAL_ALIGN_TOP:
+    case GFNT_VERTICAL_ALIGN_BOTTOM:
+      break;
+    case GFNT_VERTICAL_ALIGN_SUB:
+      shift = -(int64_t)style->size / 5;
+      break;
+    case GFNT_VERTICAL_ALIGN_SUPER:
+      shift = (int64_t)style->size / 3;
+      break;
+    case GFNT_VERTICAL_ALIGN_LENGTH:
+      shift = style->vertical_align_value;
+      break;
+    case GFNT_VERTICAL_ALIGN_PERCENTAGE:
+      shift = ((int64_t)height * style->vertical_align_value) / 0x10000;
+      break;
+    default:
+      return false;
+  }
+  if (shift < INT32_MIN || shift > INT32_MAX
+      || inline_ascent + shift < INT32_MIN || inline_ascent + shift > INT32_MAX
+      || inline_descent - shift < INT32_MIN || inline_descent - shift > INT32_MAX) return false;
+  run->shift = (GFNT_F26Dot6)shift;
+  return true;
 }
 
 /** The features of a span, cut to [from, to) of the whole text and rebased. */
@@ -988,6 +1060,13 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
             "a span has no face or no size");
       }
+      if ((unsigned)s->line_height.kind > GFNT_LINE_HEIGHT_LENGTH
+          || (s->line_height.kind == GFNT_LINE_HEIGHT_MULTIPLE && s->line_height.value < 0)
+          || (s->line_height.kind == GFNT_LINE_HEIGHT_LENGTH && s->line_height.value < 0)
+          || (unsigned)s->vertical_align > GFNT_VERTICAL_ALIGN_BOTTOM) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+            "a span has an invalid line-height or vertical alignment");
+      }
       for (size_t f = 0; f < s->face_count; f++) {
         if (!s->faces[f]) {
           return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
@@ -1337,6 +1416,11 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         pr->orient = p->vertical ? (upright ? GFNT_ORIENT_RUN_UPRIGHT : GFNT_ORIENT_RUN_CW)
                                  : GFNT_ORIENT_RUN_HORIZONTAL;
         scale_metrics(pr->face, style, pr);
+        if (!set_inline_metrics(pr, style)) {
+          r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+              "a span has an invalid line-height or vertical alignment");
+          break;
+        }
         upem = 0;
         if (gfnt_face_units_per_em(pr->face, &upem, NULL) != GFNT_OK || !upem) {
           upem = 1000;
@@ -1421,9 +1505,12 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       p->tab_width = w > 0 ? 8 * w : 2 * spans[0].style.size;
     }
   }
-  if (n == 0) {
-    p->fallback_metrics.face = spans[0].style.faces[0];
-    scale_metrics(p->fallback_metrics.face, &spans[0].style, &p->fallback_metrics);
+  p->fallback_metrics.face = spans[0].style.faces[0];
+  scale_metrics(p->fallback_metrics.face, &spans[0].style, &p->fallback_metrics);
+  if (!set_inline_metrics(&p->fallback_metrics, &spans[0].style)) {
+    r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "the root span has an invalid line-height or vertical alignment");
+    goto done;
   }
   *out = p;
   p = NULL;
@@ -1666,10 +1753,21 @@ static GFNT_Result shape_string_dir(const GFNT_Paragraph * p, size_t span,
   run->orient = !text_count ? GFNT_ORIENT_RUN_HORIZONTAL
       : force >= 0 ? (uint8_t)force : string_orientation(p, span, text[0]);
   scale_metrics(run->face, style, run);
+  if (!set_inline_metrics(run, style)) {
+    gfnt_face_runs_free(&fr);
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "a span has invalid computed line metrics");
+  }
   if (gfnt_face_units_per_em(run->face, &upem, NULL) != GFNT_OK || !upem) {
     upem = 1000;
   }
-  scale = (GFNT_F16Dot16)(((int64_t)style->size * 1024 + upem / 2) / upem);
+  int64_t scale_wide = ((int64_t)style->size * 1024 + upem / 2) / upem;
+  if (scale_wide > INT32_MAX) {
+    gfnt_face_runs_free(&fr);
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "span size exceeds the supported metric range");
+  }
+  scale = (GFNT_F16Dot16)scale_wide;
   for (size_t k = 0; k < fr.count; k++) {
     for (size_t g = 0; g < fr.runs[k].run.count && *count < cap; g++) {
       const GFNT_ShapedGlyph * sg = &fr.runs[k].run.glyphs[g];
@@ -1763,6 +1861,7 @@ typedef struct {
   size_t unit_start, unit_end, hang_from;
   GFNT_F26Dot6 start_offset, available_width, top_y, thickness;
   GFNT_F26Dot6 natural, ascent, descent, gap;
+  bool invalid;
 } LayoutLineState;
 
 typedef struct {
@@ -1781,6 +1880,9 @@ typedef struct {
   GFNT_F26Dot6 extra, extra_rem, cursor, lead;
   size_t expanded;
   bool vertical, seen_text, ink_set;
+  bool failed;
+  GFNT_F26Dot6 line_ascent, line_descent;
+  bool inline_mode;
   GFNT_F26Dot6 ink_l, ink_t, ink_r, ink_b;
 } PlacementState;
 
@@ -1794,12 +1896,43 @@ typedef struct {
   size_t * spool_len, * spool_cap;
 } JustificationState;
 
+static bool inline_shift(const GFNT_Paragraph * p, const PRun * run,
+    GFNT_F26Dot6 line_ascent, GFNT_F26Dot6 line_descent, GFNT_F26Dot6 * out) {
+  const PRun * root = &p->fallback_metrics;
+  int64_t shift;
+  switch (run->vertical_align) {
+    case GFNT_VERTICAL_ALIGN_TOP: shift = (int64_t)line_ascent - run->inline_ascent; break;
+    case GFNT_VERTICAL_ALIGN_BOTTOM: shift = (int64_t)run->inline_descent - line_descent; break;
+    case GFNT_VERTICAL_ALIGN_TEXT_TOP: shift = (int64_t)root->inline_ascent - run->inline_ascent; break;
+    case GFNT_VERTICAL_ALIGN_TEXT_BOTTOM: shift = (int64_t)run->inline_descent - root->inline_descent; break;
+    case GFNT_VERTICAL_ALIGN_MIDDLE:
+      shift = ((int64_t)root->x_height - run->inline_ascent + run->inline_descent) / 2;
+      break;
+    default: shift = run->shift; break;
+  }
+  if (shift < INT32_MIN || shift > INT32_MAX) return false;
+  *out = (GFNT_F26Dot6)shift;
+  return true;
+}
+
 /** Measure the shaped units that will be placed on one line. */
 static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size_t end,
     GFNT_F26Dot6 width, GFNT_F26Dot6 top_y, GFNT_F26Dot6 * ew,
     GFNT_F26Dot6 * tabadv) {
   LayoutLineState state = {0};
   GFNT_F26Dot6 pos = 0;
+  bool inline_mode = p->options.strut;
+  bool inline_has_box = false;
+
+  for (size_t j = start; j < end; j++) {
+    const GFNT_TextStyle * style = &p->styles[p->runs[p->units[j].run].span];
+    if (style->line_height.kind != GFNT_LINE_HEIGHT_NORMAL
+        || style->vertical_align != GFNT_VERTICAL_ALIGN_BASELINE) inline_mode = true;
+  }
+  if (inline_mode) {
+    state.ascent = state.descent = INT32_MIN;
+    state.gap = -1; /* sentinel: placement uses the union box */
+  }
 
   state.unit_start = start;
   state.unit_end = end;
@@ -1814,11 +1947,72 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
     if (unit->tab) {
       tabadv[unit->g_lo] = ew[j];
     }
-    if (run->ascent > state.ascent) state.ascent = run->ascent;
-    if (run->descent > state.descent) state.descent = run->descent;
-    if (run->gap > state.gap) state.gap = run->gap;
-    if (run->ascent + run->descent + run->gap > state.thickness) {
-      state.thickness = run->ascent + run->descent + run->gap;
+    if (inline_mode) {
+      int64_t a = run->inline_ascent, d = run->inline_descent;
+      GFNT_F26Dot6 shift = 0;
+      if (run->vertical_align == GFNT_VERTICAL_ALIGN_TOP
+          || run->vertical_align == GFNT_VERTICAL_ALIGN_BOTTOM) continue;
+      if (!inline_shift(p, run, 0, 0, &shift)) {
+        state.invalid = true;
+        continue;
+      }
+      a += shift; d -= shift;
+      if (a < INT32_MIN || a > INT32_MAX || d < INT32_MIN || d > INT32_MAX) {
+        state.invalid = true;
+        continue;
+      }
+      inline_has_box = true;
+      if (a > state.ascent) state.ascent = a;
+      if (d > state.descent) state.descent = d;
+    } else {
+      int64_t thickness = (int64_t)run->ascent + run->descent + run->gap;
+      if (thickness < INT32_MIN || thickness > INT32_MAX) {
+        state.invalid = true;
+        continue;
+      }
+      if (run->ascent > state.ascent) state.ascent = run->ascent;
+      if (run->descent > state.descent) state.descent = run->descent;
+      if (run->gap > state.gap) state.gap = run->gap;
+      if (thickness > state.thickness) {
+        state.thickness = (GFNT_F26Dot6)thickness;
+      }
+    }
+  }
+  if (inline_mode && p->options.strut) {
+    const PRun * root = &p->fallback_metrics;
+    int64_t a = (int64_t)root->inline_ascent + root->shift;
+    int64_t d = (int64_t)root->inline_descent - root->shift;
+    if (a < INT32_MIN || a > INT32_MAX || d < INT32_MIN || d > INT32_MAX) {
+      state.invalid = true;
+    }
+    inline_has_box = true;
+    if (a > state.ascent) state.ascent = a;
+    if (d > state.descent) state.descent = d;
+  }
+  if (inline_mode && !inline_has_box && start < end) {
+    const PRun * run = &p->runs[p->units[start].run];
+    state.ascent = run->inline_ascent;
+    state.descent = run->inline_descent;
+  }
+  if (inline_mode && start < end) {
+    for (size_t j = start; j < end; j++) {
+      const PRun * run = &p->runs[p->units[j].run];
+      int64_t a, d;
+      GFNT_F26Dot6 shift;
+      if (run->vertical_align != GFNT_VERTICAL_ALIGN_TOP
+          && run->vertical_align != GFNT_VERTICAL_ALIGN_BOTTOM) continue;
+      if (!inline_shift(p, run, state.ascent, state.descent, &shift)) {
+        state.invalid = true;
+        continue;
+      }
+      a = (int64_t)run->inline_ascent + shift;
+      d = (int64_t)run->inline_descent - shift;
+      if (a < INT32_MIN || a > INT32_MAX || d < INT32_MIN || d > INT32_MAX) {
+        state.invalid = true;
+        continue;
+      }
+      if (a > state.ascent) state.ascent = (GFNT_F26Dot6)a;
+      if (d > state.descent) state.descent = (GFNT_F26Dot6)d;
     }
   }
   state.hang_from = end;
@@ -1828,7 +2022,7 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
   for (size_t j = start; j < state.hang_from; j++) {
     state.natural += ew[j];
   }
-  if (start == end) {
+  if (start == end && !p->options.strut) {
     const PRun * run = start < p->unit_count ? &p->runs[p->units[start].run]
                                               : &p->fallback_metrics;
     const PRun * source = p->run_count ? (start > 0 ? &p->runs[p->units[start - 1].run] : run)
@@ -1838,6 +2032,11 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
     state.descent = source->descent;
     state.gap = source->gap;
     state.thickness = state.ascent + state.descent + state.gap;
+  }
+  if (inline_mode) {
+    int64_t thickness = (int64_t)state.ascent + state.descent;
+    if (thickness < INT32_MIN || thickness > INT32_MAX) state.invalid = true;
+    else state.thickness = (GFNT_F26Dot6)thickness;
   }
   return state;
 }
@@ -1975,6 +2174,11 @@ static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_co
         GFNT_F26Dot6 advance = pg->tab && slice->src == p->glyphs
             ? state->tabadv[g] : pg->advance;
         GFNT_F26Dot6 before = 0, after = 0, origin, l, t, r, b;
+        GFNT_F26Dot6 shift = 0;
+        if (!inline_shift(p, pr, state->line_ascent, state->line_descent, &shift)) {
+          state->failed = true;
+          return;
+        }
 
         if (line->justified && !slice->hang && slice->src == p->glyphs
             && glyphs == &slice->src[g]) {
@@ -1993,22 +2197,22 @@ static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_co
         placed->advance = before + advance + after;
         if (!state->vertical) {
           placed->pen_x = state->cursor;
-          placed->pen_y = line->baseline;
+          placed->pen_y = line->baseline - shift;
           placed->x = origin + pg->dx;
-          placed->y = line->baseline - pg->dy;
+          placed->y = line->baseline - shift - pg->dy;
           l = placed->x + pg->ix0; t = placed->y - pg->iy1;
           r = placed->x + pg->ix1; b = placed->y - pg->iy0;
         }
         else if (pr->orient == GFNT_ORIENT_RUN_UPRIGHT) {
-          placed->pen_x = 0;
+          placed->pen_x = shift;
           placed->pen_y = state->cursor;
-          placed->x = pg->dx;
+          placed->x = shift + pg->dx;
           placed->y = origin - pg->dy;
           l = placed->x + pg->ix0; t = placed->y - pg->iy1;
           r = placed->x + pg->ix1; b = placed->y - pg->iy0;
         }
         else {
-          placed->pen_x = -(pr->ascent - pr->descent) / 2;
+          placed->pen_x = -(pr->ascent - pr->descent) / 2 + shift;
           placed->pen_y = state->cursor;
           placed->x = placed->pen_x + pg->dy;
           placed->y = origin + pg->dx;
@@ -2399,10 +2603,13 @@ static GFNT_Result build_line_slices(LineBuildState * state, GFNT_Error * error)
   }
   else {
     line->box.y = state->measured->top_y;
-    line->box.height = state->measured->ascent + state->measured->descent + state->measured->gap;
+    line->box.height = state->measured->gap < 0
+        ? state->measured->ascent + state->measured->descent
+        : state->measured->ascent + state->measured->descent + state->measured->gap;
     line->ascent = state->measured->ascent;
     line->descent = state->measured->descent;
-    line->baseline = state->top_y + state->measured->gap / 2 + state->measured->ascent;
+    line->baseline = state->top_y + (state->measured->gap < 0 ? 0 : state->measured->gap / 2)
+        + state->measured->ascent;
   }
   state->slice_count = ns;
   return GFNT_OK;
@@ -2466,6 +2673,12 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     bool hy_line = false;
     bool trunc_line = false;
     bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
+
+    if (line_state.invalid) {
+      r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+          "line metrics exceed the supported layout range");
+      break;
+    }
 
     hang_from = line_state.hang_from;
     natural = line_state.natural;
@@ -2566,7 +2779,15 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     placement.extra = extra;
     placement.extra_rem = extra_rem;
     placement.vertical = vertical;
+    placement.inline_mode = line_state.gap < 0;
+    placement.line_ascent = line_state.ascent;
+    placement.line_descent = line_state.descent;
     place_line(&placement, line, ns);
+    if (placement.failed) {
+      r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+          "line alignment exceeds the supported layout range");
+      break;
+    }
     line->truncated = trunc_line;
     line->offset = line_state.start_offset - placement.lead;
     if (line->extent > widest) {

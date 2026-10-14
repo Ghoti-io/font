@@ -122,6 +122,33 @@ typedef struct GFNT_Rect {
   GFNT_F26Dot6 height;  ///< The height.
 } GFNT_Rect;
 
+/** @brief The source of an inline run's line height. Values are nonnegative. */
+typedef enum GFNT_LineHeightKind {
+  GFNT_LINE_HEIGHT_NORMAL = 0, ///< Use the face's current metrics path.
+  GFNT_LINE_HEIGHT_MULTIPLE,   ///< 16.16 multiple of style size (1.0 = 0x10000).
+  GFNT_LINE_HEIGHT_LENGTH      ///< 26.6 pixel line height.
+} GFNT_LineHeightKind;
+
+/** @brief A tagged line-height value; a zeroed value is normal. */
+typedef struct GFNT_LineHeight {
+  GFNT_LineHeightKind kind;
+  int32_t value; ///< 16.16 for MULTIPLE; 26.6 pixels for LENGTH; ignored for NORMAL.
+} GFNT_LineHeight;
+
+/** @brief Baseline alignment of an inline run; zero initialization means BASELINE. */
+typedef enum GFNT_VerticalAlign {
+  GFNT_VERTICAL_ALIGN_BASELINE = 0,
+  GFNT_VERTICAL_ALIGN_SUB,
+  GFNT_VERTICAL_ALIGN_SUPER,
+  GFNT_VERTICAL_ALIGN_LENGTH,      ///< Signed 26.6 pixels; positive raises in horizontal text.
+  GFNT_VERTICAL_ALIGN_PERCENTAGE,  ///< Signed 16.16 of this style's computed line-height.
+  GFNT_VERTICAL_ALIGN_TEXT_TOP,
+  GFNT_VERTICAL_ALIGN_TEXT_BOTTOM,
+  GFNT_VERTICAL_ALIGN_MIDDLE,
+  GFNT_VERTICAL_ALIGN_TOP,
+  GFNT_VERTICAL_ALIGN_BOTTOM
+} GFNT_VerticalAlign;
+
 /**
  * @brief How a stretch of text is set. Nothing here is owned: it all outlives the paragraph.
  *
@@ -144,6 +171,9 @@ typedef struct GFNT_TextStyle {
    * order. Ligatures are not switched off, as CSS does.
    */
   GFNT_F26Dot6 letter_spacing;
+  GFNT_LineHeight line_height; ///< Zero is NORMAL; other kinds use nonnegative 16.16 or 26.6 values.
+  GFNT_VerticalAlign vertical_align; ///< Zero is BASELINE; selectors with values use the field below.
+  int32_t vertical_align_value; ///< Signed 26.6 length or signed 16.16 percentage; ignored otherwise.
 } GFNT_TextStyle;
 
 /** @brief A stretch of the text and how it is set. The spans tile the text. */
@@ -318,6 +348,8 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_WritingMode writing_mode;   ///< Which way lines run and stack.
   /** How characters sit in a vertical mode; ignored for ::GFNT_WRITING_HORIZONTAL_TB. */
   GFNT_TextOrientation text_orientation;
+  /** Include the first span's inline box as a paragraph strut on every line; off by default. */
+  bool strut;
 } GFNT_ParagraphOptions;
 
 /** @brief A shaped, itemised paragraph. Opaque; free with ::gfnt_paragraph_free(). */

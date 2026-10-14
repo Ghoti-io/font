@@ -128,6 +128,37 @@ CASES.append(("justify-lr", J * 4, "vertical-lr", "mixed", 330, "justify", "ltr"
 CASES.append(("justify-sideways-lr", "\u65e5AB\u672cab \u8a9eAB\u65e5\u672c ab\u8a9eAB\u65e5\u672c",
               "sideways-lr", "mixed", 330, "justify", "ltr", "auto"))
 
+# Explicit line-height rectangles, including a requested height below the font metrics.
+for _name, _text, _css, _driver in (
+    ("line-height-short", "AB ab", "30px", ("--line-height-length", "30")),
+    ("line-height-tall", "AB ab", "80px", ("--line-height-length", "80")),
+    ("line-height-multiple", "AB ab", "1.5", ("--line-height-multiple", "1.5")),
+):
+    CASES.append((_name, _text, "horizontal", "mixed", None, "start", "ltr", "auto",
+                  {"lineHeight": _css, "driver": _driver}))
+
+for _name, _css, _driver in (
+    ("vertical-align-sub", "sub", "sub"),
+    ("vertical-align-super", "super", "super"),
+    ("vertical-align-length", "10px", "length:10"),
+    ("vertical-align-negative-length", "-8px", "length:-8"),
+    ("vertical-align-percentage", "50%", "percentage:0.5"),
+    ("vertical-align-text-top", "text-top", "text-top"),
+    ("vertical-align-text-bottom", "text-bottom", "text-bottom"),
+    ("vertical-align-middle", "middle", "middle"),
+    ("vertical-align-top", "top", "top"),
+    ("vertical-align-bottom", "bottom", "bottom"),
+):
+    CASES.append((_name, "AB", "horizontal", "mixed", None, "start", "ltr", "auto",
+                  {"verticalAlign": _css, "driver": ("--vertical-align", _driver)}))
+
+# One paragraph with two genuinely different text styles. The second character is smaller and
+# superscripted; compare each character's Range rectangle against its corresponding span run.
+CASES.append(("mixed-size-length", "AB", "horizontal", "mixed", None, "start", "ltr", "auto",
+              {"secondSpan": {"start": 1, "size": 30, "verticalAlign": "10px"},
+               "driver": ("--split-at", "1", "--second-size", "30",
+                          "--second-vertical-align", "length:10")}))
+
 PAGE = """<!doctype html><meta charset=utf-8>
 <style>
 @font-face { font-family: T; src: url("file://%(font)s"); }
@@ -147,6 +178,7 @@ function measure(c) {
   d.style.textAlign = c.align;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
+  d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
   if (c.room === null) {
     d.style.whiteSpace = 'pre';
   } else if (c.mode === 'horizontal') {
@@ -154,15 +186,33 @@ function measure(c) {
   } else {
     d.style.height = c.room + 'px';
   }
-  d.textContent = c.text;
+  if (c.secondSpan) {
+    const first = document.createTextNode(c.text.slice(0, c.secondSpan.start));
+    const span = document.createElement('span');
+    span.style.fontSize = c.secondSpan.size + 'px';
+    span.style.lineHeight = 'normal';
+    span.style.verticalAlign = c.secondSpan.verticalAlign;
+    span.textContent = c.text.slice(c.secondSpan.start);
+    d.append(first, span);
+  } else if (c.verticalAlign) {
+    const span = document.createElement('span');
+    span.style.lineHeight = 'normal';
+    span.style.verticalAlign = c.verticalAlign;
+    span.textContent = c.text;
+    d.appendChild(span);
+  } else {
+    d.textContent = c.text;
+  }
   document.body.appendChild(d);
-  const tn = d.firstChild;
+  const tn = c.secondSpan ? null : (c.verticalAlign ? d.firstChild.firstChild : d.firstChild);
   const chars = [];
   let i = 0;
   for (const ch of c.text) {
+    const node = c.secondSpan ? (i < c.secondSpan.start ? d.childNodes[0] : d.childNodes[1].firstChild) : tn;
+    const start = c.secondSpan && i >= c.secondSpan.start ? i - c.secondSpan.start : i;
     const r = document.createRange();
-    r.setStart(tn, i);
-    r.setEnd(tn, i + ch.length);
+    r.setStart(node, start);
+    r.setEnd(node, start + ch.length);
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
     for (const q of r.getClientRects()) {
       n++;
@@ -177,7 +227,8 @@ function measure(c) {
   d.remove();
   return out;
 }
-Promise.all(cases.map(c => document.fonts.load(%(size)d + 'px T', c.text))).then(() => {
+Promise.all(cases.flatMap(c => [document.fonts.load(%(size)d + 'px T', c.text),
+  ...(c.secondSpan ? [document.fonts.load(c.secondSpan.size + 'px T', c.text.slice(c.secondSpan.start))] : [])])).then(() => {
   document.getElementById('out').textContent = JSON.stringify(cases.map(measure));
 });
 </script>
@@ -188,7 +239,10 @@ def chrome_rects(cases):
     """Ask Chromium, in its pinned image, where every character of every case is."""
     os.makedirs(SCRATCH, exist_ok=True)
     spec = [dict(name=c[0], text=c[1], mode=c[2], orient=c[3], room=c[4], align=c[5], dir=c[6],
-                 justify=c[7] if len(c) > 7 else "auto")
+                 justify=c[7] if len(c) > 7 else "auto",
+                 lineHeight=(c[8].get("lineHeight", "normal") if len(c) > 8 else "normal"),
+                 verticalAlign=(c[8].get("verticalAlign") if len(c) > 8 else None),
+                 secondSpan=(c[8].get("secondSpan") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
@@ -212,13 +266,16 @@ def ours(case):
     argv = [DRIVER, "--size", str(SIZE), "--mode", mode if mode != "horizontal" else "horizontal",
             "--orient", orient, "--align", align, "--bidi", direction,
             "--justify", justify, FONT]
+    if len(case) > 8:
+        argv[-1:-1] = list(case[8]["driver"])
     width = "u" if room is None else str(room * 64)
     request = "%s\t%s\n" % (width, text.encode("utf-8").hex())
     finished = subprocess.run(argv, input=request, capture_output=True, text=True)
     answer = json.loads(finished.stdout.splitlines()[0])
-    layout_snapshot.record("css", name, answer)
     if "error" in answer:
         raise RuntimeError("%s: %s" % (name, answer["error"]))
+    if len(case) <= 8:
+        layout_snapshot.record("css", name, answer)
     return answer
 
 
@@ -228,6 +285,69 @@ def compare(case, theirs, mine, verbose):
     tolerance = TOLERANCE_JUSTIFIED if case[5] == "justify" else TOLERANCE
     problems = []
     chars = list(text)
+    mixed_span_case = len(case) > 8 and "secondSpan" in case[8]
+    if mixed_span_case:
+        # Range rectangles for inline text use each run's own font box, not the paragraph's
+        # union line box. Reconstruct that box from the placed baseline, advance and the oracle
+        # font's OS/2 typo ascent (880/1000 em, rounded to Chromium's whole-pixel metrics).
+        glyph_rects = {}
+        second = case[8]["secondSpan"]
+        for line in mine["lines"]:
+            for run in line["runs"]:
+                size = second["size"] if run["span"] == 1 else SIZE
+                ascent = math.floor(size * 0.88 + 0.5)
+                for glyph, baseline in zip(run["g"], run["py"]):
+                    glyph_rects[glyph[1]] = [glyph[4] / 64.0, baseline / 64.0 - ascent,
+                                             glyph[3] / 64.0, float(size)]
+        for i, ch in enumerate(chars):
+            a = theirs["chars"][i]
+            b = glyph_rects.get(i)
+            if a is None or b is None:
+                problems.append("char %d %r has no corresponding rectangle" % (i, ch))
+                continue
+            if not all(abs(x - y) <= tolerance for x, y in zip(a[:4], b)):
+                problems.append("char %d %r: chromium %s, this %s"
+                                % (i, ch, [round(v, 2) for v in a[:4]],
+                                   [round(v, 2) for v in b]))
+        if verbose and not problems:
+            print("  %s: agrees" % name)
+        return problems
+    line_height_case = len(case) > 8 and "lineHeight" in case[8]
+    glyph_y = {}
+    if line_height_case:
+        byte_at = 0
+        for line in mine["lines"]:
+            for run in line["runs"]:
+                for glyph in run["g"]:
+                    glyph_y[glyph[1]] = glyph[5] / 64.0
+        for i, ch in enumerate(chars):
+            if ch == "\n":
+                byte_at += len(ch.encode("utf-8"))
+                continue
+            a = theirs["chars"][i]
+            b = [v / 64.0 for v in mine["chars"][i]]
+            if a is None:
+                byte_at += len(ch.encode("utf-8"))
+                continue
+            gy = glyph_y.get(byte_at)
+            if gy is None or abs(a[1] + 44.0 - gy) > tolerance:
+                problems.append("char %d %r baseline: chromium %.2f, this %s"
+                                % (i, ch, a[1] + 44.0, "missing" if gy is None else "%.2f" % gy))
+            if abs(a[0] - b[0]) > tolerance or abs(a[2] - b[2]) > tolerance:
+                problems.append("char %d %r: chromium x/width %s, this %s"
+                                % (i, ch, [round(a[0], 2), round(a[2], 2)],
+                                   [round(b[0], 2), round(b[2], 2)]))
+            byte_at += len(ch.encode("utf-8"))
+        # Chromium's Range rectangle keeps the font's ink-independent 50px character box,
+        # whereas this API's selection geometry is the complete line box. Baseline and block
+        # line-box height are the comparable quantities for explicit line-height.
+        if verbose and not problems:
+            print("  %s: agrees" % name)
+        box = [mine["w"] / 64.0, mine["h"] / 64.0]
+        if abs(theirs["box"][2] - box[0]) > TOLERANCE or abs(theirs["box"][3] - box[1]) > TOLERANCE:
+            problems.append("box: chromium %s, this %s" % (
+                [round(v, 2) for v in theirs["box"][2:]], [round(v, 2) for v in box]))
+        return problems
     for i, ch in enumerate(chars):
         a = theirs["chars"][i]
         b = [v / 64.0 for v in mine["chars"][i]]

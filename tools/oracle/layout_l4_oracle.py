@@ -492,6 +492,22 @@ def main() -> int:
     for mode in ("sideways-rl", "sideways-lr"):
         expected = driver(mode, "double-side")
         browser = chromium_scenario("double-side", mode)
+        firefox_boxes = firefox_double_side_boxes(mode)
+        if len(firefox_boxes) != 2:
+            raise RuntimeError(f"Firefox {mode} expected two ruby tracks: {firefox_boxes}")
+        firefox_boxes.sort(key=lambda box: box[0])
+        firefox_order = ("over", "under") if mode == "sideways-lr" else ("under", "over")
+        if firefox_boxes[0][0] + firefox_boxes[0][2] > firefox_boxes[1][0]:
+            raise RuntimeError(f"Firefox {mode} ruby tracks overlap: {firefox_boxes}")
+        # Firefox exposes separate track rectangles in its screenshot fixture. Compare
+        # their physical ordering with the library; exact widths differ because engines
+        # size the annotation boxes differently.
+        impl_tracks = expected["lines"][0]["annotations"]
+        impl_order = sorted((track["box"][0] / 64, side)
+                            for track, side in zip(impl_tracks, ("over", "under")))
+        if tuple(side for _, side in impl_order) != firefox_order:
+            raise RuntimeError(f"library {mode} track order {impl_order} differs from Firefox "
+                               f"physical order {firefox_order}: {firefox_boxes}")
         for index, side in enumerate(("over", "under")):
             impl_box = expected["lines"][0]["annotations"][index]["box"]
             browser_box = browser[side]
@@ -502,7 +518,8 @@ def main() -> int:
                                    f"layout={impl_cross}, browser={browser_cross}")
     print("layout_l4_oracle: nested and wrapped ruby, AUTO overhang, and emphasis marks "
           "agree with Chromium within the documented comparisons; primary ruby inline "
-          "placement and advance agree with Chromium and Firefox")
+          "placement and advance agree with Chromium and Firefox; sideways track order "
+          "agrees with Firefox")
     return 0
 
 

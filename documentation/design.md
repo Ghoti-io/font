@@ -1919,7 +1919,7 @@ explicitly excluded. These limits identify missing oracle evidence.
 
 `text-align-last` now has an explicit paragraph option and six Chromium 154
 cases for start, end, left, right, center and justify; all six agree in the
-159-case CSS matrix. `overflow-wrap: anywhere` and `break-word` now have
+160-case CSS matrix. `overflow-wrap: anywhere` and `break-word` now have
 emergency grapheme-boundary wrapping at shaped-unit boundaries. Chromium
 checks their line geometry and intrinsic min-content width; only `anywhere`
 reduces that width. The cases cover Latin text whose emergency boundaries
@@ -1928,9 +1928,12 @@ cluster or ligature are not currently compared and remain a known gap.
 `word-break: break-all` and `keep-all` are also covered: Chromium checks
 break-all geometry and min-content width, and Korean and CJK keep-all line
 boundaries. The legacy `word-break: break-word` value and Level 4
-`auto-phrase` are not implemented. The remaining CSS-facing layout work
-eligible for browser differential coverage is decoration geometry
-(`text-decoration` and skip-ink), `white-space`, source-preserving `text-transform`,
+`auto-phrase` are not implemented. `white-space: pre` now prohibits soft wraps
+while preserving explicit breaks and spaces; Chromium checks line geometry and
+min-content width. `pre-wrap` remains the default. `normal`, `nowrap`,
+`pre-line`, and `break-spaces` remain unsupported. The remaining CSS-facing
+layout work eligible for browser differential coverage is decoration geometry
+(`text-decoration` and skip-ink), source-preserving `text-transform`,
 `hanging-punctuation`, `text-spacing-trim`, `text-autospace`, `text-wrap`
 balance/pretty behavior. Shaping-facing CSS such as
 `font-optical-sizing`, `font-variant-caps`, `font-size-adjust` and

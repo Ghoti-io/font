@@ -142,6 +142,9 @@ CASES.append(("word-break-keep-all-cjk", "日本語日本語", "horizontal", "mi
               "start", "ltr", "auto",
               {"wordBreak": "keep-all", "lineStructureOnly": True,
                "driver": ("--word-break", "keep-all")}))
+CASES.append(("white-space-pre", "AB AB  \nAB AB", "horizontal", "mixed", 100,
+              "start", "ltr", "auto",
+              {"whiteSpace": "pre", "driver": ("--white-space", "pre")}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
@@ -240,6 +243,7 @@ function measure(c) {
   if (c.alignLast) d.style.textAlignLast = c.alignLast;
   if (c.overflowWrap) d.style.overflowWrap = c.overflowWrap;
   if (c.wordBreak) d.style.wordBreak = c.wordBreak;
+  if (c.whiteSpace) d.style.whiteSpace = c.whiteSpace;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
@@ -303,10 +307,10 @@ function measure(c) {
   }
   const b = d.getBoundingClientRect();
   let minContent = null;
-  if (c.overflowWrap || c.wordBreak === 'break-all') {
+  if (c.overflowWrap || c.wordBreak === 'break-all' || c.whiteSpace === 'pre') {
     const intrinsic = d.cloneNode(true);
     intrinsic.style.width = 'min-content';
-    intrinsic.style.whiteSpace = 'normal';
+    if (c.whiteSpace !== 'pre') intrinsic.style.whiteSpace = 'normal';
     document.body.appendChild(intrinsic);
     minContent = intrinsic.getBoundingClientRect().width;
     intrinsic.remove();
@@ -337,7 +341,8 @@ def chrome_rects(cases):
                  alignLast=(c[8].get("alignLast") if len(c) > 8 else None),
                  overflowWrap=(c[8].get("overflowWrap") if len(c) > 8 else None),
                  wordBreak=(c[8].get("wordBreak") if len(c) > 8 else None),
-                 lineStructureOnly=(c[8].get("lineStructureOnly", False) if len(c) > 8 else False))
+                 lineStructureOnly=(c[8].get("lineStructureOnly", False) if len(c) > 8 else False),
+                 whiteSpace=(c[8].get("whiteSpace") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
@@ -387,6 +392,12 @@ def compare(case, theirs, mine, verbose):
             problems.append("min-content width: chromium %s, this %.2f"
                             % (css_min, ours_min))
     if len(case) > 8 and case[8].get("wordBreak") == "break-all":
+        css_min = theirs.get("minContent")
+        ours_min = mine["min"] / 64.0
+        if css_min is None or abs(css_min - ours_min) > TOLERANCE:
+            problems.append("min-content width: chromium %s, this %.2f"
+                            % (css_min, ours_min))
+    if len(case) > 8 and case[8].get("whiteSpace") == "pre":
         css_min = theirs.get("minContent")
         ours_min = mine["min"] / 64.0
         if css_min is None or abs(css_min - ours_min) > TOLERANCE:

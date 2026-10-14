@@ -2437,6 +2437,20 @@ TEST(LayoutContent, WordBreakBreakAllTurnsLetterBoundariesIntoOrdinaryBreaks) {
   EXPECT_EQ(para.layout.line_count, 2u);
 }
 
+TEST(LayoutContent, WhiteSpacePreKeepsSoftLineBreaksAndTrailingSpaces) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_PRE;
+  Para para("AB  \nC", {font.face}, options);
+  GFNT_F26Dot6 minimum = 0;
+
+  ASSERT_EQ(gfnt_paragraph_min_content(para.p, &minimum), GFNT_OK);
+  EXPECT_EQ(minimum, 2 * kLetter + 2 * kSpace);
+  ASSERT_EQ(para.lay(2 * kLetter), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter + 2 * kSpace);
+}
+
 TEST(LayoutContent, NoLineIsWiderThanTheMaxOrNarrowerThanItsMinimumAllows) {
   Font font(latin());
   Para para("AB CDE F ABCDEF AB C\nDE FABC D", {font.face});

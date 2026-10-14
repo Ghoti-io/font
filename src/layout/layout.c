@@ -1406,6 +1406,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
       || (unsigned)options->overflow_wrap > GFNT_OVERFLOW_WRAP_BREAK_WORD
       || (unsigned)options->word_break > GFNT_WORD_BREAK_KEEP_ALL
+      || (unsigned)options->white_space > GFNT_WHITE_SPACE_PRE
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
@@ -2054,7 +2055,7 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     int64_t shown;
 
     total += eff_width(p, u, total);
-    if (!u->space) {
+    if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE)) {
       fit = total;
     }
     if (total > INT32_MAX || total < INT32_MIN || fit > INT32_MAX || fit < INT32_MIN) {
@@ -2067,8 +2068,9 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     if (shown > widest) {
       widest = shown;
     }
-    if (u->hard || u->opportunity
-        || (p->options.overflow_wrap == GFNT_OVERFLOW_WRAP_ANYWHERE && u->emergency)) {
+    if (u->hard || (p->options.white_space != GFNT_WHITE_SPACE_PRE
+            && (u->opportunity
+                || (p->options.overflow_wrap == GFNT_OVERFLOW_WRAP_ANYWHERE && u->emergency)))) {
       total = fit = 0;
     }
   }
@@ -2098,7 +2100,7 @@ GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
     const Unit * u = &p->units[j];
 
     total += eff_width(p, u, total);
-    if (!u->space) {
+    if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE)) {
       fit = total;
     }
     if (total > INT32_MAX || total < INT32_MIN || fit > INT32_MAX || fit < INT32_MIN) {
@@ -2274,6 +2276,7 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
   size_t cands = 0;
   bool have_emergency = false;
   bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
+  bool can_wrap = p->options.white_space != GFNT_WHITE_SPACE_PRE;
 
   for (size_t j = i; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
@@ -2287,12 +2290,12 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
       result.end = j + 1;
       break;
     }
-    if (bounded && u->emergency && j + 1 < p->unit_count && fit <= width) {
+    if (can_wrap && bounded && u->emergency && j + 1 < p->unit_count && fit <= width) {
       emergency_at = j;
       emergency_fit = fit;
       have_emergency = true;
     }
-    if (bounded && fit > width && cands) {
+    if (can_wrap && bounded && fit > width && cands) {
       size_t k = cands;
 
       while (k > 0) {
@@ -2313,11 +2316,11 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
       result.hyphen = p->units[cand_at[k]].hyphen;
       break;
     }
-    if (bounded && fit > width && !cands && have_emergency && emergency_at < j) {
+    if (can_wrap && bounded && fit > width && !cands && have_emergency && emergency_at < j) {
       result.end = emergency_at + 1;
       break;
     }
-    if (u->opportunity && j + 1 < p->unit_count) {
+    if (can_wrap && u->opportunity && j + 1 < p->unit_count) {
       if (bounded && fit > width) {
         result.end = j + 1;
         result.hyphen = u->hyphen;
@@ -2754,7 +2757,11 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
     }
   }
   state.hang_from = end;
-  while (state.hang_from > start && p->units[state.hang_from - 1].space) {
+  if (state.hang_from > start && p->units[state.hang_from - 1].hard) {
+    state.hang_from--;
+  }
+  while (p->options.white_space != GFNT_WHITE_SPACE_PRE
+      && state.hang_from > start && p->units[state.hang_from - 1].space) {
     state.hang_from--;
   }
   for (size_t j = start; j < state.hang_from; j++) {

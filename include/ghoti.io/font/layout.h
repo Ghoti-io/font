@@ -362,6 +362,12 @@ typedef enum GFNT_WordBreak {
   GFNT_WORD_BREAK_KEEP_ALL   ///< Suppress implicit breaks between adjacent CJK letter units.
 } GFNT_WordBreak;
 
+/** @brief Whether preserved text may soft-wrap, after the supported CSS `white-space` values. */
+typedef enum GFNT_WhiteSpace {
+  GFNT_WHITE_SPACE_PRE_WRAP = 0, ///< Preserve spaces and allow soft wrapping; the existing default.
+  GFNT_WHITE_SPACE_PRE             ///< Preserve spaces and breaks, but prohibit soft wrapping.
+} GFNT_WhiteSpace;
+
 /** @brief What hyphenation a paragraph does, after CSS `hyphens`. */
 typedef enum GFNT_Hyphens {
   /**
@@ -479,6 +485,7 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_AlignLast align_last; ///< CSS `text-align-last`; zero preserves the default `auto` behavior.
   GFNT_OverflowWrap overflow_wrap; ///< CSS `overflow-wrap`; zero preserves `normal`.
   GFNT_WordBreak word_break; ///< CSS `word-break`; zero preserves `normal`.
+  GFNT_WhiteSpace white_space; ///< `pre-wrap` by default, or `pre` to suppress soft wrapping.
 } GFNT_ParagraphOptions;
 
 /** @brief The one inline band available to a line at a given block position. */

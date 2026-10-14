@@ -296,6 +296,7 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
 
   for (size_t i = 0; i < p->annotation_count; i++) {
     gfnt_paragraph_free(p->annotations[i].shaped);
+    gfnt_paragraph_free(p->annotations[i].alternate_shaped);
     allocator->free_fn(allocator->ctx, p->annotations[i].text);
   }
 
@@ -357,6 +358,9 @@ static bool annotation_byte_cp(const GFNT_Paragraph * p, size_t byte, size_t * c
   return true;
 }
 
+static GFNT_Result shape_default_emphasis(const GFNT_Paragraph * p, const PAnnotation * source,
+    uint32_t cp, PAnnotation * shaped, GFNT_Error * error);
+
 static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation * items,
     size_t count, GFNT_Error * error) {
   const GFNT_Allocator * allocator = p->allocator;
@@ -386,7 +390,7 @@ static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation 
       static const char * const marks[] = {"•", "•", "◦", "◎", "▲", "﹅", ""};
       size_t base = annotation->cp_start;
       uint32_t cp = base < p->length ? p->cps[base] : 0;
-      bool cjk = cp >= 0x2E80 && cp <= 0x9FFF;
+      bool cjk = is_ideographic(cp);
       size_t mark = (size_t)source->mark_kind;
       bool filled = source->filled;
       if (source->mark_kind == GFNT_EMPHASIS_MARK_DEFAULT) {
@@ -451,7 +455,20 @@ static GFNT_Result create_annotations(GFNT_Paragraph * p, const GFNT_Annotation 
     annotation->ascent = annotation_layout.lines[0].ascent;
     annotation->descent = annotation_layout.lines[0].descent;
     gfnt_layout_free(&annotation_layout);
-    if (source->kind == GFNT_ANNOTATION_EMPHASIS) continue;
+    if (source->kind == GFNT_ANNOTATION_EMPHASIS) {
+      if (source->mark_kind == GFNT_EMPHASIS_MARK_DEFAULT) {
+        PAnnotation alternate = {0};
+        const bool primary_cjk = strcmp(annotation->text, "﹅") == 0;
+        const uint32_t alternate_cp = primary_cjk ? 'A' : 0x4E00;
+        r = shape_default_emphasis(p, annotation, alternate_cp, &alternate, error);
+        if (r != GFNT_OK) return r;
+        annotation->alternate_shaped = alternate.shaped;
+        annotation->alternate_advance = alternate.advance;
+        annotation->alternate_ascent = alternate.ascent;
+        annotation->alternate_descent = alternate.descent;
+      }
+      continue;
+    }
     for (size_t u = annotation->unit_start; u < annotation->unit_end; u++) {
       if (p->units[u].hard) {
         return gfnt_error_set(error, GFNT_ERR_INVALID, 0, source->base_start, GFNT_GLYPH_NONE,
@@ -3326,6 +3343,43 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
   return GFNT_OK;
 }
 
+static GFNT_Result shape_default_emphasis(const GFNT_Paragraph * p, const PAnnotation * source,
+    uint32_t cp, PAnnotation * shaped, GFNT_Error * error) {
+  static const char dot[] = "•";
+  static const char sesame[] = "﹅";
+  const bool cjk_vertical = p->vertical && is_ideographic(cp);
+  const char * text = cjk_vertical ? sesame : dot;
+  const size_t length = cjk_vertical ? sizeof sesame - 1 : sizeof dot - 1;
+  GFNT_TextSpan span = {0};
+  GFNT_ParagraphOptions options = p->options;
+  GFNT_Layout layout = {0};
+  GFNT_Result r;
+
+  span.length = length;
+  span.style = source->descriptor.style;
+  options.direction = GFNT_BIDI_AUTO;
+  options.align = GFNT_ALIGN_START;
+  options.max_lines = 0;
+  options.ellipsis = NULL;
+  options.text_indent = 0;
+  options.hanging_indent = false;
+  options.annotations = NULL;
+  options.annotation_count = 0;
+  r = gfnt_paragraph_create(text, length, &span, 1, &options, p->allocator,
+      &shaped->shaped, error);
+  if (r != GFNT_OK) return r;
+  r = gfnt_paragraph_max_content(shaped->shaped, &shaped->advance);
+  if (r == GFNT_OK) r = gfnt_paragraph_layout(shaped->shaped, GFNT_LAYOUT_UNBOUNDED,
+      &layout, error);
+  if (r == GFNT_OK && layout.line_count) {
+    shaped->ascent = layout.lines[0].ascent;
+    shaped->descent = layout.lines[0].descent;
+  }
+  gfnt_layout_free(&layout);
+  if (r != GFNT_OK) gfnt_paragraph_free(shaped->shaped);
+  return r;
+}
+
 static GFNT_Result add_line_annotations(const GFNT_Paragraph * p, GFNT_Line * lines,
     size_t line_count, GFNT_Error * error) {
   const GFNT_Allocator * allocator = p->allocator;
@@ -3372,7 +3426,20 @@ static GFNT_Result add_line_annotations(const GFNT_Paragraph * p, GFNT_Line * li
           size_t start = p->cp_byte[unit->cp_start], end = p->cp_byte[unit->cp_end];
           if (unit->space || unit->tab || is_newline(p->cps[unit->cp_start])
               || start < line->start || start >= line->end) continue;
-          GFNT_Result r = append_line_annotation(p, annotation, ai, line, start, end,
+          const bool use_default = annotation->descriptor.mark_kind == GFNT_EMPHASIS_MARK_DEFAULT;
+          const bool cjk_vertical = p->vertical && is_ideographic(p->cps[unit->cp_start]);
+          PAnnotation alternate_mark;
+          const PAnnotation * emitted = annotation;
+          GFNT_Result r;
+          if (use_default && cjk_vertical != (strcmp(annotation->text, "﹅") == 0)) {
+            alternate_mark = *annotation;
+            alternate_mark.shaped = annotation->alternate_shaped;
+            alternate_mark.advance = annotation->alternate_advance;
+            alternate_mark.ascent = annotation->alternate_ascent;
+            alternate_mark.descent = annotation->alternate_descent;
+            emitted = &alternate_mark;
+          }
+          r = append_line_annotation(p, emitted, ai, line, start, end,
               &records[line->annotation_count], error);
           if (r != GFNT_OK) return r;
           line->annotation_count++;

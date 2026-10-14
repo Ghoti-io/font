@@ -76,9 +76,11 @@ typedef struct {
   GFNT_Annotation descriptor;
   char * text;
   GFNT_Paragraph * shaped;
+  GFNT_Paragraph * alternate_shaped;
   size_t cp_start, cp_end;
   size_t unit_start, unit_end;
   GFNT_F26Dot6 advance, ascent, descent;
+  GFNT_F26Dot6 alternate_advance, alternate_ascent, alternate_descent;
 } PAnnotation;
 
 /** Where a word can be stretched: the units it is shaped as, and what a tatweel there measures. */

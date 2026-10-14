@@ -358,6 +358,36 @@ TEST(LayoutAnnotation, EmphasisAddsOneMarkPerEligibleCluster) {
   EXPECT_EQ(line.annotations[0].kind, GFNT_ANNOTATION_EMPHASIS);
 }
 
+TEST(LayoutAnnotation, DefaultEmphasisSelectsMarkPerVerticalScriptCluster) {
+  Font font({'A', 0x4E00, 0x2022, 0xFE45});
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation emphasis{};
+  emphasis.base_start = 0;
+  emphasis.base_end = 4;
+  emphasis.kind = GFNT_ANNOTATION_EMPHASIS;
+  emphasis.position = GFNT_ANNOTATION_OVER;
+  emphasis.style.faces = faces;
+  emphasis.style.face_count = 1;
+  emphasis.style.size = kSize;
+  emphasis.mark_kind = GFNT_EMPHASIS_MARK_DEFAULT;
+  GFNT_ParagraphOptions options{};
+  options.writing_mode = GFNT_WRITING_VERTICAL_RL;
+  options.annotations = &emphasis;
+  options.annotation_count = 1;
+  Para para("A中", {font.face}, options);
+
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  const GFNT_Line & line = para.layout.lines[0];
+  ASSERT_EQ(line.annotation_count, 2u);
+  ASSERT_EQ(line.annotations[0].run_count, 1u);
+  ASSERT_EQ(line.annotations[1].run_count, 1u);
+  ASSERT_EQ(line.annotations[0].runs[0].glyph_count, 1u);
+  ASSERT_EQ(line.annotations[1].runs[0].glyph_count, 1u);
+  EXPECT_NE(line.annotations[0].runs[0].glyphs[0].glyph,
+      line.annotations[1].runs[0].glyphs[0].glyph);
+}
+
 TEST(LayoutAnnotation, RubyOverhangCanKeepTheFollowingPlainTextOnTheLine) {
   Font font(latin());
   const GFNT_Face * faces[] = {font.face};

@@ -322,6 +322,7 @@
 #define GFNT_LineHeightKind GHOTIIO_FONT(GFNT_LineHeightKind)
 #define GFNT_LineHeight GHOTIIO_FONT(GFNT_LineHeight)
 #define GFNT_VerticalAlign GHOTIIO_FONT(GFNT_VerticalAlign)
+#define GFNT_InlineObject GHOTIIO_FONT(GFNT_InlineObject)
 #define GFNT_TextSpan GHOTIIO_FONT(GFNT_TextSpan)
 #define GFNT_Align GHOTIIO_FONT(GFNT_Align)
 #define GFNT_LineBreak GHOTIIO_FONT(GFNT_LineBreak)

@@ -1067,6 +1067,15 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
             "a span has an invalid line-height or vertical alignment");
       }
+      if (s->inline_object) {
+        const GFNT_InlineObject * object = s->inline_object;
+        if (object->advance < 0 || object->ascent < 0 || object->descent < 0
+            || (int64_t)object->ascent + object->descent > INT32_MAX
+            || (unsigned)object->align > GFNT_VERTICAL_ALIGN_BOTTOM) {
+          return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+              "an inline object has invalid dimensions or alignment");
+        }
+      }
       for (size_t f = 0; f < s->face_count; f++) {
         if (!s->faces[f]) {
           return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
@@ -1163,6 +1172,16 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   p->cps = cps;
   cps_owned = true;
   p->span_count = span_count;
+  for (size_t s = 0; s < span_count; s++) {
+    if (spans[s].style.inline_object) {
+      if (spans[s].length != 3 || span_cp[s + 1] != span_cp[s] + 1
+          || span_cp[s] >= n || cps[span_cp[s]] != 0xFFFC) {
+        r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+            "an inline object descriptor must cover exactly one U+FFFC");
+        goto done;
+      }
+    }
+  }
   for (size_t i = 0; i < span_count; i++) {
     p->styles[i] = spans[i].style;
   }
@@ -1309,6 +1328,70 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         span++;
       }
       style = &spans[span].style;
+      if (end == start + 1 && cps[start] == 0xFFFC && style->inline_object) {
+        const GFNT_InlineObject * object = style->inline_object;
+        GFNT_TextStyle object_style = *style;
+        PRun * run = &p->runs[p->run_count];
+        PGlyph * glyph;
+        Unit * unit;
+
+        if (p->glyph_count == glyph_cap) {
+          size_t cap = glyph_cap ? glyph_cap * 2 : 64;
+          PGlyph * bigger;
+          while (cap <= p->glyph_count) cap *= 2;
+          bigger = allocator->realloc_fn(allocator->ctx, p->glyphs, cap * sizeof *bigger);
+          if (!bigger) {
+            r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+                "no memory for the inline object glyph");
+            goto done;
+          }
+          p->glyphs = bigger;
+          glyph_cap = cap;
+        }
+        memset(run, 0, sizeof *run);
+        run->span = span;
+        run->level = levels[start];
+        run->orient = p->vertical ? GFNT_ORIENT_RUN_UPRIGHT : GFNT_ORIENT_RUN_HORIZONTAL;
+        run->ascent = object->ascent;
+        run->descent = object->descent;
+        run->inline_ascent = object->ascent;
+        run->inline_descent = object->descent;
+        run->line_height = object->ascent + object->descent;
+        run->object = object;
+        object_style.vertical_align = object->align;
+        object_style.vertical_align_value = object->align_value;
+        if (!set_inline_metrics(run, &object_style)) {
+          r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, p->cp_byte[start], GFNT_GLYPH_NONE,
+              "an inline object has invalid computed line metrics");
+          goto done;
+        }
+        glyph = &p->glyphs[p->glyph_count];
+        memset(glyph, 0, sizeof *glyph);
+        glyph->glyph = GFNT_GLYPH_NONE;
+        glyph->cluster = (uint32_t)p->cp_byte[start];
+        glyph->advance = object->advance;
+        glyph->has_ink = false;
+        unit = &p->units[p->unit_count++];
+        memset(unit, 0, sizeof *unit);
+        unit->cp_start = start;
+        unit->cp_end = end;
+        unit->run = p->run_count;
+        unit->g_lo = p->glyph_count;
+        unit->g_hi = p->glyph_count + 1;
+        unit->object = true;
+        if ((int64_t)object->advance + style->letter_spacing < INT32_MIN
+            || (int64_t)object->advance + style->letter_spacing > INT32_MAX) {
+          r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, p->cp_byte[start], GFNT_GLYPH_NONE,
+              "an inline object advance exceeds the supported layout range");
+          goto done;
+        }
+        unit->width = (GFNT_F26Dot6)((int64_t)object->advance + style->letter_spacing);
+        p->glyphs[p->glyph_count].advance = unit->width;
+        p->glyph_count++;
+        p->run_count++;
+        start = end;
+        continue;
+      }
       flist = style->faces;
       fcount = style->face_count;
       upright = p->vertical && ori[start] == ORI_UPRIGHT;
@@ -1477,6 +1560,13 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       u->opportunity = opp[u->cp_end];
       u->hard = is_newline(last)
           && !(last == 0x0D && u->cp_end < n && cps[u->cp_end] == 0x0A);
+      if (u->object) {
+        const GFNT_InlineObject * object = p->runs[u->run].object;
+        u->opportunity = u->opportunity || object->break_after;
+        if (u->cp_start && i > 0) {
+          p->units[i - 1].opportunity = p->units[i - 1].opportunity || object->break_before;
+        }
+      }
     }
   }
   r = mark_hyphens(p, text, span_cp, error);
@@ -1833,7 +1923,7 @@ static size_t mark_justification(const GFNT_Paragraph * p, size_t ua, size_t han
         gjf[rtl ? first : last] |= rtl ? 1 : 2;
         n++;
       }
-      else if (!v->space && !v->tab && v->g_hi > v->g_lo
+      else if (!u->object && !v->space && !v->tab && v->g_hi > v->g_lo
           && is_ideographic(p->cps[v->cp_start])) {
         // Before an ideograph that follows something else but a space.
         const bool vrtl = (p->runs[v->run].level & 1) != 0;
@@ -1925,9 +2015,10 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
   bool inline_has_box = false;
 
   for (size_t j = start; j < end; j++) {
-    const GFNT_TextStyle * style = &p->styles[p->runs[p->units[j].run].span];
+    const PRun * run = &p->runs[p->units[j].run];
+    const GFNT_TextStyle * style = &p->styles[run->span];
     if (style->line_height.kind != GFNT_LINE_HEIGHT_NORMAL
-        || style->vertical_align != GFNT_VERTICAL_ALIGN_BASELINE) inline_mode = true;
+        || run->vertical_align != GFNT_VERTICAL_ALIGN_BASELINE) inline_mode = true;
   }
   if (inline_mode) {
     state.ascent = state.descent = INT32_MIN;
@@ -2236,6 +2327,7 @@ static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_co
     }
     run->glyph_count = *state->glyph_used - run_first;
     run->advance = state->cursor - run->pos;
+    run->object = pr->object ? pr->object->user : NULL;
     run->start = slice->b_lo;
     run->end = slice->b_hi;
     if (slice->hang && !state->seen_text) state->lead += run->advance;

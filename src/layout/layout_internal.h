@@ -53,6 +53,7 @@ typedef struct {
   GFNT_F26Dot6 x_height; // parent baseline to x-height, from OS/2 or half ascent fallback
   GFNT_F26Dot6 line_height;
   GFNT_VerticalAlign vertical_align;
+  const GFNT_InlineObject * object; // non-NULL for the synthetic U+FFFC run
 } PRun;
 
 /** The glyphs of one cluster. */
@@ -67,6 +68,7 @@ typedef struct {
   bool hard;                   // a line must break after it
   bool tab;                    // one tab character
   uint32_t kashida;            // 1 + the kashida point in the gap after this unit, or 0
+  bool object;                 // one synthetic glyph stands for a caller-owned object
 } Unit;
 
 /** Where a word can be stretched: the units it is shaped as, and what a tatweel there measures. */

@@ -138,7 +138,7 @@ static size_t add_group(const GFNT_Paragraph * p, const GFNT_Layout * layout,
     int32_t carets[64];
     size_t have = 0;
 
-    if (g1 - g0 == 1 && run->orientation != GFNT_ORIENT_RUN_UPRIGHT) {
+    if (g1 - g0 == 1 && run->face && run->orientation != GFNT_ORIENT_RUN_UPRIGHT) {
       const GFNT_TextStyle * style = &p->styles[run->span];
       uint16_t upem = 0;
 

@@ -432,6 +432,200 @@ TEST(LayoutLineBox, ComputedMetricsOutsidePublicRangeAreRejected) {
   EXPECT_EQ(paragraph, nullptr);
 }
 
+TEST(LayoutInlineObject, OneReplacementCharacterBecomesAnAtomicCallerOwnedRun) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  int identity = 7;
+  GFNT_InlineObject object{};
+  object.advance = 900;
+  object.ascent = 640;
+  object.descent = 128;
+  object.user = &identity;
+  GFNT_TextSpan span{};
+  span.length = 3;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  span.style.inline_object = &object;
+  const std::string text = "\xEF\xBF\xBC";
+  GFNT_Paragraph * paragraph = nullptr;
+  ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, nullptr, nullptr,
+                  &paragraph, nullptr), GFNT_OK);
+  GFNT_Layout layout{};
+  ASSERT_EQ(gfnt_paragraph_layout(paragraph, 1200, &layout, nullptr), GFNT_OK);
+  ASSERT_EQ(layout.line_count, 1u);
+  ASSERT_EQ(layout.lines[0].run_count, 1u);
+  const GFNT_LineRun & run = layout.lines[0].runs[0];
+  EXPECT_EQ(run.face, nullptr);
+  EXPECT_EQ(run.object, &identity);
+  ASSERT_EQ(run.glyph_count, 1u);
+  EXPECT_EQ(run.glyphs[0].glyph, GFNT_GLYPH_NONE);
+  EXPECT_EQ(run.glyphs[0].advance, 900);
+  EXPECT_EQ(run.advance, 900);
+  EXPECT_EQ(layout.lines[0].ascent, object.ascent);
+  EXPECT_EQ(layout.lines[0].descent, object.descent);
+  EXPECT_EQ(layout.ink.width, 0);
+  GFNT_F26Dot6 min_content = 0;
+  ASSERT_EQ(gfnt_paragraph_min_content(paragraph, &min_content), GFNT_OK);
+  EXPECT_EQ(min_content, object.advance);
+  GFNT_Hit hit{};
+  ASSERT_EQ(gfnt_layout_hit_test(paragraph, &layout, 400, 300, &hit), GFNT_OK);
+  EXPECT_TRUE(hit.offset == 0 || hit.offset == text.size());
+  GFNT_Rect rect{};
+  size_t count = 0;
+  ASSERT_EQ(gfnt_layout_range_rects(paragraph, &layout, 0, text.size(), &rect, 1, &count),
+      GFNT_OK);
+  ASSERT_EQ(count, 1u);
+  EXPECT_EQ(rect.width, object.advance);
+  gfnt_layout_free(&layout);
+  gfnt_paragraph_free(paragraph);
+}
+
+TEST(LayoutInlineObject, InvalidDescriptorOrRangeIsRejected) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_InlineObject object{};
+  object.advance = -1;
+  GFNT_TextSpan span{};
+  span.length = 3;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  span.style.inline_object = &object;
+  const std::string marker = "\xEF\xBF\xBC";
+  GFNT_Paragraph * paragraph = nullptr;
+  EXPECT_EQ(gfnt_paragraph_create(marker.data(), marker.size(), &span, 1, nullptr, nullptr,
+                  &paragraph, nullptr), GFNT_ERR_INVALID);
+  object.advance = 10;
+  const std::string wrong = "A";
+  span.length = wrong.size();
+  EXPECT_EQ(gfnt_paragraph_create(wrong.data(), wrong.size(), &span, 1, nullptr, nullptr,
+                  &paragraph, nullptr), GFNT_ERR_INVALID);
+}
+
+TEST(LayoutInlineObject, ReplacementCharacterWithoutDescriptorStaysText) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan span{};
+  span.length = 3;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  const std::string marker = "\xEF\xBF\xBC";
+  GFNT_Paragraph * paragraph = nullptr;
+  ASSERT_EQ(gfnt_paragraph_create(marker.data(), marker.size(), &span, 1, nullptr, nullptr,
+                  &paragraph, nullptr), GFNT_OK);
+  GFNT_Layout layout{};
+  ASSERT_EQ(gfnt_paragraph_layout(paragraph, 1000, &layout, nullptr), GFNT_OK);
+  ASSERT_EQ(layout.lines[0].run_count, 1u);
+  EXPECT_NE(layout.lines[0].runs[0].face, nullptr);
+  EXPECT_EQ(layout.lines[0].runs[0].object, nullptr);
+  gfnt_layout_free(&layout);
+  gfnt_paragraph_free(paragraph);
+}
+
+TEST(LayoutInlineObject, PlacedInEveryWritingModeAndKeepsBaseByteGeometry) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_InlineObject object{};
+  object.advance = 480;
+  object.ascent = 320;
+  object.descent = 160;
+  GFNT_TextSpan span{};
+  span.length = 3;
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  span.style.inline_object = &object;
+  const std::string text = "\xEF\xBF\xBC";
+  const GFNT_WritingMode modes[] = {GFNT_WRITING_HORIZONTAL_TB, GFNT_WRITING_VERTICAL_RL,
+      GFNT_WRITING_VERTICAL_LR, GFNT_WRITING_SIDEWAYS_RL, GFNT_WRITING_SIDEWAYS_LR};
+  for (GFNT_WritingMode mode : modes) {
+    GFNT_ParagraphOptions options{};
+    options.writing_mode = mode;
+    GFNT_Paragraph * paragraph = nullptr;
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &options, nullptr,
+                    &paragraph, nullptr), GFNT_OK);
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, 1000, &layout, nullptr), GFNT_OK);
+    ASSERT_EQ(layout.lines[0].run_count, 1u);
+    EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].advance, object.advance);
+    GFNT_Rect rect{};
+    size_t count = 0;
+    ASSERT_EQ(gfnt_layout_range_rects(paragraph, &layout, 0, text.size(), &rect, 1, &count),
+        GFNT_OK);
+    ASSERT_EQ(count, 1u);
+    if (mode == GFNT_WRITING_HORIZONTAL_TB) EXPECT_EQ(rect.width, object.advance);
+    else EXPECT_EQ(rect.height, object.advance);
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
+  }
+}
+
+TEST(LayoutInlineObject, DescriptorBreakFlagsCreateOpportunitiesOnBothSides) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_InlineObject object{};
+  object.advance = 400;
+  object.ascent = 320;
+  object.descent = 160;
+  object.break_before = true;
+  object.break_after = true;
+  const std::string text = std::string("A") + "\xEF\xBF\xBC" + "B";
+  GFNT_TextSpan spans[3]{};
+  spans[0].length = spans[2].length = 1;
+  spans[1].length = 3;
+  for (GFNT_TextSpan & span : spans) {
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+  }
+  spans[1].style.inline_object = &object;
+  Para para(text, {spans[0], spans[1], spans[2]});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, 350, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 3u);
+  EXPECT_EQ(para.layout.lines[0].start, 0u);
+  EXPECT_EQ(para.layout.lines[0].end, 1u);
+  EXPECT_EQ(para.layout.lines[1].start, 1u);
+  EXPECT_EQ(para.layout.lines[1].end, 4u);
+  EXPECT_EQ(para.layout.lines[2].start, 4u);
+  EXPECT_EQ(para.layout.lines[2].end, 5u);
+}
+
+TEST(LayoutInlineObject, GapAfterObjectJustifiesOnlyInterCharacter) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_InlineObject object{};
+  object.advance = 400;
+  object.ascent = 320;
+  object.descent = 160;
+  const std::string text = std::string("\xEF\xBF\xBC") + "A";
+  GFNT_TextSpan spans[2]{};
+  spans[0].length = 3;
+  spans[1].length = 1;
+  for (GFNT_TextSpan & span : spans) {
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+  }
+  spans[0].style.inline_object = &object;
+  for (GFNT_Justify justify : {GFNT_JUSTIFY_AUTO, GFNT_JUSTIFY_INTER_CHARACTER}) {
+    GFNT_ParagraphOptions options{};
+    options.align = GFNT_ALIGN_JUSTIFY;
+    options.justify = justify;
+    options.justify_last = true;
+    Para para(text, {spans[0], spans[1]}, options);
+    ASSERT_EQ(para.created, GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(para.p, 1200, &para.layout, nullptr), GFNT_OK);
+    ASSERT_EQ(para.layout.line_count, 1u);
+    EXPECT_EQ(para.layout.lines[0].justified, justify == GFNT_JUSTIFY_INTER_CHARACTER);
+    if (justify == GFNT_JUSTIFY_INTER_CHARACTER) {
+      EXPECT_GT(para.layout.lines[0].runs[0].advance, object.advance);
+    }
+  }
+}
+
 TEST(Layout, LinesBreakAfterSpacesAndTheSpacesHang) {
   Font font(latin());
   Para para("AB CD EF", {font.face});

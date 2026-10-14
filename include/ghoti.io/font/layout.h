@@ -42,8 +42,10 @@
  *
  * **What it does not do, stated rather than approximated:** kashida (a justified line
  * widens its spaces and its ideograph gaps, which is all Chromium and Pango do to Arabic as well),
- * hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and anything that must know about a non-text box on its
- * line. Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
+ * hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), ruby, and per-line flow
+ * constraints. A caller may describe an atomic U+FFFC inline object with ::GFNT_InlineObject;
+ * the library places its synthetic glyph and returns its caller identity, but never paints it.
+ * Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
  * the text is otherwise one bidirectional paragraph, so a caller with several
  * paragraphs lays out one object per paragraph.
  */
@@ -150,6 +152,23 @@ typedef enum GFNT_VerticalAlign {
 } GFNT_VerticalAlign;
 
 /**
+ * @brief Metrics and caller identity for an atomic U+FFFC inline object, in 26.6 pixels.
+ *
+ * The descriptor and @p user remain owned by the caller and must outlive the paragraph and its
+ * layouts. A true break flag adds a UAX #14 opportunity at that edge; it does not force a break.
+ */
+typedef struct GFNT_InlineObject {
+  GFNT_F26Dot6 advance; ///< Length along the line; zero is allowed.
+  GFNT_F26Dot6 ascent;  ///< Distance above the baseline (or half-thickness in vertical text).
+  GFNT_F26Dot6 descent; ///< Distance below the baseline (or half-thickness in vertical text).
+  GFNT_VerticalAlign align; ///< Baseline alignment, using the same choices as text styles.
+  int32_t align_value; ///< Signed 26.6 length or signed 16.16 percentage for align.
+  bool break_before; ///< Permit a line break immediately before this object.
+  bool break_after;  ///< Permit a line break immediately after this object.
+  void * user; ///< Caller-owned object identity, returned on its line run.
+} GFNT_InlineObject;
+
+/**
  * @brief How a stretch of text is set. Nothing here is owned: it all outlives the paragraph.
  *
  * A zeroed style is not valid: @p faces and @p size must be given.
@@ -174,6 +193,8 @@ typedef struct GFNT_TextStyle {
   GFNT_LineHeight line_height; ///< Zero is NORMAL; other kinds use nonnegative 16.16 or 26.6 values.
   GFNT_VerticalAlign vertical_align; ///< Zero is BASELINE; selectors with values use the field below.
   int32_t vertical_align_value; ///< Signed 26.6 length or signed 16.16 percentage; ignored otherwise.
+  /** Optional object descriptor. Non-NULL only for a span of exactly one U+FFFC. */
+  const GFNT_InlineObject * inline_object;
 } GFNT_TextStyle;
 
 /** @brief A stretch of the text and how it is set. The spans tile the text. */
@@ -397,6 +418,7 @@ typedef struct GFNT_LineRun {
    */
   GFNT_F26Dot6 pos;
   GFNT_F26Dot6 advance;         ///< The run's length along the line: its width, or its height.
+  void * object; ///< Caller identity for an inline object; NULL for text. Object pixels are not ink.
 } GFNT_LineRun;
 
 /**

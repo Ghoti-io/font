@@ -1653,6 +1653,19 @@ several. A cluster of several graphemes (a ligature) is divided at the font's
 `GDEF` carets when it lists one fewer than the graphemes, and evenly otherwise.
 A newline is not a box, so nothing lands after one.
 
+**Inline objects (L2).** A span may carry `GFNT_TextStyle.inline_object` only
+when it covers exactly one U+FFFC. The descriptor is caller-owned for the life
+of the paragraph and supplies an along-line advance, ascent, descent, alignment,
+optional break opportunities, and a caller identity. Layout treats the marker
+as one unbreakable unit and emits one `GFNT_GLYPH_NONE` placed glyph in a run
+with a NULL face; `GFNT_LineRun.object` returns the identity. The object's
+pixels are caller-painted and do not contribute to `GFNT_Layout.ink`. Its
+advance participates in wrapping, content sizing and selection geometry. A
+marker without a descriptor keeps the ordinary character path. Negative
+dimensions, an invalid alignment, or a descriptor on any other span range is
+rejected when the paragraph is created. Descriptor storage and identity remain
+owned by the caller and must outlive the paragraph and layouts.
+
 Justification (`GFNT_ALIGN_JUSTIFY`) widens the spaces of a line, sharing the
 slack out in whole 1/64 pixels; a line that ends a paragraph or a newline, a
 truncated one, one with no space but a hanging one, and every line of an
@@ -1772,15 +1785,15 @@ which the patch does not read either. `make check-oracle-kashida` holds all this
 screenshots of the patch's published page (23 words and phrases in Amiri, and the three
 `text-kashida-space` settings), which agree to within one tatweel at every stroke.
 
-Not done: ruby, which needs inline boxes this layout does not have.
+Not done: flow constraints and ruby.
 
 ### 10.7 Deliberately not here
 
 Hyphenation data (the `GFNT_Hyphenator` seam is built), dictionary word breaking
 for the `SA` scripts (a caller-supplied `unicode` break provider is supported),
-Knuth-Plass optimal breaking, ruby, and inline objects/flow around non-text
-boxes are outside the current implementation. Vertical writing modes are
-implemented; see §10.8.
+Knuth-Plass optimal breaking, ruby, and flow around non-text boxes are outside
+the current implementation. Inline objects are supported as described in §10.8.
+Vertical writing modes are implemented; see §10.8.
 
 ---
 

@@ -327,6 +327,47 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
       check(inside(r, l));
     }
   }
+  // Exercise an explicit atomic object on every seed as well as the arbitrary text above.
+  {
+    static const char marker[] = "\xEF\xBF\xBC";
+    GFNT_InlineObject object{};
+    GFNT_TextSpan object_span{};
+    GFNT_ParagraphOptions object_options = o;
+    GFNT_Paragraph * object_paragraph = nullptr;
+    GFNT_Layout object_layout{};
+    GFNT_F26Dot6 object_min = 0, object_max = 0;
+    object.advance = static_cast<GFNT_F26Dot6>(1 + (b & 0x3F)) * 64;
+    object.ascent = static_cast<GFNT_F26Dot6>(1 + ((a >> 2) & 0x1F)) * 32;
+    object.descent = static_cast<GFNT_F26Dot6>(1 + ((a >> 4) & 0x0F)) * 16;
+    object.break_before = (a & 1) != 0;
+    object.break_after = (b & 1) != 0;
+    object.user = &object;
+    object_span.length = 3;
+    object_span.style.faces = faces;
+    object_span.style.face_count = 1;
+    object_span.style.size = 20 * 64;
+    object_span.style.inline_object = &object;
+    object_options.max_lines = 0;
+    object_options.ellipsis = nullptr;
+    check(gfnt_paragraph_create(marker, 3, &object_span, 1, &object_options, nullptr,
+        &object_paragraph, nullptr) == GFNT_OK);
+    check(gfnt_paragraph_layout(object_paragraph, room, &object_layout, nullptr) == GFNT_OK);
+    check(object_layout.line_count >= 1 && object_layout.lines[0].run_count == 1);
+    check(object_layout.lines[0].runs[0].object == &object);
+    check(gfnt_paragraph_min_content(object_paragraph, &object_min) == GFNT_OK);
+    check(gfnt_paragraph_max_content(object_paragraph, &object_max) == GFNT_OK);
+    check(object_min >= 0 && object_max >= object_min);
+    size_t object_rect_count = 0;
+    check(gfnt_layout_range_rects(object_paragraph, &object_layout, 0, 3,
+        nullptr, 0, &object_rect_count) == GFNT_OK);
+    GFNT_Hit object_hit{};
+    check(gfnt_layout_hit_test(object_paragraph, &object_layout, 0, 0, &object_hit) == GFNT_OK);
+    GFNT_Caret object_caret{};
+    check(gfnt_layout_caret(object_paragraph, &object_layout, object_hit.offset,
+        object_hit.affinity, &object_caret) == GFNT_OK);
+    gfnt_layout_free(&object_layout);
+    gfnt_paragraph_free(object_paragraph);
+  }
   gfnt_layout_free(&l);
   gfnt_layout_free(&again);
   gfnt_paragraph_free(p);

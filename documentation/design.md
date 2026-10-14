@@ -1763,8 +1763,13 @@ order.
 
 Letter-spacing (`GFNT_TextStyle.letter_spacing`) is added to the advance of the
 last glyph of every cluster, in reading order, before any line is broken, so it
-counts in the widths; ligatures are not switched off, as CSS does. A tab
-advances to the next multiple of `tab_width` from the start of its line (0 means
+counts in the widths; ligatures are not switched off, as CSS does.
+Word-spacing (`GFNT_TextStyle.word_spacing`) adds a signed amount after each
+U+0020 space before line breaking; it affects wrapping and content-size
+measurements. Chromium's oracle shows U+3000 ideographic spaces are not affected.
+The CSS oracle covers positive and negative values, wrapping and vertical writing.
+A tab advances to the next multiple of `tab_width`
+from the start of its line (0 means
 eight spaces of the first span's first face); stops restart on each line, a tab
 is a break opportunity, and `min_content` measures from the start of the
 unbreakable stretch, which is an approximation. A `GFNT_FontProvider` is asked
@@ -1900,6 +1905,29 @@ comparable track geometry, while the Firefox screenshot oracle checks that the
 tracks remain separate on the correct sides. Both pinned browser oracles report `ruby-merge` and
 `ruby-position:inter-character` unsupported, so those behaviors are covered by
 library unit tests rather than browser comparison.
+
+**CSS oracle gaps are explicit.** The pinned oracle set is Chromium 154 and
+Firefox 153.4; it does not include Safari/WebKit. The browser oracles cannot
+currently verify `ruby-merge` or `ruby-position: inter-character`, because both
+pinned engines report those values unsupported. Safari supports the latter, but
+we have no pinned Safari runner, so this implementation's inter-character
+geometry is unit-tested only. No browser comparison currently covers CSS ruby
+annotation selection geometry inside nested `rt` boxes, the browser-dependent
+width of wrapped ruby readings, or the exact amount of `ruby-overhang: auto`;
+those are either compared only through the narrower measurements above or
+explicitly excluded. These limits identify missing oracle evidence.
+
+The following CSS-facing layout work remains eligible for browser differential
+coverage and is not complete yet: decoration geometry (`text-decoration` and
+skip-ink), the remaining line-breaking controls (`word-break`,
+`overflow-wrap`, and `white-space`), source-preserving `text-transform`,
+`hanging-punctuation`, `text-spacing-trim`, `text-autospace`, `text-wrap`
+balance/pretty behavior, and `text-align-last`. Shaping-facing CSS such as
+`font-optical-sizing`, `font-variant-caps`, `font-size-adjust` and
+`text-combine-upright`, plus `initial-letter`, also remains outside the current
+oracle matrix. Each should be added only with named CSS cases and an explicit
+comparison boundary. Optimal (Knuth–Plass) line breaking has no CSS browser
+behavior to match, so it is documented separately from this list.
 
 ### 10.7 Deliberately not here
 

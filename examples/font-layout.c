@@ -28,7 +28,8 @@
  *                    [--mode horizontal|vertical-rl|vertical-lr|sideways-rl|sideways-lr]
  *                    [--orient mixed|mixed-pango|upright|sideways]
  *                    [--justify auto|inter-word|inter-character|kashida|none]
- *                    [--justify-last] [--space-share 0..1] [--line-height-normal|--line-height-multiple N|--line-height-length PX]
+ *                    [--justify-last] [--space-share 0..1] [--word-spacing PX]
+ *                    [--line-height-normal|--line-height-multiple N|--line-height-length PX]
  *                    [--vertical-align KIND[:VALUE]] [--split-at BYTE --second-size PX]
  *                    [--second-vertical-align KIND[:VALUE]]
  *                    [--object-at BYTE --object-advance PX --object-ascent PX --object-descent PX]
@@ -144,6 +145,7 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
   spans[0].style.line_height = style_options->line_height;
   spans[0].style.vertical_align = style_options->vertical_align;
   spans[0].style.vertical_align_value = style_options->vertical_align_value;
+  spans[0].style.word_spacing = style_options->word_spacing;
   base_span = spans[0];
   second_span = base_span;
   size_t span_count = 1;
@@ -153,6 +155,7 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     spans[1].style.size = second_size ? second_size : size;
     spans[1].style.vertical_align = second_style_options->vertical_align;
     spans[1].style.vertical_align_value = second_style_options->vertical_align_value;
+    spans[1].style.word_spacing = second_style_options->word_spacing;
     second_span = spans[1];
     span_count = 2;
   }
@@ -453,6 +456,10 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[a], "--space-share") == 0 && a + 1 < argc) {
       options.space_share = (GFNT_F16Dot16)(atof(argv[++a]) * 65536.0 + 0.5);
+    }
+    else if (strcmp(argv[a], "--word-spacing") == 0 && a + 1 < argc) {
+      double spacing = atof(argv[++a]) * 64.0;
+      style_options.word_spacing = (GFNT_F26Dot6)(spacing + (spacing < 0 ? -0.5 : 0.5));
     }
     else if (strcmp(argv[a], "--line-height-multiple") == 0 && a + 1 < argc) {
       style_options.line_height.kind = GFNT_LINE_HEIGHT_MULTIPLE;

@@ -2827,6 +2827,36 @@ TEST(LayoutSpacing, ItCountsInTheLineBreakingToo) {
   EXPECT_EQ(para.layout.line_count, 2u);
 }
 
+TEST(LayoutSpacing, WordSpacingIsAppliedToSpaceBeforeBreakingAndMeasurement) {
+  Font font(latin());
+  GFNT_TextSpan span = plain_span(font, 3);
+  Para ordinary("A B", {span});
+  ASSERT_EQ(ordinary.created, GFNT_OK);
+  GFNT_F26Dot6 ordinary_max = 0;
+  ASSERT_EQ(gfnt_paragraph_max_content(ordinary.p, &ordinary_max), GFNT_OK);
+  ASSERT_EQ(ordinary.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+
+  span.style.word_spacing = 64;
+  Para spaced("A B", {span});
+  ASSERT_EQ(spaced.created, GFNT_OK);
+  GFNT_F26Dot6 spaced_max = 0;
+  ASSERT_EQ(gfnt_paragraph_max_content(spaced.p, &spaced_max), GFNT_OK);
+  ASSERT_EQ(spaced.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  EXPECT_EQ(spaced_max, ordinary_max + 64);
+  EXPECT_EQ(spaced.layout.lines[0].extent, ordinary.layout.lines[0].extent + 64);
+  EXPECT_EQ(spaced.layout.lines[0].runs[0].glyphs[2].pen_x,
+      ordinary.layout.lines[0].runs[0].glyphs[2].pen_x + 64);
+
+  span.style.word_spacing = -32;
+  Para tight("A B", {span});
+  ASSERT_EQ(tight.created, GFNT_OK);
+  GFNT_F26Dot6 tight_max = 0;
+  ASSERT_EQ(gfnt_paragraph_max_content(tight.p, &tight_max), GFNT_OK);
+  ASSERT_EQ(tight.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  EXPECT_EQ(tight_max, ordinary_max - 32);
+  EXPECT_EQ(tight.layout.lines[0].extent, ordinary.layout.lines[0].extent - 32);
+}
+
 TEST(LayoutTabs, ATabGoesToTheNextStopFromTheStartOfTheLine) {
   Font font(latin());
   GFNT_ParagraphOptions o{};

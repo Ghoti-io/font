@@ -318,6 +318,7 @@ static bool annotation_style_equal(const GFNT_TextStyle * a, const GFNT_TextStyl
       && a->language == b->language && a->features == b->features
       && a->feature_count == b->feature_count && a->variation == b->variation
       && a->line_metrics == b->line_metrics && a->letter_spacing == b->letter_spacing
+      && a->word_spacing == b->word_spacing
       && a->line_height.kind == b->line_height.kind
       && a->line_height.value == b->line_height.value
       && a->vertical_align == b->vertical_align
@@ -652,10 +653,20 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
     Unit * u = &p->units[i];
     bool all_space = u->cp_end > u->cp_start;
 
-    GFNT_F26Dot6 spacing = p->styles[p->runs[run].span].letter_spacing;
+    GFNT_TextStyle * style = &p->styles[p->runs[run].span];
 
-    if (spacing && u->g_hi > u->g_lo) {
-      p->glyphs[rtl ? u->g_lo : u->g_hi - 1].advance += spacing;
+    if (u->g_hi > u->g_lo) {
+      const int64_t extra = (int64_t)style->letter_spacing
+          + (u->cp_end == u->cp_start + 1 && cps[u->cp_start] == 0x20
+              ? style->word_spacing : 0);
+      PGlyph * last = &p->glyphs[rtl ? u->g_lo : u->g_hi - 1];
+      const int64_t advance = (int64_t)last->advance + extra;
+
+      if (advance < INT32_MIN || advance > INT32_MAX) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, last->glyph,
+            "letter or word spacing overflows a glyph advance");
+      }
+      last->advance = (GFNT_F26Dot6)advance;
     }
     if (u->cp_end - u->cp_start == 1 && cps[u->cp_start] == 0x09
         && u->g_hi > u->g_lo) {
@@ -824,9 +835,10 @@ static GFNT_Result kashida_reshape(const GFNT_Paragraph * p, const KPoint * pt, 
   if (m == 0 || m > (g_hi - g_lo) + n_tw + 4) {
     return GFNT_OK;
   }
-  // Letter-spacing was added to the paragraph's glyphs, one to a unit: do the same here.
+  // Spacing was added to the paragraph's glyphs, one to a unit: do the same here.
   {
     const GFNT_F26Dot6 spacing = p->styles[pr->span].letter_spacing;
+    const GFNT_F26Dot6 word_spacing = p->styles[pr->span].word_spacing;
 
     if (spacing) {
       for (size_t v = pt->lo; v <= pt->hi; v++) {
@@ -843,7 +855,31 @@ static GFNT_Result kashida_reshape(const GFNT_Paragraph * p, const KPoint * pt, 
           }
         }
         if (pick != SIZE_MAX) {
-          out[pick].advance += spacing;
+          const int64_t advance = (int64_t)out[pick].advance + spacing;
+          if (advance < INT32_MIN || advance > INT32_MAX) {
+            return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, out[pick].glyph,
+                "letter spacing overflows a reshaped glyph advance");
+          }
+          out[pick].advance = (GFNT_F26Dot6)advance;
+        }
+      }
+    }
+    if (word_spacing) {
+      for (size_t v = pt->lo; v <= pt->hi; v++) {
+        const Unit * x = &p->units[v];
+
+        if (x->cp_end == x->cp_start + 1 && p->cps[x->cp_start] == 0x20) {
+          for (size_t i = 0; i < m; i++) {
+            if (ocp[i] == x->cp_start) {
+              const int64_t advance = (int64_t)out[i].advance + word_spacing;
+              if (advance < INT32_MIN || advance > INT32_MAX) {
+                return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, out[i].glyph,
+                    "word spacing overflows a reshaped glyph advance");
+              }
+              out[i].advance = (GFNT_F26Dot6)advance;
+              break;
+            }
+          }
         }
       }
     }

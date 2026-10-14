@@ -112,6 +112,17 @@ for _name, _text in JUSTIFY_TEXTS:
         for _j in ("auto", "inter-word", "inter-character", "none"):
             CASES.append(("justify-%s-%s-%s" % (_name, _mode, _j), _text, _mode, "mixed", _room,
                           "justify", "ltr", _j))
+
+for _name, _text, _spacing, _room, _mode in (
+    ("word-spacing-positive", "AB ab  ca", "8px", 330, "horizontal"),
+    ("word-spacing-negative", "AB ab  ca", "-3px", 330, "horizontal"),
+    ("word-spacing-wrap", "AB ab ca AB", "12px", 200, "horizontal"),
+    ("word-spacing-cjk", "日\u3000本\u3000語", "7px", 330, "horizontal"),
+    ("word-spacing-vertical", "AB ab \u3000語", "6px", 330, "vertical-rl"),
+):
+    CASES.append((_name, _text, _mode, "mixed", _room, "start", "ltr", "auto",
+                  {"wordSpacing": _spacing,
+                   "driver": ("--word-spacing", _spacing[:-2])}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
@@ -247,6 +258,7 @@ function measure(c) {
   } else {
     d.textContent = c.text;
   }
+  if (c.wordSpacing) d.style.wordSpacing = c.wordSpacing;
   document.body.appendChild(d);
   const tn = c.secondSpan ? null : (c.flow ? d.childNodes[1]
       : c.verticalAlign ? d.firstChild.firstChild : d.firstChild);
@@ -288,7 +300,8 @@ def chrome_rects(cases):
                  lineHeight=(c[8].get("lineHeight", "normal") if len(c) > 8 else "normal"),
                  verticalAlign=(c[8].get("verticalAlign") if len(c) > 8 else None),
                  secondSpan=(c[8].get("secondSpan") if len(c) > 8 else None),
-                 flow=(c[8].get("flow") if len(c) > 8 else None))
+                 flow=(c[8].get("flow") if len(c) > 8 else None),
+                 wordSpacing=(c[8].get("wordSpacing") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
@@ -331,6 +344,30 @@ def compare(case, theirs, mine, verbose):
     tolerance = TOLERANCE_JUSTIFIED if case[5] == "justify" else TOLERANCE
     problems = []
     chars = list(text)
+    word_spacing_case = len(case) > 8 and "wordSpacing" in case[8]
+    if word_spacing_case:
+        vertical = case[2] != "horizontal"
+        css_lines, ours_lines = {}, {}
+        for i, ch in enumerate(chars):
+            a, b = theirs["chars"][i], [v / 64.0 for v in mine["chars"][i]]
+            if a is None:
+                continue
+            css_cross = round(a[0 if vertical else 1], 3)
+            ours_cross = round(b[0 if vertical else 1], 3)
+            css_lines.setdefault(css_cross, len(css_lines))
+            ours_lines.setdefault(ours_cross, len(ours_lines))
+            if css_lines[css_cross] != ours_lines[ours_cross]:
+                problems.append("char %d %r is on a different line" % (i, ch))
+                continue
+            inline_css = (a[1], a[3]) if vertical else (a[0], a[2])
+            inline_ours = (b[1], b[3]) if vertical else (b[0], b[2])
+            if not all(abs(x - y) <= tolerance for x, y in zip(inline_css, inline_ours)):
+                problems.append("char %d %r inline geometry: chromium %s, this %s"
+                                % (i, ch, [round(v, 2) for v in inline_css],
+                                   [round(v, 2) for v in inline_ours]))
+        if verbose and not problems:
+            print("  %s: agrees" % name)
+        return problems
     mixed_span_case = len(case) > 8 and "secondSpan" in case[8]
     if mixed_span_case:
         # Range rectangles for inline text use each run's own font box, not the paragraph's

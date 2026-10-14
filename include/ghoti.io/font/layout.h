@@ -199,6 +199,8 @@ typedef struct GFNT_TextStyle {
   int32_t vertical_align_value; ///< Signed 26.6 length or signed 16.16 percentage; ignored otherwise.
   /** Optional object descriptor. Non-NULL only for a span of exactly one U+FFFC. */
   const GFNT_InlineObject * inline_object;
+  /** Extra space after U+0020 word separators, in 26.6 pixels (negative tightens it). */
+  GFNT_F26Dot6 word_spacing;
 } GFNT_TextStyle;
 
 /** @brief A stretch of the text and how it is set. The spans tile the text. */

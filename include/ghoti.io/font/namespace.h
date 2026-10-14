@@ -335,6 +335,7 @@
 #define GFNT_AlignLast GHOTIIO_FONT(GFNT_AlignLast)
 #define GFNT_LineBreak GHOTIIO_FONT(GFNT_LineBreak)
 #define GFNT_OverflowWrap GHOTIIO_FONT(GFNT_OverflowWrap)
+#define GFNT_WordBreak GHOTIIO_FONT(GFNT_WordBreak)
 #define GFNT_ParagraphOptions GHOTIIO_FONT(GFNT_ParagraphOptions)
 #define GFNT_ColumnFill GHOTIIO_FONT(GFNT_ColumnFill)
 #define GFNT_ColumnOverflow GHOTIIO_FONT(GFNT_ColumnOverflow)

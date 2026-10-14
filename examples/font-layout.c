@@ -30,6 +30,7 @@
  *                    [--justify auto|inter-word|inter-character|kashida|none]
  *                    [--justify-last] [--align-last auto|start|end|left|right|center|justify]
  *                    [--overflow-wrap normal|anywhere|break-word]
+ *                    [--word-break normal|break-all|keep-all]
  *                    [--space-share 0..1] [--word-spacing PX]
  *                    [--line-height-normal|--line-height-multiple N|--line-height-length PX]
  *                    [--vertical-align KIND[:VALUE]] [--split-at BYTE --second-size PX]
@@ -472,6 +473,12 @@ int main(int argc, char ** argv) {
       options.overflow_wrap = strcmp(v, "anywhere") == 0 ? GFNT_OVERFLOW_WRAP_ANYWHERE
           : strcmp(v, "break-word") == 0 ? GFNT_OVERFLOW_WRAP_BREAK_WORD
           : GFNT_OVERFLOW_WRAP_NORMAL;
+    }
+    else if (strcmp(argv[a], "--word-break") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+
+      options.word_break = strcmp(v, "break-all") == 0 ? GFNT_WORD_BREAK_BREAK_ALL
+          : strcmp(v, "keep-all") == 0 ? GFNT_WORD_BREAK_KEEP_ALL : GFNT_WORD_BREAK_NORMAL;
     }
     else if (strcmp(argv[a], "--space-share") == 0 && a + 1 < argc) {
       options.space_share = (GFNT_F16Dot16)(atof(argv[++a]) * 65536.0 + 0.5);

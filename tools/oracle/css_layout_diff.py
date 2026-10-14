@@ -131,6 +131,17 @@ for _wrap in ("anywhere", "break-word"):
     CASES.append(("overflow-wrap-" + _wrap, "ABABABABABAB", "horizontal", "mixed", 140,
                   "start", "ltr", "auto",
                   {"overflowWrap": _wrap, "driver": ("--overflow-wrap", _wrap)}))
+CASES.append(("word-break-break-all", "ABABABABABAB", "horizontal", "mixed", 140,
+              "start", "ltr", "auto",
+              {"wordBreak": "break-all", "driver": ("--word-break", "break-all")}))
+CASES.append(("word-break-keep-all-korean", "가나다라마바사", "horizontal", "mixed", 70,
+              "start", "ltr", "auto",
+              {"wordBreak": "keep-all", "lineStructureOnly": True,
+               "driver": ("--word-break", "keep-all")}))
+CASES.append(("word-break-keep-all-cjk", "日本語日本語", "horizontal", "mixed", 70,
+              "start", "ltr", "auto",
+              {"wordBreak": "keep-all", "lineStructureOnly": True,
+               "driver": ("--word-break", "keep-all")}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
@@ -228,6 +239,7 @@ function measure(c) {
   d.style.textAlign = c.align;
   if (c.alignLast) d.style.textAlignLast = c.alignLast;
   if (c.overflowWrap) d.style.overflowWrap = c.overflowWrap;
+  if (c.wordBreak) d.style.wordBreak = c.wordBreak;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
@@ -291,7 +303,7 @@ function measure(c) {
   }
   const b = d.getBoundingClientRect();
   let minContent = null;
-  if (c.overflowWrap) {
+  if (c.overflowWrap || c.wordBreak === 'break-all') {
     const intrinsic = d.cloneNode(true);
     intrinsic.style.width = 'min-content';
     intrinsic.style.whiteSpace = 'normal';
@@ -323,7 +335,9 @@ def chrome_rects(cases):
                  flow=(c[8].get("flow") if len(c) > 8 else None),
                  wordSpacing=(c[8].get("wordSpacing") if len(c) > 8 else None),
                  alignLast=(c[8].get("alignLast") if len(c) > 8 else None),
-                 overflowWrap=(c[8].get("overflowWrap") if len(c) > 8 else None))
+                 overflowWrap=(c[8].get("overflowWrap") if len(c) > 8 else None),
+                 wordBreak=(c[8].get("wordBreak") if len(c) > 8 else None),
+                 lineStructureOnly=(c[8].get("lineStructureOnly", False) if len(c) > 8 else False))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
@@ -365,13 +379,33 @@ def compare(case, theirs, mine, verbose):
     name, text = case[0], case[1]
     tolerance = TOLERANCE_JUSTIFIED if case[5] == "justify" else TOLERANCE
     problems = []
+    chars = list(text)
     if len(case) > 8 and "overflowWrap" in case[8]:
         css_min = theirs.get("minContent")
         ours_min = mine["min"] / 64.0
         if css_min is None or abs(css_min - ours_min) > TOLERANCE:
             problems.append("min-content width: chromium %s, this %.2f"
                             % (css_min, ours_min))
-    chars = list(text)
+    if len(case) > 8 and case[8].get("wordBreak") == "break-all":
+        css_min = theirs.get("minContent")
+        ours_min = mine["min"] / 64.0
+        if css_min is None or abs(css_min - ours_min) > TOLERANCE:
+            problems.append("min-content width: chromium %s, this %.2f"
+                            % (css_min, ours_min))
+    if len(case) > 8 and case[8].get("lineStructureOnly"):
+        css_lines, ours_lines = {}, {}
+        for i, ch in enumerate(chars):
+            a, b = theirs["chars"][i], mine["chars"][i]
+            if a is None or b is None:
+                continue
+            css_cross, ours_cross = round(a[1], 3), b[1]
+            css_lines.setdefault(css_cross, len(css_lines))
+            ours_lines.setdefault(ours_cross, len(ours_lines))
+            if css_lines[css_cross] != ours_lines[ours_cross]:
+                problems.append("char %d %r is on a different line" % (i, ch))
+        if verbose and not problems:
+            print("  %s: agrees" % name)
+        return problems
     word_spacing_case = len(case) > 8 and "wordSpacing" in case[8]
     if word_spacing_case:
         vertical = case[2] != "horizontal"

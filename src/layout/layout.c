@@ -53,6 +53,28 @@ static bool is_newline(uint32_t cp) {
       || cp == 0x2028 || cp == 0x2029;
 }
 
+/** CSS Text's typographic-letter classes used by word-break. */
+static GUNI_LineBreak word_break_class(uint32_t cp, GUNI_LineBreakTailoring tailoring) {
+  return guni_line_break_resolve(guni_line_break(cp), guni_general_category(cp), tailoring);
+}
+
+static bool word_break_letter(uint32_t cp, GUNI_LineBreakTailoring tailoring) {
+  GUNI_LineBreak lb = word_break_class(cp, tailoring);
+
+  return lb == GUNI_LB_ALPHABETIC || lb == GUNI_LB_IDEOGRAPHIC || lb == GUNI_LB_NUMERIC
+      || lb == GUNI_LB_COMPLEX_CONTEXT;
+}
+
+static bool keep_all_pair(uint32_t left, uint32_t right, GUNI_LineBreakTailoring tailoring) {
+  return (guni_script(left) == GUNI_SCRIPT_HANGUL && guni_script(right) == GUNI_SCRIPT_HANGUL)
+      || ((word_break_class(left, tailoring) == GUNI_LB_ALPHABETIC
+              || word_break_class(left, tailoring) == GUNI_LB_IDEOGRAPHIC
+              || word_break_class(left, tailoring) == GUNI_LB_NUMERIC)
+          && (word_break_class(right, tailoring) == GUNI_LB_ALPHABETIC
+              || word_break_class(right, tailoring) == GUNI_LB_IDEOGRAPHIC
+              || word_break_class(right, tailoring) == GUNI_LB_NUMERIC));
+}
+
 static bool hangs(uint32_t cp) {
   if (cp == 0x20 || is_newline(cp)) {
     return true;
@@ -1109,7 +1131,8 @@ static GFNT_Result mark_hyphens(GFNT_Paragraph * p, const char * text, const siz
     GFNT_Error * error) {
   const GFNT_Allocator * a = p->allocator;
   const GFNT_Hyphenator * hy = &p->options.hyphenator;
-  const bool automatic = p->options.hyphens == GFNT_HYPHENS_AUTO && hy->points;
+  const bool automatic = p->options.hyphens == GFNT_HYPHENS_AUTO && hy->points
+      && p->options.word_break != GFNT_WORD_BREAK_BREAK_ALL;
   size_t * unit_by_end = NULL;
   uint8_t * allowed = NULL;
   size_t allowed_cap = 0;
@@ -1359,6 +1382,8 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   bool * edge = NULL;           // item boundaries
   bool * opp = NULL;
   bool * emergency_opp = NULL;
+  const bool emergency_breaks = options && (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL
+      || options->word_break == GFNT_WORD_BREAK_BREAK_ALL);
   size_t * breaks = NULL;
   GUNI_ScriptItem * scripts = NULL;
   size_t n = 0;
@@ -1380,6 +1405,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
       || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
       || (unsigned)options->overflow_wrap > GFNT_OVERFLOW_WRAP_BREAK_WORD
+      || (unsigned)options->word_break > GFNT_WORD_BREAK_KEEP_ALL
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
@@ -1534,11 +1560,11 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   ori = ALLOC(ori, n);
   edge = ALLOC(edge, n + 1);
   opp = ALLOC(opp, n + 1);
-  if (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL) {
+  if (emergency_breaks) {
     emergency_opp = ALLOC(emergency_opp, n + 1);
   }
   if (!levels || !ori || !edge || !opp
-      || (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL && !emergency_opp)) {
+      || (emergency_breaks && !emergency_opp)) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the paragraph");
     goto done;
@@ -1636,7 +1662,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         }
       }
     }
-    if (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL) {
+    if (emergency_breaks) {
       bo.kind = GUNI_BREAK_GRAPHEME;
       (void)guni_break_all_codepoints(&bo, cps, n, NULL, 0, &break_count);
       allocator->free_fn(allocator->ctx, breaks);
@@ -1928,6 +1954,23 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
 
       u->opportunity = opp[u->cp_end];
       u->emergency = emergency_opp && emergency_opp[u->cp_end];
+      if (options->word_break == GFNT_WORD_BREAK_BREAK_ALL && u->emergency
+          && u->cp_end < n
+          && word_break_letter(cps[u->cp_end - 1],
+              options->line_break == GFNT_LINE_BREAK_STRICT
+                  ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL)
+          && word_break_letter(cps[u->cp_end],
+              options->line_break == GFNT_LINE_BREAK_STRICT
+                  ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL)) {
+        u->opportunity = true;
+      }
+      if (options->word_break == GFNT_WORD_BREAK_KEEP_ALL
+          && options->line_break != GFNT_LINE_BREAK_ANYWHERE && u->cp_end < n
+          && keep_all_pair(cps[u->cp_end - 1], cps[u->cp_end],
+              options->line_break == GFNT_LINE_BREAK_STRICT
+                  ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL)) {
+        u->opportunity = false;
+      }
       u->hard = is_newline(last)
           && !(last == 0x0D && u->cp_end < n && cps[u->cp_end] == 0x0A);
       if (u->object) {

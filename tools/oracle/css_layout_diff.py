@@ -123,6 +123,10 @@ for _name, _text, _spacing, _room, _mode in (
     CASES.append((_name, _text, _mode, "mixed", _room, "start", "ltr", "auto",
                   {"wordSpacing": _spacing,
                    "driver": ("--word-spacing", _spacing[:-2])}))
+for _align_last in ("start", "end", "left", "right", "center", "justify"):
+    CASES.append(("align-last-" + _align_last, "AB ab ca AB", "horizontal", "mixed", 200,
+                  "start", "ltr", "auto",
+                  {"alignLast": _align_last, "driver": ("--align-last", _align_last)}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
@@ -218,6 +222,7 @@ function measure(c) {
   d.style.writingMode = c.mode === 'horizontal' ? 'horizontal-tb' : c.mode;
   d.style.textOrientation = c.orient;
   d.style.textAlign = c.align;
+  if (c.alignLast) d.style.textAlignLast = c.alignLast;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
@@ -301,7 +306,8 @@ def chrome_rects(cases):
                  verticalAlign=(c[8].get("verticalAlign") if len(c) > 8 else None),
                  secondSpan=(c[8].get("secondSpan") if len(c) > 8 else None),
                  flow=(c[8].get("flow") if len(c) > 8 else None),
-                 wordSpacing=(c[8].get("wordSpacing") if len(c) > 8 else None))
+                 wordSpacing=(c[8].get("wordSpacing") if len(c) > 8 else None),
+                 alignLast=(c[8].get("alignLast") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:

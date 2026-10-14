@@ -1377,6 +1377,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   }
   if ((unsigned)options->direction > GFNT_BIDI_AUTO
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
+      || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
@@ -2696,10 +2697,17 @@ static GFNT_Result justify_line(JustificationState * state, GFNT_Line * line,
     size_t li, size_t total_lines, bool bounded, bool truncated,
     GFNT_F26Dot6 * extra, GFNT_F26Dot6 * extra_rem, GFNT_Error * error) {
   const GFNT_Paragraph * p = state->paragraph;
+  const bool paragraph_last = li + 1 == total_lines;
+  const bool hard_last = ub > ua && p->units[ub - 1].hard;
+  const bool align_last = paragraph_last || hard_last;
+  const bool last_justify = p->options.align_last == GFNT_ALIGN_LAST_JUSTIFY
+      || (p->options.align_last == GFNT_ALIGN_LAST_AUTO && p->options.justify_last);
 
-  if (p->options.align == GFNT_ALIGN_JUSTIFY && bounded && !truncated
-      && ub > ua && (p->options.justify_last
-          || (li + 1 < total_lines && !p->units[ub - 1].hard))) {
+  if ((p->options.align == GFNT_ALIGN_JUSTIFY
+          || (align_last && p->options.align_last == GFNT_ALIGN_LAST_JUSTIFY))
+      && bounded && !truncated
+      && ub > ua && ((align_last && last_justify)
+          || (!align_last && !hard_last))) {
     const size_t opportunities = mark_justification(p, ua, hang_from, state->gjf);
     GFNT_F26Dot6 slack = width - natural;
     size_t strokes = 0;
@@ -2914,9 +2922,34 @@ static void align_line(const GFNT_Paragraph * p, GFNT_Line * line,
   GFNT_F26Dot6 slack = available - line->extent;
   GFNT_F26Dot6 off;
   GFNT_Align align = p->options.align;
+  bool last = line->end == p->cp_byte[p->length];
+  size_t lo = 0, hi = p->length + 1;
   GFNT_F26Dot6 shift;
   GFNT_F26Dot6 across = 0;
 
+  if (!last) {
+    while (lo < hi) {
+      size_t mid = lo + (hi - lo) / 2;
+      if (p->cp_byte[mid] < line->end) lo = mid + 1;
+      else hi = mid;
+    }
+    last = lo > 0 && lo <= p->length && p->cp_byte[lo] == line->end
+        && is_newline(p->cps[lo - 1]);
+  }
+  if (last && p->options.align_last != GFNT_ALIGN_LAST_AUTO) {
+    switch (p->options.align_last) {
+      case GFNT_ALIGN_LAST_START: align = GFNT_ALIGN_START; break;
+      case GFNT_ALIGN_LAST_END: align = GFNT_ALIGN_END; break;
+      case GFNT_ALIGN_LAST_LEFT: align = GFNT_ALIGN_LEFT; break;
+      case GFNT_ALIGN_LAST_RIGHT: align = GFNT_ALIGN_RIGHT; break;
+      case GFNT_ALIGN_LAST_CENTER: align = GFNT_ALIGN_CENTER; break;
+      case GFNT_ALIGN_LAST_JUSTIFY: align = GFNT_ALIGN_JUSTIFY; break;
+      default: break;
+    }
+  }
+  else if (last && align == GFNT_ALIGN_JUSTIFY) {
+    align = GFNT_ALIGN_START;
+  }
   if (align == GFNT_ALIGN_JUSTIFY) {
     align = GFNT_ALIGN_START;
   }

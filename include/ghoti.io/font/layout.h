@@ -291,6 +291,17 @@ typedef enum GFNT_Align {
   GFNT_ALIGN_JUSTIFY
 } GFNT_Align;
 
+/** @brief How the last line, or a line ended by a hard break, is aligned. */
+typedef enum GFNT_AlignLast {
+  GFNT_ALIGN_LAST_AUTO = 0, ///< Follow align; justified text starts unless justify_last is set.
+  GFNT_ALIGN_LAST_START,
+  GFNT_ALIGN_LAST_END,
+  GFNT_ALIGN_LAST_LEFT,
+  GFNT_ALIGN_LAST_RIGHT,
+  GFNT_ALIGN_LAST_CENTER,
+  GFNT_ALIGN_LAST_JUSTIFY
+} GFNT_AlignLast;
+
 /**
  * @brief Where the slack of a justified line goes, after CSS `text-justify`.
  *
@@ -451,6 +462,7 @@ typedef struct GFNT_ParagraphOptions {
   bool tabs_from_container;
   const GFNT_Annotation * annotations; ///< Optional nested ruby and emphasis descriptors.
   size_t annotation_count;
+  GFNT_AlignLast align_last; ///< CSS `text-align-last`; zero preserves the default `auto` behavior.
 } GFNT_ParagraphOptions;
 
 /** @brief The one inline band available to a line at a given block position. */

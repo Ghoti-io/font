@@ -1917,12 +1917,14 @@ width of wrapped ruby readings, or the exact amount of `ruby-overhang: auto`;
 those are either compared only through the narrower measurements above or
 explicitly excluded. These limits identify missing oracle evidence.
 
-The following CSS-facing layout work remains eligible for browser differential
-coverage and is not complete yet: decoration geometry (`text-decoration` and
+`text-align-last` now has an explicit paragraph option and six Chromium 154
+cases for start, end, left, right, center and justify; all six agree in the
+154-case CSS matrix. The remaining CSS-facing
+layout work eligible for browser differential coverage is decoration geometry (`text-decoration` and
 skip-ink), the remaining line-breaking controls (`word-break`,
 `overflow-wrap`, and `white-space`), source-preserving `text-transform`,
 `hanging-punctuation`, `text-spacing-trim`, `text-autospace`, `text-wrap`
-balance/pretty behavior, and `text-align-last`. Shaping-facing CSS such as
+balance/pretty behavior. Shaping-facing CSS such as
 `font-optical-sizing`, `font-variant-caps`, `font-size-adjust` and
 `text-combine-upright`, plus `initial-letter`, also remains outside the current
 oracle matrix. Each should be added only with named CSS cases and an explicit

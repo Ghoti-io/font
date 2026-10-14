@@ -332,6 +332,7 @@
 #define GFNT_RubyOverhang GHOTIIO_FONT(GFNT_RubyOverhang)
 #define GFNT_LineAnnotation GHOTIIO_FONT(GFNT_LineAnnotation)
 #define GFNT_Align GHOTIIO_FONT(GFNT_Align)
+#define GFNT_AlignLast GHOTIIO_FONT(GFNT_AlignLast)
 #define GFNT_LineBreak GHOTIIO_FONT(GFNT_LineBreak)
 #define GFNT_ParagraphOptions GHOTIIO_FONT(GFNT_ParagraphOptions)
 #define GFNT_ColumnFill GHOTIIO_FONT(GFNT_ColumnFill)

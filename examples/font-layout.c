@@ -28,7 +28,8 @@
  *                    [--mode horizontal|vertical-rl|vertical-lr|sideways-rl|sideways-lr]
  *                    [--orient mixed|mixed-pango|upright|sideways]
  *                    [--justify auto|inter-word|inter-character|kashida|none]
- *                    [--justify-last] [--space-share 0..1] [--word-spacing PX]
+ *                    [--justify-last] [--align-last auto|start|end|left|right|center|justify]
+ *                    [--space-share 0..1] [--word-spacing PX]
  *                    [--line-height-normal|--line-height-multiple N|--line-height-length PX]
  *                    [--vertical-align KIND[:VALUE]] [--split-at BYTE --second-size PX]
  *                    [--second-vertical-align KIND[:VALUE]]
@@ -453,6 +454,16 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[a], "--justify-last") == 0) {
       options.justify_last = true;
+    }
+    else if (strcmp(argv[a], "--align-last") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+
+      options.align_last = strcmp(v, "start") == 0 ? GFNT_ALIGN_LAST_START
+          : strcmp(v, "end") == 0 ? GFNT_ALIGN_LAST_END
+          : strcmp(v, "left") == 0 ? GFNT_ALIGN_LAST_LEFT
+          : strcmp(v, "right") == 0 ? GFNT_ALIGN_LAST_RIGHT
+          : strcmp(v, "center") == 0 ? GFNT_ALIGN_LAST_CENTER
+          : strcmp(v, "justify") == 0 ? GFNT_ALIGN_LAST_JUSTIFY : GFNT_ALIGN_LAST_AUTO;
     }
     else if (strcmp(argv[a], "--space-share") == 0 && a + 1 < argc) {
       options.space_share = (GFNT_F16Dot16)(atof(argv[++a]) * 65536.0 + 0.5);

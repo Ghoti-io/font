@@ -1935,7 +1935,11 @@ and CJK `break-word` geometry and intrinsic width. The legacy `word-break: break
 `normal` plus `overflow-wrap: anywhere`, including min-content sizing; Chromium
 checks its geometry and intrinsic width even with `overflow-wrap: break-word`
 specified. Level 4 `auto-phrase` is not
-implemented. `white-space: pre` prohibits soft wraps while preserving explicit breaks and spaces.
+implemented. Chromium 154 accepts it and changes Japanese phrase boundaries; the observed
+`auto-phrase` behavior uses linguistic phrase segmentation rather than the ordinary Unicode
+line-break opportunities. The current pinned Firefox rejects the value. A browser comparison
+exists for Chromium, so this remains an implementation gap, not an unavailable-oracle case.
+`white-space: pre` prohibits soft wraps while preserving explicit breaks and spaces.
 The added `break-spaces` value preserves each space, includes line-end spaces in line and intrinsic
 widths, and allows a break after each preserved space; Chromium compares line geometry and
 min-content width for both. `normal` and `nowrap` collapse whitespace sequences and segment breaks;
@@ -1989,7 +1993,11 @@ them as accepted values. `math-auto` remains unimplemented because its CSS
 behavior depends on MathML operator context not represented in this text layout
 API. Remaining CSS-facing layout work eligible for browser differential
 coverage is decoration geometry (`text-decoration` and skip-ink),
-`hanging-punctuation`, and `text-spacing-trim`. Shaping-facing CSS such as
+`hanging-punctuation`, and `text-spacing-trim`. Chromium 154 accepts
+`text-spacing-trim: normal`, `space-all`, `space-first`, and `trim-start`; it rejects
+`trim-both` and `trim-all`. Firefox 153.4 rejects all tested values. Chromium and Firefox
+153.4 reject the tested `hanging-punctuation` values, so those behaviors currently lack a
+pinned browser oracle. Shaping-facing CSS such as
 `font-optical-sizing`, `font-variant-caps`, `font-size-adjust` and
 `text-combine-upright`, plus `initial-letter`, also remains outside the current
 oracle matrix. Each should be added only with named CSS cases and an explicit

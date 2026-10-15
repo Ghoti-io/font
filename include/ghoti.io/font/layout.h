@@ -172,13 +172,18 @@ typedef struct GFNT_InlineObject {
   void * user; ///< Caller-owned object identity, returned on its line run.
 } GFNT_InlineObject;
 
-/** @brief Source-preserving Unicode case transformation for a text span. */
+/** @brief Source-preserving CSS text transformations for a text span. */
 typedef enum GFNT_TextTransform {
   GFNT_TEXT_TRANSFORM_NONE = 0, ///< Preserve source casing.
   GFNT_TEXT_TRANSFORM_CAPITALIZE, ///< Titlecase the first cased character of each word.
   GFNT_TEXT_TRANSFORM_UPPERCASE, ///< Apply full Unicode uppercase mappings.
-  GFNT_TEXT_TRANSFORM_LOWERCASE ///< Apply full Unicode lowercase mappings.
+  GFNT_TEXT_TRANSFORM_LOWERCASE, ///< Apply full Unicode lowercase mappings.
+  GFNT_TEXT_TRANSFORM_FULL_WIDTH = 4, ///< Map to full-width forms; may combine with case modes.
+  GFNT_TEXT_TRANSFORM_FULL_SIZE_KANA = 8 ///< Enlarge small Kana; may combine with other modes.
 } GFNT_TextTransform;
+
+/** @brief Mask for the mutually exclusive casing values in GFNT_TextTransform. */
+#define GFNT_TEXT_TRANSFORM_CASE_MASK 0x03u
 
 /** @brief Language-specific Unicode case rules, supplied from the content language. */
 typedef enum GFNT_CaseTailoring {

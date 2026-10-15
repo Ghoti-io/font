@@ -353,6 +353,88 @@ TEST(Layout, LowercaseUsesContextAndLanguageTailoring) {
   }
 }
 
+TEST(Layout, FullWidthAndFullSizeKanaTransformations) {
+  {
+    Font font({0xff21});
+    const GFNT_Face * faces[] = {font.face};
+    GFNT_TextSpan span{};
+    span.length = 1;
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    span.style.text_transform = GFNT_TEXT_TRANSFORM_FULL_WIDTH;
+    GFNT_Paragraph * paragraph = nullptr;
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_create("A", 1, &span, 1, nullptr, nullptr,
+                  &paragraph, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK);
+    ASSERT_EQ(layout.lines[0].runs[0].glyph_count, 1u);
+    EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].glyph, 1u);
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
+  }
+  {
+    Font font({0xff21});
+    const GFNT_Face * faces[] = {font.face};
+    GFNT_TextSpan span{};
+    span.length = 1;
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    span.style.text_transform = static_cast<GFNT_TextTransform>(
+        GFNT_TEXT_TRANSFORM_UPPERCASE | GFNT_TEXT_TRANSFORM_FULL_WIDTH);
+    GFNT_Paragraph * paragraph = nullptr;
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_create("a", 1, &span, 1, nullptr, nullptr,
+                  &paragraph, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK);
+    ASSERT_EQ(layout.lines[0].runs[0].glyph_count, 1u);
+    EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].glyph, 1u);
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
+  }
+  {
+    Font font({0x30ab});
+    const GFNT_Face * faces[] = {font.face};
+    const std::string text = "\xef\xbd\xb6";  // U+FF76 halfwidth KA
+    GFNT_TextSpan span{};
+    span.length = text.size();
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    span.style.text_transform = GFNT_TEXT_TRANSFORM_FULL_WIDTH;
+    GFNT_Paragraph * paragraph = nullptr;
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, nullptr,
+                  nullptr, &paragraph, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK);
+    ASSERT_EQ(layout.lines[0].runs[0].glyph_count, 1u);
+    EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].glyph, 1u);
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
+  }
+  {
+    Font font({0xff71});
+    const GFNT_Face * faces[] = {font.face};
+    const std::string text = "\xef\xbd\xa7";  // U+FF67 halfwidth small A
+    GFNT_TextSpan span{};
+    span.length = text.size();
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    span.style.text_transform = GFNT_TEXT_TRANSFORM_FULL_SIZE_KANA;
+    GFNT_Paragraph * paragraph = nullptr;
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, nullptr,
+                  nullptr, &paragraph, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK);
+    ASSERT_EQ(layout.lines[0].runs[0].glyph_count, 1u);
+    EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].glyph, 1u);
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
+  }
+}
+
 TEST(LayoutAnnotation, RubyWidensItsBaseAndProducesASeparatePaintTrack) {
   Font font(latin());
   const GFNT_Face * faces[] = {font.face};

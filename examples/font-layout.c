@@ -508,11 +508,12 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[a], "--text-transform") == 0 && a + 1 < argc) {
       const char * v = argv[++a];
-      style_options.text_transform = strcmp(v, "capitalize") == 0
-          ? GFNT_TEXT_TRANSFORM_CAPITALIZE
-          : strcmp(v, "uppercase") == 0 ? GFNT_TEXT_TRANSFORM_UPPERCASE
-          : strcmp(v, "lowercase") == 0 ? GFNT_TEXT_TRANSFORM_LOWERCASE
-          : GFNT_TEXT_TRANSFORM_NONE;
+      if (strcmp(v, "capitalize") == 0) style_options.text_transform |= GFNT_TEXT_TRANSFORM_CAPITALIZE;
+      else if (strcmp(v, "uppercase") == 0) style_options.text_transform |= GFNT_TEXT_TRANSFORM_UPPERCASE;
+      else if (strcmp(v, "lowercase") == 0) style_options.text_transform |= GFNT_TEXT_TRANSFORM_LOWERCASE;
+      else if (strcmp(v, "full-width") == 0) style_options.text_transform |= GFNT_TEXT_TRANSFORM_FULL_WIDTH;
+      else if (strcmp(v, "full-size-kana") == 0) style_options.text_transform |= GFNT_TEXT_TRANSFORM_FULL_SIZE_KANA;
+      else style_options.text_transform = GFNT_TEXT_TRANSFORM_NONE;
     }
     else if (strcmp(argv[a], "--case-tailoring") == 0 && a + 1 < argc) {
       const char * v = argv[++a];

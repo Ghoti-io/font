@@ -39,6 +39,7 @@
 #include <ghoti.io/unicode/break.h>
 #include <ghoti.io/unicode/case.h>
 #include <ghoti.io/unicode/char.h>
+#include <ghoti.io/unicode/norm.h>
 #include <ghoti.io/unicode/script.h>
 #include <ghoti.io/unicode/utf.h>
 #include <math.h>
@@ -1398,10 +1399,65 @@ static int hyphen_orientation(const GFNT_Paragraph * p) {
   return -1;
 }
 
-/** Apply span case transforms while retaining a monotone map to source UTF-8 bytes. */
+static uint32_t full_width_scalar(uint32_t cp, GFNT_WhiteSpace white_space) {
+  if (cp >= 0x21 && cp <= 0x7e) return cp + 0xfee0;
+  if (cp == 0x20) {
+    return white_space == GFNT_WHITE_SPACE_PRE || white_space == GFNT_WHITE_SPACE_PRE_WRAP
+            || white_space == GFNT_WHITE_SPACE_BREAK_SPACES ? 0x3000 : cp;
+  }
+  switch (cp) {
+    case 0x2985: return 0xff5f;
+    case 0x2986: return 0xff60;
+    case 0x00a2: return 0xffe0;
+    case 0x00a3: return 0xffe1;
+    case 0x00ac: return 0xffe2;
+    case 0x00af: return 0xffe3;
+    case 0x00a6: return 0xffe4;
+    case 0x00a5: return 0xffe5;
+    case 0x20a9: return 0xffe6;
+    default: return cp;
+  }
+}
+
+static uint32_t full_size_kana_scalar(uint32_t cp) {
+  switch (cp) {
+    case 0x3041: return 0x3042; case 0x3043: return 0x3044;
+    case 0x3045: return 0x3046; case 0x3047: return 0x3048;
+    case 0x3049: return 0x304a; case 0x3095: return 0x304b;
+    case 0x3096: return 0x3051; case 0x1b132: return 0x3053;
+    case 0x3063: return 0x3064; case 0x3083: return 0x3084;
+    case 0x3085: return 0x3086; case 0x3087: return 0x3088;
+    case 0x308e: return 0x308f; case 0x1b150: return 0x3090;
+    case 0x1b151: return 0x3091; case 0x1b152: return 0x3092;
+    case 0x30a1: return 0x30a2; case 0x30a3: return 0x30a4;
+    case 0x30a5: return 0x30a6; case 0x30a7: return 0x30a8;
+    case 0x30a9: return 0x30aa; case 0x30f5: return 0x30ab;
+    case 0x31f0: return 0x30af; case 0x30f6: return 0x30b1;
+    case 0x1b155: return 0x30b3; case 0x31f1: return 0x30b7;
+    case 0x31f2: return 0x30b9; case 0x30c3: return 0x30c4;
+    case 0x31f3: return 0x30c8; case 0x31f4: return 0x30cc;
+    case 0x31f5: return 0x30cf; case 0x31f6: return 0x30d2;
+    case 0x31f7: return 0x30d5; case 0x31f8: return 0x30d8;
+    case 0x31f9: return 0x30db; case 0x31fa: return 0x30e0;
+    case 0x30e3: return 0x30e4; case 0x30e5: return 0x30e6;
+    case 0x30e7: return 0x30e8; case 0x31fb: return 0x30e9;
+    case 0x31fc: return 0x30ea; case 0x31fd: return 0x30eb;
+    case 0x31fe: return 0x30ec; case 0x31ff: return 0x30ed;
+    case 0x30ee: return 0x30ef; case 0x1b164: return 0x30f0;
+    case 0x1b165: return 0x30f1; case 0x1b166: return 0x30f2;
+    case 0x1b167: return 0x30f3; case 0xff67: return 0xff71;
+    case 0xff68: return 0xff72; case 0xff69: return 0xff73;
+    case 0xff6a: return 0xff74; case 0xff6b: return 0xff75;
+    case 0xff6f: return 0xff82; case 0xff6c: return 0xff94;
+    case 0xff6d: return 0xff95; case 0xff6e: return 0xff96;
+    default: return cp;
+  }
+}
+
+/** Apply CSS text transforms while retaining a monotone map to source UTF-8 bytes. */
 static GFNT_Result transform_case(const uint32_t * source, size_t source_length,
     const size_t * source_bytes, const GFNT_TextSpan * spans, size_t span_count,
-    const size_t * source_span_cp, const GFNT_Allocator * allocator,
+    const size_t * source_span_cp, GFNT_WhiteSpace white_space, const GFNT_Allocator * allocator,
     uint32_t ** result_cps, size_t ** result_bytes, size_t * result_length,
     size_t ** result_span_cp, size_t ** result_source_to_layout) {
   uint32_t * mapped = NULL;
@@ -1414,8 +1470,8 @@ static GFNT_Result transform_case(const uint32_t * source, size_t source_length,
   bool word_has_cased = false;
   GUNI_BreakOptions word_options = { .kind = GUNI_BREAK_WORD };
 
-  if (source_length > (SIZE_MAX - 1) / GUNI_CASE_MAX_EXPANSION) return GFNT_ERR_INVALID;
-  const size_t capacity = source_length * GUNI_CASE_MAX_EXPANSION;
+  if (source_length > (SIZE_MAX - 1) / (GUNI_CASE_MAX_EXPANSION * GUNI_NORM_MAX_EXPANSION_NFKD)) return GFNT_ERR_INVALID;
+  const size_t capacity = source_length * GUNI_CASE_MAX_EXPANSION * GUNI_NORM_MAX_EXPANSION_NFKD;
   mapped = ALLOC(mapped, capacity);
   mapped_bytes = allocator->calloc_fn(allocator->ctx, capacity + 1, sizeof *mapped_bytes);
   mapped_spans = ALLOC(mapped_spans, span_count + 1);
@@ -1428,7 +1484,7 @@ static GFNT_Result transform_case(const uint32_t * source, size_t source_length,
   source_to_layout[0] = 0;
 
   for (size_t i = 0; i < source_length; i++) {
-    uint32_t piece[GUNI_CASE_MAX_EXPANSION];
+    uint32_t piece[GUNI_CASE_MAX_EXPANSION * GUNI_NORM_MAX_EXPANSION_NFKD];
     size_t piece_length = 1;
     const GFNT_TextStyle * style;
     GUNI_CaseTailoring tailoring;
@@ -1443,15 +1499,16 @@ static GFNT_Result transform_case(const uint32_t * source, size_t source_length,
     style = &spans[span].style;
     tailoring = (GUNI_CaseTailoring)style->case_tailoring;
     piece[0] = source[i];
-    if (style->text_transform == GFNT_TEXT_TRANSFORM_UPPERCASE) {
+    const unsigned case_mode = (unsigned)style->text_transform & GFNT_TEXT_TRANSFORM_CASE_MASK;
+    if (case_mode == GFNT_TEXT_TRANSFORM_UPPERCASE) {
       if (guni_to_upper_at(source, source_length, i, tailoring, piece,
               GUNI_CASE_MAX_EXPANSION, &piece_length) != GUNI_OK) goto invalid;
     }
-    else if (style->text_transform == GFNT_TEXT_TRANSFORM_LOWERCASE) {
+    else if (case_mode == GFNT_TEXT_TRANSFORM_LOWERCASE) {
       if (guni_to_lower_at(source, source_length, i, tailoring, piece,
               GUNI_CASE_MAX_EXPANSION, &piece_length) != GUNI_OK) goto invalid;
     }
-    else if (style->text_transform == GFNT_TEXT_TRANSFORM_CAPITALIZE
+    else if (case_mode == GFNT_TEXT_TRANSFORM_CAPITALIZE
         && !word_has_cased && (GUNI_GC_MASK(category) & GUNI_GC_MASK_LC)) {
       uint32_t lowered[GUNI_CASE_MAX_EXPANSION];
       size_t lowered_length = 0;
@@ -1463,8 +1520,24 @@ static GFNT_Result transform_case(const uint32_t * source, size_t source_length,
     }
     if (GUNI_GC_MASK(category) & GUNI_GC_MASK_LC) word_has_cased = true;
     for (size_t j = 0; j < piece_length; j++) {
-      mapped[out] = piece[j];
-      mapped_bytes[out++] = source_bytes[i];
+      uint32_t expanded[GUNI_NORM_MAX_EXPANSION_NFKD];
+      size_t expanded_length = 1;
+      expanded[0] = piece[j];
+      if ((style->text_transform & GFNT_TEXT_TRANSFORM_FULL_WIDTH)
+          && guni_decomposition_type(piece[j]) == GUNI_DT_NARROW) {
+        if (guni_decompose(piece[j], true, expanded, GUNI_NORM_MAX_EXPANSION_NFKD,
+                &expanded_length) != GUNI_OK) goto invalid;
+      }
+      else if (style->text_transform & GFNT_TEXT_TRANSFORM_FULL_WIDTH) {
+        expanded[0] = full_width_scalar(piece[j], white_space);
+      }
+      for (size_t k = 0; k < expanded_length; k++) {
+        if (style->text_transform & GFNT_TEXT_TRANSFORM_FULL_SIZE_KANA) {
+          expanded[k] = full_size_kana_scalar(expanded[k]);
+        }
+        mapped[out] = expanded[k];
+        mapped_bytes[out++] = source_bytes[i];
+      }
     }
     mapped_bytes[out] = source_bytes[i + 1];
     source_to_layout[i + 1] = out;
@@ -1570,9 +1643,9 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           || (s->line_height.kind == GFNT_LINE_HEIGHT_MULTIPLE && s->line_height.value < 0)
           || (s->line_height.kind == GFNT_LINE_HEIGHT_LENGTH && s->line_height.value < 0)
           || (unsigned)s->vertical_align > GFNT_VERTICAL_ALIGN_BOTTOM
-          || (unsigned)s->text_transform > GFNT_TEXT_TRANSFORM_LOWERCASE
+          || ((unsigned)s->text_transform & ~0x0fu) != 0
           || (unsigned)s->case_tailoring > GFNT_CASE_TAILORING_LITHUANIAN
-          || (s->text_transform == GFNT_TEXT_TRANSFORM_NONE
+          || (((unsigned)s->text_transform & GFNT_TEXT_TRANSFORM_CASE_MASK) == GFNT_TEXT_TRANSFORM_NONE
               && s->case_tailoring != GFNT_CASE_TAILORING_NONE)) {
         return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
             "a span has an invalid line-height, vertical alignment, or text transform");
@@ -1695,7 +1768,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     }
     if (needs_transform && n) {
       size_t transformed_length = 0;
-      r = transform_case(cps, n, p->cp_byte, spans, span_count, span_cp, allocator,
+      r = transform_case(cps, n, p->cp_byte, spans, span_count, span_cp, options->white_space, allocator,
           &transformed_cps, &transformed_bytes, &transformed_length, &transformed_spans,
           &source_to_layout);
       if (r != GFNT_OK) {

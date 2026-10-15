@@ -271,6 +271,88 @@ TEST(Layout, ALineOfLettersIsPlacedFromTheLeftOnTheBaseline) {
   }
 }
 
+TEST(Layout, UppercaseExpansionKeepsSourceByteClusters) {
+  Font font({'A', 'S'});
+  const GFNT_Face * faces[] = {font.face};
+  const std::string text = "a\xC3\x9F";  // aß → ASS
+  GFNT_TextSpan span{};
+  span.length = text.size();
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  span.style.text_transform = GFNT_TEXT_TRANSFORM_UPPERCASE;
+  GFNT_Paragraph * paragraph = nullptr;
+  GFNT_Layout layout{};
+  ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, nullptr,
+                nullptr, &paragraph, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK);
+  ASSERT_EQ(layout.line_count, 1u);
+  EXPECT_EQ(layout.lines[0].start, 0u);
+  EXPECT_EQ(layout.lines[0].end, text.size());
+  ASSERT_EQ(layout.lines[0].run_count, 1u);
+  const GFNT_LineRun & run = layout.lines[0].runs[0];
+  ASSERT_EQ(run.glyph_count, 3u);
+  EXPECT_EQ(run.glyphs[0].glyph, 1u);
+  EXPECT_EQ(run.glyphs[0].cluster, 0u);
+  EXPECT_EQ(run.glyphs[1].glyph, 2u);
+  EXPECT_EQ(run.glyphs[1].cluster, 1u);
+  EXPECT_EQ(run.glyphs[2].glyph, 2u);
+  EXPECT_EQ(run.glyphs[2].cluster, 1u);
+  GFNT_Rect rects[2]{};
+  size_t rect_count = 0;
+  ASSERT_EQ(gfnt_layout_range_rects(paragraph, &layout, 1, text.size(), rects, 2,
+                &rect_count), GFNT_OK);
+  ASSERT_EQ(rect_count, 1u);
+  EXPECT_EQ(rects[0].width, 2 * kLetter)
+      << "the transformed expansion must remain selectable as its source character";
+  gfnt_layout_free(&layout);
+  gfnt_paragraph_free(paragraph);
+}
+
+TEST(Layout, LowercaseUsesContextAndLanguageTailoring) {
+  {
+    Font font({0x03BF, 0x03C2});
+    const GFNT_Face * faces[] = {font.face};
+    const std::string text = "\xCE\x9F\xCE\xA3";  // ΟΣ → ος (final sigma)
+    GFNT_TextSpan span{};
+    span.length = text.size();
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    span.style.text_transform = GFNT_TEXT_TRANSFORM_LOWERCASE;
+    GFNT_Paragraph * paragraph = nullptr;
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, nullptr,
+                  nullptr, &paragraph, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK);
+    ASSERT_EQ(layout.lines[0].runs[0].glyph_count, 2u);
+    EXPECT_EQ(layout.lines[0].runs[0].glyphs[1].glyph, 2u);
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
+  }
+  {
+    Font font({0x0131});
+    const GFNT_Face * faces[] = {font.face};
+    const std::string text = "I";
+    GFNT_TextSpan span{};
+    span.length = text.size();
+    span.style.faces = faces;
+    span.style.face_count = 1;
+    span.style.size = kSize;
+    span.style.text_transform = GFNT_TEXT_TRANSFORM_LOWERCASE;
+    span.style.case_tailoring = GFNT_CASE_TAILORING_TURKIC;
+    GFNT_Paragraph * paragraph = nullptr;
+    GFNT_Layout layout{};
+    ASSERT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, nullptr,
+                  nullptr, &paragraph, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(paragraph, GFNT_LAYOUT_UNBOUNDED, &layout, nullptr), GFNT_OK);
+    ASSERT_EQ(layout.lines[0].runs[0].glyph_count, 1u);
+    EXPECT_EQ(layout.lines[0].runs[0].glyphs[0].glyph, 1u);
+    gfnt_layout_free(&layout);
+    gfnt_paragraph_free(paragraph);
+  }
+}
+
 TEST(LayoutAnnotation, RubyWidensItsBaseAndProducesASeparatePaintTrack) {
   Font font(latin());
   const GFNT_Face * faces[] = {font.face};

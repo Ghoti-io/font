@@ -37,6 +37,7 @@
 #include <ghoti.io/font/outline.h>
 #include <ghoti.io/unicode/bidi.h>
 #include <ghoti.io/unicode/break.h>
+#include <ghoti.io/unicode/case.h>
 #include <ghoti.io/unicode/char.h>
 #include <ghoti.io/unicode/script.h>
 #include <ghoti.io/unicode/utf.h>
@@ -343,6 +344,12 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
 
   allocator->free_fn(allocator->ctx, p->cp_byte);
   allocator->free_fn(allocator->ctx, p->cps);
+  if (p->owned_features) {
+    for (size_t i = 0; i < p->span_count; i++) {
+      allocator->free_fn(allocator->ctx, p->owned_features[i]);
+    }
+  }
+  allocator->free_fn(allocator->ctx, p->owned_features);
   allocator->free_fn(allocator->ctx, p->styles);
   allocator->free_fn(allocator->ctx, p->runs);
   allocator->free_fn(allocator->ctx, p->glyphs);
@@ -364,7 +371,9 @@ static bool annotation_style_equal(const GFNT_TextStyle * a, const GFNT_TextStyl
       && a->line_height.value == b->line_height.value
       && a->vertical_align == b->vertical_align
       && a->vertical_align_value == b->vertical_align_value
-      && a->inline_object == b->inline_object;
+      && a->inline_object == b->inline_object
+      && a->text_transform == b->text_transform
+      && a->case_tailoring == b->case_tailoring;
 }
 
 static bool annotation_merge_compatible(const GFNT_Annotation * a, const GFNT_Annotation * b) {
@@ -1238,7 +1247,8 @@ static GFNT_Result mark_hyphens(GFNT_Paragraph * p, const char * text, const siz
         const size_t k = p->cp_byte[i] - p->cp_byte[first];
         const size_t unit = unit_by_end[i];
 
-        if (allowed[k] && unit != (size_t)-1 && !p->units[unit].hard
+        if (p->cp_byte[i] > p->cp_byte[i - 1] && allowed[k]
+            && unit != (size_t)-1 && !p->units[unit].hard
             && !p->units[unit].opportunity) {
           p->units[unit].opportunity = true;
           p->units[unit].hyphen = !is_ideographic(p->cps[i - 1]);
@@ -1388,6 +1398,106 @@ static int hyphen_orientation(const GFNT_Paragraph * p) {
   return -1;
 }
 
+/** Apply span case transforms while retaining a monotone map to source UTF-8 bytes. */
+static GFNT_Result transform_case(const uint32_t * source, size_t source_length,
+    const size_t * source_bytes, const GFNT_TextSpan * spans, size_t span_count,
+    const size_t * source_span_cp, const GFNT_Allocator * allocator,
+    uint32_t ** result_cps, size_t ** result_bytes, size_t * result_length,
+    size_t ** result_span_cp, size_t ** result_source_to_layout) {
+  uint32_t * mapped = NULL;
+  size_t * mapped_bytes = NULL;
+  size_t * mapped_spans = NULL;
+  size_t * source_to_layout = NULL;
+  size_t * breaks = NULL;
+  size_t break_count = 0;
+  size_t out = 0, span = 0, break_index = 0;
+  bool word_has_cased = false;
+  GUNI_BreakOptions word_options = { .kind = GUNI_BREAK_WORD };
+
+  if (source_length > (SIZE_MAX - 1) / GUNI_CASE_MAX_EXPANSION) return GFNT_ERR_INVALID;
+  const size_t capacity = source_length * GUNI_CASE_MAX_EXPANSION;
+  mapped = ALLOC(mapped, capacity);
+  mapped_bytes = allocator->calloc_fn(allocator->ctx, capacity + 1, sizeof *mapped_bytes);
+  mapped_spans = ALLOC(mapped_spans, span_count + 1);
+  source_to_layout = ALLOC(source_to_layout, source_length + 1);
+  breaks = ALLOC(breaks, source_length + 1);
+  if (!mapped || !mapped_bytes || !mapped_spans || !source_to_layout || !breaks) goto oom;
+  if (source_length && guni_break_all_codepoints(&word_options, source, source_length,
+          breaks, source_length + 1, &break_count) != GUNI_OK) goto invalid;
+  mapped_spans[0] = 0;
+  source_to_layout[0] = 0;
+
+  for (size_t i = 0; i < source_length; i++) {
+    uint32_t piece[GUNI_CASE_MAX_EXPANSION];
+    size_t piece_length = 1;
+    const GFNT_TextStyle * style;
+    GUNI_CaseTailoring tailoring;
+    GUNI_GeneralCategory category = guni_general_category(source[i]);
+
+    while (span + 1 < span_count && source_span_cp[span + 1] <= i) {
+      span++;
+      mapped_spans[span] = out;
+    }
+    while (break_index < break_count && breaks[break_index] < i) break_index++;
+    if (break_index < break_count && breaks[break_index] == i) word_has_cased = false;
+    style = &spans[span].style;
+    tailoring = (GUNI_CaseTailoring)style->case_tailoring;
+    piece[0] = source[i];
+    if (style->text_transform == GFNT_TEXT_TRANSFORM_UPPERCASE) {
+      if (guni_to_upper_at(source, source_length, i, tailoring, piece,
+              GUNI_CASE_MAX_EXPANSION, &piece_length) != GUNI_OK) goto invalid;
+    }
+    else if (style->text_transform == GFNT_TEXT_TRANSFORM_LOWERCASE) {
+      if (guni_to_lower_at(source, source_length, i, tailoring, piece,
+              GUNI_CASE_MAX_EXPANSION, &piece_length) != GUNI_OK) goto invalid;
+    }
+    else if (style->text_transform == GFNT_TEXT_TRANSFORM_CAPITALIZE
+        && !word_has_cased && (GUNI_GC_MASK(category) & GUNI_GC_MASK_LC)) {
+      uint32_t lowered[GUNI_CASE_MAX_EXPANSION];
+      size_t lowered_length = 0;
+      if (guni_to_lower_at(source, source_length, i, tailoring, lowered,
+              GUNI_CASE_MAX_EXPANSION, &lowered_length) != GUNI_OK) goto invalid;
+      if (lowered_length == 1 && lowered[0] == source[i]
+          && guni_to_title_at(source, source_length, i, tailoring, piece,
+              GUNI_CASE_MAX_EXPANSION, &piece_length) != GUNI_OK) goto invalid;
+    }
+    if (GUNI_GC_MASK(category) & GUNI_GC_MASK_LC) word_has_cased = true;
+    for (size_t j = 0; j < piece_length; j++) {
+      mapped[out] = piece[j];
+      mapped_bytes[out++] = source_bytes[i];
+    }
+    mapped_bytes[out] = source_bytes[i + 1];
+    source_to_layout[i + 1] = out;
+  }
+  while (span + 1 < span_count) {
+    span++;
+    mapped_spans[span] = out;
+  }
+  mapped_spans[span_count] = out;
+  allocator->free_fn(allocator->ctx, breaks);
+  *result_cps = mapped;
+  *result_bytes = mapped_bytes;
+  *result_length = out;
+  *result_span_cp = mapped_spans;
+  *result_source_to_layout = source_to_layout;
+  return GFNT_OK;
+
+oom:
+  allocator->free_fn(allocator->ctx, mapped);
+  allocator->free_fn(allocator->ctx, mapped_bytes);
+  allocator->free_fn(allocator->ctx, mapped_spans);
+  allocator->free_fn(allocator->ctx, source_to_layout);
+  allocator->free_fn(allocator->ctx, breaks);
+  return GFNT_ERR_OOM;
+invalid:
+  allocator->free_fn(allocator->ctx, mapped);
+  allocator->free_fn(allocator->ctx, mapped_bytes);
+  allocator->free_fn(allocator->ctx, mapped_spans);
+  allocator->free_fn(allocator->ctx, source_to_layout);
+  allocator->free_fn(allocator->ctx, breaks);
+  return GFNT_ERR_INVALID;
+}
+
 GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     const GFNT_TextSpan * spans, size_t span_count,
     const GFNT_ParagraphOptions * options, const GFNT_Allocator * allocator,
@@ -1398,6 +1508,11 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   uint8_t * levels = NULL;
   uint8_t * ori = NULL;         // per code point, in vertical text: ORI_UPRIGHT or ORI_SIDEWAYS
   size_t * span_cp = NULL;      // span_count + 1 code point starts
+  size_t * source_span_cp = NULL;
+  size_t * source_to_layout = NULL;
+  uint32_t * transformed_cps = NULL;
+  size_t * transformed_bytes = NULL;
+  size_t * transformed_spans = NULL;
   bool * edge = NULL;           // item boundaries
   bool * opp = NULL;
   bool * emergency_opp = NULL;
@@ -1447,12 +1562,20 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
             "a span has no face or no size");
       }
+      if (s->feature_count && !s->features) {
+        return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+            "a span has shaping features without a feature array");
+      }
       if ((unsigned)s->line_height.kind > GFNT_LINE_HEIGHT_LENGTH
           || (s->line_height.kind == GFNT_LINE_HEIGHT_MULTIPLE && s->line_height.value < 0)
           || (s->line_height.kind == GFNT_LINE_HEIGHT_LENGTH && s->line_height.value < 0)
-          || (unsigned)s->vertical_align > GFNT_VERTICAL_ALIGN_BOTTOM) {
+          || (unsigned)s->vertical_align > GFNT_VERTICAL_ALIGN_BOTTOM
+          || (unsigned)s->text_transform > GFNT_TEXT_TRANSFORM_LOWERCASE
+          || (unsigned)s->case_tailoring > GFNT_CASE_TAILORING_LITHUANIAN
+          || (s->text_transform == GFNT_TEXT_TRANSFORM_NONE
+              && s->case_tailoring != GFNT_CASE_TAILORING_NONE)) {
         return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
-            "a span has an invalid line-height or vertical alignment");
+            "a span has an invalid line-height, vertical alignment, or text transform");
       }
       if (s->inline_object) {
         const GFNT_InlineObject * object = s->inline_object;
@@ -1509,7 +1632,9 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   }
   p->cp_byte = allocator->calloc_fn(allocator->ctx, length + 1, sizeof *p->cp_byte);
   p->styles = allocator->calloc_fn(allocator->ctx, span_count, sizeof *p->styles);
-  if (!p->cp_byte || !p->styles) {
+  p->owned_features = allocator->calloc_fn(allocator->ctx, span_count,
+      sizeof *p->owned_features);
+  if (!p->cp_byte || !p->styles || !p->owned_features) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the paragraph");
     goto done;
@@ -1554,6 +1679,41 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     }
     p->cp_byte[n] = length;
     span_cp[span_count] = n;
+  }
+  source_span_cp = ALLOC(source_span_cp, span_count + 1);
+  if (!source_span_cp) {
+    r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for source span boundaries");
+    goto done;
+  }
+  memcpy(source_span_cp, span_cp, (span_count + 1) * sizeof *source_span_cp);
+  {
+    bool needs_transform = false;
+    for (size_t s = 0; s < span_count; s++) {
+      needs_transform = needs_transform
+          || spans[s].style.text_transform != GFNT_TEXT_TRANSFORM_NONE;
+    }
+    if (needs_transform && n) {
+      size_t transformed_length = 0;
+      r = transform_case(cps, n, p->cp_byte, spans, span_count, span_cp, allocator,
+          &transformed_cps, &transformed_bytes, &transformed_length, &transformed_spans,
+          &source_to_layout);
+      if (r != GFNT_OK) {
+        r = gfnt_error_set(error, r, 0, 0, GFNT_GLYPH_NONE,
+            r == GFNT_ERR_OOM ? "no memory for transformed text" : "text transform failed");
+        goto done;
+      }
+      allocator->free_fn(allocator->ctx, cps);
+      allocator->free_fn(allocator->ctx, p->cp_byte);
+      allocator->free_fn(allocator->ctx, span_cp);
+      cps = transformed_cps;
+      p->cp_byte = transformed_bytes;
+      span_cp = transformed_spans;
+      transformed_cps = NULL;
+      transformed_bytes = NULL;
+      transformed_spans = NULL;
+      n = transformed_length;
+    }
   }
   if (!annotation_tree_valid(options->annotations, options->annotation_count,
           length, 0, length, 0)) {
@@ -1624,6 +1784,30 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   }
   for (size_t i = 0; i < span_count; i++) {
     p->styles[i] = spans[i].style;
+    if (source_to_layout && spans[i].style.feature_count) {
+      const size_t source_start = source_span_cp[i];
+      const size_t source_length = source_span_cp[i + 1] - source_start;
+      const size_t layout_start = span_cp[i];
+      p->owned_features[i] = ALLOC(p->owned_features[i], spans[i].style.feature_count);
+      if (!p->owned_features[i]) {
+        r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+            "no memory for transformed shaping features");
+        goto done;
+      }
+      memcpy(p->owned_features[i], spans[i].style.features,
+          spans[i].style.feature_count * sizeof *p->owned_features[i]);
+      for (size_t f = 0; f < spans[i].style.feature_count; f++) {
+        GFNT_ShapeFeature * feature = &p->owned_features[i][f];
+        size_t start = feature->start > source_length ? source_length : feature->start;
+        size_t end = feature->end == GFNT_SHAPE_END ? source_length
+            : (feature->end > source_length ? source_length : feature->end);
+        feature->start = source_to_layout[source_start + start] - layout_start;
+        if (feature->end != GFNT_SHAPE_END) {
+          feature->end = source_to_layout[source_start + end] - layout_start;
+        }
+      }
+      p->styles[i].features = p->owned_features[i];
+    }
   }
 
   levels = ALLOC(levels, n);
@@ -1726,7 +1910,9 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       if (guni_break_all_codepoints(&bo, cps, n, breaks, break_count,
               &break_count) == GUNI_OK) {
         for (size_t i = 0; i < break_count; i++) {
-          if (breaks[i] <= n) {
+          if (breaks[i] <= n
+              && !(breaks[i] > 0 && breaks[i] < n
+                  && p->cp_byte[breaks[i]] == p->cp_byte[breaks[i] - 1])) {
             opp[breaks[i]] = true;
           }
         }
@@ -1747,7 +1933,10 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         if (guni_break_all_codepoints(&bo, cps, n, breaks, break_count,
                 &break_count) == GUNI_OK) {
           for (size_t i = 0; i < break_count; i++) {
-            if (breaks[i] > 0 && breaks[i] < n) emergency_opp[breaks[i]] = true;
+            if (breaks[i] > 0 && breaks[i] < n
+                && p->cp_byte[breaks[i]] != p->cp_byte[breaks[i] - 1]) {
+              emergency_opp[breaks[i]] = true;
+            }
           }
         }
       }
@@ -2121,6 +2310,11 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   *out = p;
   p = NULL;
 done:
+  allocator->free_fn(allocator->ctx, source_span_cp);
+  allocator->free_fn(allocator->ctx, source_to_layout);
+  allocator->free_fn(allocator->ctx, transformed_cps);
+  allocator->free_fn(allocator->ctx, transformed_bytes);
+  allocator->free_fn(allocator->ctx, transformed_spans);
   if (!cps_owned) {
     allocator->free_fn(allocator->ctx, cps);
   }

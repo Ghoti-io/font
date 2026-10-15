@@ -118,7 +118,8 @@ static size_t add_group(const GFNT_Paragraph * p, const GFNT_Layout * layout,
   memset(&bo, 0, sizeof bo);
   bo.kind = GUNI_BREAK_GRAPHEME;
   for (size_t c = c0; c < c1 && graphemes < 64; c++) {
-    if (c == c0 || guni_break_at_codepoints(&bo, p->cps, p->length, c)) {
+    if (c == c0 || (p->cp_byte[c] > p->cp_byte[c - 1]
+            && guni_break_at_codepoints(&bo, p->cps, p->length, c))) {
       cuts[graphemes++] = c;
     }
   }

@@ -172,6 +172,21 @@ typedef struct GFNT_InlineObject {
   void * user; ///< Caller-owned object identity, returned on its line run.
 } GFNT_InlineObject;
 
+/** @brief Source-preserving Unicode case transformation for a text span. */
+typedef enum GFNT_TextTransform {
+  GFNT_TEXT_TRANSFORM_NONE = 0, ///< Preserve source casing.
+  GFNT_TEXT_TRANSFORM_CAPITALIZE, ///< Titlecase the first cased character of each word.
+  GFNT_TEXT_TRANSFORM_UPPERCASE, ///< Apply full Unicode uppercase mappings.
+  GFNT_TEXT_TRANSFORM_LOWERCASE ///< Apply full Unicode lowercase mappings.
+} GFNT_TextTransform;
+
+/** @brief Language-specific Unicode case rules, supplied from the content language. */
+typedef enum GFNT_CaseTailoring {
+  GFNT_CASE_TAILORING_NONE = 0,
+  GFNT_CASE_TAILORING_TURKIC,
+  GFNT_CASE_TAILORING_LITHUANIAN
+} GFNT_CaseTailoring;
+
 /**
  * @brief How a stretch of text is set. Nothing here is owned: it all outlives the paragraph.
  *
@@ -201,6 +216,10 @@ typedef struct GFNT_TextStyle {
   const GFNT_InlineObject * inline_object;
   /** Extra space after U+0020 word separators, in 26.6 pixels (negative tightens it). */
   GFNT_F26Dot6 word_spacing;
+  /** CSS `text-transform`; zero preserves source text. */
+  GFNT_TextTransform text_transform;
+  /** Language-specific casing for text_transform; zero uses default Unicode rules. */
+  GFNT_CaseTailoring case_tailoring;
 } GFNT_TextStyle;
 
 /** @brief A stretch of the text and how it is set. The spans tile the text. */

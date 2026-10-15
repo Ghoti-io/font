@@ -33,6 +33,8 @@
  *                    [--line-break normal|strict|loose|anywhere]
  *                    [--word-break normal|break-all|keep-all|break-word]
  *                    [--white-space pre-wrap|pre|break-spaces|normal|nowrap|pre-line]
+ *                    [--text-transform none|capitalize|uppercase|lowercase]
+ *                    [--case-tailoring none|turkic|lithuanian]
  *                    [--space-share 0..1] [--word-spacing PX]
  *                    [--line-height-normal|--line-height-multiple N|--line-height-length PX]
  *                    [--vertical-align KIND[:VALUE]] [--split-at BYTE --second-size PX]
@@ -151,6 +153,8 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
   spans[0].style.vertical_align = style_options->vertical_align;
   spans[0].style.vertical_align_value = style_options->vertical_align_value;
   spans[0].style.word_spacing = style_options->word_spacing;
+  spans[0].style.text_transform = style_options->text_transform;
+  spans[0].style.case_tailoring = style_options->case_tailoring;
   base_span = spans[0];
   second_span = base_span;
   size_t span_count = 1;
@@ -161,6 +165,8 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     spans[1].style.vertical_align = second_style_options->vertical_align;
     spans[1].style.vertical_align_value = second_style_options->vertical_align_value;
     spans[1].style.word_spacing = second_style_options->word_spacing;
+    spans[1].style.text_transform = second_style_options->text_transform;
+    spans[1].style.case_tailoring = second_style_options->case_tailoring;
     second_span = spans[1];
     span_count = 2;
   }
@@ -499,6 +505,20 @@ int main(int argc, char ** argv) {
           : strcmp(v, "nowrap") == 0 ? GFNT_WHITE_SPACE_NOWRAP
           : strcmp(v, "pre-line") == 0 ? GFNT_WHITE_SPACE_PRE_LINE
           : GFNT_WHITE_SPACE_PRE_WRAP;
+    }
+    else if (strcmp(argv[a], "--text-transform") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+      style_options.text_transform = strcmp(v, "capitalize") == 0
+          ? GFNT_TEXT_TRANSFORM_CAPITALIZE
+          : strcmp(v, "uppercase") == 0 ? GFNT_TEXT_TRANSFORM_UPPERCASE
+          : strcmp(v, "lowercase") == 0 ? GFNT_TEXT_TRANSFORM_LOWERCASE
+          : GFNT_TEXT_TRANSFORM_NONE;
+    }
+    else if (strcmp(argv[a], "--case-tailoring") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+      style_options.case_tailoring = strcmp(v, "turkic") == 0 ? GFNT_CASE_TAILORING_TURKIC
+          : strcmp(v, "lithuanian") == 0 ? GFNT_CASE_TAILORING_LITHUANIAN
+          : GFNT_CASE_TAILORING_NONE;
     }
     else if (strcmp(argv[a], "--space-share") == 0 && a + 1 < argc) {
       options.space_share = (GFNT_F16Dot16)(atof(argv[++a]) * 65536.0 + 0.5);

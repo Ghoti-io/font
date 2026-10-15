@@ -16,7 +16,7 @@ build our own text shaper and font manager over time"*); because `image` has
 no way to put text into a raster; and because a PDF library, should one come,
 needs to read four font formats and write two of them.
 
-The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-2`, the include
+The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-3`, the include
 path `<ghoti.io/font/...>`.
 
 ---
@@ -1818,7 +1818,7 @@ mixed or upright, and turned otherwise; and after an ideograph a soft hyphen is 
 to break (`GFNT_HYPHENS_MANUAL_PANGO`: a place to break, as Pango has it, and the hyphen turned with
 the text). A caret is a horizontal bar, and a range's rectangles are
 as thick as the column. `make check-oracle-css` holds the layout to Chromium (the `chrome` image,
-CSS Writing Modes): the rectangle of every character in 183 cases (5,442 characters), and the ink
+CSS Writing Modes): the rectangle of every character in 186 cases (5,455 characters), and the ink
 of 124 glyphs in 14 cases read from screenshots, agree to 0.05 and 1.6 pixels; a wrong orientation
 or direction fails both.
 
@@ -1920,7 +1920,7 @@ explicitly excluded. These limits identify missing oracle evidence.
 
 `text-align-last` now has an explicit paragraph option and six Chromium 154
 cases for start, end, left, right, center and justify; all six agree in the
-183-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
+186-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
 before closing punctuation and its precedence over `word-break: keep-all`, and compares
 `line-break: strict` and `loose` for small-kana wrapping. `overflow-wrap:
 anywhere` and `break-word` now have
@@ -1947,9 +1947,14 @@ character occupies; it does not compare the carriage return's zero-width range r
 Text spec case for `text-align-last: justify` on a
 forced-break `pre` line is unit-tested, because Chromium 154 leaves those
 preserved-space lines start-aligned instead of justifying them. `pre-wrap`
-remains the default. The remaining CSS-facing layout work eligible for browser differential
-coverage is decoration geometry
-(`text-decoration` and skip-ink), source-preserving `text-transform`,
+remains the default. Source-preserving `text-transform` implements
+`capitalize`, `uppercase`, and `lowercase` with full Unicode mappings and an
+explicit case-tailoring option. The browser differential covers those three
+values; expansion and contextual mappings are covered by unit cases because
+the oracle font lacks the required glyphs. `full-width`, `full-size-kana`, and
+`math-auto` remain unimplemented. The remaining CSS-facing layout work eligible
+for browser differential coverage is decoration geometry
+(`text-decoration` and skip-ink),
 `hanging-punctuation`, `text-spacing-trim`, `text-autospace`, `text-wrap`
 balance/pretty behavior. Shaping-facing CSS such as
 `font-optical-sizing`, `font-variant-caps`, `font-size-adjust` and

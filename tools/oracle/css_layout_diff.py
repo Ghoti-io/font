@@ -223,6 +223,15 @@ CASES.append(("white-space-pre-line-crlf", "A\r\nB", "horizontal", "mixed", 80,
               "start", "ltr", "auto",
               {"whiteSpace": "pre-line", "lineStructureOnly": True,
                "driver": ("--white-space", "pre-line")}))
+CASES.append(("text-transform-uppercase", "abc", "horizontal", "mixed", 200,
+              "start", "ltr", "auto",
+              {"textTransform": "uppercase", "driver": ("--text-transform", "uppercase")}))
+CASES.append(("text-transform-lowercase", "ABC", "horizontal", "mixed", 200,
+              "start", "ltr", "auto",
+              {"textTransform": "lowercase", "driver": ("--text-transform", "lowercase")}))
+CASES.append(("text-transform-capitalize", "abc abc", "horizontal", "mixed", 200,
+              "start", "ltr", "auto",
+              {"textTransform": "capitalize", "driver": ("--text-transform", "capitalize")}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
@@ -324,6 +333,7 @@ function measure(c) {
   if (c.wordBreak) d.style.wordBreak = c.wordBreak;
   if (c.lineBreak) d.style.lineBreak = c.lineBreak;
   if (c.whiteSpace) d.style.whiteSpace = c.whiteSpace;
+  if (c.textTransform) d.style.textTransform = c.textTransform;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
@@ -431,7 +441,8 @@ def chrome_rects(cases):
                  lineBreak=(c[8].get("lineBreak") if len(c) > 8 else None),
                  lang=(c[8].get("lang") if len(c) > 8 else None),
                  lineStructureOnly=(c[8].get("lineStructureOnly", False) if len(c) > 8 else False),
-                 whiteSpace=(c[8].get("whiteSpace") if len(c) > 8 else None))
+                 whiteSpace=(c[8].get("whiteSpace") if len(c) > 8 else None),
+                 textTransform=(c[8].get("textTransform") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:

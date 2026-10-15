@@ -409,18 +409,27 @@ VERTICAL_ALTERNATES = {
     "emdash": ("emdash.vert", (460, 0, 520, 1000)),
 }
 
+# Same-outline half-advance forms let CSS `text-spacing-trim` expose its spacing
+# decisions to the browser oracle without changing the punctuation's shape.
+SPACING_ALTERNATES = {
+    "kakko": ("kakko.halt", "kakko.vhal"),
+    "kakko.close": ("kakko.close.halt", "kakko.close.vhal"),
+}
+
 
 def build_vertical_text(out):
-    """A small font with vertical metrics, vertical forms, and every orientation class.
+    """A small font with vertical metrics, vertical forms, spacing alternates, and orientation classes.
 
     Ideographs and kana (upright), CJK punctuation with `vert` forms (Tu or Tr by UAX #50),
     Latin letters, digits, brackets (sideways), and an em dash and an ellipsis. `vhea` and
     `vmtx` give each its vertical advance, and the horizontal and vertical metrics differ
-    everywhere so that the wrong one cannot be mistaken for the right one. Boxes, not shapes:
-    what matters is where a glyph's ink is, not what it looks like.
+    everywhere so that the wrong one cannot be mistaken for the right one. Same-outline
+    `halt`/`vhal` forms let a browser expose spacing decisions through advances alone.
+    Boxes, not shapes: what matters is where a glyph's ink is, not what it looks like.
     """
     order = [".notdef"] + [g[0] for g in VERTICAL_GLYPHS] \
-        + [alt for alt, _ in VERTICAL_ALTERNATES.values()]
+        + [alt for alt, _ in VERTICAL_ALTERNATES.values()] \
+        + [alt for names in SPACING_ALTERNATES.values() for alt in names]
     glyphs = {}
     hmetrics = {}
     vmetrics = {}
@@ -447,6 +456,15 @@ def build_vertical_text(out):
         glyphs[alt] = draw(box)
         hmetrics[alt] = (hmetrics[base][0], box[0])
         vmetrics[alt] = (vmetrics[base][0], VERTICAL_ASCENT - box[3])
+    for base, (horizontal, vertical) in SPACING_ALTERNATES.items():
+        glyphs[horizontal] = draw(next(box for name, _, _, _, box in VERTICAL_GLYPHS
+                                      if name == base))
+        glyphs[vertical] = draw(next(box for name, _, _, _, box in VERTICAL_GLYPHS
+                                    if name == base))
+        hmetrics[horizontal] = (hmetrics[base][0] // 2, hmetrics[base][1])
+        vmetrics[horizontal] = vmetrics[base]
+        hmetrics[vertical] = hmetrics[base]
+        vmetrics[vertical] = (vmetrics[base][0] // 2, vmetrics[base][1])
     fb = FontBuilder(UPEM, isTTF=True)
     fb.setupGlyphOrder(order)
     fb.setupGlyf(glyphs)
@@ -465,7 +483,13 @@ def build_vertical_text(out):
     from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
     subs = "\n".join("  sub %s by %s;" % (base, alt)
                      for base, (alt, _) in VERTICAL_ALTERNATES.items())
-    addOpenTypeFeaturesFromString(fb.font, "feature vert {\n%s\n} vert;" % subs)
+    spacing_h = "\n".join("  sub %s by %s;" % (base, alternatives[0])
+                          for base, alternatives in SPACING_ALTERNATES.items())
+    spacing_v = "\n".join("  sub %s by %s;" % (base, alternatives[1])
+                          for base, alternatives in SPACING_ALTERNATES.items())
+    addOpenTypeFeaturesFromString(fb.font,
+        "feature vert {\n%s\n} vert;\nfeature halt {\n%s\n} halt;\n"
+        "feature vhal {\n%s\n} vhal;" % (subs, spacing_h, spacing_v))
     pin(fb)
     fb.save(out)
 
@@ -5050,8 +5074,9 @@ FIXTURES = {
         "delta, and one glyph whose charstring advance hmtx disagrees with"),
     "vertical-text.ttf": (build_vertical_text,
         "TrueType: vhea and vmtx with vertical advances unlike the horizontal ones, a vert "
-        "feature giving CJK punctuation vertical forms, ideographs and kana, Latin letters, "
-        "digits and brackets, for vertical paragraph layout"),
+        "feature giving CJK punctuation vertical forms, same-outline half-advance halt/vhal "
+        "forms for text-spacing-trim, ideographs and kana, Latin letters, digits and brackets, "
+        "for browser and layout oracles"),
     "math.ttf": (build_math,
         "TrueType: a MATH table with every part present (constants and some with device tables, "
         "italics corrections, top accents, extended shapes, kerns on all four corners, vertical "

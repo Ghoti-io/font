@@ -192,7 +192,7 @@ const std::vector<Entry> & every_fixture() {
       {"cff-curves.otf", 13},
       {"cff-hints.otf", 8},
       {"cff-repeats.otf", 21},
-      {"vertical-text.ttf", 53},
+      {"vertical-text.ttf", 57},
       {"arabic-join.ttf", 69},
       {"math.ttf", 27},
       {"math-variable.ttf", 27},

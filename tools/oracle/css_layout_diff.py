@@ -270,6 +270,40 @@ for _name, _text, _value, _driver in (
     _extra = {"textAutospace": _value}
     _room = 50 if _name == "text-autospace-wrap-boundary" else 400
     CASES.append((_name, _text, "horizontal", "mixed", _room, "start", "ltr", "auto", _extra))
+for _name, _text, _value, _room, _driver in (
+    ("text-spacing-trim-normal-adjacent", "「「日本」」", "normal", 400, ()),
+    ("text-spacing-trim-space-all-adjacent", "「「日本」」", "space-all", 400, ()),
+    ("text-spacing-trim-normal-forced-start", "日語\n「日本", "normal", 400, ()),
+    ("text-spacing-trim-space-first-forced-start", "日語\n「日本", "space-first", 400, ()),
+    ("text-spacing-trim-trim-start-forced-start", "日語\n「日本", "trim-start", 400, ()),
+    ("text-spacing-trim-normal-line-end", "日本語」", "normal", 175, ()),
+    ("text-spacing-trim-space-all-line-end", "日本語」", "space-all", 175, ()),
+    ("text-spacing-trim-trim-start-wrap-start", "日本「語", "trim-start", 100,
+     ("--line-break", "anywhere")),
+    ("text-spacing-trim-space-all-wrap-start", "日本「語", "space-all", 100,
+     ("--line-break", "anywhere")),
+):
+    CASES.append((_name, _text, "horizontal", "mixed", _room, "start", "ltr", "auto",
+                  {"textSpacingTrim": _value,
+                   "lang": "ja",
+                   "driver": ("--text-spacing-trim", _value) + _driver}))
+
+# Chromium accepts and computes these values but currently produces the same
+# geometry as space-all for these four trim-sensitive cases. Keep the probe
+# explicit and fail if that browser behavior changes; do not score a known
+# no-op as a geometry match.
+_TRIM_INCONCLUSIVE_BASELINES = {
+    "text-spacing-trim-normal-adjacent": "text-spacing-trim-space-all-adjacent",
+    "text-spacing-trim-normal-line-end": "text-spacing-trim-space-all-line-end",
+    "text-spacing-trim-trim-start-forced-start": "text-spacing-trim-space-first-forced-start",
+    "text-spacing-trim-trim-start-wrap-start": "text-spacing-trim-space-all-wrap-start",
+}
+for _index, _case in enumerate(CASES):
+    if _case[0] in _TRIM_INCONCLUSIVE_BASELINES:
+        _options = dict(_case[8])
+        _options["geometryOracle"] = False
+        _options["oracleBaseline"] = _TRIM_INCONCLUSIVE_BASELINES[_case[0]]
+        CASES[_index] = _case[:8] + (_options,)
 CASES.append(("text-transform-uppercase", "abc", "horizontal", "mixed", 200,
               "start", "ltr", "auto",
               {"textTransform": "uppercase", "driver": ("--text-transform", "uppercase")}))
@@ -383,6 +417,11 @@ function measure(c) {
   if (c.textTransform) d.style.textTransform = c.textTransform;
   if (c.textWrapStyle) d.style.textWrapStyle = c.textWrapStyle;
   d.style.textAutospace = c.textAutospace || 'no-autospace';
+  const spacingTrim = c.textSpacingTrim || 'space-all';
+  if (!CSS.supports('text-spacing-trim', spacingTrim)) {
+    throw new Error('Chromium does not support text-spacing-trim: ' + spacingTrim);
+  }
+  d.style.textSpacingTrim = spacingTrim;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
@@ -462,7 +501,8 @@ function measure(c) {
     intrinsic.remove();
   }
   const out = {name: c.name, box: [b.x, b.y, b.width, b.height], chars: chars,
-               minContent: minContent};
+               minContent: minContent,
+               computedTextSpacingTrim: getComputedStyle(d).textSpacingTrim};
   d.remove();
   return out;
 }
@@ -493,13 +533,16 @@ def chrome_rects(cases):
                  whiteSpace=(c[8].get("whiteSpace") if len(c) > 8 else None),
                  textTransform=(c[8].get("textTransform") if len(c) > 8 else None),
                  textWrapStyle=(c[8].get("textWrapStyle") if len(c) > 8 else None),
-                 textAutospace=(c[8].get("textAutospace") if len(c) > 8 else None))
+                 textAutospace=(c[8].get("textAutospace") if len(c) > 8 else None),
+                 textSpacingTrim=(c[8].get("textSpacingTrim", "space-all")
+                                  if len(c) > 8 else "space-all"))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
         h.write(PAGE % dict(font=FONT, size=SIZE, cases=json.dumps(spec)))
     argv = oracle_env.command("chrome", [
         "chromium", "--headless=new", "--no-sandbox", "--disable-gpu",
+        "--enable-blink-features=CSSTextSpacing,CSSTextAutoSpace,CSSTextSpacingTrim",
         "--allow-file-access-from-files", "--disable-dev-shm-usage",
         "--user-data-dir=" + os.path.join(SCRATCH, "profile"),
         "--virtual-time-budget=5000", "--dump-dom", "file://" + page], scratch=SCRATCH)
@@ -565,6 +608,8 @@ def ours(case):
             "--orient", orient, "--align", align, "--bidi", direction,
             "--justify", justify, "--text-autospace",
             case[8].get("textAutospace", "no-autospace") if len(case) > 8 else "no-autospace", FONT]
+    argv[-1:-1] = ["--text-spacing-trim",
+                   case[8].get("textSpacingTrim", "space-all") if len(case) > 8 else "space-all"]
     if len(case) > 8:
         argv[-1:-1] = list(case[8].get("driver", ()))
     width = "u" if room is None else str(room * 64)
@@ -772,6 +817,26 @@ INK_CASES = [
      "sideways-lr", "mixed", 1100, "justify"),
 ]
 
+DECORATION_CASES = [
+    ("decoration-underline-none", "AB AB", "none", None),
+    ("decoration-underline-auto", "AB AB", "auto", None),
+    ("decoration-underline-all", "AB AB", "all", None),
+    ("decoration-underline-space-range", "AB AB", "none", (1, 2)),
+]
+
+DECORATION_PAGE = """<!doctype html><meta charset=utf-8>
+<style>
+@font-face { font-family:T; src:url("file://%(font)s"); }
+html, body { margin:0; background:#fff }
+.t { position:absolute; left:%(margin)dpx; top:%(margin)dpx; margin:0; padding:0;
+     font:%(size)dpx T; line-height:normal; white-space:pre; color:transparent }
+.d {
+     text-decoration-line:underline; text-decoration-style:solid;
+     text-decoration-color:#000; text-decoration-thickness:1px;
+     text-underline-position:from-font; text-underline-offset:-10px;
+     text-decoration-skip-ink:%(skip)s }
+</style>%(markup)s"""
+
 INK_PAGE = """<!doctype html><meta charset=utf-8>
 <style>
 @font-face { font-family: T; src: url("file://%(font)s"); }
@@ -779,7 +844,7 @@ html, body { margin: 0; background: #fff }
 .t { font-family: T; font-size: %(size)dpx; line-height: normal; position: absolute;
      left: %(margin)dpx; top: %(margin)dpx; margin: 0; padding: 0; color: #000;
      white-space: pre-wrap; writing-mode: %(mode)s; text-orientation: %(orient)s; %(room)s;
-     text-align: %(align)s; text-autospace: no-autospace }
+     text-align: %(align)s; text-autospace: no-autospace; text-spacing-trim: space-all }
 </style>
 <div class=t id=t></div>
 <script>
@@ -886,7 +951,8 @@ def ink_case(case):
     name, text, mode, orient, room = case[:5]
     align = case[5] if len(case) > 5 else "start"
     argv = [DRIVER, "--size", str(INK_SIZE), "--mode", mode, "--orient", orient,
-            "--align", align, "--text-autospace", "no-autospace", FONT]
+            "--align", align, "--text-autospace", "no-autospace",
+            "--text-spacing-trim", "space-all", FONT]
     request = "%d\t%s\n" % (room * 64, text.encode("utf-8").hex())
     finished = subprocess.run(argv, input=request, capture_output=True, text=True)
     mine = json.loads(finished.stdout.splitlines()[0])
@@ -932,14 +998,82 @@ def ink_case(case):
     return problems, len(want)
 
 
+def decoration_case(case):
+    """Compare resolved underline rectangles and skip-ink gaps with Chromium pixels."""
+    name, text, skip, selected_range = case
+    room = 900
+    argv = [DRIVER, "--size", str(INK_SIZE), "--mode", "horizontal", "--orient", "mixed",
+            "--align", "start", "--decoration-line", "underline",
+            "--decoration-offset", "-10", "--decoration-thickness", "1",
+            "--decoration-skip-ink", skip, FONT]
+    if selected_range is None:
+        selected_range = (0, len(text.encode("utf-8")))
+        markup = '<div class=t><span class=d>%s</span></div>' % html.escape(text)
+    else:
+        start, end = selected_range
+        argv.extend(["--decoration-range", "%d:%d" % (start, end)])
+        markup = '<div class=t>%s<span class=d>%s</span>%s</div>' % (
+            html.escape(text[:start]), html.escape(text[start:end]), html.escape(text[end:]))
+    request = "%d\t%s\n" % (room * 64, text.encode("utf-8").hex())
+    finished = subprocess.run(argv, input=request, capture_output=True, text=True)
+    mine = json.loads(finished.stdout.splitlines()[0])
+    if "error" in mine:
+        raise RuntimeError("%s: layout driver refused decoration geometry: %s"
+                           % (name, mine["error"]))
+    layout_snapshot.record("css", name, mine)
+    width, height = room + 2 * INK_MARGIN, INK_SIZE + 2 * INK_MARGIN
+    page = os.path.join(SCRATCH, name + ".html")
+    shot = os.path.join(SCRATCH, name + ".png")
+    with open(page, "w", encoding="utf-8") as handle:
+        handle.write(DECORATION_PAGE % dict(font=FONT, margin=INK_MARGIN, size=INK_SIZE,
+                                            skip=skip, markup=markup))
+    argv = oracle_env.command("chrome", [
+        "chromium", "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+        "--allow-file-access-from-files", "--disable-dev-shm-usage", "--disable-lcd-text",
+        "--force-device-scale-factor=1", "--force-color-profile=srgb",
+        "--window-size=%d,%d" % (width, height), "--virtual-time-budget=5000",
+        "--user-data-dir=" + os.path.join(SCRATCH, "profile"),
+        "--screenshot=" + shot, "file://" + page], scratch=SCRATCH)
+    subprocess.run(argv, capture_output=True, text=True)
+    if not os.path.exists(shot):
+        raise RuntimeError("%s: Chromium took no decoration screenshot" % name)
+    w, h, dark = read_png(shot)
+    found = components(dark, w, h)
+    want = [(x / 64.0 + INK_MARGIN, y / 64.0 + INK_MARGIN,
+             (x + width) / 64.0 + INK_MARGIN, (y + height) / 64.0 + INK_MARGIN)
+            for _line, x, y, width, height in mine["decoration"]]
+    problems = []
+    unmatched = list(found)
+    if len(found) != len(want):
+        problems.append("%d decoration regions drawn, %d predicted" % (len(found), len(want)))
+    for box in want:
+        best = min(unmatched, key=lambda f: sum(abs(p - q) for p, q in zip(f, box)),
+                   default=None)
+        if best is None or any(abs(p - q) > INK_TOLERANCE for p, q in zip(best, box)):
+            problems.append("predicted decoration %s, nearest drawn %s"
+                            % ([round(v, 1) for v in box], best))
+        else:
+            unmatched.remove(best)
+    return problems, len(want)
+
+
 def main():
     verbose = "-v" in sys.argv
     names = [a for a in sys.argv[1:] if not a.startswith("-")]
     if "flow" in names:
         names = [name for name in names if name != "flow"] + FLOW_CASES
-    cases = [c for c in CASES if not names or c[0] in names]
+    selected = set(names)
+    if names:
+        for case in CASES:
+            if case[0] in selected and len(case) > 8:
+                baseline = case[8].get("oracleBaseline")
+                if baseline:
+                    selected.add(baseline)
+    cases = [c for c in CASES if not names or c[0] in selected]
     measured = chrome_rects(cases)
+    measured_by_name = {c[0]: answer for c, answer in zip(cases, measured)}
     differ = compared = 0
+    inconclusive = 0
     for case, theirs in zip(cases, measured):
         if case[0] in FLOW_CASES:
             flow = case[8]["flow"]
@@ -957,6 +1091,29 @@ def main():
                 if len(rows) < 2 or not active_side:
                     raise RuntimeError("%s does not wrap into its narrowed float band" % case[0])
         mine = ours(case)
+        expected = (case[8].get("textSpacingTrim", "space-all")
+                    if len(case) > 8 else "space-all")
+        actual = theirs.get("computedTextSpacingTrim")
+        if actual != expected:
+            raise RuntimeError("%s: Chromium computed text-spacing-trim %r, expected %r"
+                               % (case[0], actual, expected))
+        if len(case) > 8 and case[8].get("geometryOracle") is False:
+            baseline_name = case[8]["oracleBaseline"]
+            baseline = measured_by_name.get(baseline_name)
+            if baseline is None:
+                raise RuntimeError("%s: missing CSS geometry baseline %s"
+                                   % (case[0], baseline_name))
+            if (theirs["chars"] != baseline["chars"]
+                    or theirs["box"] != baseline["box"]):
+                raise RuntimeError("%s: Chromium now exposes text-spacing-trim geometry; "
+                                   "remove the inconclusive marker and compare it"
+                                   % case[0])
+            inconclusive += 1
+            if verbose:
+                print("  %s: CSS value computed; geometry remains identical to %s, "
+                      "so this case is not counted as a match"
+                      % (case[0], baseline_name))
+            continue
         problems = compare(case, theirs, mine, verbose)
         compared += sum(1 for c in theirs["chars"] if c is not None)
         if problems:
@@ -964,8 +1121,8 @@ def main():
             print("%s differs:" % case[0])
             for line in problems[:8]:
                 print("   " + line)
-    print("css_layout_diff: %d cases, %d characters compared, %d cases differ"
-          % (len(cases), compared, differ))
+    print("css_layout_diff: %d cases, %d characters compared, %d geometry cases inconclusive, "
+          "%d cases differ" % (len(cases), compared, inconclusive, differ))
     ink_cases = [c for c in INK_CASES if not names or c[0] in names]
     ink_differ = ink_glyphs = 0
     for case in ink_cases:
@@ -976,10 +1133,22 @@ def main():
             print("%s differs:" % case[0])
             for line in problems[:8]:
                 print("   " + line)
+    decoration_cases = [c for c in DECORATION_CASES if not names or c[0] in names]
+    decoration_differ = decoration_gaps = 0
+    for case in decoration_cases:
+        problems, count = decoration_case(case)
+        decoration_gaps += count
+        if problems:
+            decoration_differ += 1
+            print("%s differs:" % case[0])
+            for line in problems[:8]:
+                print("   " + line)
         elif verbose:
             print("  %s: agrees" % case[0])
     print("css_layout_diff ink: %d cases, %d glyphs placed, %d cases differ"
           % (len(ink_cases), ink_glyphs, ink_differ))
+    print("css_layout_diff decoration: %d cases, %d visible segments, %d cases differ"
+          % (len(decoration_cases), decoration_gaps, decoration_differ))
     firefox_cases = [case for case in FIREFOX_TRANSFORM_CASES
                      if not names or case[0] in names]
     firefox_differ = 0
@@ -1003,7 +1172,7 @@ def main():
     print("css_layout_diff Firefox text-transform: %d cases, %d differ"
           % (len(firefox_cases), firefox_differ))
     layout_snapshot.finish("css")
-    return 1 if differ or ink_differ or firefox_differ else 0
+    return 1 if differ or ink_differ or decoration_differ or firefox_differ else 0
 
 
 if __name__ == "__main__":

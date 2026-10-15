@@ -16,7 +16,7 @@ build our own text shaper and font manager over time"*); because `image` has
 no way to put text into a raster; and because a PDF library, should one come,
 needs to read four font formats and write two of them.
 
-The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-6`, the include
+The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-7`, the include
 path `<ghoti.io/font/...>`.
 
 ---
@@ -1521,7 +1521,7 @@ drew.
 | 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, implemented with a caller-supplied fallback provider (§10.8) |
 | 4 | Break opportunities: UAX #14 lines, UAX #29 graphemes and words | `unicode`, applied here |
 | 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout; see §10.8 |
-| 6 | Inline layout: inline objects, per-line constraints (flow around boxes), ruby and emphasis tracks | `font` returns text and geometry; application-specific painting remains with the caller. CSS decoration geometry is not implemented. |
+| 6 | Inline layout: inline objects, per-line constraints (flow around boxes), ruby and emphasis tracks | `font` returns text and geometry; application-specific painting remains with the caller. Resolved text-decoration geometry is available through the paragraph decoration API. |
 | 6a | List markers, and what an inline object contains and how it is painted | `cjelly` |
 | 7 | Box model: margins, padding, where a float sits, flex, grid, constraints | `cjelly` (its Task 3.1); a float's band reaches `font` as a per-line constraint |
 
@@ -1998,13 +1998,44 @@ modes currently have no browser differential. The CSS `punctuation`, `insert`,
 and `replace` keywords are not implemented; the pinned browser does not expose
 them as accepted values. `math-auto` remains unimplemented because its CSS
 behavior depends on MathML operator context not represented in this text layout
-API. Remaining CSS-facing layout work eligible for browser differential
-coverage is decoration geometry (`text-decoration` and skip-ink),
-`hanging-punctuation`, and `text-spacing-trim`. Chromium 154 accepts
-`text-spacing-trim: normal`, `space-all`, `space-first`, and `trim-start`; it rejects
-`trim-both` and `trim-all`. Firefox 153.4 rejects all tested values. Chromium and Firefox
-153.4 reject the tested `hanging-punctuation` values, so those behaviors currently lack a
-pinned browser oracle. Shaping-facing CSS such as
+API. `text-spacing-trim` exposes Chromium's accepted values `normal`, `space-all`,
+`space-first`, and `trim-start`. The implementation applies the CSS Text 4
+adjacent-punctuation rules, half-ideographic trimming, line-start policies,
+line-end fit behavior, and intrinsic sizing. Unit cases cover adjacent opening
+and closing marks, `space-all`, paragraph and forced-break starts, soft-wrap
+starts under `space-first`, a closing mark that is reduced only when it
+otherwise cannot fit, and Japanese fullwidth colon classification. Japanese
+fullwidth colons and semicolons use the spec's middle-dot convention; its
+fullwidth comma and full stop use the closing-punctuation convention. The
+Chromium CSS probe confirms the accepted and computed property values. Its
+`vertical-text.ttf` fixture includes same-shape `halt` and
+`vhal` alternates, but Chromium currently produces the same geometry for
+`normal`/`trim-start` as for `space-all` in the trim-sensitive cases. The probe
+checks that no-op against explicit baselines and labels those measurements
+inconclusive; it does not count them as browser matches. Firefox 153.4 rejects
+all tested `text-spacing-trim` values.
+`trim-both` and `trim-all` are not exposed by either pinned browser and are not
+implemented. Full CSS comparison remains an explicit gap until a pinned browser
+and a fixture font can expose the spacing behavior.
+
+Adding `text_spacing_trim` changes the public `GFNT_ParagraphOptions` layout.
+The package, SONAME and symbol namespace therefore move to ABI major 7; callers
+must rebuild against the matching `ghoti.io-font-7` headers and library.
+
+Resolved decoration geometry is implemented for underline, overline and
+line-through, including byte-range selection and glyph-ink gaps. The caller
+supplies the resolved offset and thickness and paints the returned rectangles;
+CSS cascade, decoration style/color, font-derived offset/thickness and text
+decoration propagation are outside this API. A pinned Chromium comparison
+covers horizontal underlines with `text-decoration-skip-ink: none`, `auto` and
+`all` for the bundled fixture font. The `auto` result is browser-specific and
+the library currently follows this pinned Chromium behavior. Unit tests cover
+overline, line-through and selected ranges, but browser comparisons do not yet
+cover those lines, vertical writing, multiple decorated inline boxes, or
+line-edge behavior. Those remain explicit oracle coverage gaps.
+
+Chromium and Firefox 153.4 reject the tested `hanging-punctuation` values, so
+those behaviors currently lack a pinned browser oracle. Shaping-facing CSS such as
 `font-optical-sizing`, `font-variant-caps`, `font-size-adjust` and
 `text-combine-upright`, plus `initial-letter`, also remains outside the current
 oracle matrix. Each should be added only with named CSS cases and an explicit

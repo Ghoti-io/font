@@ -420,6 +420,14 @@ typedef enum GFNT_TextAutospace {
   GFNT_TEXT_AUTOSPACE_NUMERIC     ///< CSS `ideograph-numeric` only.
 } GFNT_TextAutospace;
 
+/** @brief CJK punctuation spacing policy, after CSS `text-spacing-trim`. */
+typedef enum GFNT_TextSpacingTrim {
+  GFNT_TEXT_SPACING_TRIM_NORMAL = 0, ///< Collapse adjacent punctuation; trim a closing mark at line end only to fit.
+  GFNT_TEXT_SPACING_TRIM_SPACE_ALL, ///< Keep full-width punctuation full-width everywhere.
+  GFNT_TEXT_SPACING_TRIM_SPACE_FIRST, ///< Keep opening punctuation full-width on the first and forced-break lines.
+  GFNT_TEXT_SPACING_TRIM_TRIM_START ///< Trim full-width opening punctuation at every line start.
+} GFNT_TextSpacingTrim;
+
 /** @brief What hyphenation a paragraph does, after CSS `hyphens`. */
 typedef enum GFNT_Hyphens {
   /**
@@ -541,6 +549,7 @@ typedef struct GFNT_ParagraphOptions {
                                ///< `normal`, `nowrap`, and `pre-line` behavior.
   GFNT_TextWrapStyle text_wrap_style; ///< CSS `text-wrap-style`; zero selects `auto`.
   GFNT_TextAutospace text_autospace; ///< CSS `text-autospace`; zero selects spec `normal`.
+  GFNT_TextSpacingTrim text_spacing_trim; ///< CSS `text-spacing-trim`; zero selects `normal`.
 } GFNT_ParagraphOptions;
 
 /** @brief The one inline band available to a line at a given block position. */
@@ -728,7 +737,36 @@ typedef struct GFNT_Layout {
   GFNT_Rect ink;
   const GFNT_Allocator * allocator; ///< What the arrays came from.
   void * storage_;       ///< Internal: the runs and glyphs.
+  const void * paragraph_; ///< Internal identity used by paragraph-bound geometry helpers.
 } GFNT_Layout;
+
+/** @brief Which CSS text-decoration line to return as geometry. */
+typedef enum GFNT_DecorationLine {
+  GFNT_DECORATION_UNDERLINE = 0,
+  GFNT_DECORATION_OVERLINE,
+  GFNT_DECORATION_LINE_THROUGH
+} GFNT_DecorationLine;
+
+/** @brief Glyph-ink interruption policy for underline and overline geometry. */
+typedef enum GFNT_DecorationSkipInk {
+  GFNT_DECORATION_SKIP_INK_NONE = 0,
+  GFNT_DECORATION_SKIP_INK_AUTO,
+  GFNT_DECORATION_SKIP_INK_ALL
+} GFNT_DecorationSkipInk;
+
+/** @brief One continuous visible piece of a text-decoration line. */
+typedef struct GFNT_DecorationSegment {
+  size_t line; ///< Index in the source layout.
+  GFNT_Rect box; ///< Physical rectangle in 26.6 pixels.
+} GFNT_DecorationSegment;
+
+/** @brief Result of ::gfnt_paragraph_decoration_layout(). */
+typedef struct GFNT_DecorationLayout {
+  const GFNT_DecorationSegment * segments;
+  size_t segment_count;
+  const GFNT_Allocator * allocator;
+  const void * storage_;
+} GFNT_DecorationLayout;
 
 /** @brief How a fixed set of columns is filled. */
 typedef enum GFNT_ColumnFill {
@@ -806,6 +844,40 @@ GFNT_API void gfnt_paragraph_free(GFNT_Paragraph * paragraph);
  */
 GFNT_API GFNT_Result gfnt_paragraph_layout(const GFNT_Paragraph * paragraph,
     GFNT_F26Dot6 width, GFNT_Layout * out, GFNT_Error * error);
+
+/**
+ * @brief Resolve one CSS text-decoration line to physical rectangles over an existing layout.
+ *
+ * The byte range identifies the decorating inline's contents. The caller supplies the already
+ * resolved cross-axis offset and positive thickness; CSS cascade, style/color painting and
+ * automatic offset selection remain with the caller. Leading and trailing line spaces are not
+ * decorated. `auto` and `all` interrupt underlines and overlines at glyph ink; line-through is
+ * always continuous as specified by CSS. In this API, `auto` follows the pinned browser behavior
+ * and uses the same conservative ink gaps as `all`.
+ * Any overlap with a typographic character unit decorates the whole shaped unit. Spaces between
+ * visible text units are included when selected; leading and trailing line spaces are omitted.
+ *
+ * @param paragraph Paragraph that produced @p layout.
+ * @param layout Its completed line layout, including a column or flow layout if applicable.
+ * @param start First decorated text byte; must be a UTF-8 boundary.
+ * @param end One past the last decorated text byte; must be a UTF-8 boundary.
+ * @param line Decoration kind.
+ * @param offset Signed physical cross-axis offset from the line baseline (y in horizontal text,
+ *   x in vertical text).
+ * @param thickness Positive line thickness in 26.6 pixels.
+ * @param skip_ink Glyph interruption policy.
+ * @param out Receives owned geometry; it must be zero-initialised or previously freed, then freed
+ *   with ::gfnt_decoration_layout_free().
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID for mismatched inputs or bad values, ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_paragraph_decoration_layout(const GFNT_Paragraph * paragraph,
+    const GFNT_Layout * layout, size_t start, size_t end, GFNT_DecorationLine line,
+    GFNT_F26Dot6 offset, GFNT_F26Dot6 thickness, GFNT_DecorationSkipInk skip_ink,
+    GFNT_DecorationLayout * out, GFNT_Error * error);
+
+/** @brief Free decoration geometry. NULL or a zeroed result is harmless. */
+GFNT_API void gfnt_decoration_layout_free(GFNT_DecorationLayout * layout);
 
 /**
  * @brief Lay out a paragraph across a fixed set of equal columns.

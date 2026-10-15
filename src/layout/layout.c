@@ -228,6 +228,133 @@ static int64_t eff_width_at(const GFNT_Paragraph * p, const Unit * u,
   return p->tab_width - remainder + u->ruby_added;
 }
 
+typedef enum TextSpacingPunctuation {
+  TEXT_SPACING_NONE,
+  TEXT_SPACING_OPEN,
+  TEXT_SPACING_CLOSE,
+  TEXT_SPACING_MIDDLE
+} TextSpacingPunctuation;
+
+#define TEXT_SPACING_GC_OPEN (GUNI_GC_MASK(GUNI_GC_INITIAL_PUNCTUATION) \
+    | GUNI_GC_MASK(GUNI_GC_OPEN_PUNCTUATION))
+#define TEXT_SPACING_GC_CLOSE (GUNI_GC_MASK(GUNI_GC_FINAL_PUNCTUATION) \
+    | GUNI_GC_MASK(GUNI_GC_CLOSE_PUNCTUATION))
+
+static uint32_t text_spacing_cp(const GFNT_Paragraph * p, const Unit * unit) {
+  return autospace_base_cp(p, unit);
+}
+
+static bool text_spacing_ideograph(uint32_t cp) {
+  uint32_t category = guni_general_category_mask(cp);
+  GUNI_EastAsianWidth width = guni_east_asian_width(cp);
+
+  return guni_script(cp) == GUNI_SCRIPT_HAN
+      && !(category & GUNI_GC_MASK_P)
+      && (width == GUNI_EAW_WIDE || width == GUNI_EAW_FULLWIDTH);
+}
+
+static TextSpacingPunctuation text_spacing_punctuation(const GFNT_Paragraph * p,
+    const Unit * unit) {
+  uint32_t cp = text_spacing_cp(p, unit);
+  uint32_t category = guni_general_category_mask(cp);
+  bool in_cjk_block = cp >= 0x3000 && cp <= 0x303F;
+  bool fullwidth = in_cjk_block || guni_east_asian_width(cp) == GUNI_EAW_FULLWIDTH;
+
+  if (cp == 0x00B7 || cp == 0x2027 || cp == 0x30FB) return TEXT_SPACING_MIDDLE;
+  if ((cp == 0x2018 || cp == 0x201C)
+      || (fullwidth && (category & TEXT_SPACING_GC_OPEN))) {
+    return TEXT_SPACING_OPEN;
+  }
+  if ((cp == 0x2019 || cp == 0x201D)
+      || (fullwidth && (category & TEXT_SPACING_GC_CLOSE))) {
+    return TEXT_SPACING_CLOSE;
+  }
+  /* CSS Text permits language conventions and writing mode to classify these.
+   * Japanese convention treats fullwidth colon/semicolon as middle dots and
+   * ideographic/fullwidth comma and full stop as closing punctuation. */
+  if (cp == 0xFF1A || cp == 0xFF1B) {
+    const GFNT_TextStyle * style = &p->styles[p->runs[unit->run].span];
+    if (style->content_language == GFNT_CONTENT_LANGUAGE_JAPANESE) {
+      return TEXT_SPACING_MIDDLE;
+    }
+    return TEXT_SPACING_CLOSE;
+  }
+  if (cp == 0x3001 || cp == 0x3002 || cp == 0xFF0C || cp == 0xFF0E) {
+    return TEXT_SPACING_CLOSE;
+  }
+  return TEXT_SPACING_NONE;
+}
+
+/** Half an ideographic advance, only for punctuation that is actually full-width in this face. */
+static int64_t text_spacing_half_ic(const GFNT_Paragraph * p, size_t index) {
+  const Unit * unit = &p->units[index];
+  const PRun * run = &p->runs[unit->run];
+  const GFNT_TextStyle * style = &p->styles[run->span];
+  int64_t ic = p->ideographic_advance[run->span] > 0
+      ? p->ideographic_advance[run->span] : style->size;
+
+  if (unit->object || unit->tab || text_spacing_punctuation(p, unit) == TEXT_SPACING_NONE) {
+    return 0;
+  }
+  if (ic <= 0) return 0;
+  /* CSS leaves proportional punctuation alone. A narrow punctuation advance therefore does not
+   * acquire a synthetic half-width trim merely because its code point is fullwidth. */
+  int64_t delta = (int64_t)unit->base_width - style->letter_spacing - ic;
+  if (delta < 0) delta = -delta;
+  if (delta * 8 > ic) return 0;
+  return ic / 2;
+}
+
+static bool text_spacing_is_space(const Unit * unit, const GFNT_Paragraph * p) {
+  return unit->cp_end == unit->cp_start + 1 && p->cps[unit->cp_start] == 0x3000;
+}
+
+static bool text_spacing_open_at_start(const GFNT_Paragraph * p, size_t start) {
+  if (start >= p->unit_count
+      || text_spacing_punctuation(p, &p->units[start]) != TEXT_SPACING_OPEN) return false;
+  if (p->options.text_spacing_trim == GFNT_TEXT_SPACING_TRIM_TRIM_START) return true;
+  if (p->options.text_spacing_trim != GFNT_TEXT_SPACING_TRIM_SPACE_FIRST) return false;
+  return start > 0 && !p->units[start - 1].hard;
+}
+
+/** Whether an opening mark collapses against its previous character on this line. */
+static bool text_spacing_trim_open_pair(const GFNT_Paragraph * p, size_t left, size_t right) {
+  const Unit * before = &p->units[left], *open = &p->units[right];
+  TextSpacingPunctuation previous = text_spacing_punctuation(p, before);
+  TextSpacingPunctuation current = text_spacing_punctuation(p, open);
+  const GFNT_TextStyle * before_style = &p->styles[p->runs[before->run].span];
+  const GFNT_TextStyle * open_style = &p->styles[p->runs[open->run].span];
+
+  if (p->options.text_spacing_trim == GFNT_TEXT_SPACING_TRIM_SPACE_ALL || before->hard) {
+    return false;
+  }
+  return current == TEXT_SPACING_OPEN
+      && (previous == TEXT_SPACING_OPEN || previous == TEXT_SPACING_MIDDLE
+          || text_spacing_is_space(before, p)
+          || (previous == TEXT_SPACING_CLOSE && before_style->size >= open_style->size)
+          || (guni_general_category_mask(text_spacing_cp(p, before))
+              & TEXT_SPACING_GC_OPEN));
+}
+
+/** Whether a closing mark collapses against its following character on this line. */
+static bool text_spacing_trim_close_pair(const GFNT_Paragraph * p, size_t left, size_t right) {
+  const Unit * close = &p->units[left], *after = &p->units[right];
+  TextSpacingPunctuation previous = text_spacing_punctuation(p, close);
+  TextSpacingPunctuation current = text_spacing_punctuation(p, after);
+  const GFNT_TextStyle * close_style = &p->styles[p->runs[close->run].span];
+  const GFNT_TextStyle * after_style = &p->styles[p->runs[after->run].span];
+
+  if (p->options.text_spacing_trim == GFNT_TEXT_SPACING_TRIM_SPACE_ALL || close->hard) {
+    return false;
+  }
+  return previous == TEXT_SPACING_CLOSE
+      && (current == TEXT_SPACING_CLOSE || current == TEXT_SPACING_MIDDLE
+          || text_spacing_is_space(after, p)
+          || (current == TEXT_SPACING_OPEN && after_style->size > close_style->size)
+          || (guni_general_category_mask(text_spacing_cp(p, after))
+              & TEXT_SPACING_GC_CLOSE));
+}
+
 /** The width of a unit measured from the line start (the legacy tab origin). */
 static int64_t eff_width(const GFNT_Paragraph * p, const Unit * u, int64_t pos) {
   return eff_width_at(p, u, pos, 0);
@@ -426,6 +553,7 @@ void gfnt_paragraph_free(GFNT_Paragraph * p) {
   }
   allocator->free_fn(allocator->ctx, p->owned_features);
   allocator->free_fn(allocator->ctx, p->styles);
+  allocator->free_fn(allocator->ctx, p->ideographic_advance);
   allocator->free_fn(allocator->ctx, p->runs);
   allocator->free_fn(allocator->ctx, p->glyphs);
   allocator->free_fn(allocator->ctx, p->units);
@@ -805,6 +933,13 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
       u->width += p->glyphs[g].advance;
     }
     u->base_width = u->width;
+    if (!p->ideographic_advance[p->runs[run].span]
+        && text_spacing_ideograph(autospace_base_cp(p, u))) {
+      int64_t advance = (int64_t)u->base_width - style->letter_spacing;
+      if (advance > 0 && advance <= INT32_MAX) {
+        p->ideographic_advance[p->runs[run].span] = (GFNT_F26Dot6)advance;
+      }
+    }
     for (size_t c = u->cp_start; c < u->cp_end; c++) {
       all_space = all_space && hangs(cps[c]);
     }
@@ -1696,6 +1831,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->text_wrap_style > GFNT_TEXT_WRAP_STABLE
       || (unsigned)options->text_autospace > GFNT_TEXT_AUTOSPACE_NUMERIC
+      || (unsigned)options->text_spacing_trim > GFNT_TEXT_SPACING_TRIM_TRIM_START
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
       || options->space_share < 0 || options->space_share > 0x10000
       || (unsigned)options->writing_mode > GFNT_WRITING_SIDEWAYS_LR
@@ -1783,9 +1919,11 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   }
   p->cp_byte = allocator->calloc_fn(allocator->ctx, length + 1, sizeof *p->cp_byte);
   p->styles = allocator->calloc_fn(allocator->ctx, span_count, sizeof *p->styles);
+  p->ideographic_advance = allocator->calloc_fn(allocator->ctx, span_count,
+      sizeof *p->ideographic_advance);
   p->owned_features = allocator->calloc_fn(allocator->ctx, span_count,
       sizeof *p->owned_features);
-  if (!p->cp_byte || !p->styles || !p->owned_features) {
+  if (!p->cp_byte || !p->styles || !p->ideographic_advance || !p->owned_features) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the paragraph");
     goto done;
@@ -2535,19 +2673,37 @@ done:
 GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     GFNT_F26Dot6 * out) {
   int64_t total = 0, fit = 0, widest = 0;
+  bool line_start = true;
 
   if (!p || !out) {
     return GFNT_ERR_INVALID;
   }
   for (size_t j = 0; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
-
+    int64_t trim_current = 0, trim_previous = 0;
     int64_t shown;
 
+    if (line_start && text_spacing_open_at_start(p, j)) {
+      trim_current = text_spacing_half_ic(p, j);
+    }
+    else if (j && !p->units[j - 1].hard) {
+      if (text_spacing_trim_open_pair(p, j - 1, j)) {
+        trim_current = text_spacing_half_ic(p, j);
+      }
+      if (text_spacing_trim_close_pair(p, j - 1, j)) {
+        trim_previous = text_spacing_half_ic(p, j - 1);
+      }
+    }
     if (j && !p->units[j - 1].hard && !p->units[j - 1].opportunity) {
       total += p->units[j - 1].autospace_after;
     }
-    total += eff_width(p, u, total);
+    if (trim_previous) {
+      total -= trim_previous;
+      fit -= trim_previous;
+    }
+    int64_t unit_width = eff_width(p, u, total);
+    if (trim_current > unit_width) trim_current = unit_width;
+    total += unit_width - trim_current;
     if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE
             || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES)) {
       fit = total;
@@ -2558,6 +2714,12 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     // A stretch that ends at a hyphenation point ends in the hyphen; the end of the text is not one.
     shown = fit + (u->hyphen && u->opportunity && j + 1 < p->unit_count
                        ? p->hyphen_width[p->runs[u->run].span] : 0);
+    if (!u->hard && u->opportunity && p->options.text_spacing_trim
+            != GFNT_TEXT_SPACING_TRIM_SPACE_ALL
+        && text_spacing_punctuation(p, u) == TEXT_SPACING_CLOSE) {
+      int64_t trim_end = text_spacing_half_ic(p, j);
+      if (trim_end && shown >= trim_end) shown -= trim_end;
+    }
     if (shown > INT32_MAX || shown < INT32_MIN) return GFNT_ERR_INVALID;
     if (shown > widest) {
       widest = shown;
@@ -2568,7 +2730,9 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
                      || p->options.word_break == GFNT_WORD_BREAK_BREAK_WORD)
                     && u->emergency)))) {
       total = fit = 0;
+      line_start = true;
     }
+    else line_start = false;
   }
   {
     // A tab at the start of a stretch is a whole tab stop wide there and only the way to the next
@@ -2588,15 +2752,34 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
 GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
     GFNT_F26Dot6 * out) {
   int64_t total = 0, fit = 0, widest = 0;
+  bool line_start = true;
 
   if (!p || !out) {
     return GFNT_ERR_INVALID;
   }
   for (size_t j = 0; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
+    int64_t trim_current = 0, trim_previous = 0;
 
+    if (line_start && text_spacing_open_at_start(p, j)) {
+      trim_current = text_spacing_half_ic(p, j);
+    }
+    else if (j && !p->units[j - 1].hard) {
+      if (text_spacing_trim_open_pair(p, j - 1, j)) {
+        trim_current = text_spacing_half_ic(p, j);
+      }
+      if (text_spacing_trim_close_pair(p, j - 1, j)) {
+        trim_previous = text_spacing_half_ic(p, j - 1);
+      }
+    }
     if (j && !p->units[j - 1].hard) total += p->units[j - 1].autospace_after;
-    total += eff_width(p, u, total);
+    if (trim_previous) {
+      total -= trim_previous;
+      fit -= trim_previous;
+    }
+    int64_t unit_width = eff_width(p, u, total);
+    if (trim_current > unit_width) trim_current = unit_width;
+    total += unit_width - trim_current;
     if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE
             || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES)) {
       fit = total;
@@ -2609,7 +2792,9 @@ GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
     }
     if (u->hard) {
       total = fit = 0;
+      line_start = true;
     }
+    else line_start = false;
   }
   *out = (GFNT_F26Dot6)widest;
   return GFNT_OK;
@@ -2643,6 +2828,322 @@ void gfnt_layout_free(GFNT_Layout * layout) {
   }
   layout->allocator->free_fn(layout->allocator->ctx, layout->lines);
   layout->allocator->free_fn(layout->allocator->ctx, layout->storage_);
+  memset(layout, 0, sizeof *layout);
+}
+
+typedef struct {
+  int64_t start, end;
+} DecorationInterval;
+
+typedef struct {
+  int64_t start, end;
+  int64_t ink_start, ink_end, ink_cross_start, ink_cross_end;
+  bool whitespace, has_ink;
+} DecorationGlyph;
+
+static bool paragraph_byte_boundary(const GFNT_Paragraph * p, size_t byte,
+    size_t * cp_index) {
+  size_t lo = 0, hi = p->length + 1;
+
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (p->cp_byte[mid] < byte) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > p->length || p->cp_byte[lo] != byte) return false;
+  if (cp_index) *cp_index = lo;
+  return true;
+}
+
+static const Unit * paragraph_unit_for_cp(const GFNT_Paragraph * p, size_t cp,
+    size_t * unit_index) {
+  size_t lo = 0, hi = p->unit_count;
+
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (p->units[mid].cp_end <= cp) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo >= p->unit_count || cp < p->units[lo].cp_start) return NULL;
+  if (unit_index) *unit_index = lo;
+  return &p->units[lo];
+}
+
+static const PGlyph * paragraph_glyph_for_placed(const GFNT_Paragraph * p,
+    const GFNT_LineRun * run, const GFNT_PlacedGlyph * placed, const Unit ** out_unit) {
+  size_t cp, ui;
+  const Unit * unit;
+  const PRun * source_run;
+
+  if (!paragraph_byte_boundary(p, placed->cluster, &cp) || cp >= p->length) return NULL;
+  unit = paragraph_unit_for_cp(p, cp, &ui);
+  if (!unit || unit->object || unit->tab) return NULL;
+  source_run = &p->runs[unit->run];
+  if (source_run->span != run->span || source_run->face != run->face) return NULL;
+  for (size_t i = unit->g_lo; i < unit->g_hi; i++) {
+    const PGlyph * glyph = &p->glyphs[i];
+    if (glyph->glyph == placed->glyph && glyph->cluster == placed->cluster) {
+      if (out_unit) *out_unit = unit;
+      return glyph;
+    }
+  }
+  return NULL;
+}
+
+static bool decoration_interval_before(const DecorationInterval * a,
+    const DecorationInterval * b) {
+  return a->start < b->start || (a->start == b->start && a->end < b->end);
+}
+
+GFNT_Result gfnt_paragraph_decoration_layout(const GFNT_Paragraph * p,
+    const GFNT_Layout * layout, size_t start, size_t end, GFNT_DecorationLine line,
+    GFNT_F26Dot6 offset, GFNT_F26Dot6 thickness, GFNT_DecorationSkipInk skip_ink,
+    GFNT_DecorationLayout * out, GFNT_Error * error) {
+  const GFNT_Allocator * allocator;
+  size_t total_glyphs = 0, capacity, segment_count = 0;
+  DecorationGlyph * glyphs = NULL;
+  DecorationInterval * selected = NULL;
+  DecorationInterval * gaps = NULL;
+  GFNT_DecorationSegment * segments = NULL;
+
+  if (!p || !layout || !out || !layout->allocator || layout->paragraph_ != p
+      || end < start || end > p->cp_byte[p->length]
+      || !paragraph_byte_boundary(p, start, NULL) || !paragraph_byte_boundary(p, end, NULL)
+      || thickness <= 0 || (unsigned)line > GFNT_DECORATION_LINE_THROUGH
+      || (unsigned)skip_ink > GFNT_DECORATION_SKIP_INK_ALL) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "invalid text decoration geometry request");
+  }
+  allocator = layout->allocator;
+  if (start == end) {
+    *out = (GFNT_DecorationLayout){NULL, 0, allocator, NULL};
+    return GFNT_OK;
+  }
+  for (size_t li = 0; li < layout->line_count; li++) {
+    const GFNT_Line * current = &layout->lines[li];
+    for (size_t ri = 0; ri < current->run_count; ri++) {
+      if (current->runs[ri].glyph_count > SIZE_MAX - total_glyphs) {
+        return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+            "text decoration glyph count overflows");
+      }
+      total_glyphs += current->runs[ri].glyph_count;
+    }
+  }
+  if (total_glyphs > (SIZE_MAX - layout->line_count - 1) / 2) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+        "text decoration segment count overflows");
+  }
+  capacity = total_glyphs * 2 + layout->line_count + 1;
+  if (total_glyphs > SIZE_MAX / sizeof *glyphs || total_glyphs > SIZE_MAX / sizeof *selected
+      || total_glyphs > SIZE_MAX / sizeof *gaps
+      || capacity > SIZE_MAX / sizeof *segments) {
+    return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+        "text decoration allocation size overflows");
+  }
+  glyphs = allocator->calloc_fn(allocator->ctx, total_glyphs ? total_glyphs : 1,
+      sizeof *glyphs);
+  selected = allocator->calloc_fn(allocator->ctx, total_glyphs ? total_glyphs : 1,
+      sizeof *selected);
+  gaps = allocator->calloc_fn(allocator->ctx, total_glyphs ? total_glyphs : 1,
+      sizeof *gaps);
+  segments = allocator->calloc_fn(allocator->ctx, capacity, sizeof *segments);
+  if (!glyphs || !selected || !gaps || !segments) {
+    allocator->free_fn(allocator->ctx, glyphs);
+    allocator->free_fn(allocator->ctx, selected);
+    allocator->free_fn(allocator->ctx, gaps);
+    allocator->free_fn(allocator->ctx, segments);
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for text decoration geometry");
+  }
+
+  for (size_t li = 0; li < layout->line_count; li++) {
+    const GFNT_Line * current = &layout->lines[li];
+    const bool vertical = layout->writing_mode != GFNT_WRITING_HORIZONTAL_TB;
+    const int64_t cross = (int64_t)current->baseline + offset;
+    const int64_t cross_end = cross + thickness;
+    size_t count = 0, gap_count = 0;
+    size_t selected_count = 0, merged_count = 0;
+    int64_t line_first = INT64_MAX, line_last = INT64_MIN;
+
+    if (cross < INT32_MIN || cross_end > INT32_MAX) {
+      allocator->free_fn(allocator->ctx, glyphs);
+      allocator->free_fn(allocator->ctx, selected);
+      allocator->free_fn(allocator->ctx, gaps);
+      allocator->free_fn(allocator->ctx, segments);
+      return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+          "text decoration cross-axis position overflows");
+    }
+
+    for (size_t ri = 0; ri < current->run_count; ri++) {
+      const GFNT_LineRun * run = &current->runs[ri];
+      if (run->ellipsis) continue;
+      for (size_t gi = 0; gi < run->glyph_count; gi++) {
+        const GFNT_PlacedGlyph * placed = &run->glyphs[gi];
+        const Unit * unit = NULL;
+        const PGlyph * source;
+        size_t cp;
+        int64_t pen = vertical ? placed->pen_y : placed->pen_x;
+        int64_t after = pen + placed->advance;
+        DecorationGlyph * item;
+        bool range_match = false;
+
+        if (!paragraph_byte_boundary(p, placed->cluster, &cp) || cp >= p->length) continue;
+        unit = paragraph_unit_for_cp(p, cp, NULL);
+        source = paragraph_glyph_for_placed(p, run, placed, &unit);
+        if (source && unit) {
+          size_t unit_start = p->cp_byte[unit->cp_start];
+          size_t unit_end = p->cp_byte[unit->cp_end];
+          range_match = unit_start < end && unit_end > start;
+        }
+        else if (unit) {
+          size_t unit_start = p->cp_byte[unit->cp_start];
+          size_t unit_end = p->cp_byte[unit->cp_end];
+          range_match = unit_start < end && unit_end > start;
+        }
+        else {
+          range_match = placed->cluster >= start && placed->cluster < end;
+        }
+        if (!unit || !unit->space) {
+          int64_t glyph_start = pen < after ? pen : after;
+          int64_t glyph_end = pen > after ? pen : after;
+          if (glyph_start < line_first) line_first = glyph_start;
+          if (glyph_end > line_last) line_last = glyph_end;
+        }
+        if (!range_match) continue;
+        item = &glyphs[count++];
+        *item = (DecorationGlyph){0};
+        item->start = pen < after ? pen : after;
+        item->end = pen > after ? pen : after;
+        item->whitespace = unit && unit->space;
+        if (!source || !source->has_ink) continue;
+
+        if (!vertical) {
+          item->ink_start = (int64_t)placed->x + source->ix0;
+          item->ink_end = (int64_t)placed->x + source->ix1;
+          item->ink_cross_start = (int64_t)placed->y - source->iy1;
+          item->ink_cross_end = (int64_t)placed->y - source->iy0;
+        }
+        else if (run->orientation == GFNT_ORIENT_RUN_UPRIGHT) {
+          item->ink_start = (int64_t)placed->y - source->iy1;
+          item->ink_end = (int64_t)placed->y - source->iy0;
+          item->ink_cross_start = (int64_t)placed->x + source->ix0;
+          item->ink_cross_end = (int64_t)placed->x + source->ix1;
+        }
+        else if (layout->writing_mode == GFNT_WRITING_SIDEWAYS_LR) {
+          item->ink_start = (int64_t)placed->y - source->ix1;
+          item->ink_end = (int64_t)placed->y - source->ix0;
+          item->ink_cross_start = (int64_t)placed->x - source->iy1;
+          item->ink_cross_end = (int64_t)placed->x - source->iy0;
+        }
+        else {
+          item->ink_start = (int64_t)placed->y + source->ix0;
+          item->ink_end = (int64_t)placed->y + source->ix1;
+          item->ink_cross_start = (int64_t)placed->x + source->iy0;
+          item->ink_cross_end = (int64_t)placed->x + source->iy1;
+        }
+        item->has_ink = item->ink_start < item->ink_end
+            && item->ink_cross_start < cross_end && item->ink_cross_end > cross;
+      }
+    }
+    for (size_t i = 0; i < count; i++) {
+      const DecorationGlyph * item = &glyphs[i];
+      if (item->start >= item->end
+          || (item->whitespace
+              && (line_first == INT64_MAX || item->start < line_first || item->end > line_last))) {
+        continue;
+      }
+      selected[selected_count++] = (DecorationInterval){item->start, item->end};
+    }
+    if (!selected_count) continue;
+    for (size_t i = 1; i < selected_count; i++) {
+      DecorationInterval value = selected[i];
+      size_t j = i;
+      while (j && decoration_interval_before(&value, &selected[j - 1])) {
+        selected[j] = selected[j - 1];
+        j--;
+      }
+      selected[j] = value;
+    }
+    for (size_t i = 0; i < selected_count; i++) {
+      if (!merged_count || selected[i].start > selected[merged_count - 1].end) {
+        selected[merged_count++] = selected[i];
+      }
+      else if (selected[i].end > selected[merged_count - 1].end) {
+        selected[merged_count - 1].end = selected[i].end;
+      }
+    }
+    for (size_t i = 0; i < merged_count; i++) {
+      if (selected[i].start < INT32_MIN || selected[i].end > INT32_MAX
+          || selected[i].end - selected[i].start > INT32_MAX) {
+        allocator->free_fn(allocator->ctx, glyphs);
+        allocator->free_fn(allocator->ctx, selected);
+        allocator->free_fn(allocator->ctx, gaps);
+        allocator->free_fn(allocator->ctx, segments);
+        return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+            "text decoration line extent overflows");
+      }
+    }
+
+    if (skip_ink != GFNT_DECORATION_SKIP_INK_NONE
+        && line != GFNT_DECORATION_LINE_THROUGH) {
+      const int64_t clearance = thickness > 64 ? thickness : 64;
+      for (size_t i = 0; i < count; i++) {
+        if (glyphs[i].has_ink) {
+          gaps[gap_count++] = (DecorationInterval){
+              glyphs[i].ink_start - clearance, glyphs[i].ink_end + clearance};
+        }
+      }
+      for (size_t i = 1; i < gap_count; i++) {
+        DecorationInterval value = gaps[i];
+        size_t j = i;
+        while (j && decoration_interval_before(&value, &gaps[j - 1])) {
+          gaps[j] = gaps[j - 1];
+          j--;
+        }
+        gaps[j] = value;
+      }
+    }
+
+    for (size_t r = 0; r < merged_count; r++) {
+      int64_t first = selected[r].start, last = selected[r].end, cursor = first;
+      for (size_t i = 0; i <= gap_count; i++) {
+        int64_t gap_start = i < gap_count ? gaps[i].start : last;
+        int64_t gap_end = i < gap_count ? gaps[i].end : last;
+        if (gap_start < first) gap_start = first;
+        if (gap_start > last) gap_start = last;
+        if (gap_end > last) gap_end = last;
+        if (gap_start > cursor) {
+          GFNT_Rect box = vertical
+              ? (GFNT_Rect){(GFNT_F26Dot6)cross, (GFNT_F26Dot6)cursor,
+                  thickness, (GFNT_F26Dot6)(gap_start - cursor)}
+              : (GFNT_Rect){(GFNT_F26Dot6)cursor, (GFNT_F26Dot6)cross,
+                  (GFNT_F26Dot6)(gap_start - cursor), thickness};
+          segments[segment_count++] = (GFNT_DecorationSegment){li, box};
+        }
+        if (gap_end > cursor) cursor = gap_end;
+        if (cursor >= last) break;
+      }
+    }
+  }
+  allocator->free_fn(allocator->ctx, glyphs);
+  allocator->free_fn(allocator->ctx, selected);
+  allocator->free_fn(allocator->ctx, gaps);
+  if (segment_count == 0) {
+    allocator->free_fn(allocator->ctx, segments);
+    segments = NULL;
+  }
+  else {
+    GFNT_DecorationSegment * compact = allocator->realloc_fn(allocator->ctx,
+        segments, segment_count * sizeof *segments);
+    if (compact) segments = compact;
+  }
+  *out = (GFNT_DecorationLayout){segments, segment_count, allocator, segments};
+  return GFNT_OK;
+}
+
+void gfnt_decoration_layout_free(GFNT_DecorationLayout * layout) {
+  if (!layout || !layout->allocator) return;
+  layout->allocator->free_fn(layout->allocator->ctx, (void *)layout->storage_);
   memset(layout, 0, sizeof *layout);
 }
 
@@ -2779,9 +3280,31 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
 
   for (size_t j = i; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
+    int64_t trim_current = 0, trim_previous = 0;
 
     if (j > start) total += p->units[j - 1].autospace_after;
-    total += eff_width_at(p, u, total, tab_origin);
+    if (j == start && text_spacing_open_at_start(p, start)) {
+      trim_current = text_spacing_half_ic(p, j);
+    }
+    else if (j > start) {
+      if (text_spacing_trim_open_pair(p, j - 1, j)) {
+        trim_current = text_spacing_half_ic(p, j);
+      }
+      if (text_spacing_trim_close_pair(p, j - 1, j)) {
+        trim_previous = text_spacing_half_ic(p, j - 1);
+      }
+    }
+    if (trim_previous) {
+      total -= trim_previous;
+      fit -= trim_previous;
+      for (size_t k = cands; k > 0; k--) {
+        if (cand_at[k - 1] == j - 1) cand_fit[k - 1] -= trim_previous;
+      }
+      if (have_emergency && emergency_at == j - 1) emergency_fit -= trim_previous;
+    }
+    int64_t unit_width = eff_width_at(p, u, total, tab_origin);
+    if (trim_current > unit_width) trim_current = unit_width;
+    total += unit_width - trim_current;
     total -= ruby_right_refund(p, start, j, NULL, NULL);
     if (!u->space || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES) {
       fit = total;
@@ -2794,6 +3317,15 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
       emergency_at = j;
       emergency_fit = fit;
       have_emergency = true;
+    }
+    if (can_wrap && bounded && u->opportunity
+        && fit > width && p->options.text_spacing_trim != GFNT_TEXT_SPACING_TRIM_SPACE_ALL
+        && text_spacing_punctuation(p, u) == TEXT_SPACING_CLOSE) {
+      int64_t trim_end = text_spacing_half_ic(p, j);
+      if (trim_end && fit - trim_end <= width) {
+        result.end = j + 1;
+        break;
+      }
     }
     if (can_wrap && bounded && fit > width && cands) {
       size_t k = cands;
@@ -3282,6 +3814,7 @@ typedef struct {
   PGlyph * spool;
   GFNT_F26Dot6 * tabadv;
   GFNT_F26Dot6 * ruby_reclaim;
+  GFNT_F26Dot6 * spacing_trim;
   GFNT_F26Dot6 extra, extra_rem, cursor, lead;
   size_t unit_start, unit_end;
   size_t expanded;
@@ -3324,7 +3857,7 @@ static bool inline_shift(const GFNT_Paragraph * p, const PRun * run,
 /** Measure the shaped units that will be placed on one line. */
 static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size_t end,
     GFNT_F26Dot6 width, GFNT_F26Dot6 top_y, GFNT_F26Dot6 tab_origin, GFNT_F26Dot6 * ew,
-    GFNT_F26Dot6 * tabadv, GFNT_F26Dot6 * ruby_reclaim) {
+    GFNT_F26Dot6 * tabadv, GFNT_F26Dot6 * ruby_reclaim, GFNT_F26Dot6 * spacing_trim) {
   LayoutLineState state = {0};
   GFNT_F26Dot6 pos = 0;
   int64_t annotation_over = 0, annotation_under = 0;
@@ -3352,9 +3885,11 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
   state.unit_end = end;
   state.available_width = width;
   state.top_y = top_y;
+  for (size_t j = start; j < end; j++) spacing_trim[j] = 0;
   for (size_t j = start; j < end; j++) {
     const Unit * unit = &p->units[j];
     const PRun * run = &p->runs[unit->run];
+    int64_t trim_current = 0, trim_previous = 0;
     size_t group_start = 0;
     const PAnnotation * group = NULL;
     GFNT_F26Dot6 refund = ruby_right_refund(p, start, j, &group, &group_start);
@@ -3387,7 +3922,29 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
       ew[j - 1] += p->units[j - 1].autospace_after;
       pos += p->units[j - 1].autospace_after;
     }
+    if (j == start && text_spacing_open_at_start(p, start)) {
+      trim_current = text_spacing_half_ic(p, j);
+    }
+    else if (j > start) {
+      if (text_spacing_trim_open_pair(p, j - 1, j)) {
+        trim_current = text_spacing_half_ic(p, j);
+      }
+      if (text_spacing_trim_close_pair(p, j - 1, j)) {
+        trim_previous = text_spacing_half_ic(p, j - 1);
+      }
+    }
+    if (trim_previous) {
+      if (trim_previous > ew[j - 1]) state.invalid = true;
+      else {
+        ew[j - 1] -= (GFNT_F26Dot6)trim_previous;
+        pos -= trim_previous;
+        spacing_trim[j - 1] += (GFNT_F26Dot6)trim_previous;
+      }
+    }
     ew[j] = eff_width_at(p, unit, pos, tab_origin);
+    if (trim_current > ew[j]) trim_current = ew[j];
+    ew[j] -= (GFNT_F26Dot6)trim_current;
+    spacing_trim[j] += (GFNT_F26Dot6)trim_current;
     pos += ew[j];
     if (unit->tab) {
       tabadv[unit->g_lo] = ew[j];
@@ -3491,6 +4048,18 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
   }
   for (size_t j = start; j < state.hang_from; j++) {
     state.natural += ew[j];
+  }
+  if (state.natural > width && state.hang_from > start
+      && p->options.text_spacing_trim != GFNT_TEXT_SPACING_TRIM_SPACE_ALL) {
+    size_t last = state.hang_from - 1;
+    if (text_spacing_punctuation(p, &p->units[last]) == TEXT_SPACING_CLOSE) {
+      int64_t trim_end = text_spacing_half_ic(p, last);
+      if (trim_end && state.natural - trim_end <= width && trim_end <= ew[last]) {
+        ew[last] -= (GFNT_F26Dot6)trim_end;
+        state.natural -= (GFNT_F26Dot6)trim_end;
+        spacing_trim[last] += (GFNT_F26Dot6)trim_end;
+      }
+    }
   }
   if (start == end && !p->options.strut) {
     const PRun * run = start < p->unit_count ? &p->runs[p->units[start].run]
@@ -3651,8 +4220,34 @@ static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_co
         GFNT_F26Dot6 advance = pg->tab && slice->src == p->glyphs
             ? state->tabadv[g] : pg->advance;
         GFNT_F26Dot6 before = 0, after = 0, origin, l, t, r, b;
+        GFNT_F26Dot6 trim_before = 0, trim_here = 0;
         GFNT_F26Dot6 shift = 0;
         if (slice->src == p->glyphs) advance -= state->ruby_reclaim[g];
+        if (slice->src == p->glyphs && glyphs == &slice->src[g]
+            && pg->unit < p->unit_count && state->spacing_trim[pg->unit]) {
+          const Unit * unit = &p->units[pg->unit];
+          int64_t remaining = state->spacing_trim[pg->unit];
+
+          /* Reduce the latest glyph advances first. A cluster can end in zero-
+           * advance combining marks, so its whole trim cannot always be taken
+           * from the final glyph. Later glyph offsets compensate for any earlier
+           * advance reduction, preserving their shaped positions. */
+          for (size_t q = unit->g_hi; q > unit->g_lo && remaining > 0;) {
+            size_t candidate = --q;
+            int64_t available = (int64_t)p->glyphs[candidate].advance
+                - state->ruby_reclaim[candidate];
+            int64_t reduction = available > 0
+                ? (available < remaining ? available : remaining) : 0;
+            if (candidate == g) trim_here = (GFNT_F26Dot6)reduction;
+            else if (candidate < g) trim_before += (GFNT_F26Dot6)reduction;
+            remaining -= reduction;
+          }
+          if (remaining > 0 || trim_here > advance) {
+            state->failed = true;
+            return;
+          }
+          advance -= trim_here;
+        }
         if (slice->src == p->glyphs && glyphs == &slice->src[g]
             && pg->unit >= state->unit_start
             && pg->unit + 1 < state->unit_end) {
@@ -3688,7 +4283,7 @@ static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_co
             state->expanded++;
           }
         }
-        origin = state->cursor + before;
+        origin = state->cursor + before + trim_before;
         placed->glyph = pg->glyph;
         placed->cluster = pg->cluster;
         placed->advance = before + advance + after;
@@ -3931,7 +4526,7 @@ typedef struct {
   Slice * slices;
   uint8_t * slice_levels, * gjf;
   GFNT_F26Dot6 * ew, * tabadv, * cand_fit;
-  GFNT_F26Dot6 * ruby_reclaim;
+  GFNT_F26Dot6 * ruby_reclaim, * spacing_trim;
   uint32_t * gk;
   KReshape * kres;
   PGlyph * spool;
@@ -3971,6 +4566,8 @@ static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragra
       sizeof *state->tabadv);
   state->ruby_reclaim = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1,
       sizeof *state->ruby_reclaim);
+  state->spacing_trim = allocator->calloc_fn(allocator->ctx, p->unit_count + 1,
+      sizeof *state->spacing_trim);
   state->gjf = allocator->calloc_fn(allocator->ctx, p->glyph_count + 1, 1);
   state->hyphened = allocator->calloc_fn(allocator->ctx, p->unit_count + 2,
       sizeof *state->hyphened);
@@ -3988,7 +4585,7 @@ static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragra
   state->line_tops = allocator->calloc_fn(allocator->ctx, p->unit_count + 2,
       sizeof *state->line_tops);
   if (!state->starts || !state->slices || !state->order || !state->slice_levels
-      || !state->ew || !state->tabadv || !state->ruby_reclaim || !state->gjf
+      || !state->ew || !state->tabadv || !state->ruby_reclaim || !state->spacing_trim || !state->gjf
       || !state->hyphened || !state->gk
       || !state->kres || !state->cand_at || !state->cand_fit || !state->band_starts
       || !state->band_widths || !state->line_tops) {
@@ -4004,7 +4601,7 @@ static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragra
       LayoutLineState measured = measure_line(p, state->starts[li], state->starts[li + 1],
           state->band_widths[li], top,
           p->options.tabs_from_container ? state->band_starts[li] : 0,
-          state->ew, state->tabadv, state->ruby_reclaim);
+          state->ew, state->tabadv, state->ruby_reclaim, state->spacing_trim);
       if (measured.invalid || measured.thickness < 0
           || top > INT32_MAX - measured.thickness) {
         return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
@@ -4059,7 +4656,7 @@ static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragra
         GFNT_F26Dot6 tab_origin = p->options.tabs_from_container ? band.start : 0;
         br = break_one_line(p, unit, band.width, tab_origin, state->cand_at, state->cand_fit);
         measured = measure_line(p, unit, br.end, band.width, top, tab_origin, state->ew,
-            state->tabadv, state->ruby_reclaim);
+            state->tabadv, state->ruby_reclaim, state->spacing_trim);
         if (measured.invalid || measured.thickness < 0) {
           return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
               "line metrics exceed the supported layout range");
@@ -4187,6 +4784,7 @@ static void layout_state_free(LayoutState * state) {
   allocator->free_fn(allocator->ctx, state->ew);
   allocator->free_fn(allocator->ctx, state->tabadv);
   allocator->free_fn(allocator->ctx, state->ruby_reclaim);
+  allocator->free_fn(allocator->ctx, state->spacing_trim);
   allocator->free_fn(allocator->ctx, state->gjf);
   allocator->free_fn(allocator->ctx, state->gk);
   allocator->free_fn(allocator->ctx, state->kres);
@@ -5007,6 +5605,7 @@ static void layout_state_finish(LayoutState * state, GFNT_Layout * out,
   out->ink = ink;
   out->allocator = state->allocator;
   out->storage_ = state->storage;
+  out->paragraph_ = p;
   state->lines = NULL;
   state->storage = NULL;
   layout_state_free(state);
@@ -5157,7 +5756,7 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     GFNT_F26Dot6 line_top = line_tops[li];
     GFNT_F26Dot6 tab_origin = p->options.tabs_from_container ? band_starts[li] : 0;
     LayoutLineState line_state = measure_line(p, ua, ub, line_width, line_top, tab_origin,
-        ew, tabadv, state->ruby_reclaim);
+        ew, tabadv, state->ruby_reclaim, state->spacing_trim);
     size_t hang_from;
     size_t ns = 0;
     PlacementState placement = {0};
@@ -5278,6 +5877,7 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     placement.spool = spool;
     placement.tabadv = tabadv;
     placement.ruby_reclaim = state->ruby_reclaim;
+    placement.spacing_trim = state->spacing_trim;
     placement.unit_start = ua;
     placement.unit_end = ub;
     placement.extra = extra;

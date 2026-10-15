@@ -3358,6 +3358,326 @@ TEST(LayoutSpacing, TextAutospaceCanSelectTheLetterAndNumberClasses) {
   EXPECT_EQ(width, 2 * kLetter);
 }
 
+TEST(LayoutSpacing, TextSpacingTrimCollapsesAdjacentPunctuationAndHonorsSpaceAll) {
+  Font font({0x65E5, 0x300C, 0x300D});
+  GFNT_F26Dot6 width = 0;
+
+  Para normal("「「日」」", {font.face});
+  ASSERT_EQ(normal.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(normal.p, &width), GFNT_OK);
+  EXPECT_EQ(width, 4 * kLetter);
+  ASSERT_EQ(normal.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(normal.layout.line_count, 1u);
+  const GFNT_LineRun & normal_run = normal.layout.lines[0].runs[0];
+  ASSERT_EQ(normal_run.glyph_count, 5u);
+  EXPECT_EQ(normal_run.glyphs[0].advance, kLetter);
+  EXPECT_EQ(normal_run.glyphs[1].advance, kLetter / 2);
+  EXPECT_EQ(normal_run.glyphs[2].advance, kLetter);
+  EXPECT_EQ(normal_run.glyphs[3].advance, kLetter / 2);
+  EXPECT_EQ(normal_run.glyphs[4].advance, kLetter);
+
+  GFNT_ParagraphOptions options{};
+  options.text_spacing_trim = GFNT_TEXT_SPACING_TRIM_SPACE_ALL;
+  Para all("「「日」」", {font.face}, options);
+  ASSERT_EQ(all.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(all.p, &width), GFNT_OK);
+  EXPECT_EQ(width, 5 * kLetter);
+  ASSERT_EQ(all.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(all.layout.line_count, 1u);
+  EXPECT_EQ(all.layout.lines[0].extent, 5 * kLetter);
+}
+
+TEST(LayoutSpacing, TextSpacingTrimStartAppliesAtParagraphAndForcedLineStarts) {
+  Font font({0x65E5, 0x300C});
+  GFNT_ParagraphOptions trim_options{};
+  trim_options.text_spacing_trim = GFNT_TEXT_SPACING_TRIM_TRIM_START;
+  Para trim("日\n「日", {font.face}, trim_options);
+  ASSERT_EQ(trim.created, GFNT_OK);
+  ASSERT_EQ(trim.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(trim.layout.line_count, 2u);
+  ASSERT_EQ(trim.layout.lines[1].runs[0].glyph_count, 2u);
+  EXPECT_EQ(trim.layout.lines[1].runs[0].glyphs[0].advance, kLetter / 2);
+  EXPECT_EQ(trim.layout.lines[1].runs[0].glyphs[1].pen_x, kLetter / 2);
+
+  GFNT_ParagraphOptions first_options{};
+  first_options.text_spacing_trim = GFNT_TEXT_SPACING_TRIM_SPACE_FIRST;
+  Para first("日\n「日", {font.face}, first_options);
+  ASSERT_EQ(first.created, GFNT_OK);
+  ASSERT_EQ(first.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(first.layout.line_count, 2u);
+  EXPECT_EQ(first.layout.lines[1].runs[0].glyphs[0].advance, kLetter);
+}
+
+TEST(LayoutSpacing, TextSpacingTrimSpaceFirstKeepsForcedBreaksButTrimsWrappedStarts) {
+  Font font({0x65E5, 0x300C});
+  GFNT_ParagraphOptions first_options{};
+  first_options.text_spacing_trim = GFNT_TEXT_SPACING_TRIM_SPACE_FIRST;
+  Para first("日日「日", {font.face}, first_options);
+  ASSERT_EQ(first.created, GFNT_OK);
+  ASSERT_EQ(first.lay(2 * kLetter), GFNT_OK);
+  ASSERT_EQ(first.layout.line_count, 2u);
+  ASSERT_EQ(first.layout.lines[1].runs[0].glyph_count, 2u);
+  EXPECT_EQ(first.layout.lines[1].runs[0].glyphs[0].advance, kLetter / 2);
+
+  Para normal("日日「日", {font.face});
+  ASSERT_EQ(normal.created, GFNT_OK);
+  ASSERT_EQ(normal.lay(2 * kLetter), GFNT_OK);
+  ASSERT_EQ(normal.layout.line_count, 2u);
+  EXPECT_EQ(normal.layout.lines[1].runs[0].glyphs[0].advance, kLetter);
+}
+
+TEST(LayoutSpacing, TextSpacingTrimNormalUsesHalfWidthClosingMarkOnlyToFit) {
+  Font font({0x65E5, 0x300D});
+  const std::string text = "日日日」";
+  Para normal(text, {font.face});
+  ASSERT_EQ(normal.created, GFNT_OK);
+  GFNT_F26Dot6 maximum = 0;
+  ASSERT_EQ(gfnt_paragraph_max_content(normal.p, &maximum), GFNT_OK);
+  EXPECT_EQ(maximum, 4 * kLetter);
+  ASSERT_EQ(normal.lay(3 * kLetter + kLetter / 2), GFNT_OK);
+  ASSERT_EQ(normal.layout.line_count, 1u);
+  EXPECT_EQ(normal.layout.lines[0].extent, 3 * kLetter + kLetter / 2);
+  ASSERT_EQ(normal.layout.lines[0].runs[0].glyph_count, 4u);
+  EXPECT_EQ(normal.layout.lines[0].runs[0].glyphs[3].advance, kLetter / 2);
+
+  GFNT_ParagraphOptions all_options{};
+  all_options.text_spacing_trim = GFNT_TEXT_SPACING_TRIM_SPACE_ALL;
+  Para all(text, {font.face}, all_options);
+  ASSERT_EQ(all.created, GFNT_OK);
+  ASSERT_EQ(all.lay(3 * kLetter + kLetter / 2), GFNT_OK);
+  EXPECT_EQ(all.layout.line_count, 2u);
+}
+
+TEST(LayoutSpacing, TextSpacingTrimUsesJapaneseColonClass) {
+  Font font({0x300D, 0xFF1A});
+  const std::string text = "日：」";
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_TextSpan span{};
+  span.length = text.size();
+  span.style.faces = faces;
+  span.style.face_count = 1;
+  span.style.size = kSize;
+  span.style.content_language = GFNT_CONTENT_LANGUAGE_JAPANESE;
+  Para japanese(text, {span});
+  ASSERT_EQ(japanese.created, GFNT_OK);
+  ASSERT_EQ(japanese.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(japanese.layout.line_count, 1u);
+  EXPECT_EQ(japanese.layout.lines[0].extent, 3 * kLetter);
+
+  span.style.content_language = GFNT_CONTENT_LANGUAGE_UNSPECIFIED;
+  Para unspecified(text, {span});
+  ASSERT_EQ(unspecified.created, GFNT_OK);
+  ASSERT_EQ(unspecified.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(unspecified.layout.line_count, 1u);
+  EXPECT_EQ(unspecified.layout.lines[0].extent, 5 * kLetter / 2);
+}
+
+TEST(LayoutSpacing, TextSpacingTrimKeepsACombiningMarkClusterPlaceable) {
+  Font font({0x65E5, 0x300D, 0x0301});
+  const std::string text = "日日」\xCC\x81";
+  Para para(text, {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  GFNT_Error error{};
+  GFNT_Result result = gfnt_paragraph_layout(para.p, 2 * kLetter + kLetter / 2,
+      &para.layout, &error);
+  ASSERT_EQ(result, GFNT_OK) << (error.message ? error.message : "no diagnostic");
+  snapshot_layout(text, 2 * kLetter + kLetter / 2, para.layout);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter + kLetter / 2);
+}
+
+TEST(LayoutDecoration, ResolvesRangesAndSkipsGlyphInk) {
+  Font font(latin(), true);
+  Para para("A B", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+
+  GFNT_DecorationLayout continuous{};
+  ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, para.text.size(),
+                GFNT_DECORATION_UNDERLINE, -2 * 64, 64,
+                GFNT_DECORATION_SKIP_INK_NONE, &continuous, nullptr), GFNT_OK);
+  ASSERT_EQ(continuous.segment_count, 1u);
+  EXPECT_EQ(continuous.segments[0].line, 0u);
+  EXPECT_EQ(continuous.segments[0].box.x, 0);
+  EXPECT_EQ(continuous.segments[0].box.y, para.layout.lines[0].baseline - 2 * 64);
+  EXPECT_EQ(continuous.segments[0].box.width, 5 * kLetter / 2);
+  EXPECT_EQ(continuous.segments[0].box.height, 64);
+
+  GFNT_DecorationLayout skipped{};
+  ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, para.text.size(),
+                GFNT_DECORATION_UNDERLINE, -2 * 64, 64,
+                GFNT_DECORATION_SKIP_INK_ALL, &skipped, nullptr), GFNT_OK);
+  ASSERT_GT(skipped.segment_count, 0u);
+  GFNT_F26Dot6 skipped_width = 0;
+  for (size_t i = 0; i < skipped.segment_count; i++) {
+    skipped_width += skipped.segments[i].box.width;
+  }
+  EXPECT_LT(skipped_width, continuous.segments[0].box.width);
+
+  GFNT_DecorationLayout strike{};
+  ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, para.text.size(),
+                GFNT_DECORATION_LINE_THROUGH, -2 * 64, 64,
+                GFNT_DECORATION_SKIP_INK_ALL, &strike, nullptr), GFNT_OK);
+  ASSERT_EQ(strike.segment_count, 1u);
+  EXPECT_EQ(strike.segments[0].box.width, continuous.segments[0].box.width);
+
+  GFNT_DecorationLayout range{};
+  ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 2, 3,
+                GFNT_DECORATION_OVERLINE, -8 * 64, 64,
+                GFNT_DECORATION_SKIP_INK_NONE, &range, nullptr), GFNT_OK);
+  ASSERT_EQ(range.segment_count, 1u);
+  EXPECT_EQ(range.segments[0].box.x, 3 * kLetter / 2);
+  EXPECT_EQ(range.segments[0].box.width, kLetter);
+
+  GFNT_DecorationLayout space_range{};
+  ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 1, 2,
+                GFNT_DECORATION_UNDERLINE, -2 * 64, 64,
+                GFNT_DECORATION_SKIP_INK_NONE, &space_range, nullptr), GFNT_OK);
+  ASSERT_EQ(space_range.segment_count, 1u);
+  EXPECT_EQ(space_range.segments[0].box.x, kLetter);
+  EXPECT_EQ(space_range.segments[0].box.width, kSpace);
+
+  gfnt_decoration_layout_free(&continuous);
+  gfnt_decoration_layout_free(&skipped);
+  gfnt_decoration_layout_free(&strike);
+  gfnt_decoration_layout_free(&range);
+  gfnt_decoration_layout_free(&space_range);
+}
+
+TEST(LayoutDecoration, RejectsMismatchedLayoutsAndInvalidRanges) {
+  Font font({0x65E5, 'A'});
+  Para para("日A", {font.face});
+  Para other("日A", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(other.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(other.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  GFNT_DecorationLayout result{};
+
+  EXPECT_EQ(gfnt_paragraph_decoration_layout(para.p, &other.layout, 0, 2,
+                GFNT_DECORATION_UNDERLINE, 0, 64,
+                GFNT_DECORATION_SKIP_INK_NONE, &result, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 1, 4,
+                GFNT_DECORATION_UNDERLINE, 0, 64,
+                GFNT_DECORATION_SKIP_INK_NONE, &result, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, 2,
+                GFNT_DECORATION_UNDERLINE, 0, 0,
+                GFNT_DECORATION_SKIP_INK_NONE, &result, nullptr), GFNT_ERR_INVALID);
+
+  GFNT_DecorationLayout japanese{};
+  ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, 3,
+                GFNT_DECORATION_UNDERLINE, 0, 64,
+                GFNT_DECORATION_SKIP_INK_NONE, &japanese, nullptr), GFNT_OK);
+  ASSERT_EQ(japanese.segment_count, 1u);
+  GFNT_F26Dot6 japanese_advance = 0;
+  for (size_t ri = 0; ri < para.layout.lines[0].run_count; ri++) {
+    for (size_t gi = 0; gi < para.layout.lines[0].runs[ri].glyph_count; gi++) {
+      const GFNT_PlacedGlyph & glyph = para.layout.lines[0].runs[ri].glyphs[gi];
+      if (glyph.cluster == 0) japanese_advance = glyph.advance;
+    }
+  }
+  ASSERT_GT(japanese_advance, 0);
+  EXPECT_EQ(japanese.segments[0].box.x, 0);
+  EXPECT_EQ(japanese.segments[0].box.width, japanese_advance);
+  gfnt_decoration_layout_free(&japanese);
+}
+
+TEST(LayoutDecoration, MapsVerticalAndSidewaysInkToTheInlineAxis) {
+  Font font(latin(), true);
+  for (const auto & mode : {std::pair{GFNT_WRITING_VERTICAL_RL, GFNT_ORIENT_UPRIGHT},
+           std::pair{GFNT_WRITING_VERTICAL_RL, GFNT_ORIENT_SIDEWAYS},
+           std::pair{GFNT_WRITING_SIDEWAYS_LR, GFNT_ORIENT_MIXED}}) {
+    GFNT_ParagraphOptions options{};
+    options.writing_mode = mode.first;
+    options.text_orientation = mode.second;
+    Para para("AB", {font.face}, options);
+    ASSERT_EQ(para.created, GFNT_OK);
+    ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+    ASSERT_EQ(para.layout.line_count, 1u);
+
+    GFNT_DecorationLayout continuous{};
+    ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, para.text.size(),
+                  GFNT_DECORATION_UNDERLINE, 64, 64,
+                  GFNT_DECORATION_SKIP_INK_NONE, &continuous, nullptr), GFNT_OK);
+    ASSERT_EQ(continuous.segment_count, 1u);
+    EXPECT_EQ(continuous.segments[0].box.x, para.layout.lines[0].baseline + 64);
+    EXPECT_EQ(continuous.segments[0].box.width, 64);
+    EXPECT_GT(continuous.segments[0].box.height, 0);
+
+    GFNT_DecorationLayout skipped{};
+    ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, para.text.size(),
+                  GFNT_DECORATION_UNDERLINE, 64, 64,
+                  GFNT_DECORATION_SKIP_INK_ALL, &skipped, nullptr), GFNT_OK);
+    GFNT_F26Dot6 visible = 0;
+    for (size_t i = 0; i < skipped.segment_count; i++) {
+      EXPECT_EQ(skipped.segments[i].box.x, para.layout.lines[0].baseline + 64);
+      EXPECT_EQ(skipped.segments[i].box.width, 64);
+      visible += skipped.segments[i].box.height;
+    }
+    EXPECT_LT(visible, continuous.segments[0].box.height);
+    gfnt_decoration_layout_free(&continuous);
+    gfnt_decoration_layout_free(&skipped);
+  }
+}
+
+TEST(LayoutDecoration, KeepsBidiRangeSegmentsDisjoint) {
+  Font font(latin_and_hebrew());
+  GFNT_ParagraphOptions options{};
+  options.direction = GFNT_BIDI_LTR;
+  Para para("ABאב", {font.face}, options);
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+
+  const GFNT_PlacedGlyph * alef = nullptr, * bet = nullptr;
+  for (size_t ri = 0; ri < para.layout.lines[0].run_count; ri++) {
+    const GFNT_LineRun & run = para.layout.lines[0].runs[ri];
+    for (size_t gi = 0; gi < run.glyph_count; gi++) {
+      const GFNT_PlacedGlyph & glyph = run.glyphs[gi];
+      if (glyph.cluster == 2) alef = &glyph;
+      if (glyph.cluster == 4) bet = &glyph;
+    }
+  }
+  ASSERT_NE(alef, nullptr);
+  ASSERT_NE(bet, nullptr);
+  EXPECT_LT(bet->pen_x, alef->pen_x);
+
+  GFNT_DecorationLayout selected{};
+  ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, 4,
+                GFNT_DECORATION_UNDERLINE, 0, 64,
+                GFNT_DECORATION_SKIP_INK_NONE, &selected, nullptr), GFNT_OK);
+  ASSERT_EQ(selected.segment_count, 2u);
+  EXPECT_EQ(selected.segments[0].box.x, 0);
+  EXPECT_EQ(selected.segments[0].box.width, 2 * kLetter);
+  EXPECT_EQ(selected.segments[1].box.x, alef->pen_x);
+  EXPECT_EQ(selected.segments[1].box.width, alef->advance);
+  EXPECT_EQ(selected.segments[0].box.x + selected.segments[0].box.width, bet->pen_x);
+  EXPECT_EQ(bet->pen_x + bet->advance, selected.segments[1].box.x);
+  gfnt_decoration_layout_free(&selected);
+}
+
+TEST(LayoutDecoration, ResetsGlyphInkStateBetweenLines) {
+  Font font(latin(), true);
+  Para para("ABX A B", {font.face});
+  ASSERT_EQ(para.created, GFNT_OK);
+  ASSERT_EQ(para.lay(3 * kLetter), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+
+  GFNT_DecorationLayout skipped{};
+  ASSERT_EQ(gfnt_paragraph_decoration_layout(para.p, &para.layout, 0, para.text.size(),
+                GFNT_DECORATION_UNDERLINE, -2 * 64, 64,
+                GFNT_DECORATION_SKIP_INK_ALL, &skipped, nullptr), GFNT_OK);
+  GFNT_F26Dot6 second_line_visible = 0;
+  for (size_t i = 0; i < skipped.segment_count; i++) {
+    if (skipped.segments[i].line == 1) {
+      second_line_visible += skipped.segments[i].box.width;
+    }
+  }
+  EXPECT_GT(second_line_visible, 0);
+  gfnt_decoration_layout_free(&skipped);
+}
+
 TEST(LayoutTabs, ATabGoesToTheNextStopFromTheStartOfTheLine) {
   Font font(latin());
   GFNT_ParagraphOptions o{};

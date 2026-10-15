@@ -67,6 +67,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <ghoti.io/font/font.h>
 #include <ghoti.io/font/layout.h>
 #include <ghoti.io/font/outline.h>
@@ -80,6 +81,22 @@ static int hexval(int c) {
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
   if (c >= 'A' && c <= 'F') return c - 'A' + 10;
   return -1;
+}
+
+static int decoration_length(const char * text, GFNT_F26Dot6 * out) {
+  char * end;
+  double value;
+  double scaled;
+
+  errno = 0;
+  value = strtod(text, &end);
+  if (errno || end == text || *end || !isfinite(value)) return 0;
+  scaled = value * 64.0;
+  if (!isfinite(scaled) || scaled < INT32_MIN || scaled > INT32_MAX) return 0;
+  scaled = round(scaled);
+  if (scaled < INT32_MIN || scaled > INT32_MAX) return 0;
+  *out = (GFNT_F26Dot6)scaled;
+  return 1;
 }
 
 static void print_rect(GFNT_Rect r) {
@@ -134,7 +151,10 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     GFNT_F26Dot6 width, GFNT_F26Dot6 size, const GFNT_ParagraphOptions * options,
     const GFNT_TextStyle * style_options, size_t split_at, GFNT_F26Dot6 second_size,
     const GFNT_TextStyle * second_style_options, size_t object_at,
-    GFNT_InlineObject * inline_object, const FlowSpec * flow) {
+    GFNT_InlineObject * inline_object, const FlowSpec * flow, bool have_decoration,
+    GFNT_DecorationLine decoration_line, GFNT_F26Dot6 decoration_offset,
+    GFNT_F26Dot6 decoration_thickness, GFNT_DecorationSkipInk decoration_skip_ink,
+    size_t decoration_start, size_t decoration_end) {
   const GFNT_Face * faces[2] = {face, fallback};
   GFNT_TextSpan spans[4];
   GFNT_TextSpan base_span;
@@ -143,6 +163,7 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
   GFNT_Layout l;
   GFNT_Error error;
   GFNT_F26Dot6 min = 0, max = 0;
+  GFNT_DecorationLayout decoration = {0};
 
   memset(spans, 0, sizeof spans);
   memset(&l, 0, sizeof l);
@@ -222,11 +243,27 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     gfnt_paragraph_free(p);
     return 0;
   }
+  if (have_decoration
+      && gfnt_paragraph_decoration_layout(p, &l, decoration_start, decoration_end,
+          decoration_line,
+          decoration_offset, decoration_thickness, decoration_skip_ink,
+          &decoration, &error) != GFNT_OK) {
+    printf("{\"error\":\"%s\"}\n", error.message ? error.message : "decoration refused");
+    gfnt_layout_free(&l);
+    gfnt_paragraph_free(p);
+    return 0;
+  }
   printf("{\"min\":%d,\"max\":%d,\"w\":%d,\"h\":%d,\"mode\":%d,"
          "\"truncated\":%s,\"ink\":", min, max, l.width, l.height,
       (int)l.writing_mode, l.truncated ? "true" : "false");
   print_rect(l.ink);
-  printf(",\"lines\":[");
+  printf(",\"decoration\":[");
+  for (size_t i = 0; i < decoration.segment_count; i++) {
+    const GFNT_DecorationSegment * segment = &decoration.segments[i];
+    printf("%s[%zu,%d,%d,%d,%d]", i ? "," : "", segment->line,
+        segment->box.x, segment->box.y, segment->box.width, segment->box.height);
+  }
+  printf("],\"lines\":[");
   for (size_t i = 0; i < l.line_count; i++) {
     const GFNT_Line * line = &l.lines[i];
 
@@ -353,6 +390,7 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     at += used;
   }
   printf("]}\n");
+  gfnt_decoration_layout_free(&decoration);
   gfnt_layout_free(&l);
   gfnt_paragraph_free(p);
   return 0;
@@ -373,6 +411,13 @@ int main(int argc, char ** argv) {
   int have_flow = 0;
   GFNT_InlineObject inline_object;
   int have_object = 0;
+  bool have_decoration = false;
+  GFNT_DecorationLine decoration_line = GFNT_DECORATION_UNDERLINE;
+  GFNT_F26Dot6 decoration_offset = 0;
+  GFNT_F26Dot6 decoration_thickness = 64;
+  GFNT_DecorationSkipInk decoration_skip_ink = GFNT_DECORATION_SKIP_INK_AUTO;
+  size_t decoration_start = 0, decoration_end = 0;
+  bool have_decoration_range = false;
   GFNT_Blob * blob = NULL;
   GFNT_Blob * fallback_blob = NULL;
   GFNT_Face * face = NULL;
@@ -530,6 +575,56 @@ int main(int argc, char ** argv) {
           : strcmp(v, "ideograph-numeric") == 0 ? GFNT_TEXT_AUTOSPACE_NUMERIC
           : GFNT_TEXT_AUTOSPACE_NORMAL;
     }
+    else if (strcmp(argv[a], "--text-spacing-trim") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+      options.text_spacing_trim = strcmp(v, "space-all") == 0
+          ? GFNT_TEXT_SPACING_TRIM_SPACE_ALL
+          : strcmp(v, "space-first") == 0 ? GFNT_TEXT_SPACING_TRIM_SPACE_FIRST
+          : strcmp(v, "trim-start") == 0 ? GFNT_TEXT_SPACING_TRIM_TRIM_START
+          : GFNT_TEXT_SPACING_TRIM_NORMAL;
+    }
+    else if (strcmp(argv[a], "--decoration-line") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+      if (strcmp(v, "underline") == 0) decoration_line = GFNT_DECORATION_UNDERLINE;
+      else if (strcmp(v, "overline") == 0) decoration_line = GFNT_DECORATION_OVERLINE;
+      else if (strcmp(v, "line-through") == 0) decoration_line = GFNT_DECORATION_LINE_THROUGH;
+      else {
+        fprintf(stderr, "invalid decoration line %s\n", v);
+        return 2;
+      }
+      have_decoration = true;
+    }
+    else if (strcmp(argv[a], "--decoration-offset") == 0 && a + 1 < argc) {
+      if (!decoration_length(argv[++a], &decoration_offset)) {
+        fprintf(stderr, "invalid decoration offset\n");
+        return 2;
+      }
+    }
+    else if (strcmp(argv[a], "--decoration-thickness") == 0 && a + 1 < argc) {
+      if (!decoration_length(argv[++a], &decoration_thickness)
+          || decoration_thickness <= 0) {
+        fprintf(stderr, "invalid decoration thickness\n");
+        return 2;
+      }
+    }
+    else if (strcmp(argv[a], "--decoration-skip-ink") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+      if (strcmp(v, "none") == 0) decoration_skip_ink = GFNT_DECORATION_SKIP_INK_NONE;
+      else if (strcmp(v, "auto") == 0) decoration_skip_ink = GFNT_DECORATION_SKIP_INK_AUTO;
+      else if (strcmp(v, "all") == 0) decoration_skip_ink = GFNT_DECORATION_SKIP_INK_ALL;
+      else {
+        fprintf(stderr, "invalid decoration skip-ink value %s\n", v);
+        return 2;
+      }
+    }
+    else if (strcmp(argv[a], "--decoration-range") == 0 && a + 1 < argc) {
+      char extra;
+      if (sscanf(argv[++a], "%zu:%zu%c", &decoration_start, &decoration_end, &extra) != 2) {
+        fprintf(stderr, "invalid decoration range\n");
+        return 2;
+      }
+      have_decoration_range = true;
+    }
     else if (strcmp(argv[a], "--text-transform") == 0 && a + 1 < argc) {
       const char * v = argv[++a];
       if (strcmp(v, "capitalize") == 0) style_options.text_transform |= GFNT_TEXT_TRANSFORM_CAPITALIZE;
@@ -675,7 +770,10 @@ int main(int argc, char ** argv) {
     flow.width = width;
     answer(face, fallback, text, n, width, size, &options, &style_options,
         split_at, second_size, &second_style_options, object_at,
-        have_object ? &inline_object : NULL, have_flow ? &flow : NULL);
+        have_object ? &inline_object : NULL, have_flow ? &flow : NULL,
+        have_decoration, decoration_line, decoration_offset, decoration_thickness,
+        decoration_skip_ink, have_decoration_range ? decoration_start : 0,
+        have_decoration_range ? decoration_end : n);
     free(text);
   }
   free(line);

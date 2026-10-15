@@ -30,7 +30,7 @@ def rejects_object_mutant() -> None:
     replacement = "if (end == start + 1 && cps[start] == 0xFFFC && !style->inline_object) {"
     if original.count(needle) != 1:
         raise RuntimeError(f"expected one mutation site, found {original.count(needle)}")
-    artifacts = (APP, APP.parent / "libghoti.io-font-6.a",
+    artifacts = (APP, APP.parent / "libghoti.io-font-7.a",
         ROOT / "build" / BUILD / "objects/layout/layout.o")
     try:
         SOURCE.write_text(original.replace(needle, replacement))

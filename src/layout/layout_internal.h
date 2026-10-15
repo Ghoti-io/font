@@ -108,6 +108,7 @@ struct GFNT_Paragraph {
   size_t * cp_byte;            // length + 1 byte offsets
   uint32_t * cps;              // the code points
   GFNT_TextStyle * styles;     // one per span, copied
+  GFNT_F26Dot6 * ideographic_advance; // first shaped Han advance per style span, for punctuation
   GFNT_ShapeFeature ** owned_features; // transformed copies when codepoint counts change
   size_t span_count;
   uint8_t para_level;

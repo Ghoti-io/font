@@ -16,7 +16,7 @@ build our own text shaper and font manager over time"*); because `image` has
 no way to put text into a raster; and because a PDF library, should one come,
 needs to read four font formats and write two of them.
 
-The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-4`, the include
+The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-5`, the include
 path `<ghoti.io/font/...>`.
 
 ---
@@ -1977,12 +1977,19 @@ implemented. Chromium accepts `pretty`, but the exact improvements are
 user-agent-defined and its behavior still needs a named oracle case before the
 value can be claimed as implemented. The pinned Chromium rejects
 `avoid-short-last-line`.
-`math-auto` remains unimplemented because its CSS behavior depends on MathML
-operator context not represented in this text layout API. The remaining
-CSS-facing layout work eligible
-for browser differential coverage is decoration geometry
-(`text-decoration` and skip-ink),
-`hanging-punctuation`, `text-spacing-trim`, and `text-autospace`. Shaping-facing CSS such as
+`text-autospace` implements the spec-default `normal` (ideograph-alpha plus
+ideograph-numeric) and `no-autospace`, with spacing at direct same-line
+boundaries and in intrinsic sizing. Chromium 154 compares normal, disabled,
+both boundary directions, numeric boundaries, and suppression by a space or
+fullwidth Latin. `ideograph-alpha` and `ideograph-numeric` are available as
+options too, but Chromium 154 rejects those keywords, so those individual
+modes currently have no browser differential. The CSS `punctuation`, `insert`,
+and `replace` keywords are not implemented; the pinned browser does not expose
+them as accepted values. `math-auto` remains unimplemented because its CSS
+behavior depends on MathML operator context not represented in this text layout
+API. Remaining CSS-facing layout work eligible for browser differential
+coverage is decoration geometry (`text-decoration` and skip-ink),
+`hanging-punctuation`, and `text-spacing-trim`. Shaping-facing CSS such as
 `font-optical-sizing`, `font-variant-caps`, `font-size-adjust` and
 `text-combine-upright`, plus `initial-letter`, also remains outside the current
 oracle matrix. Each should be added only with named CSS cases and an explicit

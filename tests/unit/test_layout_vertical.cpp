@@ -95,6 +95,7 @@ struct Para {
     o.text_orientation = orientation;
     o.direction = direction;
     o.align = align;
+    o.text_autospace = GFNT_TEXT_AUTOSPACE_NONE;
     created = gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o, nullptr, &p,
         nullptr);
   }
@@ -484,6 +485,7 @@ struct Justified {
     o.align = GFNT_ALIGN_JUSTIFY;
     o.justify = how;
     o.direction = direction;
+    o.text_autospace = GFNT_TEXT_AUTOSPACE_NONE;
     EXPECT_EQ(gfnt_paragraph_create(text.data(), text.size(), &span, 1, &o, nullptr, &p, nullptr),
         GFNT_OK);
   }

@@ -34,6 +34,7 @@
 typedef struct {
   uint32_t glyph;
   uint32_t cluster;   // byte offset
+  size_t unit;        // owning paragraph unit, or unused for synthetic glyphs
   GFNT_F26Dot6 advance, dx, dy;
   bool expand;        // a justification opportunity: the space this stands for
   bool tab;           // a tab: its advance is the distance to the next stop
@@ -62,6 +63,7 @@ typedef struct {
   size_t run;                  // index into the paragraph's runs
   size_t g_lo, g_hi;           // its glyphs in the paragraph's glyph array
   GFNT_F26Dot6 width, base_width, ruby_added;
+  GFNT_F26Dot6 autospace_after; // CSS inter-script spacing before the next unit, if on this line
   bool space;                  // hangs at the end of a line
   bool opportunity;            // a line may break after it
   bool emergency;              // an overflow-wrap grapheme break may follow it

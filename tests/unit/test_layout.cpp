@@ -3264,6 +3264,63 @@ TEST(LayoutSpacing, WordSpacingIsAppliedToSpaceBeforeBreakingAndMeasurement) {
   EXPECT_EQ(tight.layout.lines[0].extent, ordinary.layout.lines[0].extent - 32);
 }
 
+TEST(LayoutSpacing, TextAutospaceIsAddedOnlyWhenThePairStaysOnTheLine) {
+  Font font({0x65E5, 'A', '1'});
+  GFNT_ParagraphOptions normal_options{};
+  Para normal("日A", {font.face}, normal_options);
+  ASSERT_EQ(normal.created, GFNT_OK);
+  GFNT_F26Dot6 minimum = 0, maximum = 0;
+  ASSERT_EQ(gfnt_paragraph_min_content(normal.p, &minimum), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(normal.p, &maximum), GFNT_OK);
+  EXPECT_EQ(minimum, kLetter);
+  EXPECT_EQ(maximum, 2 * kLetter + kLetter / 8);
+  ASSERT_EQ(normal.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  ASSERT_EQ(normal.layout.lines[0].run_count, 2u);
+  EXPECT_EQ(normal.layout.lines[0].extent, maximum);
+  EXPECT_EQ(normal.layout.lines[0].runs[0].glyphs[0].advance, kLetter + kLetter / 8);
+  EXPECT_EQ(normal.layout.lines[0].runs[1].glyphs[0].pen_x, kLetter + kLetter / 8);
+
+  ASSERT_EQ(normal.lay(kLetter), GFNT_OK);
+  ASSERT_EQ(normal.layout.line_count, 2u);
+  EXPECT_EQ(normal.layout.lines[0].extent, kLetter);
+  EXPECT_EQ(normal.layout.lines[0].runs[0].glyphs[0].advance, kLetter);
+
+  GFNT_ParagraphOptions disabled_options{};
+  disabled_options.text_autospace = GFNT_TEXT_AUTOSPACE_NONE;
+  Para disabled("日A", {font.face}, disabled_options);
+  ASSERT_EQ(disabled.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(disabled.p, &maximum), GFNT_OK);
+  EXPECT_EQ(maximum, 2 * kLetter);
+  ASSERT_EQ(disabled.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
+  EXPECT_EQ(disabled.layout.lines[0].extent, 2 * kLetter);
+}
+
+TEST(LayoutSpacing, TextAutospaceCanSelectTheLetterAndNumberClasses) {
+  Font font({0x65E5, 'A', '1'});
+  GFNT_ParagraphOptions alpha_options{};
+  alpha_options.text_autospace = GFNT_TEXT_AUTOSPACE_ALPHA;
+  GFNT_F26Dot6 width = 0;
+  Para alpha("日A", {font.face}, alpha_options);
+  ASSERT_EQ(alpha.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(alpha.p, &width), GFNT_OK);
+  EXPECT_EQ(width, 2 * kLetter + kLetter / 8);
+  Para alpha_number("日1", {font.face}, alpha_options);
+  ASSERT_EQ(alpha_number.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(alpha_number.p, &width), GFNT_OK);
+  EXPECT_EQ(width, 2 * kLetter);
+
+  GFNT_ParagraphOptions numeric_options{};
+  numeric_options.text_autospace = GFNT_TEXT_AUTOSPACE_NUMERIC;
+  Para numeric("日1", {font.face}, numeric_options);
+  ASSERT_EQ(numeric.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(numeric.p, &width), GFNT_OK);
+  EXPECT_EQ(width, 2 * kLetter + kLetter / 8);
+  Para numeric_alpha("日A", {font.face}, numeric_options);
+  ASSERT_EQ(numeric_alpha.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(numeric_alpha.p, &width), GFNT_OK);
+  EXPECT_EQ(width, 2 * kLetter);
+}
+
 TEST(LayoutTabs, ATabGoesToTheNextStopFromTheStartOfTheLine) {
   Font font(latin());
   GFNT_ParagraphOptions o{};

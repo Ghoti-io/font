@@ -131,6 +131,80 @@ static bool is_ideographic(uint32_t cp) {
       || (cp >= 0x20000 && cp <= 0x3FFFF);
 }
 
+/** CSS Text's ideograph class for text-autospace (narrower than justification's measured set). */
+static bool autospace_ideograph(uint32_t cp) {
+  return (cp >= 0x3041 && cp <= 0x30FF
+          && !(guni_general_category_mask(cp) & GUNI_GC_MASK_P))
+      || (cp >= 0x31C0 && cp <= 0x31FF) || guni_script(cp) == GUNI_SCRIPT_HAN;
+}
+
+static uint32_t autospace_base_cp(const GFNT_Paragraph * p, const Unit * unit) {
+  for (size_t i = unit->cp_start; i < unit->cp_end; i++) {
+    if (!(guni_general_category_mask(p->cps[i]) & GUNI_GC_MASK_M)) return p->cps[i];
+  }
+  return p->cps[unit->cp_start];
+}
+
+static bool autospace_non_ideographic_letter(const GFNT_Paragraph * p, const Unit * unit,
+    uint32_t cp) {
+  uint32_t category = guni_general_category_mask(cp);
+  GUNI_EastAsianWidth width = guni_east_asian_width(cp);
+
+  if (autospace_ideograph(cp) || width == GUNI_EAW_WIDE || width == GUNI_EAW_FULLWIDTH
+      || (p->vertical && p->runs[unit->run].orient == GFNT_ORIENT_RUN_UPRIGHT)) {
+    return false;
+  }
+  return (category & (GUNI_GC_MASK_L | GUNI_GC_MASK_M)) != 0;
+}
+
+static bool autospace_non_ideographic_number(const GFNT_Paragraph * p, const Unit * unit,
+    uint32_t cp) {
+  GUNI_EastAsianWidth width = guni_east_asian_width(cp);
+
+  return guni_general_category(cp) == GUNI_GC_DECIMAL_NUMBER
+      && width != GUNI_EAW_FULLWIDTH
+      && !(p->vertical && p->runs[unit->run].orient == GFNT_ORIENT_RUN_UPRIGHT);
+}
+
+/** Return the CSS 0.125ic advance at an ideograph/non-ideograph boundary. */
+static GFNT_F26Dot6 autospace_boundary(const GFNT_Paragraph * p,
+    const Unit * left, const Unit * right) {
+  bool left_ideo, right_ideo, left_alpha, right_alpha, left_number, right_number;
+  const Unit * ideograph;
+  const GFNT_TextStyle * style;
+  int64_t ic, gap;
+
+  if (p->options.text_autospace == GFNT_TEXT_AUTOSPACE_NONE || left->hard || right->hard
+      || left->object || right->object || left->space || right->space
+      || left->cp_end != right->cp_start) {
+    return 0;
+  }
+  uint32_t left_cp = autospace_base_cp(p, left), right_cp = autospace_base_cp(p, right);
+
+  left_ideo = autospace_ideograph(left_cp);
+  right_ideo = autospace_ideograph(right_cp);
+  left_alpha = autospace_non_ideographic_letter(p, left, left_cp);
+  right_alpha = autospace_non_ideographic_letter(p, right, right_cp);
+  left_number = autospace_non_ideographic_number(p, left, left_cp);
+  right_number = autospace_non_ideographic_number(p, right, right_cp);
+  if (p->options.text_autospace == GFNT_TEXT_AUTOSPACE_ALPHA) {
+    if (!((left_ideo && right_alpha) || (left_alpha && right_ideo))) return 0;
+  }
+  else if (p->options.text_autospace == GFNT_TEXT_AUTOSPACE_NUMERIC) {
+    if (!((left_ideo && right_number) || (left_number && right_ideo))) return 0;
+  }
+  else if (!((left_ideo && (right_alpha || right_number))
+          || ((left_alpha || left_number) && right_ideo))) {
+    return 0;
+  }
+  ideograph = left_ideo ? left : right;
+  style = &p->styles[p->runs[ideograph->run].span];
+  ic = ideograph->base_width - style->letter_spacing;
+  if (ic <= 0) ic = style->size;
+  gap = (ic + 4) / 8;
+  return gap > INT32_MAX ? INT32_MAX : (GFNT_F26Dot6)gap;
+}
+
 #define PROVIDER_MAX 8
 #define ELL_GLYPHS 16
 
@@ -707,6 +781,7 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
     GFNT_TextStyle * style = &p->styles[p->runs[run].span];
 
     if (u->g_hi > u->g_lo) {
+      for (size_t g = u->g_lo; g < u->g_hi; g++) p->glyphs[g].unit = i;
       const int64_t extra = (int64_t)style->letter_spacing
           + (u->cp_end == u->cp_start + 1 && cps[u->cp_start] == 0x20
               ? style->word_spacing : 0);
@@ -1620,6 +1695,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->text_wrap_style > GFNT_TEXT_WRAP_STABLE
+      || (unsigned)options->text_autospace > GFNT_TEXT_AUTOSPACE_NUMERIC
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
       || options->space_share < 0 || options->space_share > 0x10000
       || (unsigned)options->writing_mode > GFNT_WRITING_SIDEWAYS_LR
@@ -2341,6 +2417,12 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         }
       }
     }
+    for (size_t i = 1; i < p->unit_count; i++) {
+      Unit * left = &p->units[i - 1];
+      GFNT_F26Dot6 gap = autospace_boundary(p, left, &p->units[i]);
+
+      left->autospace_after = gap;
+    }
   }
   r = mark_hyphens(p, text, span_cp, error);
   if (r != GFNT_OK) {
@@ -2420,6 +2502,9 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
 
     int64_t shown;
 
+    if (j && !p->units[j - 1].hard && !p->units[j - 1].opportunity) {
+      total += p->units[j - 1].autospace_after;
+    }
     total += eff_width(p, u, total);
     if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE
             || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES)) {
@@ -2468,6 +2553,7 @@ GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
   for (size_t j = 0; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
 
+    if (j && !p->units[j - 1].hard) total += p->units[j - 1].autospace_after;
     total += eff_width(p, u, total);
     if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE
             || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES)) {
@@ -2652,6 +2738,7 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
   for (size_t j = i; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
 
+    if (j > start) total += p->units[j - 1].autospace_after;
     total += eff_width_at(p, u, total, tab_origin);
     total -= ruby_right_refund(p, start, j, NULL, NULL);
     if (!u->space || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES) {
@@ -2758,7 +2845,10 @@ static int64_t balanced_line_width(const GFNT_Paragraph * p, size_t start, size_
   size_t content_end = end;
 
   if (content_end > start && p->units[content_end - 1].hard) content_end--;
-  for (size_t i = start; i < content_end; i++) width += p->units[i].width;
+  for (size_t i = start; i < content_end; i++) {
+    if (i > start) width += p->units[i - 1].autospace_after;
+    width += p->units[i].width;
+  }
   if (p->options.white_space != GFNT_WHITE_SPACE_PRE
       && p->options.white_space != GFNT_WHITE_SPACE_BREAK_SPACES) {
     while (content_end > start && p->units[content_end - 1].space) {
@@ -3134,6 +3224,7 @@ typedef struct {
   GFNT_F26Dot6 * tabadv;
   GFNT_F26Dot6 * ruby_reclaim;
   GFNT_F26Dot6 extra, extra_rem, cursor, lead;
+  size_t unit_start, unit_end;
   size_t expanded;
   bool vertical, seen_text, ink_set;
   bool failed;
@@ -3233,6 +3324,10 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
       }
     }
 
+    if (j > start && p->units[j - 1].autospace_after) {
+      ew[j - 1] += p->units[j - 1].autospace_after;
+      pos += p->units[j - 1].autospace_after;
+    }
     ew[j] = eff_width_at(p, unit, pos, tab_origin);
     pos += ew[j];
     if (unit->tab) {
@@ -3499,6 +3594,16 @@ static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_co
         GFNT_F26Dot6 before = 0, after = 0, origin, l, t, r, b;
         GFNT_F26Dot6 shift = 0;
         if (slice->src == p->glyphs) advance -= state->ruby_reclaim[g];
+        if (slice->src == p->glyphs && glyphs == &slice->src[g]
+            && pg->unit >= state->unit_start
+            && pg->unit + 1 < state->unit_end) {
+          GFNT_F26Dot6 gap = p->units[pg->unit].autospace_after;
+          if (gap > 0 && advance > INT32_MAX - gap) {
+            state->failed = true;
+            return;
+          }
+          advance += gap;
+        }
         if (slice->hang && (p->options.white_space == GFNT_WHITE_SPACE_NORMAL
                 || p->options.white_space == GFNT_WHITE_SPACE_NOWRAP
                 || p->options.white_space == GFNT_WHITE_SPACE_PRE_LINE)) {
@@ -5114,6 +5219,8 @@ static GFNT_Result layout_process_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 w
     placement.spool = spool;
     placement.tabadv = tabadv;
     placement.ruby_reclaim = state->ruby_reclaim;
+    placement.unit_start = ua;
+    placement.unit_end = ub;
     placement.extra = extra;
     placement.extra_rem = extra_rem;
     placement.vertical = vertical;

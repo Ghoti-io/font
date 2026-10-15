@@ -404,6 +404,14 @@ typedef enum GFNT_TextWrapStyle {
   GFNT_TEXT_WRAP_STABLE    ///< Keep the greedy break decisions independent of later lines.
 } GFNT_TextWrapStyle;
 
+/** @brief Automatic spacing at boundaries between ideographs and Latin characters/numbers. */
+typedef enum GFNT_TextAutospace {
+  GFNT_TEXT_AUTOSPACE_NORMAL = 0, ///< CSS `normal`: ideograph-alpha and ideograph-numeric.
+  GFNT_TEXT_AUTOSPACE_NONE,       ///< CSS `no-autospace`.
+  GFNT_TEXT_AUTOSPACE_ALPHA,      ///< CSS `ideograph-alpha` only.
+  GFNT_TEXT_AUTOSPACE_NUMERIC     ///< CSS `ideograph-numeric` only.
+} GFNT_TextAutospace;
+
 /** @brief What hyphenation a paragraph does, after CSS `hyphens`. */
 typedef enum GFNT_Hyphens {
   /**
@@ -524,6 +532,7 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_WhiteSpace white_space; ///< `pre-wrap` by default; supports CSS `pre`, `break-spaces`,
                                ///< `normal`, `nowrap`, and `pre-line` behavior.
   GFNT_TextWrapStyle text_wrap_style; ///< CSS `text-wrap-style`; zero selects `auto`.
+  GFNT_TextAutospace text_autospace; ///< CSS `text-autospace`; zero selects spec `normal`.
 } GFNT_ParagraphOptions;
 
 /** @brief The one inline band available to a line at a given block position. */

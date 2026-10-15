@@ -33,6 +33,7 @@
  *                    [--line-break normal|strict|loose|anywhere]
  *                    [--word-break normal|break-all|keep-all|break-word]
  *                    [--white-space pre-wrap|pre|break-spaces|normal|nowrap|pre-line]
+ *                    [--text-autospace normal|no-autospace|ideograph-alpha|ideograph-numeric]
  *                    [--text-transform none|capitalize|uppercase|lowercase]
  *                    [--case-tailoring none|turkic|lithuanian]
  *                    [--space-share 0..1] [--word-spacing PX]
@@ -510,6 +511,13 @@ int main(int argc, char ** argv) {
       const char * v = argv[++a];
       options.text_wrap_style = strcmp(v, "balance") == 0 ? GFNT_TEXT_WRAP_BALANCE
           : strcmp(v, "stable") == 0 ? GFNT_TEXT_WRAP_STABLE : GFNT_TEXT_WRAP_AUTO;
+    }
+    else if (strcmp(argv[a], "--text-autospace") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+      options.text_autospace = strcmp(v, "no-autospace") == 0 ? GFNT_TEXT_AUTOSPACE_NONE
+          : strcmp(v, "ideograph-alpha") == 0 ? GFNT_TEXT_AUTOSPACE_ALPHA
+          : strcmp(v, "ideograph-numeric") == 0 ? GFNT_TEXT_AUTOSPACE_NUMERIC
+          : GFNT_TEXT_AUTOSPACE_NORMAL;
     }
     else if (strcmp(argv[a], "--text-transform") == 0 && a + 1 < argc) {
       const char * v = argv[++a];

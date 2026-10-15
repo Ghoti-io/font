@@ -240,6 +240,18 @@ CASES.append(("text-wrap-stable", "AB AB AB AB", "horizontal", "mixed", 260,
               "start", "ltr", "auto",
               {"textWrapStyle": "stable",
                "driver": ("--text-wrap-style", "stable")}))
+for _name, _text, _value, _driver in (
+    ("text-autospace-normal-alpha", "日本A", "normal", "normal"),
+    ("text-autospace-normal-reverse", "A日本", "normal", "normal"),
+    ("text-autospace-normal-numeric", "日1語", "normal", "normal"),
+    ("text-autospace-none", "日本A", "no-autospace", "no-autospace"),
+    ("text-autospace-space-suppresses", "日 A", "normal", "normal"),
+    ("text-autospace-fullwidth-excluded", "日Ａ語", "normal", "normal"),
+    ("text-autospace-wrap-boundary", "日A", "normal", "normal"),
+):
+    _extra = {"textAutospace": _value}
+    _room = 50 if _name == "text-autospace-wrap-boundary" else 400
+    CASES.append((_name, _text, "horizontal", "mixed", _room, "start", "ltr", "auto", _extra))
 CASES.append(("text-transform-uppercase", "abc", "horizontal", "mixed", 200,
               "start", "ltr", "auto",
               {"textTransform": "uppercase", "driver": ("--text-transform", "uppercase")}))
@@ -352,6 +364,7 @@ function measure(c) {
   if (c.whiteSpace) d.style.whiteSpace = c.whiteSpace;
   if (c.textTransform) d.style.textTransform = c.textTransform;
   if (c.textWrapStyle) d.style.textWrapStyle = c.textWrapStyle;
+  d.style.textAutospace = c.textAutospace || 'no-autospace';
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
@@ -461,7 +474,8 @@ def chrome_rects(cases):
                  lineStructureOnly=(c[8].get("lineStructureOnly", False) if len(c) > 8 else False),
                  whiteSpace=(c[8].get("whiteSpace") if len(c) > 8 else None),
                  textTransform=(c[8].get("textTransform") if len(c) > 8 else None),
-                 textWrapStyle=(c[8].get("textWrapStyle") if len(c) > 8 else None))
+                 textWrapStyle=(c[8].get("textWrapStyle") if len(c) > 8 else None),
+                 textAutospace=(c[8].get("textAutospace") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:
@@ -531,9 +545,10 @@ def ours(case):
     justify = case[7] if len(case) > 7 else "auto"
     argv = [DRIVER, "--size", str(SIZE), "--mode", mode if mode != "horizontal" else "horizontal",
             "--orient", orient, "--align", align, "--bidi", direction,
-            "--justify", justify, FONT]
+            "--justify", justify, "--text-autospace",
+            case[8].get("textAutospace", "no-autospace") if len(case) > 8 else "no-autospace", FONT]
     if len(case) > 8:
-        argv[-1:-1] = list(case[8]["driver"])
+        argv[-1:-1] = list(case[8].get("driver", ()))
     width = "u" if room is None else str(room * 64)
     request = "%s\t%s\n" % (width, text.encode("utf-8").hex())
     finished = subprocess.run(argv, input=request, capture_output=True, text=True)
@@ -746,7 +761,7 @@ html, body { margin: 0; background: #fff }
 .t { font-family: T; font-size: %(size)dpx; line-height: normal; position: absolute;
      left: %(margin)dpx; top: %(margin)dpx; margin: 0; padding: 0; color: #000;
      white-space: pre-wrap; writing-mode: %(mode)s; text-orientation: %(orient)s; %(room)s;
-     text-align: %(align)s }
+     text-align: %(align)s; text-autospace: no-autospace }
 </style>
 <div class=t id=t></div>
 <script>
@@ -853,7 +868,7 @@ def ink_case(case):
     name, text, mode, orient, room = case[:5]
     align = case[5] if len(case) > 5 else "start"
     argv = [DRIVER, "--size", str(INK_SIZE), "--mode", mode, "--orient", orient,
-            "--align", align, FONT]
+            "--align", align, "--text-autospace", "no-autospace", FONT]
     request = "%d\t%s\n" % (room * 64, text.encode("utf-8").hex())
     finished = subprocess.run(argv, input=request, capture_output=True, text=True)
     mine = json.loads(finished.stdout.splitlines()[0])

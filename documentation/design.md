@@ -4039,8 +4039,9 @@ What that cost in findings:
 **Remaining implementation gaps (current):** `FeatureVariations` condition
 format 2; multibyte Macintosh and Microsoft `name` encodings; `gasp`; native
 Windows and macOS font enumeration; `JSTF` and the AAT features listed in §9;
-PDF-specific writing helpers; `COLR` v1 compositing and SVG drawing/rewriting;
-and CSS decoration geometry. The TrueType hinting interpreter,
+PDF-specific writing helpers; and `COLR` v1 compositing and SVG drawing/rewriting.
+CSS decoration rectangles are available through the paragraph layout API; the
+remaining browser comparison limits are listed in §10.6. The TrueType hinting interpreter,
 WOFF 2 collection writer, and the formats/features in §16 are deliberate
 first-release non-goals. These statements supersede the earlier phase notes in
 this section, which record implementation history rather than current status.

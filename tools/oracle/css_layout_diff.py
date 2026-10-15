@@ -8,7 +8,7 @@
 # Ghoti.io Font is free software: you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License version 3 as
 # published by the Free Software Foundation.
-"""Paragraph layout against Chromium: CSS Writing Modes, CSS Text and the browser's line breaking.
+"""Paragraph layout against Chromium, with Firefox for extended text-transform values.
 
 documentation/design.md section 10 and notes/font/VERTICAL.md. Chromium (the pinned image,
 `chrome` in tools/oracle/containers/IMAGES) is asked to lay each case out in a page whose only
@@ -34,6 +34,10 @@ when it has one. The rectangle matrix includes horizontal, vertical and sideways
 wrapping, bidi, line-height, inline-object and flow cases, plus inter-word and inter-character
 justification in both directions. It does not cover kashida shaping; that has its own oracle.
 
+Firefox supplies full-width, combined case/full-width, and full-size-kana cases unsupported by
+the pinned Chromium. Their inline position, advance and range-box size are compared; the
+fixture-specific vertical line-box offset is recorded as a comparison boundary.
+
 Usage: css_layout_diff.py [-v] [case-name...]
 """
 
@@ -55,6 +59,11 @@ ROOT = oracle_env.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples", "font-layout")
 SCRATCH = os.path.join(ROOT, "build", "oracle", "css-layout")
 FONT = os.path.join(ROOT, "tests", "data", "fonts", "vertical-text.ttf")
+FIREFOX_TRANSFORM_CASES = [
+    ("text-transform-full-width-firefox", "A", "full-width"),
+    ("text-transform-case-full-width-firefox", "a", "uppercase full-width"),
+    ("text-transform-full-size-kana-firefox", "\uff67", "full-size-kana"),
+]
 
 # The most a coordinate may differ, in pixels: two units of the 1/64 pixel both sides compute in.
 TOLERANCE = 0.05
@@ -457,6 +466,53 @@ def chrome_rects(cases):
     if not found or not found.group(1).strip():
         raise RuntimeError("Chromium gave no measurements:\n" + finished.stderr[-600:])
     return json.loads(html.unescape(found.group(1)))
+
+
+def firefox_transform_rect(case):
+    """Read one CSS text-transform range rectangle from Firefox via a pixel data strip."""
+    name, text, transform = case
+    os.makedirs(SCRATCH, exist_ok=True)
+    page = os.path.join(SCRATCH, name + ".html")
+    shot = os.path.join(SCRATCH, name + ".png")
+    source = f'''<!doctype html><meta charset="utf-8"><style>
+@font-face {{ font-family:T; src:url("file://{FONT}"); }}
+html,body {{ margin:0; background:white; }}
+#sample {{ position:absolute; left:0; top:0; font:50px T; line-height:normal;
+white-space:pre; text-transform:{transform}; }}
+#data {{ position:fixed; left:0; top:0; z-index:2147483647; }}
+#data span {{ position:absolute; top:0; width:1px; height:1px; }}
+</style><div id="sample">{html.escape(text)}</div><div id="data"></div>
+<script>window.addEventListener('load',()=>{{
+const node=document.querySelector('#sample').firstChild,range=document.createRange();
+range.setStart(node,0);range.setEnd(node,node.length);const r=range.getBoundingClientRect();
+const vals=[CSS.supports('text-transform',{json.dumps(transform)})?1:0,
+ r.x,r.y,r.width,r.height].map(v=>Math.max(0,Math.min(65535,Math.round(v*64))));
+const data=document.querySelector('#data');let x=0;for(const value of vals){{
+for(let bit=15;bit>=0;bit--){{const px=document.createElement('span');
+px.style.left=x+++'px';px.style.background=(value&(1<<bit))?'black':'white';data.append(px);}}
+}}}});</script>'''
+    with open(page, "w", encoding="utf-8") as handle:
+        handle.write(source)
+    argv = oracle_env.command("firefox", ["firefox-esr", "--headless", "--no-remote",
+        "--window-size=800,200", "--screenshot", shot, "file://" + page], scratch=SCRATCH)
+    finished = subprocess.run(argv, capture_output=True, text=True)
+    if finished.returncode or not os.path.exists(shot):
+        raise RuntimeError("%s: Firefox transform screenshot failed: %s"
+                           % (name, finished.stderr[-500:]))
+    width, height, dark = read_png(shot)
+    if width < 80 or height < 1:
+        raise RuntimeError("%s: Firefox transform screenshot is too small (%dx%d)"
+                           % (name, width, height))
+    values = []
+    for value_index in range(5):
+        value = 0
+        for bit in range(16):
+            value = (value << 1) | int(dark[0][value_index * 16 + bit])
+        values.append(value)
+    if values[0] != 64:
+        raise RuntimeError("%s: Firefox does not support text-transform %r"
+                           % (name, transform))
+    return [value / 64.0 for value in values[1:]]
 
 
 def ours(case):
@@ -881,8 +937,30 @@ def main():
             print("  %s: agrees" % case[0])
     print("css_layout_diff ink: %d cases, %d glyphs placed, %d cases differ"
           % (len(ink_cases), ink_glyphs, ink_differ))
+    firefox_cases = [case for case in FIREFOX_TRANSFORM_CASES
+                     if not names or case[0] in names]
+    firefox_differ = 0
+    for name, text, transform in firefox_cases:
+        driver_args = tuple(arg for mode in transform.split()
+                            for arg in ("--text-transform", mode))
+        case = (name, text, "horizontal", "mixed", 200, "start", "ltr", "auto",
+                {"driver": driver_args})
+        firefox_rect = firefox_transform_rect((name, text, transform))
+        answer = ours(case)
+        impl_rect = [value / 64.0 for value in answer["chars"][0]]
+        # Firefox's Range rectangle is vertically offset by 5px for this font's
+        # normal inline line box; the library reports line-relative coordinates.
+        # Compare inline position and the glyph's advance/line-box size here.
+        if any(abs(firefox_rect[index] - impl_rect[index]) > TOLERANCE
+               for index in (0, 2, 3)):
+            firefox_differ += 1
+            print("%s differs: Firefox inline/size %s, this %s" %
+                  (name, [round(firefox_rect[index], 2) for index in (0, 2, 3)],
+                   [round(impl_rect[index], 2) for index in (0, 2, 3)]))
+    print("css_layout_diff Firefox text-transform: %d cases, %d differ"
+          % (len(firefox_cases), firefox_differ))
     layout_snapshot.finish("css")
-    return 1 if differ or ink_differ else 0
+    return 1 if differ or ink_differ or firefox_differ else 0
 
 
 if __name__ == "__main__":

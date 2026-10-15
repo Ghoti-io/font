@@ -83,4 +83,4 @@ chrome	localhost/ghoti-font-oracle-chrome:154.0.8037.92	Chrome 154.0.8037.92	CSS
 # Pango, built here, driven from Python. What the desktop's layout engine does, vertical gravity
 # included; the second opinion where CSS and users' experience of Pango may differ.
 pango	localhost/ghoti-font-oracle-pango:1.56.3	Pango 1.56.3	Paragraph layout as GTK sets it: line breaking, alignment, and vertical gravity with its hints - the second reference for vertical text
-firefox	localhost/ghoti-font-oracle-firefox:153.4.0	Firefox 153.4.0	Firefox ESR CSS inline object geometry; pinned Debian trixie package
+firefox	localhost/ghoti-font-oracle-firefox:153.4.0	Firefox 153.4.0	Firefox ESR CSS inline object, text-transform geometry; pinned Debian trixie package

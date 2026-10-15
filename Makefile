@@ -1198,9 +1198,9 @@ check-oracle-layout: $(EXAMPLES)
 	@$(ORACLE_RUN) icu,harfbuzz,fonttools -- python3 $(ORACLE)/layout_diff.py --all --quiet \
 		--snapshot-check tests/data/golden/layout-snapshot.jsonl.gz
 
-check-oracle-css: ## Lay out vertical and horizontal paragraphs and hold them to Chromium (CSS Writing Modes)
+check-oracle-css: ## Compare CSS text and transform geometry with Chromium and Firefox
 check-oracle-css: $(EXAMPLES)
-	@GHOTI_LAYOUT_SNAPSHOT_MODE=check $(ORACLE_RUN) chrome -- python3 $(ORACLE)/css_layout_diff.py
+	@GHOTI_LAYOUT_SNAPSHOT_MODE=check $(ORACLE_RUN) chrome,firefox -- python3 $(ORACLE)/css_layout_diff.py
 
 check-oracle-css-l1: $(EXAMPLES) ## Compare mixed-size, mixed-alignment character rectangles with Chromium
 	@$(ORACLE_RUN) chrome -- python3 $(ORACLE)/css_layout_diff.py mixed-size-length

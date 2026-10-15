@@ -1954,12 +1954,15 @@ values; expansion and contextual mappings are covered by unit cases because
 the oracle font lacks the required glyphs. `full-width` and `full-size-kana`
 now use Unicode compatibility mappings and the CSS Text full-size Kana mapping
 table, and can combine with the case modes. Unit cases verify representative
-Latin and Kana mappings. They are not yet in the browser differential: its
-fixed `vertical-text.ttf` lacks the transformed glyphs, so Chromium falls back
-to a system font while this library shapes the missing glyph from the supplied
-face. Their resulting rectangles are not comparable evidence. `math-auto`
-remains unimplemented because its CSS behavior depends on MathML operator
-context not represented in this text layout API. The remaining CSS-facing layout work eligible
+Latin and Kana mappings. Firefox compares full-width, combined case/full-width,
+and full-size-kana inline positions and range sizes using the shared fixture
+font, which has the needed glyphs. Firefox's Range boxes have a 5px line-box
+offset for this fixture, so the comparison excludes that vertical coordinate;
+inline positions, advances and range-box sizes agree. Chromium does not support
+these values, so its unchanged text is not used as an oracle for them.
+`math-auto` remains unimplemented because its CSS behavior depends on MathML
+operator context not represented in this text layout API. The remaining
+CSS-facing layout work eligible
 for browser differential coverage is decoration geometry
 (`text-decoration` and skip-ink),
 `hanging-punctuation`, `text-spacing-trim`, `text-autospace`, `text-wrap`

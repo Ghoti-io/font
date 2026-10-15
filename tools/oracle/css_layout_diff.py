@@ -153,6 +153,24 @@ CASES.append(("word-break-break-word-overrides-overflow-wrap", "ABABABABABAB", "
 CASES.append(("word-break-break-word-cjk", "日本語日本語", "horizontal", "mixed", 70,
               "start", "ltr", "auto",
               {"wordBreak": "break-word", "driver": ("--word-break", "break-word")}))
+for _name, _text, _rooms in (
+    ("short", "明日天気が良ければ、散歩に行きます。", (80, 120, 150, 200)),
+    ("long", "今日は図書館で本を借りてから、友達と公園へ行く予定です。", (100, 160, 200)),
+    ("punctuation", "彼は「これは難しい」と言った後、すぐに答えました。", (100, 140, 180)),
+    ("mixed", "明日はABCを読んで、午後3時に駅で会いましょう。", (100, 160, 200)),
+    ("halfwidth-kana", "ｶﾀｶﾅを読む文章です。", (80, 120, 160)),
+    ("halfwidth-voiced", "ｶﾞｷﾞｸﾞを含む文章です。", (80, 120, 160)),
+    ("fullwidth-latin", "日本語のＡＩ技術は進んでいます。", (100, 150, 200)),
+):
+    for _room in _rooms:
+        CASES.append(("word-break-auto-phrase-ja-%s-%d" % (_name, _room), _text,
+                      "horizontal", "mixed", _room, "start", "ltr", "auto",
+                      {"wordBreak": "auto-phrase", "lang": "ja",
+                       "lineStructureOnly": _name == "mixed",
+                       "driver": ("--word-break", "auto-phrase", "--content-language", "ja")}))
+CASES.append(("word-break-auto-phrase-unknown-language", "今日は図書館で本を借りてから、友達と公園へ行く予定です。",
+              "horizontal", "mixed", 150, "start", "ltr", "auto",
+              {"wordBreak": "auto-phrase", "driver": ("--word-break", "auto-phrase")}))
 CASES.append(("word-break-keep-all-korean", "가나다라마바사", "horizontal", "mixed", 70,
               "start", "ltr", "auto",
               {"wordBreak": "keep-all", "lineStructureOnly": True,

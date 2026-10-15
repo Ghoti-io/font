@@ -15,7 +15,7 @@ BUILD = os.environ.get("BUILD", "linux/release")
 MAKE_BUILD = BUILD.removeprefix("linux/")
 APP = ROOT / "build" / BUILD / "apps" / "testLayout"
 LD_PATH = f"{PREFIX}/lib/ghoti.io:{PREFIX}/lib"
-ARTIFACTS = (APP, APP.parent / "libghoti.io-font-0.a",
+ARTIFACTS = (APP, APP.parent / "libghoti.io-font-6.a",
              ROOT / "build" / BUILD / "objects/layout/layout.o")
 
 

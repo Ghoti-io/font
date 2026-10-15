@@ -16,7 +16,7 @@ MAKE_BUILD = BUILD.removeprefix("linux/")
 APP = ROOT / "build" / BUILD / "apps" / "testLayout_vertical"
 UNIT_APP = ROOT / "build" / BUILD / "apps" / "testLayout"
 LD_PATH = f"{PREFIX}/lib/ghoti.io:{PREFIX}/lib"
-ARTIFACTS = (APP, UNIT_APP, APP.parent / "libghoti.io-font-1.a",
+ARTIFACTS = (APP, UNIT_APP, APP.parent / "libghoti.io-font-6.a",
              ROOT / "build" / BUILD / "objects/layout/layout.o")
 
 

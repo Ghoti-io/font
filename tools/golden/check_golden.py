@@ -122,7 +122,7 @@ def cutil_dependencies():
     defect this gate exists to find.
     """
     archive = os.path.join(ROOT, "build", "linux", "release", "apps",
-                           "libghoti.io-font-0.a")
+                           "libghoti.io-font-6.a")
     if not os.path.exists(archive):
         raise SystemExit("%s is not built; run `make`" % archive)
     listed = subprocess.run(["nm", archive], capture_output=True, text=True)

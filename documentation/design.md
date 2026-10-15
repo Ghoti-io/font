@@ -16,7 +16,7 @@ build our own text shaper and font manager over time"*); because `image` has
 no way to put text into a raster; and because a PDF library, should one come,
 needs to read four font formats and write two of them.
 
-The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-5`, the include
+The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-6`, the include
 path `<ghoti.io/font/...>`.
 
 ---
@@ -1818,7 +1818,7 @@ mixed or upright, and turned otherwise; and after an ideograph a soft hyphen is 
 to break (`GFNT_HYPHENS_MANUAL_PANGO`: a place to break, as Pango has it, and the hyphen turned with
 the text). A caret is a horizontal bar, and a range's rectangles are
 as thick as the column. `make check-oracle-css` holds the layout to Chromium (the `chrome` image,
-CSS Writing Modes): the rectangle of every character in 186 cases (5,455 characters), and the ink
+CSS Writing Modes): the rectangle of every character in 218 cases (5,957 characters), and the ink
 of 124 glyphs in 14 cases read from screenshots, agree to 0.05 and 1.6 pixels; a wrong orientation
 or direction fails both.
 
@@ -1920,7 +1920,7 @@ explicitly excluded. These limits identify missing oracle evidence.
 
 `text-align-last` now has an explicit paragraph option and six Chromium 154
 cases for start, end, left, right, center and justify; all six agree in the
-186-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
+218-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
 before closing punctuation and its precedence over `word-break: keep-all`, and compares
 `line-break: strict` and `loose` for small-kana wrapping. `overflow-wrap:
 anywhere` and `break-word` now have
@@ -1934,11 +1934,18 @@ break-all geometry and min-content width, Korean and CJK keep-all line boundarie
 and CJK `break-word` geometry and intrinsic width. The legacy `word-break: break-word` value is implemented as
 `normal` plus `overflow-wrap: anywhere`, including min-content sizing; Chromium
 checks its geometry and intrinsic width even with `overflow-wrap: break-word`
-specified. Level 4 `auto-phrase` is not
-implemented. Chromium 154 accepts it and changes Japanese phrase boundaries; the observed
-`auto-phrase` behavior uses linguistic phrase segmentation rather than the ordinary Unicode
-line-break opportunities. The current pinned Firefox rejects the value. A browser comparison
-exists for Chromium, so this remains an implementation gap, not an unavailable-oracle case.
+specified. Japanese `auto-phrase` uses the ICU 78.3 Japanese phrase model and
+scopes predictions to Japanese CJK runs. The content language is an explicit
+`GFNT_ContentLanguage` on each text style; when it is unspecified, normal
+breaking is used. Chromium 154 compares 23 Japanese cases across narrow and
+wide widths, including punctuation, halfwidth kana, voiced kana, fullwidth
+Latin and mixed Latin/digit text. The mixed-script cases compare line membership
+only: in this fixture Chromium reports a 31.8px advance for the digit `3`, while
+the library's character range reports 30px, so comparing inline geometry would
+conflate line breaking with the separate range-advance discrepancy. The model source, version, checksum and
+license are recorded in `third_party/icu/README.md`. Other languages do not yet
+have phrase models and therefore use normal line breaking; the pinned Firefox
+rejects `auto-phrase`.
 `white-space: pre` prohibits soft wraps while preserving explicit breaks and spaces.
 The added `break-spaces` value preserves each space, includes line-end spaces in line and intrinsic
 widths, and allows a break after each preserved space; Chromium compares line geometry and

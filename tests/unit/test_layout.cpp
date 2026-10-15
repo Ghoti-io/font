@@ -2638,6 +2638,43 @@ TEST(LayoutContent, WordBreakBreakWordKeepsAnAllowedSpaceOpportunity) {
   EXPECT_EQ(para.layout.lines[1].start, 3u);
 }
 
+TEST(LayoutContent, AutoPhraseWithoutLanguageUsesNormalBreaking) {
+  const std::string text = "今日は図書館で本を借りてから、友達と公園へ行く予定です。";
+  std::vector<uint32_t> chars = {
+      0x4ECA, 0x65E5, 0x306F, 0x56F3, 0x66F8, 0x9928, 0x3067, 0x672C, 0x3092,
+      0x501F, 0x308A, 0x3066, 0x304B, 0x3089, 0x3001, 0x53CB, 0x9054, 0x3068,
+      0x516C, 0x5712, 0x3078, 0x884C, 0x304F, 0x4E88, 0x5B9A, 0x3067, 0x3059, 0x3002};
+  Font font(chars);
+  GFNT_ParagraphOptions normal_options{};
+  GFNT_ParagraphOptions phrase_options{};
+  phrase_options.word_break = GFNT_WORD_BREAK_AUTO_PHRASE;
+  const GFNT_Face * japanese_faces[] = {font.face};
+  GFNT_TextSpan japanese_span{};
+  japanese_span.length = text.size();
+  japanese_span.style.faces = japanese_faces;
+  japanese_span.style.face_count = 1;
+  japanese_span.style.size = kSize;
+  japanese_span.style.content_language = GFNT_CONTENT_LANGUAGE_JAPANESE;
+  Para normal(text, {font.face}, normal_options);
+  Para phrase_without_language(text, {font.face}, phrase_options);
+  Para phrase_with_language(text, {japanese_span}, phrase_options);
+
+  ASSERT_EQ(normal.created, GFNT_OK);
+  ASSERT_EQ(phrase_without_language.created, GFNT_OK);
+  ASSERT_EQ(phrase_with_language.created, GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(normal.p, 4 * kLetter, &normal.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(phrase_without_language.p, 4 * kLetter,
+      &phrase_without_language.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(phrase_with_language.p, 4 * kLetter,
+      &phrase_with_language.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(normal.layout.line_count, phrase_without_language.layout.line_count);
+  for (size_t i = 0; i < normal.layout.line_count; i++) {
+    EXPECT_EQ(normal.layout.lines[i].start, phrase_without_language.layout.lines[i].start);
+    EXPECT_EQ(normal.layout.lines[i].end, phrase_without_language.layout.lines[i].end);
+  }
+  EXPECT_NE(normal.layout.line_count, phrase_with_language.layout.line_count);
+}
+
 TEST(LayoutContent, TextWrapBalanceKeepsLineCountWithinForcedBreakGroups) {
   Font font(latin());
   GFNT_ParagraphOptions options{};

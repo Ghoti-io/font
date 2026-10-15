@@ -13,7 +13,7 @@ BUILD ?= release
 # The version of this library. MINOR_VERSION carries the minor and the patch as
 # one dotted string; the two are split out below for the places that need three
 # separate integers. See CONVENTIONS.md section 4.
-MAJOR_VERSION := 5
+MAJOR_VERSION := 6
 MINOR_VERSION := 0.0
 VERSION_MINOR_ONLY := $(word 1,$(subst ., ,$(MINOR_VERSION)))
 VERSION_PATCH_ONLY := $(or $(word 2,$(subst ., ,$(MINOR_VERSION))),0)
@@ -468,7 +468,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
-	check-reader check-seeds check-layout-unit-snapshot
+	check-reader check-seeds check-layout-unit-snapshot check-phrase-model
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -700,6 +700,10 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 .PHONY: check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-phrase-model
+
+check-phrase-model: ## Check the generated Japanese phrase model against its pinned source
+	@python3 tools/layout/generate_phrase_model.py --check
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive

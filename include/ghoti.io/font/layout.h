@@ -192,6 +192,12 @@ typedef enum GFNT_CaseTailoring {
   GFNT_CASE_TAILORING_LITHUANIAN
 } GFNT_CaseTailoring;
 
+/** @brief Content language used by language-sensitive CSS text behavior. */
+typedef enum GFNT_ContentLanguage {
+  GFNT_CONTENT_LANGUAGE_UNSPECIFIED = 0,
+  GFNT_CONTENT_LANGUAGE_JAPANESE
+} GFNT_ContentLanguage;
+
 /**
  * @brief How a stretch of text is set. Nothing here is owned: it all outlives the paragraph.
  *
@@ -202,6 +208,7 @@ typedef struct GFNT_TextStyle {
   size_t face_count;               ///< How many; at least one.
   GFNT_F26Dot6 size;               ///< Pixels per em, 26.6; more than zero.
   GFNT_Tag language;               ///< The OpenType language system tag, or 0.
+  GFNT_ContentLanguage content_language; ///< Content language, independent of OpenType `language`.
   /** Features; a range counts code points from the start of the span. */
   const GFNT_ShapeFeature * features;
   size_t feature_count;            ///< How many entries @p features has.
@@ -384,7 +391,8 @@ typedef enum GFNT_WordBreak {
   GFNT_WORD_BREAK_NORMAL = 0,
   GFNT_WORD_BREAK_BREAK_ALL, ///< Emergency breaks between typographic units are ordinary breaks.
   GFNT_WORD_BREAK_KEEP_ALL,  ///< Suppress implicit breaks between adjacent CJK letter units.
-  GFNT_WORD_BREAK_BREAK_WORD ///< Legacy CSS alias for normal plus overflow-wrap:anywhere.
+  GFNT_WORD_BREAK_BREAK_WORD, ///< Legacy CSS alias for normal plus overflow-wrap:anywhere.
+  GFNT_WORD_BREAK_AUTO_PHRASE ///< Prefer Japanese phrase boundaries when available.
 } GFNT_WordBreak;
 
 /** @brief Whether preserved text may soft-wrap, after the supported CSS `white-space` values. */

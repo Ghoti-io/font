@@ -1690,7 +1690,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
       || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
       || (unsigned)options->overflow_wrap > GFNT_OVERFLOW_WRAP_BREAK_WORD
-      || (unsigned)options->word_break > GFNT_WORD_BREAK_BREAK_WORD
+      || (unsigned)options->word_break > GFNT_WORD_BREAK_AUTO_PHRASE
       || (unsigned)options->white_space > GFNT_WHITE_SPACE_PRE_LINE
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
@@ -1720,6 +1720,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           || (s->line_height.kind == GFNT_LINE_HEIGHT_MULTIPLE && s->line_height.value < 0)
           || (s->line_height.kind == GFNT_LINE_HEIGHT_LENGTH && s->line_height.value < 0)
           || (unsigned)s->vertical_align > GFNT_VERTICAL_ALIGN_BOTTOM
+          || (unsigned)s->content_language > GFNT_CONTENT_LANGUAGE_JAPANESE
           || ((unsigned)s->text_transform & ~0x0fu) != 0
           || (unsigned)s->case_tailoring > GFNT_CASE_TAILORING_LITHUANIAN
           || (((unsigned)s->text_transform & GFNT_TEXT_TRANSFORM_CASE_MASK) == GFNT_TEXT_TRANSFORM_NONE
@@ -2423,6 +2424,47 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
 
       left->autospace_after = gap;
     }
+    if (options->word_break == GFNT_WORD_BREAK_AUTO_PHRASE) {
+      bool has_japanese = false;
+
+      for (size_t i = 0; i < span_count; i++) {
+        if (p->styles[i].content_language == GFNT_CONTENT_LANGUAGE_JAPANESE) {
+          has_japanese = true;
+          break;
+        }
+      }
+      if (has_japanese) {
+        bool * boundaries = NULL;
+
+        r = gfnt_phrase_japanese_boundaries(p->cps, p->length, allocator, &boundaries);
+        if (r != GFNT_OK) {
+          const char * message = r == GFNT_ERR_OOM
+              ? "no memory for Japanese phrase boundaries"
+              : r == GFNT_ERR_LIMIT
+                  ? "Japanese phrase input exceeds the supported length"
+                  : "invalid Japanese phrase boundary input";
+
+          r = gfnt_error_set(error, r, 0, 0, GFNT_GLYPH_NONE,
+              message);
+          goto done;
+        }
+        for (size_t i = 0; i + 1 < p->unit_count; i++) {
+          Unit * left = &p->units[i];
+          const Unit * right = &p->units[i + 1];
+          const GFNT_TextStyle * left_style = &p->styles[p->runs[left->run].span];
+          const GFNT_TextStyle * right_style = &p->styles[p->runs[right->run].span];
+
+          if (!left->hard && !right->hard && left->cp_end < p->length
+              && boundaries[left->cp_end]
+              && left_style->content_language == GFNT_CONTENT_LANGUAGE_JAPANESE
+              && right_style->content_language == GFNT_CONTENT_LANGUAGE_JAPANESE) {
+            left->opportunity = true;
+            left->phrase_preferred = true;
+          }
+        }
+        allocator->free_fn(allocator->ctx, boundaries);
+      }
+    }
   }
   r = mark_hyphens(p, text, span_cp, error);
   if (r != GFNT_OK) {
@@ -2769,6 +2811,14 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
         result.end = emergency_at + 1;
         break;
       }
+      if (p->options.word_break == GFNT_WORD_BREAK_AUTO_PHRASE) {
+        size_t preferred = SIZE_MAX;
+
+        for (size_t c = 0; c < k; c++) {
+          if (p->units[cand_at[c]].phrase_preferred) preferred = c;
+        }
+        if (preferred != SIZE_MAX) k = preferred + 1;
+      }
       k = k ? k - 1 : 0;
       result.end = cand_at[k] + 1;
       result.hyphen = p->units[cand_at[k]].hyphen;
@@ -2918,8 +2968,17 @@ static size_t break_lines_balanced(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     if (!has_tab && auto_lines > 1 && auto_lines <= 10 && auto_lines != SIZE_MAX) {
       const uint64_t auto_variance = balance_variance(p, group_first_line, auto_lines,
           group_end, starts, hyphened);
-      for (size_t i = group_start; i + 1 < group_end; i++) {
-        if (p->units[i].opportunity) cand_at[point_count++] = i + 1;
+      if (p->options.word_break == GFNT_WORD_BREAK_AUTO_PHRASE) {
+        for (size_t i = group_start; i + 1 < group_end; i++) {
+          if (p->units[i].opportunity && p->units[i].phrase_preferred) {
+            cand_at[point_count++] = i + 1;
+          }
+        }
+      }
+      if (!point_count) {
+        for (size_t i = group_start; i + 1 < group_end; i++) {
+          if (p->units[i].opportunity) cand_at[point_count++] = i + 1;
+        }
       }
       cand_at[point_count++] = group_end;
       if (point_count >= auto_lines) {

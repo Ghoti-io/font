@@ -31,7 +31,8 @@
  *                    [--justify-last] [--align-last auto|start|end|left|right|center|justify]
  *                    [--overflow-wrap normal|anywhere|break-word]
  *                    [--line-break normal|strict|loose|anywhere]
- *                    [--word-break normal|break-all|keep-all|break-word]
+ *                    [--word-break normal|break-all|keep-all|break-word|auto-phrase]
+ *                    [--content-language ja]
  *                    [--white-space pre-wrap|pre|break-spaces|normal|nowrap|pre-line]
  *                    [--text-autospace normal|no-autospace|ideograph-alpha|ideograph-numeric]
  *                    [--text-transform none|capitalize|uppercase|lowercase]
@@ -150,6 +151,7 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
   spans[0].style.faces = faces;
   spans[0].style.face_count = fallback ? 2 : 1;
   spans[0].style.size = size;
+  spans[0].style.content_language = style_options->content_language;
   spans[0].style.line_height = style_options->line_height;
   spans[0].style.vertical_align = style_options->vertical_align;
   spans[0].style.vertical_align_value = style_options->vertical_align_value;
@@ -163,6 +165,7 @@ static int answer(const GFNT_Face * face, const GFNT_Face * fallback, const char
     spans[1] = base_span;
     spans[1].length = length - split_at;
     spans[1].style.size = second_size ? second_size : size;
+    spans[1].style.content_language = second_style_options->content_language;
     spans[1].style.vertical_align = second_style_options->vertical_align;
     spans[1].style.vertical_align_value = second_style_options->vertical_align_value;
     spans[1].style.word_spacing = second_style_options->word_spacing;
@@ -495,7 +498,15 @@ int main(int argc, char ** argv) {
 
       options.word_break = strcmp(v, "break-all") == 0 ? GFNT_WORD_BREAK_BREAK_ALL
           : strcmp(v, "keep-all") == 0 ? GFNT_WORD_BREAK_KEEP_ALL
-          : strcmp(v, "break-word") == 0 ? GFNT_WORD_BREAK_BREAK_WORD : GFNT_WORD_BREAK_NORMAL;
+          : strcmp(v, "break-word") == 0 ? GFNT_WORD_BREAK_BREAK_WORD
+          : strcmp(v, "auto-phrase") == 0 ? GFNT_WORD_BREAK_AUTO_PHRASE
+          : GFNT_WORD_BREAK_NORMAL;
+    }
+    else if (strcmp(argv[a], "--content-language") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+      style_options.content_language = strcmp(v, "ja") == 0
+          ? GFNT_CONTENT_LANGUAGE_JAPANESE : GFNT_CONTENT_LANGUAGE_UNSPECIFIED;
+      second_style_options.content_language = style_options.content_language;
     }
     else if (strcmp(argv[a], "--white-space") == 0 && a + 1 < argc) {
       const char * v = argv[++a];

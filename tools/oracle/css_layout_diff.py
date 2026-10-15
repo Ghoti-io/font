@@ -152,6 +152,10 @@ CASES.append(("word-break-keep-all-cjk", "日本語日本語", "horizontal", "mi
 CASES.append(("line-break-anywhere-punctuation", "日本語（AB）日本語", "horizontal", "mixed", 50,
               "start", "ltr", "auto",
               {"lineBreak": "anywhere", "driver": ("--line-break", "anywhere")}))
+CASES.append(("line-break-anywhere-before-closing-punctuation", "AB）", "horizontal", "mixed", 70,
+              "start", "ltr", "auto",
+              {"lineBreak": "anywhere", "lang": "ja",
+               "driver": ("--line-break", "anywhere")}))
 CASES.append(("line-break-anywhere-overrides-keep-all", "日本語日本語", "horizontal", "mixed", 50,
               "start", "ltr", "auto",
               {"lineBreak": "anywhere", "wordBreak": "keep-all",

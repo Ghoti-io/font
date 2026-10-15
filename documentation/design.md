@@ -1919,7 +1919,7 @@ explicitly excluded. These limits identify missing oracle evidence.
 
 `text-align-last` now has an explicit paragraph option and six Chromium 154
 cases for start, end, left, right, center and justify; all six agree in the
-165-case CSS matrix. Chromium also checks `line-break: anywhere` around
+166-case CSS matrix. Chromium also checks `line-break: anywhere` around
 punctuation and its precedence over `word-break: keep-all`, and compares
 `line-break: strict` and `loose` for small-kana wrapping. `overflow-wrap:
 anywhere` and `break-word` now have
@@ -1932,7 +1932,8 @@ cluster or ligature are not currently compared and remain a known gap.
 break-all geometry and min-content width, and Korean and CJK keep-all line
 boundaries. The legacy `word-break: break-word` value is implemented as
 `normal` plus `overflow-wrap: anywhere`, including min-content sizing; Chromium
-checks its geometry and intrinsic width. Level 4 `auto-phrase` is not
+checks its geometry and intrinsic width even with `overflow-wrap: break-word`
+specified. Level 4 `auto-phrase` is not
 implemented. `white-space: pre` now prohibits soft wraps
 while preserving explicit breaks and spaces; Chromium checks line geometry and
 min-content width. `pre-wrap` remains the default. `normal`, `nowrap`,

@@ -137,6 +137,10 @@ CASES.append(("word-break-break-all", "ABABABABABAB", "horizontal", "mixed", 140
 CASES.append(("word-break-break-word", "ABABABABABAB", "horizontal", "mixed", 140,
               "start", "ltr", "auto",
               {"wordBreak": "break-word", "driver": ("--word-break", "break-word")}))
+CASES.append(("word-break-break-word-overrides-overflow-wrap", "ABABABABABAB", "horizontal",
+              "mixed", 140, "start", "ltr", "auto",
+              {"wordBreak": "break-word", "overflowWrap": "break-word",
+               "driver": ("--word-break", "break-word", "--overflow-wrap", "break-word")}))
 CASES.append(("word-break-keep-all-korean", "가나다라마바사", "horizontal", "mixed", 70,
               "start", "ltr", "auto",
               {"wordBreak": "keep-all", "lineStructureOnly": True,

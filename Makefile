@@ -700,13 +700,13 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 .PHONY: check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
-.PHONY: check-phrase-model
-
-check-phrase-model: ## Check the generated Japanese phrase model against its pinned source
-	@python3 tools/layout/generate_phrase_model.py --check
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
+
+.PHONY: check-phrase-model
+check-phrase-model: ## Check that the first-party Japanese phrase model is reproducible
+	@python3 tools/layout/train_phrase_model.py --check
 .PHONY: check-oracle-bitmap check-oracle-bitmap-exhaustive check-oracle-eblc
 # Fixture commands
 .PHONY: fixtures fixtures-list check-fixtures

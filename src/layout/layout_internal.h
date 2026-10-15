@@ -66,7 +66,6 @@ typedef struct {
   GFNT_F26Dot6 autospace_after; // CSS inter-script spacing before the next unit, if on this line
   bool space;                  // hangs at the end of a line
   bool opportunity;            // a line may break after it
-  bool phrase_preferred;       // preferred linguistic boundary for word-break:auto-phrase
   bool emergency;              // an overflow-wrap grapheme break may follow it
   bool hyphen;                 // ... and then a hyphen is added to the line
   bool hard;                   // a line must break after it
@@ -135,7 +134,7 @@ struct GFNT_Paragraph {
   PRun fallback_metrics;       // the first span's first face, for an empty text
 };
 
-GFNT_Result gfnt_phrase_japanese_boundaries(const uint32_t * cps, size_t cp_count,
-    const GFNT_Allocator * allocator, bool ** out);
+int32_t gfnt_phrase_japanese_boundary_score(const uint32_t * cps, size_t cp_count,
+    size_t line_start, size_t boundary, size_t fit_end, GFNT_F26Dot6 line_width);
 
 #endif // GHOTI_IO_GFNT_LAYOUT_INTERNAL_H

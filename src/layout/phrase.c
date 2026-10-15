@@ -10,14 +10,9 @@
  */
 #include "layout_internal.h"
 
-#include <ghoti.io/unicode/char.h>
-#include <ghoti.io/unicode/enums.h>
-#include <ghoti.io/unicode/script.h>
 #include <limits.h>
 #include <stdint.h>
 
-/* Independent C implementation of ICU's pinned Japanese phrase predictor.
- * The table data and full license are in third_party/icu/. */
 typedef struct PhraseFeature {
   uint8_t length;
   uint32_t units[3];
@@ -26,133 +21,149 @@ typedef struct PhraseFeature {
 
 #include "phrase_model_ja.h"
 
-#define TABLE_COUNT(table) (sizeof(table) / sizeof((table)[0]))
-
 typedef struct PhraseTable {
   const PhraseFeature * features;
   size_t count;
 } PhraseTable;
 
-static int compare_feature(const PhraseFeature * a, uint8_t length,
+static uint32_t phrase_character_class(uint32_t cp);
+
+static int compare_feature(const PhraseFeature * feature, uint8_t length,
     const uint32_t units[3]) {
-  if (a->length != length) return a->length < length ? -1 : 1;
+  if (feature->length != length) return feature->length < length ? -1 : 1;
   for (size_t i = 0; i < 3; i++) {
-    if (a->units[i] != units[i]) return a->units[i] < units[i] ? -1 : 1;
+    if (feature->units[i] != units[i]) {
+      return feature->units[i] < units[i] ? -1 : 1;
+    }
   }
   return 0;
 }
 
-static int32_t feature_weight(const PhraseTable * table, const uint32_t * text,
-    size_t text_length, int64_t start, int64_t end) {
+static int32_t feature_weight(const PhraseTable * table, const uint32_t * cps,
+    size_t cp_count, size_t boundary, int offset, uint8_t width, bool classes) {
   uint32_t units[3] = {0, 0, 0};
+  int64_t start = (int64_t)boundary + offset;
+  int64_t end = start + width;
   uint8_t length;
-  size_t lo = 0, hi = table->count;
+  size_t low = 0, high = table->count;
 
   if (start < 0) start = 0;
   if (end < 0) end = 0;
-  if ((uint64_t)start > text_length) start = (int64_t)text_length;
-  if ((uint64_t)end > text_length) end = (int64_t)text_length;
+  if ((uint64_t)start > cp_count) start = (int64_t)cp_count;
+  if ((uint64_t)end > cp_count) end = (int64_t)cp_count;
   if (end < start) {
     int64_t swap = start;
     start = end;
     end = swap;
   }
-  if (end - start > 3) return 0;
   length = (uint8_t)(end - start);
-  for (uint8_t i = 0; i < length; i++) units[i] = text[start + i];
-  while (lo < hi) {
-    size_t mid = lo + (hi - lo) / 2;
-    int cmp = compare_feature(&table->features[mid], length, units);
-    if (!cmp) return table->features[mid].weight;
-    if (cmp < 0) lo = mid + 1;
-    else hi = mid;
+  for (uint8_t i = 0; i < length; i++) {
+    units[i] = classes ? 0x130000u + phrase_character_class(cps[start + i])
+        : cps[start + i];
+  }
+
+  while (low < high) {
+    size_t middle = low + (high - low) / 2;
+    int comparison = compare_feature(&table->features[middle], length, units);
+    if (!comparison) return table->features[middle].weight;
+    if (comparison < 0) low = middle + 1;
+    else high = middle;
   }
   return 0;
 }
 
-static bool japanese_dictionary_character(uint32_t cp) {
-  GUNI_Script script = guni_script(cp);
-
-  return script == GUNI_SCRIPT_HAN || script == GUNI_SCRIPT_HIRAGANA
-      || script == GUNI_SCRIPT_KATAKANA || (cp >= 0xAC00 && cp <= 0xD7A3);
+static uint32_t phrase_character_class(uint32_t cp) {
+  if (cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D || cp == 0x3000) return 1;
+  if ((cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF)
+      || (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0x20000 && cp <= 0x323AF)) return 2;
+  if ((cp >= 0x3040 && cp <= 0x309F) || (cp >= 0x1B001 && cp <= 0x1B11F)) return 3;
+  if ((cp >= 0x30A0 && cp <= 0x30FF) || (cp >= 0x31F0 && cp <= 0x31FF)
+      || (cp >= 0xFF66 && cp <= 0xFF9F)) return 4;
+  if ((cp >= 0x30 && cp <= 0x39) || (cp >= 0xFF10 && cp <= 0xFF19)) return 5;
+  if ((cp >= 0x41 && cp <= 0x5A) || (cp >= 0x61 && cp <= 0x7A)
+      || (cp >= 0xFF21 && cp <= 0xFF3A) || (cp >= 0xFF41 && cp <= 0xFF5A)) return 6;
+  if (cp == 0x300C || cp == 0x300E || cp == 0xFF62 || cp == 0xFF08 || cp == 0xFF3B
+      || cp == 0x3010 || cp == 0x3008 || cp == 0x300A) return 7;
+  if (cp == 0x300D || cp == 0x300F || cp == 0xFF63 || cp == 0xFF09 || cp == 0xFF3D
+      || cp == 0x3011 || cp == 0x3009 || cp == 0x300B) return 8;
+  if (cp == 0x3001 || cp == 0xFF0C || cp == 0x3002 || cp == 0xFF0E || cp == 0x30FB
+      || cp == 0xFF1A || cp == 0xFF1B) return 9;
+  if (cp == 0x30FC || cp == 0xFF70 || cp == 0x309D || cp == 0x309E
+      || cp == 0x30FD || cp == 0x30FE) return 10;
+  return 11;
 }
 
-static bool phrase_context_character(uint32_t cp) {
-  const uint32_t category = guni_general_category_mask(cp);
+int32_t gfnt_phrase_japanese_boundary_score(const uint32_t * cps, size_t cp_count,
+    size_t line_start, size_t boundary, size_t fit_end, GFNT_F26Dot6 line_width) {
+  static const int offsets[13] = {-3, -2, -1, 0, 1, 2, -2, -1, 0, -3, -2, -1, 0};
+  static const uint8_t widths[13] = {1, 1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3};
+  PhraseTable tables[35];
+  int64_t score = (int64_t)phrase_model_ja_bias - phrase_model_ja_threshold;
 
-  return (category & GUNI_GC_MASK_L) != 0
-      || (category & (GUNI_GC_MASK(GUNI_GC_DECIMAL_NUMBER)
-          | GUNI_GC_MASK(GUNI_GC_INITIAL_PUNCTUATION)
-          | GUNI_GC_MASK(GUNI_GC_OPEN_PUNCTUATION))) != 0;
-}
-
-static bool phrase_close_punctuation(uint32_t cp) {
-  const uint32_t category = guni_general_category_mask(cp);
-  const uint32_t punctuation = GUNI_GC_MASK(GUNI_GC_CONNECTOR_PUNCTUATION)
-      | GUNI_GC_MASK(GUNI_GC_DASH_PUNCTUATION)
-      | GUNI_GC_MASK(GUNI_GC_CLOSE_PUNCTUATION)
-      | GUNI_GC_MASK(GUNI_GC_FINAL_PUNCTUATION)
-      | GUNI_GC_MASK(GUNI_GC_OTHER_PUNCTUATION);
-
-  return (category & punctuation) != 0;
-}
-
-GFNT_Result gfnt_phrase_japanese_boundaries(const uint32_t * cps, size_t cp_count,
-    const GFNT_Allocator * allocator, bool ** out) {
-  const PhraseTable tables[13] = {
-    {phrase_uw1, TABLE_COUNT(phrase_uw1)}, {phrase_uw2, TABLE_COUNT(phrase_uw2)},
-    {phrase_uw3, TABLE_COUNT(phrase_uw3)}, {phrase_uw4, TABLE_COUNT(phrase_uw4)},
-    {phrase_uw5, TABLE_COUNT(phrase_uw5)}, {phrase_uw6, TABLE_COUNT(phrase_uw6)},
-    {phrase_bw1, TABLE_COUNT(phrase_bw1)}, {phrase_bw2, TABLE_COUNT(phrase_bw2)},
-    {phrase_bw3, TABLE_COUNT(phrase_bw3)}, {phrase_tw1, TABLE_COUNT(phrase_tw1)},
-    {phrase_tw2, TABLE_COUNT(phrase_tw2)}, {phrase_tw3, TABLE_COUNT(phrase_tw3)},
-    {phrase_tw4, TABLE_COUNT(phrase_tw4)}
-  };
-  bool * boundaries = NULL;
-
-  if (!out || (!cps && cp_count) || !allocator || !allocator->calloc_fn
-      || !allocator->free_fn) {
-    return GFNT_ERR_INVALID;
+  if (!cps || line_start >= boundary || boundary >= cp_count
+      || fit_end < boundary || fit_end > cp_count) return INT32_MIN;
+  for (size_t table = 0; table < 35; table++) {
+    tables[table].features = phrase_model_ja_features[table];
+    tables[table].count = phrase_model_ja_feature_counts[table];
   }
-  if (cp_count > (size_t)(INT64_MAX - 3)) return GFNT_ERR_LIMIT;
-  *out = NULL;
-  boundaries = allocator->calloc_fn(allocator->ctx, cp_count + 1, sizeof *boundaries);
-  if (!boundaries) {
-    return GFNT_ERR_OOM;
+  for (size_t table = 0; table < 13; table++) {
+    score += feature_weight(&tables[table], cps, cp_count, boundary,
+        offsets[table], widths[table], false);
+    score += feature_weight(&tables[13 + table], cps, cp_count, boundary,
+        offsets[table], widths[table], true);
   }
-
-  for (size_t start = 0; start < cp_count;) {
-    size_t end;
-
-    while (start < cp_count && !japanese_dictionary_character(cps[start])) start++;
-    if (start == cp_count) break;
-    end = start + 1;
-    while (end < cp_count && japanese_dictionary_character(cps[end])) end++;
-    if (start > 0 && phrase_close_punctuation(cps[start - 1])) boundaries[start] = true;
-    for (size_t cp = start + 1; cp < end; cp++) {
-      const int64_t at = (int64_t)(cp - start);
-      const size_t run_length = end - start;
-      const uint32_t * run = cps + start;
-      int64_t score = phrase_ja_base_score;
-
-      score += feature_weight(&tables[0], run, run_length, at - 3, at - 2);
-      score += feature_weight(&tables[1], run, run_length, at - 2, at - 1);
-      score += feature_weight(&tables[2], run, run_length, at - 1, at);
-      score += feature_weight(&tables[3], run, run_length, at, at + 1);
-      score += feature_weight(&tables[4], run, run_length, at + 1, at + 2);
-      score += feature_weight(&tables[5], run, run_length, at + 2, at + 3);
-      score += feature_weight(&tables[6], run, run_length, at - 2, at);
-      score += feature_weight(&tables[7], run, run_length, at - 1, at + 1);
-      score += feature_weight(&tables[8], run, run_length, at, at + 2);
-      score += feature_weight(&tables[9], run, run_length, at - 3, at);
-      score += feature_weight(&tables[10], run, run_length, at - 2, at + 1);
-      score += feature_weight(&tables[11], run, run_length, at - 1, at + 2);
-      score += feature_weight(&tables[12], run, run_length, at, at + 3);
-      boundaries[cp] = score > 0;
+  for (size_t offset = 0; offset < 3; offset++) {
+    score += feature_weight(&tables[26 + offset], cps, cp_count, line_start,
+        (int)offset, 1, false);
+    score += feature_weight(&tables[29 + offset], cps, cp_count, line_start,
+        (int)offset, 1, true);
+  }
+  {
+    uint32_t units[3] = {0x110000u + (uint32_t)((boundary - line_start - 1) > 8
+        ? 8 : boundary - line_start - 1), 0, 0};
+    size_t low = 0, high = tables[32].count;
+    while (low < high) {
+      size_t middle = low + (high - low) / 2;
+      int comparison = compare_feature(&tables[32].features[middle], 1, units);
+      if (!comparison) {
+        score += tables[32].features[middle].weight;
+        break;
+      }
+      if (comparison < 0) low = middle + 1;
+      else high = middle;
     }
-    if (end < cp_count && phrase_context_character(cps[end])) boundaries[end] = true;
-    start = end;
   }
-  *out = boundaries;
-  return GFNT_OK;
+  {
+    size_t width_bucket = line_width > 0 ? (size_t)line_width / (10u * 64u) : 0;
+    uint32_t units[3] = {0x140000u + (uint32_t)(width_bucket > 63 ? 63 : width_bucket), 0, 0};
+    size_t low = 0, high = tables[34].count;
+    while (low < high) {
+      size_t middle = low + (high - low) / 2;
+      int comparison = compare_feature(&tables[34].features[middle], 1, units);
+      if (!comparison) {
+        score += tables[34].features[middle].weight;
+        break;
+      }
+      if (comparison < 0) low = middle + 1;
+      else high = middle;
+    }
+  }
+  {
+    size_t fit = fit_end - line_start - 1;
+    uint32_t units[3] = {0x120000u + (uint32_t)(fit > 32 ? 32 : fit), 0, 0};
+    size_t low = 0, high = tables[33].count;
+    while (low < high) {
+      size_t middle = low + (high - low) / 2;
+      int comparison = compare_feature(&tables[33].features[middle], 1, units);
+      if (!comparison) {
+        score += tables[33].features[middle].weight;
+        break;
+      }
+      if (comparison < 0) low = middle + 1;
+      else high = middle;
+    }
+  }
+  if (score > INT32_MAX) score = INT32_MAX;
+  if (score < INT32_MIN) score = INT32_MIN;
+  return (int32_t)score;
 }

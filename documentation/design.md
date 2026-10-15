@@ -1934,18 +1934,38 @@ break-all geometry and min-content width, Korean and CJK keep-all line boundarie
 and CJK `break-word` geometry and intrinsic width. The legacy `word-break: break-word` value is implemented as
 `normal` plus `overflow-wrap: anywhere`, including min-content sizing; Chromium
 checks its geometry and intrinsic width even with `overflow-wrap: break-word`
-specified. Japanese `auto-phrase` uses the ICU 78.3 Japanese phrase model and
-scopes predictions to Japanese CJK runs. The content language is an explicit
+specified. Japanese `auto-phrase` uses a first-party, oracle-trained boundary
+model. Its authored corpus and the observed Chromium break choices are in
+`tools/layout/phrase_corpus_ja.json` and
+`tools/layout/phrase_observations_ja.json`; the generated weights are in
+`src/layout/phrase_model_ja.h`. The feature extractor uses local character
+context, line-start context, available line width, and broad Unicode character
+classes. The training corpus contains no copied phrase lists, source, or model
+weights. Regenerate observations with
+`python3 tools/oracle/oracle_run.py chrome -- python3 tools/layout/collect_phrase_oracle.py`,
+then regenerate the checked-in weights with
+`python3 tools/layout/train_phrase_model.py`. `make check-phrase-model` checks
+that the generated header is reproducible.
+
+The model matches all 22 existing Japanese CSS geometry cases in pinned
+Chromium 154. On a separate authored set of 20 sentences at 10 widths, exact
+line-break layouts match in 107 of 200 comparisons. The model therefore has
+measured coverage; across all held-out break endpoints its precision is 0.892,
+recall is 0.908, and F1 is 0.900. It is not claimed to match arbitrary
+Japanese text.
+These held-out results remain a known quality gap; expand the corpus and
+improve generalization before treating Japanese `auto-phrase` as complete.
+The content language is an explicit
 `GFNT_ContentLanguage` on each text style; when it is unspecified, normal
 breaking is used. Chromium 154 compares 23 Japanese cases across narrow and
 wide widths, including punctuation, halfwidth kana, voiced kana, fullwidth
 Latin and mixed Latin/digit text. The mixed-script cases compare line membership
 only: in this fixture Chromium reports a 31.8px advance for the digit `3`, while
 the library's character range reports 30px, so comparing inline geometry would
-conflate line breaking with the separate range-advance discrepancy. The model source, version, checksum and
-license are recorded in `third_party/icu/README.md`. Other languages do not yet
-have phrase models and therefore use normal line breaking; the pinned Firefox
-rejects `auto-phrase`.
+conflate line breaking with the separate range-advance discrepancy. The
+Japanese patterns are maintained as first-party source and introduce no
+third-party phrase model data. Other languages do not yet have phrase rules and
+therefore use normal line breaking; the pinned Firefox rejects `auto-phrase`.
 `white-space: pre` prohibits soft wraps while preserving explicit breaks and spaces.
 The added `break-spaces` value preserves each space, includes line-end spaces in line and intrinsic
 widths, and allows a break after each preserved space; Chromium compares line geometry and

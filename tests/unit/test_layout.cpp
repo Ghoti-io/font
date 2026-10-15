@@ -203,11 +203,15 @@ struct Para {
 };
 
 struct FlowBands {
+  size_t calls = 0;
   bool offset = true;
   GFNT_F26Dot6 width = 800;
   bool zero_width = false;
   bool retry_by_height = false;
+  bool shrink_by_height = false;
   bool clear = false;
+  bool clear_on_height = false;
+  bool saw_clear_retry = false;
   GFNT_Result result = GFNT_OK;
   bool invalid = false;
 };
@@ -215,6 +219,7 @@ struct FlowBands {
 GFNT_Result flow_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6 height,
     GFNT_Band * out) {
   auto & bands = *static_cast<FlowBands *>(context);
+  ++bands.calls;
   if (bands.invalid) {
     out->start = 0;
     out->width = -1;
@@ -226,6 +231,12 @@ GFNT_Result flow_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6 height,
   if (bands.zero_width) out->width = 0;
   out->next_top = 0;
   if (bands.retry_by_height && height > 0) out->width = 320;
+  if (bands.shrink_by_height && height > 0 && out->width > 0) out->width--;
+  if (bands.clear_on_height && top == 1000 && height == 0) bands.saw_clear_retry = true;
+  if (bands.clear_on_height && top < 1000 && height > 0) {
+    out->width = 1000;
+    out->next_top = 1000;
+  }
   if (bands.clear && top < 1000) {
     out->width = 400;
     out->next_top = 1000;
@@ -1105,6 +1116,23 @@ TEST(LayoutFlow, TextWrapBalanceKeepsForcedBreakGroupsIndependent) {
   gfnt_layout_free(&flow);
 }
 
+TEST(LayoutFlow, TextWrapBalanceRetriesHypotheticalLinesAtNextTop) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_BALANCE;
+  Para para("A AB AB AB", {font.face}, options);
+  GFNT_Layout flow{};
+  FlowBands context;
+  context.offset = false;
+  context.width = 2240;
+  context.clear_on_height = true;
+  GFNT_LineConstraint constraint{&context, flow_band};
+
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &flow, nullptr), GFNT_OK);
+  EXPECT_TRUE(context.saw_clear_retry);
+  gfnt_layout_free(&flow);
+}
+
 TEST(LayoutFlow, TextWrapPrettyUsesRepeatSafeCallbackBands) {
   Font font(latin());
   GFNT_ParagraphOptions options{};
@@ -1143,6 +1171,31 @@ TEST(LayoutFlow, AvoidShortLastLineUsesRepeatSafeCallbackBands) {
   EXPECT_EQ(flow.lines[0].end, 6u);
   EXPECT_EQ(flow.lines[1].start, 6u);
   EXPECT_EQ(flow.lines[1].extent, 4 * kLetter + kSpace);
+  gfnt_layout_free(&flow);
+}
+
+TEST(LayoutFlow, AvoidShortLastLineBoundsSpeculativeRetries) {
+  constexpr size_t word_count = 1000;
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+  std::string text;
+  text.reserve(word_count * 3);
+  for (size_t i = 0; i < word_count; i++) {
+    if (i) text.push_back(' ');
+    text += "AB";
+  }
+  Para para(text, {font.face}, options);
+  GFNT_Layout flow{};
+  FlowBands context;
+  context.offset = false;
+  context.width = static_cast<GFNT_F26Dot6>(800 * (word_count - 1));
+  context.shrink_by_height = true;
+  GFNT_LineConstraint constraint{&context, flow_band};
+
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &flow, nullptr), GFNT_OK);
+  ASSERT_EQ(flow.line_count, 2u);
+  EXPECT_LE(context.calls, 520u);
   gfnt_layout_free(&flow);
 }
 

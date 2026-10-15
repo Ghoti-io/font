@@ -4905,6 +4905,7 @@ static void layout_state_free(LayoutState * state) {
 }
 
 #define FLOW_WRAP_LINES_MAX 10
+#define FLOW_AVOID_CALLBACK_LIMIT 512
 
 typedef struct {
   const GFNT_Paragraph * paragraph;
@@ -4935,7 +4936,8 @@ static bool flow_band_valid(const GFNT_Band * band) {
 
 /** Measure a candidate against the callback's actual-height band, retrying changed bands. */
 static bool flow_wrap_measure(FlowWrapSearch * search, size_t start, size_t end,
-    bool hyphenated, size_t line, GFNT_F26Dot6 top, GFNT_Band * out_band,
+    bool hyphenated, size_t line, GFNT_F26Dot6 top, GFNT_F26Dot6 * out_top,
+    GFNT_Band * out_band,
     LayoutLineState * out_measure, int64_t * out_advance) {
   const GFNT_Paragraph * p = search->paragraph;
   GFNT_Band raw = {0}, band = {0};
@@ -4956,7 +4958,17 @@ static bool flow_wrap_measure(FlowWrapSearch * search, size_t start, size_t end,
 
     band = raw;
     if (!indent_band(p, line, &band)) return false;
-    if (!band.width || (band.next_top > top && band.width == 0)) return false;
+    if (!band.width && band.next_top > top) {
+      top = band.next_top;
+      raw = (GFNT_Band){0};
+      if (++search->callback_calls > search->callback_limit) {
+        search->exhausted = true;
+        return false;
+      }
+      result = search->constraint->band(search->constraint->ctx, top, 0, &raw);
+      if (result != GFNT_OK || !flow_band_valid(&raw)) return false;
+      continue;
+    }
     tab_origin = p->options.tabs_from_container ? band.start : 0;
     measured = measure_line(p, start, end, band.width, top, tab_origin,
         search->state->ew, search->state->tabadv, search->state->ruby_reclaim,
@@ -4984,7 +4996,22 @@ static bool flow_wrap_measure(FlowWrapSearch * search, size_t start, size_t end,
       if (hyphenated && end > start && p->units[end - 1].hyphen) {
         advance += p->hyphen_width[p->runs[p->units[end - 1].run].span];
       }
-      if (advance > band.width) return false;
+      if (advance > band.width && band.next_top > top) {
+        top = band.next_top;
+        if (++search->callback_calls > search->callback_limit) {
+          search->exhausted = true;
+          return false;
+        }
+        result = search->constraint->band(search->constraint->ctx, top, 0, &raw);
+        if (result != GFNT_OK || !flow_band_valid(&raw)) return false;
+        continue;
+      }
+      if (advance > band.width) {
+        for (size_t i = start; i + 1 < end; i++) {
+          if (p->units[i].opportunity) return false;
+        }
+      }
+      *out_top = top;
       *out_band = band;
       *out_measure = measured;
       *out_advance = advance;
@@ -5072,7 +5099,8 @@ static void flow_wrap_search_lines(FlowWrapSearch * search, size_t start,
     }
     hyphenated = left > 1 && p->units[end - 1].hyphen;
     if (!flow_wrap_measure(search, start, end, hyphenated,
-            search->first_line + slot, top, &band, &measured, &advance)) {
+            search->first_line + slot, top, &search->path_tops[slot],
+            &band, &measured, &advance)) {
       if (search->exhausted) break;
       continue;
     }
@@ -5080,11 +5108,11 @@ static void flow_wrap_search_lines(FlowWrapSearch * search, size_t start,
     search->path_hyphened[slot] = hyphenated;
     search->path_starts_x[slot] = band.start;
     search->path_widths[slot] = band.width;
-    search->path_tops[slot] = top;
     search->path_advances[slot] = advance;
     search->path_starts[slot + 1] = end;
+    if (search->path_tops[slot] > INT32_MAX - measured.thickness) continue;
     flow_wrap_search_lines(search, end, slot + 1,
-        (GFNT_F26Dot6)(top + measured.thickness));
+        (GFNT_F26Dot6)(search->path_tops[slot] + measured.thickness));
   }
 }
 
@@ -5150,17 +5178,21 @@ static void flow_wrap_optimize(const GFNT_Paragraph * p,
         ? SIZE_MAX : search.node_limit * 16;
     int64_t old_advances[FLOW_WRAP_LINES_MAX];
     bool old_measurable = true;
-    GFNT_F26Dot6 old_top = group_top;
     for (size_t i = 0; i < group_lines; i++) {
       GFNT_Band band = {0};
       LayoutLineState measured = {0};
+      GFNT_F26Dot6 measured_old_top = old_tops[first_line + i];
       if (!flow_wrap_measure(&search, old_starts[first_line + i],
               old_starts[first_line + i + 1], old_hyphened[first_line + i],
-              first_line + i, old_top, &band, &measured, &old_advances[i])) {
+              first_line + i, old_tops[first_line + i], &measured_old_top,
+              &band, &measured, &old_advances[i])) {
         old_measurable = false;
         break;
       }
-      old_top = (GFNT_F26Dot6)(old_top + measured.thickness);
+      if (measured_old_top != old_tops[first_line + i]) {
+        old_measurable = false;
+        break;
+      }
     }
     if (old_measurable) {
       flow_wrap_search_lines(&search, group_start, 0, group_top);
@@ -5221,9 +5253,8 @@ static void flow_avoid_short_last_line(const GFNT_Paragraph * p,
   measure_search.paragraph = p;
   measure_search.constraint = constraint;
   measure_search.state = state;
-  measure_search.callback_limit = p->unit_count > (SIZE_MAX - 128) / 4
-      ? SIZE_MAX : 128 + p->unit_count * 4;
-  while (group_start < p->unit_count) {
+  measure_search.callback_limit = FLOW_AVOID_CALLBACK_LIMIT;
+  while (group_start < p->unit_count && !measure_search.exhausted) {
     size_t group_end = group_start, after_group = first_line;
     while (group_end < p->unit_count && !p->units[group_end].hard) group_end++;
     if (group_end < p->unit_count) group_end++;
@@ -5235,37 +5266,42 @@ static void flow_avoid_short_last_line(const GFNT_Paragraph * p,
       GFNT_Band old_last_band = {0};
       LayoutLineState old_last_measure = {0};
       int64_t old_last_advance = 0;
+      GFNT_F26Dot6 old_last_top = state->line_tops[last];
 
-      measure_search.callback_calls = 0;
       if (flow_wrap_measure(&measure_search, last_start, group_end,
-              state->hyphened[last], last, state->line_tops[last], &old_last_band,
+              state->hyphened[last], last, state->line_tops[last], &old_last_top,
+              &old_last_band,
               &old_last_measure, &old_last_advance)
           && old_last_band.width > 0
           && old_last_advance < old_last_band.width / 3) {
         size_t best_boundary = 0;
         int64_t best_advance = INT64_MAX;
         GFNT_Band best_previous_band = {0}, best_last_band = {0};
-        LayoutLineState best_previous_measure = {0}, best_last_measure = {0};
+        LayoutLineState best_last_measure = {0};
+        GFNT_F26Dot6 best_previous_top = 0, best_last_top = 0;
 
-        for (size_t boundary = last_start; boundary > previous_start + 1;) {
+        for (size_t boundary = last_start; boundary > previous_start + 1
+                && !measure_search.exhausted;) {
           GFNT_Band previous_band = {0}, last_band = {0};
           LayoutLineState previous_measure = {0}, last_measure = {0};
           int64_t previous_advance = 0, last_advance = 0;
+          GFNT_F26Dot6 new_previous_top = state->line_tops[previous];
+          GFNT_F26Dot6 measured_last_top = 0;
           boundary--;
           if (!p->units[boundary - 1].opportunity || !p->units[boundary - 1].space) continue;
-          measure_search.callback_calls = 0;
           if (!flow_wrap_measure(&measure_search, previous_start, boundary,
                   p->units[boundary - 1].hyphen, previous,
-                  state->line_tops[previous], &previous_band, &previous_measure,
+                  state->line_tops[previous], &new_previous_top,
+                  &previous_band, &previous_measure,
                   &previous_advance)
               || previous_advance > previous_band.width) continue;
-          const int64_t new_last_top64 = (int64_t)state->line_tops[previous]
+          const int64_t new_last_top64 = (int64_t)new_previous_top
               + previous_measure.thickness;
           if (new_last_top64 > INT32_MAX) continue;
           GFNT_F26Dot6 new_last_top = (GFNT_F26Dot6)new_last_top64;
-          measure_search.callback_calls = 0;
           if (!flow_wrap_measure(&measure_search, boundary, group_end, false, last,
-                  new_last_top, &last_band, &last_measure, &last_advance)
+                  new_last_top, &measured_last_top,
+                  &last_band, &last_measure, &last_advance)
               || last_advance > last_band.width
               || last_advance < last_band.width / 3
               || last_advance <= old_last_advance) continue;
@@ -5274,14 +5310,13 @@ static void flow_avoid_short_last_line(const GFNT_Paragraph * p,
             best_advance = last_advance;
             best_previous_band = previous_band;
             best_last_band = last_band;
-            best_previous_measure = previous_measure;
             best_last_measure = last_measure;
+            best_previous_top = new_previous_top;
+            best_last_top = measured_last_top;
           }
         }
-        if (best_boundary) {
-          const GFNT_F26Dot6 new_last_top = state->line_tops[previous]
-              + best_previous_measure.thickness;
-          const int64_t after_group_top = (int64_t)new_last_top
+        if (best_boundary && !measure_search.exhausted) {
+          const int64_t after_group_top = (int64_t)best_last_top
               + best_last_measure.thickness;
           if (after_group == state->line_count || after_group_top == state->line_tops[after_group]) {
             state->starts[last] = best_boundary;
@@ -5289,9 +5324,10 @@ static void flow_avoid_short_last_line(const GFNT_Paragraph * p,
             state->hyphened[last] = false;
             state->band_starts[previous] = best_previous_band.start;
             state->band_widths[previous] = best_previous_band.width;
+            state->line_tops[previous] = best_previous_top;
             state->band_starts[last] = best_last_band.start;
             state->band_widths[last] = best_last_band.width;
-            state->line_tops[last] = new_last_top;
+            state->line_tops[last] = best_last_top;
           }
         }
       }

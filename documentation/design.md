@@ -2001,7 +2001,8 @@ lines fit and the following group keeps its original block position. Candidate
 callback errors or invalid bands make that candidate unavailable; errors from
 the initial committed greedy layout still fail the layout. Unit cases cover
 short text, unbounded width, each added value, line counts, forced-break groups,
-tabs, annotations, and callback-provided bands.
+tabs, annotations, callback-provided bands, clear-position retries, and bounded
+speculative callback work for `avoid-short-last-line`.
 The Chromium oracle compares balance geometry at multiple measures and for
 different paragraph lengths, and checks CSS parse support for all values. It
 does not claim a geometry match for `pretty`, whose optimization

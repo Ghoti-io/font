@@ -508,8 +508,8 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[a], "--text-wrap-style") == 0 && a + 1 < argc) {
       const char * v = argv[++a];
-      options.text_wrap_style = strcmp(v, "balance") == 0
-          ? GFNT_TEXT_WRAP_BALANCE : GFNT_TEXT_WRAP_AUTO;
+      options.text_wrap_style = strcmp(v, "balance") == 0 ? GFNT_TEXT_WRAP_BALANCE
+          : strcmp(v, "stable") == 0 ? GFNT_TEXT_WRAP_STABLE : GFNT_TEXT_WRAP_AUTO;
     }
     else if (strcmp(argv[a], "--text-transform") == 0 && a + 1 < argc) {
       const char * v = argv[++a];

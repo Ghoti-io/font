@@ -1970,8 +1970,13 @@ after a forced break in the corresponding probe, so that case is checked by a
 unit test against the spec rule instead of being treated as an oracle match.
 Balancing is currently bypassed for callback-constrained flow, tabs and
 annotated paragraphs; those combinations are known implementation gaps.
-`text-wrap-style: pretty`, `stable`, and `avoid-short-last-line` are not
-implemented. The oracle does not currently claim coverage for these values.
+`GFNT_TEXT_WRAP_STABLE` uses the ordinary greedy breaker, which already makes
+each break without considering later lines; Chromium compares that equivalence
+in the CSS matrix. `text-wrap-style: pretty` and `avoid-short-last-line` are not
+implemented. Chromium accepts `pretty`, but the exact improvements are
+user-agent-defined and its behavior still needs a named oracle case before the
+value can be claimed as implemented. The pinned Chromium rejects
+`avoid-short-last-line`.
 `math-auto` remains unimplemented because its CSS behavior depends on MathML
 operator context not represented in this text layout API. The remaining
 CSS-facing layout work eligible

@@ -400,7 +400,8 @@ typedef enum GFNT_WhiteSpace {
 /** @brief How soft wrap opportunities are selected, after CSS `text-wrap-style`. */
 typedef enum GFNT_TextWrapStyle {
   GFNT_TEXT_WRAP_AUTO = 0, ///< Use the ordinary greedy line breaker.
-  GFNT_TEXT_WRAP_BALANCE   ///< Balance line lengths within short forced-break groups.
+  GFNT_TEXT_WRAP_BALANCE,  ///< Balance line lengths within short forced-break groups.
+  GFNT_TEXT_WRAP_STABLE    ///< Keep the greedy break decisions independent of later lines.
 } GFNT_TextWrapStyle;
 
 /** @brief What hyphenation a paragraph does, after CSS `hyphens`. */

@@ -1619,7 +1619,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->white_space > GFNT_WHITE_SPACE_PRE_LINE
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
-      || (unsigned)options->text_wrap_style > GFNT_TEXT_WRAP_BALANCE
+      || (unsigned)options->text_wrap_style > GFNT_TEXT_WRAP_STABLE
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
       || options->space_share < 0 || options->space_share > 0x10000
       || (unsigned)options->writing_mode > GFNT_WRITING_SIDEWAYS_LR

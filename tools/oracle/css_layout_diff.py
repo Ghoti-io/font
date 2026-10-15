@@ -236,6 +236,10 @@ CASES.append(("text-wrap-balance", "AB AB AB AB", "horizontal", "mixed", 260,
               "start", "ltr", "auto",
               {"textWrapStyle": "balance",
                "driver": ("--text-wrap-style", "balance")}))
+CASES.append(("text-wrap-stable", "AB AB AB AB", "horizontal", "mixed", 260,
+              "start", "ltr", "auto",
+              {"textWrapStyle": "stable",
+               "driver": ("--text-wrap-style", "stable")}))
 CASES.append(("text-transform-uppercase", "abc", "horizontal", "mixed", 200,
               "start", "ltr", "auto",
               {"textTransform": "uppercase", "driver": ("--text-transform", "uppercase")}))

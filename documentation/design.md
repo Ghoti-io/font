@@ -1919,7 +1919,7 @@ explicitly excluded. These limits identify missing oracle evidence.
 
 `text-align-last` now has an explicit paragraph option and six Chromium 154
 cases for start, end, left, right, center and justify; all six agree in the
-167-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
+168-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
 before closing punctuation and its precedence over `word-break: keep-all`, and compares
 `line-break: strict` and `loose` for small-kana wrapping. `overflow-wrap:
 anywhere` and `break-word` now have
@@ -1929,14 +1929,17 @@ reduces that width. The cases cover Latin text whose emergency boundaries
 coincide with shaped-unit boundaries. Breaks inside an indivisible shaping
 cluster or ligature are not currently compared and remain a known gap.
 `word-break: break-all`, `break-word`, and `keep-all` are also covered: Chromium checks
-break-all geometry and min-content width, and Korean and CJK keep-all line
-boundaries. The legacy `word-break: break-word` value is implemented as
+break-all geometry and min-content width, Korean and CJK keep-all line boundaries,
+and CJK `break-word` intrinsic width. The legacy `word-break: break-word` value is implemented as
 `normal` plus `overflow-wrap: anywhere`, including min-content sizing; Chromium
 checks its geometry and intrinsic width even with `overflow-wrap: break-word`
 specified. Level 4 `auto-phrase` is not
 implemented. `white-space: pre` now prohibits soft wraps
 while preserving explicit breaks and spaces; Chromium checks line geometry and
-min-content width. `pre-wrap` remains the default. `normal`, `nowrap`,
+min-content width. A CSS Text spec case for `text-align-last: justify` on a
+forced-break `pre` line is unit-tested, because Chromium 154 leaves those
+preserved-space lines start-aligned instead of justifying them. `pre-wrap`
+remains the default. `normal`, `nowrap`,
 `pre-line`, and `break-spaces` remain unsupported. The remaining CSS-facing
 layout work eligible for browser differential coverage is decoration geometry
 (`text-decoration` and skip-ink), source-preserving `text-transform`,

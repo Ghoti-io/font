@@ -2462,11 +2462,24 @@ TEST(LayoutContent, WordBreakBreakWordOverridesOverflowWrapForMinContent) {
   EXPECT_EQ(minimum, kLetter);
 }
 
+TEST(LayoutContent, WordBreakBreakWordKeepsAnAllowedSpaceOpportunity) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.word_break = GFNT_WORD_BREAK_BREAK_WORD;
+  Para para("AB CD", {font.face}, options);
+
+  ASSERT_EQ(para.lay(2 * kLetter + kSpace), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].end, 3u);
+  EXPECT_EQ(para.layout.lines[1].start, 3u);
+}
+
 TEST(LayoutContent, WhiteSpacePreKeepsSoftLineBreaksAndTrailingSpaces) {
   Font font(latin());
   GFNT_ParagraphOptions options{};
   options.white_space = GFNT_WHITE_SPACE_PRE;
   options.overflow_wrap = GFNT_OVERFLOW_WRAP_ANYWHERE;
+  options.line_break = GFNT_LINE_BREAK_ANYWHERE;
   Para para("AB  \nC", {font.face}, options);
   GFNT_F26Dot6 minimum = 0, maximum = 0;
 
@@ -2733,6 +2746,25 @@ TEST(LayoutJustify, ALineEndingInANewlineOrWithNoSpaceIsLeftAlone) {
   Para unbounded("AB CD", {font.face}, o);
   ASSERT_EQ(unbounded.lay(GFNT_LAYOUT_UNBOUNDED), GFNT_OK);
   EXPECT_FALSE(unbounded.layout.lines[0].justified);
+}
+
+TEST(LayoutJustify, WhiteSpacePreAndAlignLastJustifyIncludeTrailingSpaces) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_PRE;
+  options.align = GFNT_ALIGN_JUSTIFY;
+  options.align_last = GFNT_ALIGN_LAST_JUSTIFY;
+  Para para("AB  \nCD  \nEF", {font.face}, options);
+  const GFNT_F26Dot6 width = 200 * 64;
+
+  ASSERT_EQ(para.lay(width), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 3u);
+  EXPECT_TRUE(para.layout.lines[0].justified);
+  EXPECT_EQ(para.layout.lines[0].extent, width);
+  EXPECT_TRUE(para.layout.lines[1].justified);
+  EXPECT_EQ(para.layout.lines[1].extent, width);
+  EXPECT_FALSE(para.layout.lines[2].justified);
+  EXPECT_EQ(para.layout.lines[2].extent, 2 * kLetter);
 }
 
 TEST(LayoutJustify, TheRemainderIsSharedOutOneUnitAtATime) {

@@ -2492,6 +2492,18 @@ TEST(LayoutContent, WhiteSpacePreKeepsSoftLineBreaksAndTrailingSpaces) {
   EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter + 2 * kSpace);
 }
 
+TEST(LayoutContent, WhiteSpacePreSuppressesOrdinarySpaceWrapping) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_PRE;
+  Para para("AB CD", {font.face}, options);
+
+  ASSERT_EQ(para.lay(2 * kLetter + kSpace), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].end, 5u);
+  EXPECT_EQ(para.layout.lines[0].extent, 4 * kLetter + kSpace);
+}
+
 TEST(LayoutContent, WhiteSpacePreKeepsConsecutiveAndTrailingHardBreaks) {
   Font font(latin());
   GFNT_ParagraphOptions options{};

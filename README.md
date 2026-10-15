@@ -102,10 +102,10 @@ Once the library is installed, pkg-config carries the include path, the
 library, and its dependencies:
 
 ```bash
-cc -o show show.c $(pkg-config --cflags --libs ghoti.io-font-0)
+cc -o show show.c $(pkg-config --cflags --libs ghoti.io-font-2)
 ```
 
-The module name ends in the major version, `-0` for this release, so two
+The module name ends in the major version, `-2` for this release, so two
 majors can be installed side by side. A build made with `make BRANCH=-dev`
 installs `ghoti.io-font-dev` instead.
 
@@ -172,7 +172,7 @@ asks which glyph a code point maps to does not link a rasteriser or a shaper.
 ## Dependencies
 
 Found through pkg-config, and the installed `.pc` file names it, so a
-program that links `ghoti.io-font-0` links this too.
+program that links `ghoti.io-font-2` links this too.
 
 - [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) — the allocator, the growable array, and the overflow-checked size arithmetic.
 - [ghoti.io-compress](https://github.com/Ghoti-io/compress) — gzip, for the `.pcf.gz` and `.psf.gz` a bitmap font usually arrives in, and zlib for WOFF 1.

@@ -16,7 +16,7 @@ build our own text shaper and font manager over time"*); because `image` has
 no way to put text into a raster; and because a PDF library, should one come,
 needs to read four font formats and write two of them.
 
-The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-0`, the include
+The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-2`, the include
 path `<ghoti.io/font/...>`.
 
 ---

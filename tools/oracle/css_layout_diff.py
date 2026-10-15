@@ -143,8 +143,7 @@ CASES.append(("word-break-break-word-overrides-overflow-wrap", "ABABABABABAB", "
                "driver": ("--word-break", "break-word", "--overflow-wrap", "break-word")}))
 CASES.append(("word-break-break-word-cjk", "日本語日本語", "horizontal", "mixed", 70,
               "start", "ltr", "auto",
-              {"wordBreak": "break-word", "lineStructureOnly": True,
-               "driver": ("--word-break", "break-word")}))
+              {"wordBreak": "break-word", "driver": ("--word-break", "break-word")}))
 CASES.append(("word-break-keep-all-korean", "가나다라마바사", "horizontal", "mixed", 70,
               "start", "ltr", "auto",
               {"wordBreak": "keep-all", "lineStructureOnly": True,
@@ -156,7 +155,7 @@ CASES.append(("word-break-keep-all-cjk", "日本語日本語", "horizontal", "mi
 CASES.append(("line-break-anywhere-punctuation", "日本語（AB）日本語", "horizontal", "mixed", 50,
               "start", "ltr", "auto",
               {"lineBreak": "anywhere", "driver": ("--line-break", "anywhere")}))
-CASES.append(("line-break-anywhere-before-closing-punctuation", "AB）", "horizontal", "mixed", 70,
+CASES.append(("line-break-anywhere-before-closing-punctuation", "AB）", "horizontal", "mixed", 68,
               "start", "ltr", "auto",
               {"lineBreak": "anywhere", "lang": "ja",
                "driver": ("--line-break", "anywhere")}))
@@ -172,6 +171,10 @@ for _line_break in ("strict", "loose"):
 CASES.append(("white-space-pre", "AB AB  \nAB AB", "horizontal", "mixed", 100,
               "start", "ltr", "auto",
               {"whiteSpace": "pre", "driver": ("--white-space", "pre")}))
+CASES.append(("white-space-pre-line-break-anywhere", "AB） AB", "horizontal", "mixed", 55,
+              "start", "ltr", "auto",
+              {"whiteSpace": "pre", "lineBreak": "anywhere", "lang": "ja",
+               "driver": ("--white-space", "pre", "--line-break", "anywhere")}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills

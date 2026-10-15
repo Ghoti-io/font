@@ -13,7 +13,7 @@ BUILD ?= release
 # The version of this library. MINOR_VERSION carries the minor and the patch as
 # one dotted string; the two are split out below for the places that need three
 # separate integers. See CONVENTIONS.md section 4.
-MAJOR_VERSION := 3
+MAJOR_VERSION := 4
 MINOR_VERSION := 0.0
 VERSION_MINOR_ONLY := $(word 1,$(subst ., ,$(MINOR_VERSION)))
 VERSION_PATCH_ONLY := $(or $(word 2,$(subst ., ,$(MINOR_VERSION))),0)

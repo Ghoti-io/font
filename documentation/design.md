@@ -16,7 +16,7 @@ build our own text shaper and font manager over time"*); because `image` has
 no way to put text into a raster; and because a PDF library, should one come,
 needs to read four font formats and write two of them.
 
-The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-3`, the include
+The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-4`, the include
 path `<ghoti.io/font/...>`.
 
 ---
@@ -1960,13 +1960,24 @@ font, which has the needed glyphs. Firefox's Range boxes have a 5px line-box
 offset for this fixture, so the comparison excludes that vertical coordinate;
 inline positions, advances and range-box sizes agree. Chromium does not support
 these values, so its unchanged text is not used as an oracle for them.
+`GFNT_TEXT_WRAP_BALANCE` implements CSS `text-wrap-style: balance` for
+static-width paragraphs. It preserves the greedy line count, balances forced
+break groups independently, and uses the ordinary greedy breaker for groups
+with more than ten lines. The CSS Text spec permits that ten-line fallback and
+requires forced-break groups to be processed separately. The Chromium oracle
+compares one two-line Latin case. Chromium 154 does not balance a later group
+after a forced break in the corresponding probe, so that case is checked by a
+unit test against the spec rule instead of being treated as an oracle match.
+Balancing is currently bypassed for callback-constrained flow, tabs and
+annotated paragraphs; those combinations are known implementation gaps.
+`text-wrap-style: pretty`, `stable`, and `avoid-short-last-line` are not
+implemented. The oracle does not currently claim coverage for these values.
 `math-auto` remains unimplemented because its CSS behavior depends on MathML
 operator context not represented in this text layout API. The remaining
 CSS-facing layout work eligible
 for browser differential coverage is decoration geometry
 (`text-decoration` and skip-ink),
-`hanging-punctuation`, `text-spacing-trim`, `text-autospace`, `text-wrap`
-balance/pretty behavior. Shaping-facing CSS such as
+`hanging-punctuation`, `text-spacing-trim`, and `text-autospace`. Shaping-facing CSS such as
 `font-optical-sizing`, `font-variant-caps`, `font-size-adjust` and
 `text-combine-upright`, plus `initial-letter`, also remains outside the current
 oracle matrix. Each should be added only with named CSS cases and an explicit

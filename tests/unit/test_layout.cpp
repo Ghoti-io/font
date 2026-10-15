@@ -2638,6 +2638,36 @@ TEST(LayoutContent, WordBreakBreakWordKeepsAnAllowedSpaceOpportunity) {
   EXPECT_EQ(para.layout.lines[1].start, 3u);
 }
 
+TEST(LayoutContent, TextWrapBalanceKeepsLineCountWithinForcedBreakGroups) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_BALANCE;
+  Para para("AB AB AB AB\nAB AB AB AB", {font.face}, options);
+  Para greedy("AB AB AB AB\nAB AB AB AB", {font.face});
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, width, &greedy.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(greedy.layout.line_count, 4u);
+  EXPECT_EQ(greedy.layout.lines[0].start, 0u);
+  EXPECT_EQ(greedy.layout.lines[0].end, 9u);
+  EXPECT_EQ(greedy.layout.lines[1].start, 9u);
+  EXPECT_EQ(greedy.layout.lines[2].start, 12u);
+  EXPECT_EQ(greedy.layout.lines[2].end, 21u);
+  EXPECT_EQ(greedy.layout.lines[3].start, 21u);
+
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, width,
+      &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 4u);
+  EXPECT_EQ(para.layout.lines[0].start, 0u);
+  EXPECT_EQ(para.layout.lines[0].end, 6u);
+  EXPECT_EQ(para.layout.lines[1].start, 6u);
+  EXPECT_EQ(para.layout.lines[1].end, 12u);
+  EXPECT_EQ(para.layout.lines[2].start, 12u);
+  EXPECT_EQ(para.layout.lines[2].end, 18u);
+  EXPECT_EQ(para.layout.lines[3].start, 18u);
+  EXPECT_EQ(para.layout.lines[3].end, 23u);
+}
+
 TEST(LayoutContent, WhiteSpacePreKeepsSoftLineBreaksAndTrailingSpaces) {
   Font font(latin());
   GFNT_ParagraphOptions options{};

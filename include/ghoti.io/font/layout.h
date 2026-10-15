@@ -397,6 +397,12 @@ typedef enum GFNT_WhiteSpace {
   GFNT_WHITE_SPACE_PRE_LINE        ///< Collapse spaces; preserve segment breaks.
 } GFNT_WhiteSpace;
 
+/** @brief How soft wrap opportunities are selected, after CSS `text-wrap-style`. */
+typedef enum GFNT_TextWrapStyle {
+  GFNT_TEXT_WRAP_AUTO = 0, ///< Use the ordinary greedy line breaker.
+  GFNT_TEXT_WRAP_BALANCE   ///< Balance line lengths within short forced-break groups.
+} GFNT_TextWrapStyle;
+
 /** @brief What hyphenation a paragraph does, after CSS `hyphens`. */
 typedef enum GFNT_Hyphens {
   /**
@@ -516,6 +522,7 @@ typedef struct GFNT_ParagraphOptions {
   GFNT_WordBreak word_break; ///< CSS `word-break`; zero preserves `normal`.
   GFNT_WhiteSpace white_space; ///< `pre-wrap` by default; supports CSS `pre`, `break-spaces`,
                                ///< `normal`, `nowrap`, and `pre-line` behavior.
+  GFNT_TextWrapStyle text_wrap_style; ///< CSS `text-wrap-style`; zero selects `auto`.
 } GFNT_ParagraphOptions;
 
 /** @brief The one inline band available to a line at a given block position. */

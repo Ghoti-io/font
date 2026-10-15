@@ -1619,6 +1619,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->white_space > GFNT_WHITE_SPACE_PRE_LINE
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
+      || (unsigned)options->text_wrap_style > GFNT_TEXT_WRAP_BALANCE
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
       || options->space_share < 0 || options->space_share > 0x10000
       || (unsigned)options->writing_mode > GFNT_WRITING_SIDEWAYS_LR
@@ -2722,6 +2723,205 @@ static bool indent_band(const GFNT_Paragraph * p, size_t line, GFNT_Band * band)
 
 static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     size_t * starts, bool * hyphened, size_t * cand_at, GFNT_F26Dot6 * cand_fit,
+    GFNT_F26Dot6 * band_starts, GFNT_F26Dot6 * band_widths);
+
+/** Greedy line count for one forced-break group at a candidate measure. */
+static size_t count_group_lines(const GFNT_Paragraph * p, size_t start, size_t end,
+    size_t first_line, GFNT_F26Dot6 width, size_t * starts, bool * hyphened,
+    GFNT_F26Dot6 * band_starts, GFNT_F26Dot6 * band_widths,
+    size_t * cand_at, GFNT_F26Dot6 * cand_fit) {
+  size_t lines = 0;
+
+  while (start < end) {
+    GFNT_Band band = {0, width, 0};
+    GFNT_F26Dot6 tab_origin;
+    BreakResult result;
+
+    if (!indent_band(p, first_line + lines, &band)) band.width = width;
+    tab_origin = p->options.tabs_from_container ? band.start : 0;
+    result = break_one_line(p, start, band.width, tab_origin, cand_at, cand_fit);
+    if (result.end <= start || result.end > end) return SIZE_MAX;
+    starts[first_line + lines] = start;
+    hyphened[first_line + lines] = result.hyphen;
+    band_starts[first_line + lines] = band.start;
+    band_widths[first_line + lines] = band.width;
+    start = result.end;
+    lines++;
+  }
+  return lines;
+}
+
+/** Width of a candidate line, excluding collapsed hanging spaces and its forced break unit. */
+static int64_t balanced_line_width(const GFNT_Paragraph * p, size_t start, size_t end,
+    bool hyphenate) {
+  int64_t width = 0;
+  size_t content_end = end;
+
+  if (content_end > start && p->units[content_end - 1].hard) content_end--;
+  for (size_t i = start; i < content_end; i++) width += p->units[i].width;
+  if (p->options.white_space != GFNT_WHITE_SPACE_PRE
+      && p->options.white_space != GFNT_WHITE_SPACE_BREAK_SPACES) {
+    while (content_end > start && p->units[content_end - 1].space) {
+      width -= p->units[--content_end].width;
+    }
+  }
+  if (hyphenate && content_end > start && p->units[content_end - 1].hyphen) {
+    const Unit * unit = &p->units[content_end - 1];
+    width += p->hyphen_width[p->runs[unit->run].span];
+  }
+  return width;
+}
+
+/** Fixed-point variance score for a line sequence; smaller means better balance. */
+static uint64_t balance_variance(const GFNT_Paragraph * p, size_t first_line,
+    size_t line_count, size_t end, const size_t * starts, const bool * hyphened) {
+  int64_t widths[10], total = 0, largest = 0;
+  uint64_t score = 0;
+
+  for (size_t i = 0; i < line_count; i++) {
+    size_t line_end = i + 1 < line_count ? starts[first_line + i + 1] : end;
+    widths[i] = balanced_line_width(p, starts[first_line + i], line_end,
+        hyphened[first_line + i]);
+    if (widths[i] > largest) largest = widths[i];
+  }
+  /* Keep the sum of at most ten squared deltas inside uint64_t, even for an
+   * unbreakable line whose advance is much larger than the requested width. */
+  while (largest > INT64_C(900000000)) {
+    largest >>= 1;
+    for (size_t i = 0; i < line_count; i++) widths[i] >>= 1;
+  }
+  for (size_t i = 0; i < line_count; i++) {
+    total += widths[i];
+  }
+  const int64_t average = total / (int64_t)line_count;
+  for (size_t i = 0; i < line_count; i++) {
+    int64_t delta = widths[i] - average;
+    if (delta < 0) delta = -delta;
+    score += (uint64_t)(delta * delta);
+  }
+  return score;
+}
+
+/** Balance short forced-break groups by selecting soft-wrap points near their average line width. */
+static size_t break_lines_balanced(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
+    size_t * starts, bool * hyphened, size_t * cand_at, GFNT_F26Dot6 * cand_fit,
+    GFNT_F26Dot6 * band_starts, GFNT_F26Dot6 * band_widths) {
+  size_t lines = 0, group_start = 0;
+
+  if (width == GFNT_LAYOUT_UNBOUNDED || p->options.text_wrap_style != GFNT_TEXT_WRAP_BALANCE) {
+    return break_lines(p, width, starts, hyphened, cand_at, cand_fit,
+        band_starts, band_widths);
+  }
+  if (p->annotation_count) return break_lines(p, width, starts, hyphened, cand_at, cand_fit,
+      band_starts, band_widths);
+  if (!p->unit_count) return break_lines(p, width, starts, hyphened, cand_at, cand_fit,
+      band_starts, band_widths);
+  while (group_start < p->unit_count) {
+    size_t group_end = group_start;
+    size_t auto_lines, point_count = 0, group_first_line = lines;
+    bool has_tab = false, balanced = false;
+    while (group_end < p->unit_count && !p->units[group_end].hard) group_end++;
+    if (group_end < p->unit_count) group_end++;
+    for (size_t i = group_start; i < group_end; i++) has_tab = has_tab || p->units[i].tab;
+    auto_lines = count_group_lines(p, group_start, group_end, lines, width, starts,
+        hyphened, band_starts, band_widths, cand_at, cand_fit);
+    if (!has_tab && auto_lines > 1 && auto_lines <= 10 && auto_lines != SIZE_MAX) {
+      const uint64_t auto_variance = balance_variance(p, group_first_line, auto_lines,
+          group_end, starts, hyphened);
+      for (size_t i = group_start; i + 1 < group_end; i++) {
+        if (p->units[i].opportunity) cand_at[point_count++] = i + 1;
+      }
+      cand_at[point_count++] = group_end;
+      if (point_count >= auto_lines) {
+        size_t current = group_start, next_point = 0;
+        bool feasible = true;
+        for (size_t line = 0; line + 1 < auto_lines; line++) {
+          const size_t lines_left = auto_lines - line;
+          const size_t max_point = point_count - lines_left;
+          GFNT_Band band = {0, width, 0};
+          int64_t remaining = balanced_line_width(p, current, group_end, false);
+          int64_t target = remaining / (int64_t)lines_left;
+          int64_t best_difference = INT64_MAX;
+          size_t best_point = SIZE_MAX, best_end = 0;
+
+          if (!indent_band(p, lines + line, &band)) band.width = width;
+          for (size_t point = next_point; point <= max_point; point++) {
+            size_t end = cand_at[point];
+            int64_t candidate_width = balanced_line_width(p, current, end, end < group_end);
+            int64_t difference = candidate_width - target;
+            if (difference < 0) difference = -difference;
+            if (candidate_width <= band.width && difference < best_difference) {
+              best_difference = difference;
+              best_point = point;
+              best_end = end;
+            }
+          }
+          if (best_point == SIZE_MAX) {
+            feasible = false;
+            break;
+          }
+          starts[lines] = current;
+          band_starts[lines] = band.start;
+          band_widths[lines] = band.width;
+          hyphened[lines] = best_end < group_end
+              && p->units[best_end - 1].hyphen;
+          lines++;
+          current = best_end;
+          next_point = best_point + 1;
+        }
+        if (feasible) {
+          GFNT_Band band = {0, width, 0};
+          int64_t last_width = balanced_line_width(p, current, group_end, false);
+          if (!indent_band(p, lines, &band)) band.width = width;
+          if (last_width <= band.width) {
+            starts[lines] = current;
+            band_starts[lines] = band.start;
+            band_widths[lines] = band.width;
+            hyphened[lines] = false;
+            lines++;
+            if (balance_variance(p, group_first_line, auto_lines, group_end,
+                    starts, hyphened) < auto_variance) {
+              group_start = group_end;
+              balanced = true;
+            }
+          }
+        }
+      }
+    }
+    if (!balanced) {
+      lines = group_first_line;
+      while (group_start < group_end) {
+        GFNT_Band band = {0, width, 0};
+        BreakResult result;
+
+        if (!indent_band(p, lines, &band)) band.width = width;
+        starts[lines] = group_start;
+        band_starts[lines] = band.start;
+        band_widths[lines] = band.width;
+        result = break_one_line(p, group_start, band.width,
+            p->options.tabs_from_container ? band.start : 0, cand_at, cand_fit);
+        if (result.end <= group_start || result.end > group_end) {
+          result.end = group_end;
+          result.hyphen = false;
+        }
+        hyphened[lines++] = result.hyphen;
+        group_start = result.end;
+      }
+    }
+  }
+  if (p->units[p->unit_count - 1].hard) {
+    GFNT_Band band = {0, width, 0};
+    (void)indent_band(p, lines, &band);
+    band_starts[lines] = band.start;
+    band_widths[lines] = band.width;
+    hyphened[lines] = false;
+    starts[lines++] = p->unit_count;
+  }
+  return lines;
+}
+
+static size_t break_lines(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
+    size_t * starts, bool * hyphened, size_t * cand_at, GFNT_F26Dot6 * cand_fit,
     GFNT_F26Dot6 * band_starts, GFNT_F26Dot6 * band_widths) {
   size_t lines = 0;
   size_t i = 0;
@@ -3632,7 +3832,7 @@ static GFNT_Result layout_state_allocate(LayoutState * state, const GFNT_Paragra
         "no memory for the layout");
   }
   if (!constraint) {
-    state->line_count = break_lines(p, width, state->starts, state->hyphened,
+    state->line_count = break_lines_balanced(p, width, state->starts, state->hyphened,
         state->cand_at, state->cand_fit, state->band_starts, state->band_widths);
     GFNT_F26Dot6 top = 0;
     for (size_t li = 0; li < state->line_count; li++) {

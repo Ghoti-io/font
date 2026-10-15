@@ -506,6 +506,11 @@ int main(int argc, char ** argv) {
           : strcmp(v, "pre-line") == 0 ? GFNT_WHITE_SPACE_PRE_LINE
           : GFNT_WHITE_SPACE_PRE_WRAP;
     }
+    else if (strcmp(argv[a], "--text-wrap-style") == 0 && a + 1 < argc) {
+      const char * v = argv[++a];
+      options.text_wrap_style = strcmp(v, "balance") == 0
+          ? GFNT_TEXT_WRAP_BALANCE : GFNT_TEXT_WRAP_AUTO;
+    }
     else if (strcmp(argv[a], "--text-transform") == 0 && a + 1 < argc) {
       const char * v = argv[++a];
       if (strcmp(v, "capitalize") == 0) style_options.text_transform |= GFNT_TEXT_TRANSFORM_CAPITALIZE;

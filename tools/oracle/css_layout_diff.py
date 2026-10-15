@@ -232,6 +232,10 @@ CASES.append(("white-space-pre-line-crlf", "A\r\nB", "horizontal", "mixed", 80,
               "start", "ltr", "auto",
               {"whiteSpace": "pre-line", "lineStructureOnly": True,
                "driver": ("--white-space", "pre-line")}))
+CASES.append(("text-wrap-balance", "AB AB AB AB", "horizontal", "mixed", 260,
+              "start", "ltr", "auto",
+              {"textWrapStyle": "balance",
+               "driver": ("--text-wrap-style", "balance")}))
 CASES.append(("text-transform-uppercase", "abc", "horizontal", "mixed", 200,
               "start", "ltr", "auto",
               {"textTransform": "uppercase", "driver": ("--text-transform", "uppercase")}))
@@ -343,6 +347,7 @@ function measure(c) {
   if (c.lineBreak) d.style.lineBreak = c.lineBreak;
   if (c.whiteSpace) d.style.whiteSpace = c.whiteSpace;
   if (c.textTransform) d.style.textTransform = c.textTransform;
+  if (c.textWrapStyle) d.style.textWrapStyle = c.textWrapStyle;
   d.style.textJustify = c.justify;
   d.style.direction = c.dir;
   d.style.lineHeight = c.verticalAlign ? '0' : (c.lineHeight || 'normal');
@@ -451,7 +456,8 @@ def chrome_rects(cases):
                  lang=(c[8].get("lang") if len(c) > 8 else None),
                  lineStructureOnly=(c[8].get("lineStructureOnly", False) if len(c) > 8 else False),
                  whiteSpace=(c[8].get("whiteSpace") if len(c) > 8 else None),
-                 textTransform=(c[8].get("textTransform") if len(c) > 8 else None))
+                 textTransform=(c[8].get("textTransform") if len(c) > 8 else None),
+                 textWrapStyle=(c[8].get("textWrapStyle") if len(c) > 8 else None))
             for c in cases]
     page = os.path.join(SCRATCH, "page.html")
     with open(page, "w", encoding="utf-8") as h:

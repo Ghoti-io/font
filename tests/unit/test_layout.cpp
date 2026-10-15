@@ -2504,6 +2504,38 @@ TEST(LayoutContent, WhiteSpacePreSuppressesOrdinarySpaceWrapping) {
   EXPECT_EQ(para.layout.lines[0].extent, 4 * kLetter + kSpace);
 }
 
+TEST(LayoutContent, WhiteSpaceBreakSpacesWrapsAndCountsEachPreservedSpace) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_BREAK_SPACES;
+  Para para("AB  CD", {font.face}, options);
+  GFNT_F26Dot6 minimum = 0, maximum = 0;
+
+  ASSERT_EQ(gfnt_paragraph_min_content(para.p, &minimum), GFNT_OK);
+  EXPECT_EQ(minimum, 2 * kLetter + kSpace);
+  ASSERT_EQ(gfnt_paragraph_max_content(para.p, &maximum), GFNT_OK);
+  EXPECT_EQ(maximum, 4 * kLetter + 2 * kSpace);
+  ASSERT_EQ(para.lay(2 * kLetter + kSpace), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].end, 3u);
+  EXPECT_EQ(para.layout.lines[1].start, 3u);
+  EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter + kSpace);
+  EXPECT_EQ(para.layout.lines[1].extent, 2 * kLetter + kSpace);
+}
+
+TEST(LayoutContent, WhiteSpaceBreakSpacesCountsTrailingSpaceBeforeHardBreak) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_BREAK_SPACES;
+  Para para("AB  \nA", {font.face}, options);
+
+  ASSERT_EQ(para.lay(2 * kLetter + kSpace), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 3u);
+  EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter + kSpace);
+  EXPECT_EQ(para.layout.lines[1].extent, kSpace);
+  EXPECT_EQ(para.layout.lines[2].extent, kLetter);
+}
+
 TEST(LayoutContent, WhiteSpacePreKeepsConsecutiveAndTrailingHardBreaks) {
   Font font(latin());
   GFNT_ParagraphOptions options{};

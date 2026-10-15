@@ -1407,7 +1407,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
       || (unsigned)options->overflow_wrap > GFNT_OVERFLOW_WRAP_BREAK_WORD
       || (unsigned)options->word_break > GFNT_WORD_BREAK_BREAK_WORD
-      || (unsigned)options->white_space > GFNT_WHITE_SPACE_PRE
+      || (unsigned)options->white_space > GFNT_WHITE_SPACE_BREAK_SPACES
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
@@ -1956,6 +1956,9 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
 
       u->opportunity = opp[u->cp_end];
       u->emergency = emergency_opp && emergency_opp[u->cp_end];
+      if (options->white_space == GFNT_WHITE_SPACE_BREAK_SPACES && u->space) {
+        u->opportunity = true;
+      }
       if (options->word_break == GFNT_WORD_BREAK_BREAK_ALL && u->emergency
           && u->cp_end < n
           && word_break_letter(cps[u->cp_end - 1],
@@ -2056,7 +2059,8 @@ GFNT_Result gfnt_paragraph_min_content(const GFNT_Paragraph * p,
     int64_t shown;
 
     total += eff_width(p, u, total);
-    if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE)) {
+    if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE
+            || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES)) {
       fit = total;
     }
     if (total > INT32_MAX || total < INT32_MIN || fit > INT32_MAX || fit < INT32_MIN) {
@@ -2103,7 +2107,8 @@ GFNT_Result gfnt_paragraph_max_content(const GFNT_Paragraph * p,
     const Unit * u = &p->units[j];
 
     total += eff_width(p, u, total);
-    if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE)) {
+    if (!u->hard && (!u->space || p->options.white_space == GFNT_WHITE_SPACE_PRE
+            || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES)) {
       fit = total;
     }
     if (total > INT32_MAX || total < INT32_MIN || fit > INT32_MAX || fit < INT32_MIN) {
@@ -2286,7 +2291,7 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
 
     total += eff_width_at(p, u, total, tab_origin);
     total -= ruby_right_refund(p, start, j, NULL, NULL);
-    if (!u->space) {
+    if (!u->space || p->options.white_space == GFNT_WHITE_SPACE_BREAK_SPACES) {
       fit = total;
     }
     if (u->hard) {
@@ -2764,6 +2769,7 @@ static LayoutLineState measure_line(const GFNT_Paragraph * p, size_t start, size
     state.hang_from--;
   }
   while (p->options.white_space != GFNT_WHITE_SPACE_PRE
+      && p->options.white_space != GFNT_WHITE_SPACE_BREAK_SPACES
       && state.hang_from > start && p->units[state.hang_from - 1].space) {
     state.hang_from--;
   }

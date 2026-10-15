@@ -1521,7 +1521,7 @@ drew.
 | 3 | Itemisation: by script, direction, style span, and by which face has the glyph | `font` layout, implemented with a caller-supplied fallback provider (§10.8) |
 | 4 | Break opportunities: UAX #14 lines, UAX #29 graphemes and words | `unicode`, applied here |
 | 5 | Paragraph layout: wrap, stack, justify, align, truncate, tabs | `font` layout; see §10.8 |
-| 6 | Inline layout: inline objects, per-line constraints (flow around boxes), ruby and emphasis marks, decoration geometry | `font` for text and geometry-only inline layout (planned); application-specific painting remains with the caller |
+| 6 | Inline layout: inline objects, per-line constraints (flow around boxes), ruby and emphasis tracks | `font` returns text and geometry; application-specific painting remains with the caller. CSS decoration geometry is not implemented. |
 | 6a | List markers, and what an inline object contains and how it is painted | `cjelly` |
 | 7 | Box model: margins, padding, where a float sits, flex, grid, constraints | `cjelly` (its Task 3.1); a float's band reaches `font` as a per-line constraint |
 
@@ -1729,7 +1729,7 @@ first face, fits; with no string the lines are only counted. The mark is a
 `GFNT_LineRun` with `ellipsis` set, stands for no bytes and is not a box for hit
 testing.
 
-**Annotation tracks (L4, partial).** `GFNT_ParagraphOptions.annotations` accepts
+**Annotation tracks (L4, implemented subset).** `GFNT_ParagraphOptions.annotations` accepts
 UTF-8 byte ranges for ruby text and emphasis marks. Ruby text is shaped once in
 its own style, can keep its base range indivisible with `group_break`, and is
 placed against the rendered line. Over/under tracks contribute to line metrics and
@@ -1818,8 +1818,9 @@ mixed or upright, and turned otherwise; and after an ideograph a soft hyphen is 
 to break (`GFNT_HYPHENS_MANUAL_PANGO`: a place to break, as Pango has it, and the hyphen turned with
 the text). A caret is a horizontal bar, and a range's rectangles are
 as thick as the column. `make check-oracle-css` holds the layout to Chromium (the `chrome` image,
-CSS Writing Modes): the rectangle of every character in 22 cases, and the ink of 40 glyphs read
-from a screenshot, agree to 0.05 and 1.6 pixels; a wrong orientation or direction fails both.
+CSS Writing Modes): the rectangle of every character in 172 cases (5,378 characters), and the ink
+of 124 glyphs in 14 cases read from screenshots, agree to 0.05 and 1.6 pixels; a wrong orientation
+or direction fails both.
 
 **Held to Pango too** (`make check-oracle-pango`, the pinned `pango` image): with
 `GFNT_ORIENT_MIXED_PANGO` and `GFNT_HYPHENS_MANUAL_PANGO` the line each character lies on and where
@@ -1919,7 +1920,7 @@ explicitly excluded. These limits identify missing oracle evidence.
 
 `text-align-last` now has an explicit paragraph option and six Chromium 154
 cases for start, end, left, right, center and justify; all six agree in the
-168-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
+172-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
 before closing punctuation and its precedence over `word-break: keep-all`, and compares
 `line-break: strict` and `loose` for small-kana wrapping. `overflow-wrap:
 anywhere` and `break-word` now have
@@ -1930,17 +1931,18 @@ coincide with shaped-unit boundaries. Breaks inside an indivisible shaping
 cluster or ligature are not currently compared and remain a known gap.
 `word-break: break-all`, `break-word`, and `keep-all` are also covered: Chromium checks
 break-all geometry and min-content width, Korean and CJK keep-all line boundaries,
-and CJK `break-word` intrinsic width. The legacy `word-break: break-word` value is implemented as
+and CJK `break-word` geometry and intrinsic width. The legacy `word-break: break-word` value is implemented as
 `normal` plus `overflow-wrap: anywhere`, including min-content sizing; Chromium
 checks its geometry and intrinsic width even with `overflow-wrap: break-word`
 specified. Level 4 `auto-phrase` is not
-implemented. `white-space: pre` now prohibits soft wraps
-while preserving explicit breaks and spaces; Chromium checks line geometry and
-min-content width. A CSS Text spec case for `text-align-last: justify` on a
+implemented. `white-space: pre` prohibits soft wraps while preserving explicit breaks and spaces.
+The added `break-spaces` value preserves each space, includes line-end spaces in line and intrinsic
+widths, and allows a break after each preserved space; Chromium compares line geometry and
+min-content width for both. A CSS Text spec case for `text-align-last: justify` on a
 forced-break `pre` line is unit-tested, because Chromium 154 leaves those
 preserved-space lines start-aligned instead of justifying them. `pre-wrap`
-remains the default. `normal`, `nowrap`,
-`pre-line`, and `break-spaces` remain unsupported. The remaining CSS-facing
+remains the default. `normal`, `nowrap`, and `pre-line` remain unsupported because this API does
+not yet collapse whitespace sequences or transform segment breaks to spaces. The remaining CSS-facing
 layout work eligible for browser differential coverage is decoration geometry
 (`text-decoration` and skip-ink), source-preserving `text-transform`,
 `hanging-punctuation`, `text-spacing-trim`, `text-autospace`, `text-wrap`
@@ -3949,7 +3951,7 @@ What that cost in findings:
 format 2; multibyte Macintosh and Microsoft `name` encodings; `gasp`; native
 Windows and macOS font enumeration; `JSTF` and the AAT features listed in §9;
 PDF-specific writing helpers; `COLR` v1 compositing and SVG drawing/rewriting;
-and ruby annotation tracks and emphasis marks. The TrueType hinting interpreter,
+and CSS decoration geometry. The TrueType hinting interpreter,
 WOFF 2 collection writer, and the formats/features in §16 are deliberate
 first-release non-goals. These statements supersede the earlier phase notes in
 this section, which record implementation history rather than current status.

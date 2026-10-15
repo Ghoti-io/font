@@ -175,6 +175,18 @@ CASES.append(("white-space-pre-line-break-anywhere", "AB） AB", "horizontal", "
               "start", "ltr", "auto",
               {"whiteSpace": "pre", "lineBreak": "anywhere", "lang": "ja",
                "driver": ("--white-space", "pre", "--line-break", "anywhere")}))
+CASES.append(("white-space-break-spaces", "AB  AB", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "break-spaces",
+               "driver": ("--white-space", "break-spaces")}))
+CASES.append(("white-space-break-spaces-trailing", "AB  \nAB", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "break-spaces",
+               "driver": ("--white-space", "break-spaces")}))
+CASES.append(("white-space-break-spaces-vertical", "AB  AB", "vertical-rl", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "break-spaces",
+               "driver": ("--white-space", "break-spaces")}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
@@ -341,12 +353,15 @@ function measure(c) {
   let minContent = null;
   if (c.overflowWrap || c.wordBreak === 'break-all' || c.wordBreak === 'break-word'
       || c.lineBreak === 'anywhere'
-      || c.whiteSpace === 'pre') {
+      || c.whiteSpace === 'pre' || c.whiteSpace === 'break-spaces') {
     const intrinsic = d.cloneNode(true);
-    intrinsic.style.width = 'min-content';
-    if (c.whiteSpace !== 'pre') intrinsic.style.whiteSpace = 'normal';
+    intrinsic.style.inlineSize = 'min-content';
+    if (c.whiteSpace !== 'pre' && c.whiteSpace !== 'break-spaces') {
+      intrinsic.style.whiteSpace = 'normal';
+    }
     document.body.appendChild(intrinsic);
-    minContent = intrinsic.getBoundingClientRect().width;
+    const intrinsicRect = intrinsic.getBoundingClientRect();
+    minContent = c.mode === 'horizontal' ? intrinsicRect.width : intrinsicRect.height;
     intrinsic.remove();
   }
   const out = {name: c.name, box: [b.x, b.y, b.width, b.height], chars: chars,
@@ -445,7 +460,7 @@ def compare(case, theirs, mine, verbose):
         if css_min is None or abs(css_min - ours_min) > TOLERANCE:
             problems.append("min-content width: chromium %s, this %.2f"
                             % (css_min, ours_min))
-    if len(case) > 8 and case[8].get("whiteSpace") == "pre":
+    if len(case) > 8 and case[8].get("whiteSpace") in ("pre", "break-spaces"):
         css_min = theirs.get("minContent")
         ours_min = mine["min"] / 64.0
         if css_min is None or abs(css_min - ours_min) > TOLERANCE:

@@ -2536,6 +2536,55 @@ TEST(LayoutContent, WhiteSpaceBreakSpacesCountsTrailingSpaceBeforeHardBreak) {
   EXPECT_EQ(para.layout.lines[2].extent, kLetter);
 }
 
+TEST(LayoutContent, WhiteSpaceNormalCollapsesAndWrapsWhitespace) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_NORMAL;
+  Para para(" A   B ", {font.face}, options);
+  GFNT_F26Dot6 minimum = 0, maximum = 0;
+
+  ASSERT_EQ(gfnt_paragraph_min_content(para.p, &minimum), GFNT_OK);
+  EXPECT_EQ(minimum, kLetter);
+  ASSERT_EQ(gfnt_paragraph_max_content(para.p, &maximum), GFNT_OK);
+  EXPECT_EQ(maximum, 2 * kLetter + kSpace);
+  ASSERT_EQ(para.lay(2 * kLetter + kSpace), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter + kSpace);
+}
+
+TEST(LayoutContent, WhiteSpaceNowrapCollapsesAndKeepsOneLine) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_NOWRAP;
+  Para para("A   AB\nB", {font.face}, options);
+  GFNT_F26Dot6 minimum = 0, maximum = 0;
+
+  ASSERT_EQ(gfnt_paragraph_min_content(para.p, &minimum), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(para.p, &maximum), GFNT_OK);
+  EXPECT_EQ(minimum, 2 * kLetter);
+  EXPECT_EQ(maximum, 4 * kLetter + 2 * kSpace);
+  ASSERT_EQ(para.lay(2 * kLetter), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 1u);
+  EXPECT_EQ(para.layout.lines[0].extent, maximum);
+}
+
+TEST(LayoutContent, WhiteSpacePreLineCollapsesSpacesAndPreservesBreaks) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_PRE_LINE;
+  Para para("A   B\n C", {font.face}, options);
+  GFNT_F26Dot6 minimum = 0, maximum = 0;
+
+  ASSERT_EQ(gfnt_paragraph_min_content(para.p, &minimum), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_max_content(para.p, &maximum), GFNT_OK);
+  EXPECT_EQ(minimum, kLetter);
+  EXPECT_EQ(maximum, 2 * kLetter + kSpace);
+  ASSERT_EQ(para.lay(maximum), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  EXPECT_EQ(para.layout.lines[0].extent, maximum);
+  EXPECT_EQ(para.layout.lines[1].extent, kLetter);
+}
+
 TEST(LayoutContent, WhiteSpacePreKeepsConsecutiveAndTrailingHardBreaks) {
   Font font(latin());
   GFNT_ParagraphOptions options{};

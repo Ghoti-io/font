@@ -32,7 +32,7 @@
  *                    [--overflow-wrap normal|anywhere|break-word]
  *                    [--line-break normal|strict|loose|anywhere]
  *                    [--word-break normal|break-all|keep-all|break-word]
- *                    [--white-space pre-wrap|pre|break-spaces]
+ *                    [--white-space pre-wrap|pre|break-spaces|normal|nowrap|pre-line]
  *                    [--space-share 0..1] [--word-spacing PX]
  *                    [--line-height-normal|--line-height-multiple N|--line-height-length PX]
  *                    [--vertical-align KIND[:VALUE]] [--split-at BYTE --second-size PX]
@@ -495,6 +495,9 @@ int main(int argc, char ** argv) {
 
       options.white_space = strcmp(v, "pre") == 0 ? GFNT_WHITE_SPACE_PRE
           : strcmp(v, "break-spaces") == 0 ? GFNT_WHITE_SPACE_BREAK_SPACES
+          : strcmp(v, "normal") == 0 ? GFNT_WHITE_SPACE_NORMAL
+          : strcmp(v, "nowrap") == 0 ? GFNT_WHITE_SPACE_NOWRAP
+          : strcmp(v, "pre-line") == 0 ? GFNT_WHITE_SPACE_PRE_LINE
           : GFNT_WHITE_SPACE_PRE_WRAP;
     }
     else if (strcmp(argv[a], "--space-share") == 0 && a + 1 < argc) {

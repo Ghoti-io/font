@@ -187,6 +187,42 @@ CASES.append(("white-space-break-spaces-vertical", "AB  AB", "vertical-rl", "mix
               "start", "ltr", "auto",
               {"whiteSpace": "break-spaces",
                "driver": ("--white-space", "break-spaces")}))
+CASES.append(("white-space-normal-collapse", " A   AB  ", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "normal", "driver": ("--white-space", "normal")}))
+CASES.append(("white-space-normal-segment-break", "A\nB", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "normal", "driver": ("--white-space", "normal")}))
+CASES.append(("white-space-normal-crlf", "A\r\nB", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "normal", "driver": ("--white-space", "normal")}))
+CASES.append(("white-space-normal-cjk-segment-break", "\u65e5\n\u672c", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "normal", "lang": "ja",
+               "driver": ("--white-space", "normal")}))
+CASES.append(("white-space-normal-tabs", "A\t\tAB", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "normal", "driver": ("--white-space", "normal")}))
+CASES.append(("white-space-normal-vertical", "A   AB", "vertical-rl", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "normal", "driver": ("--white-space", "normal")}))
+CASES.append(("white-space-normal-span-boundary", "A   AB", "horizontal", "mixed", 200,
+              "start", "ltr", "auto",
+              {"whiteSpace": "normal", "secondSpan": {"start": 2, "size": 30},
+               "driver": ("--white-space", "normal", "--split-at", "2", "--second-size", "30")}))
+CASES.append(("white-space-nowrap-collapse", "A   AB\nB", "horizontal", "mixed", 40,
+              "start", "ltr", "auto",
+              {"whiteSpace": "nowrap", "driver": ("--white-space", "nowrap")}))
+CASES.append(("white-space-pre-line-collapse", " A   AB  \n B", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "pre-line", "driver": ("--white-space", "pre-line")}))
+CASES.append(("white-space-pre-line-empty-lines", "A\n\nB", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "pre-line", "driver": ("--white-space", "pre-line")}))
+CASES.append(("white-space-pre-line-crlf", "A\r\nB", "horizontal", "mixed", 80,
+              "start", "ltr", "auto",
+              {"whiteSpace": "pre-line", "lineStructureOnly": True,
+               "driver": ("--white-space", "pre-line")}))
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
@@ -353,7 +389,9 @@ function measure(c) {
   let minContent = null;
   if (c.overflowWrap || c.wordBreak === 'break-all' || c.wordBreak === 'break-word'
       || c.lineBreak === 'anywhere'
-      || c.whiteSpace === 'pre' || c.whiteSpace === 'break-spaces') {
+      || c.whiteSpace === 'pre' || c.whiteSpace === 'break-spaces'
+      || c.whiteSpace === 'normal' || c.whiteSpace === 'nowrap'
+      || c.whiteSpace === 'pre-line') {
     const intrinsic = d.cloneNode(true);
     intrinsic.style.inlineSize = 'min-content';
     if (c.whiteSpace !== 'pre' && c.whiteSpace !== 'break-spaces') {
@@ -460,7 +498,8 @@ def compare(case, theirs, mine, verbose):
         if css_min is None or abs(css_min - ours_min) > TOLERANCE:
             problems.append("min-content width: chromium %s, this %.2f"
                             % (css_min, ours_min))
-    if len(case) > 8 and case[8].get("whiteSpace") in ("pre", "break-spaces"):
+    if len(case) > 8 and case[8].get("whiteSpace") in (
+            "pre", "break-spaces", "normal", "nowrap", "pre-line"):
         css_min = theirs.get("minContent")
         ours_min = mine["min"] / 64.0
         if css_min is None or abs(css_min - ours_min) > TOLERANCE:

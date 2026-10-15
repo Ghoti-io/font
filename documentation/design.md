@@ -1818,7 +1818,7 @@ mixed or upright, and turned otherwise; and after an ideograph a soft hyphen is 
 to break (`GFNT_HYPHENS_MANUAL_PANGO`: a place to break, as Pango has it, and the hyphen turned with
 the text). A caret is a horizontal bar, and a range's rectangles are
 as thick as the column. `make check-oracle-css` holds the layout to Chromium (the `chrome` image,
-CSS Writing Modes): the rectangle of every character in 172 cases (5,378 characters), and the ink
+CSS Writing Modes): the rectangle of every character in 183 cases (5,442 characters), and the ink
 of 124 glyphs in 14 cases read from screenshots, agree to 0.05 and 1.6 pixels; a wrong orientation
 or direction fails both.
 
@@ -1920,7 +1920,7 @@ explicitly excluded. These limits identify missing oracle evidence.
 
 `text-align-last` now has an explicit paragraph option and six Chromium 154
 cases for start, end, left, right, center and justify; all six agree in the
-172-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
+183-case CSS matrix. Chromium also checks `line-break: anywhere` breaking
 before closing punctuation and its precedence over `word-break: keep-all`, and compares
 `line-break: strict` and `loose` for small-kana wrapping. `overflow-wrap:
 anywhere` and `break-word` now have
@@ -1938,12 +1938,17 @@ specified. Level 4 `auto-phrase` is not
 implemented. `white-space: pre` prohibits soft wraps while preserving explicit breaks and spaces.
 The added `break-spaces` value preserves each space, includes line-end spaces in line and intrinsic
 widths, and allows a break after each preserved space; Chromium compares line geometry and
-min-content width for both. A CSS Text spec case for `text-align-last: justify` on a
+min-content width for both. `normal` and `nowrap` collapse whitespace sequences and segment breaks;
+`normal` also removes a segment break between ideographs. `pre-line` collapses spaces while
+preserving segment breaks. Chromium compares repeated spaces across a span boundary, tabs, LF/CRLF
+segment breaks, Latin and ideographic segment breaks, `nowrap` overflow, `pre-line` empty lines,
+min-content widths and vertical layout. The CRLF `pre-line` case compares which line each visible
+character occupies; it does not compare the carriage return's zero-width range rectangle. A CSS
+Text spec case for `text-align-last: justify` on a
 forced-break `pre` line is unit-tested, because Chromium 154 leaves those
 preserved-space lines start-aligned instead of justifying them. `pre-wrap`
-remains the default. `normal`, `nowrap`, and `pre-line` remain unsupported because this API does
-not yet collapse whitespace sequences or transform segment breaks to spaces. The remaining CSS-facing
-layout work eligible for browser differential coverage is decoration geometry
+remains the default. The remaining CSS-facing layout work eligible for browser differential
+coverage is decoration geometry
 (`text-decoration` and skip-ink), source-preserving `text-transform`,
 `hanging-punctuation`, `text-spacing-trim`, `text-autospace`, `text-wrap`
 balance/pretty behavior. Shaping-facing CSS such as

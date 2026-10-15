@@ -53,6 +53,25 @@ static bool is_newline(uint32_t cp) {
       || cp == 0x2028 || cp == 0x2029;
 }
 
+static bool css_segment_break(uint32_t cp) {
+  return cp == 0x0A || cp == 0x0D;
+}
+
+static bool css_collapsible_space(uint32_t cp) {
+  return cp == 0x20 || cp == 0x09 || css_segment_break(cp);
+}
+
+static bool paragraph_hard_break(const GFNT_Paragraph * p, uint32_t cp) {
+  if (p->options.white_space == GFNT_WHITE_SPACE_NORMAL
+      || p->options.white_space == GFNT_WHITE_SPACE_NOWRAP) {
+    return false;
+  }
+  if (p->options.white_space == GFNT_WHITE_SPACE_PRE_LINE) {
+    return css_segment_break(cp);
+  }
+  return is_newline(cp);
+}
+
 /** CSS Text's typographic-letter classes used by word-break. */
 static GUNI_LineBreak word_break_class(uint32_t cp, GUNI_LineBreakTailoring tailoring) {
   return guni_line_break_resolve(guni_line_break(cp), guni_general_category(cp), tailoring);
@@ -1382,6 +1401,8 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   bool * edge = NULL;           // item boundaries
   bool * opp = NULL;
   bool * emergency_opp = NULL;
+  bool * collapsed = NULL;
+  bool * removed_break = NULL;
   const bool emergency_breaks = options && (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL
       || options->word_break == GFNT_WORD_BREAK_BREAK_ALL
       || options->word_break == GFNT_WORD_BREAK_BREAK_WORD);
@@ -1407,7 +1428,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
       || (unsigned)options->overflow_wrap > GFNT_OVERFLOW_WRAP_BREAK_WORD
       || (unsigned)options->word_break > GFNT_WORD_BREAK_BREAK_WORD
-      || (unsigned)options->white_space > GFNT_WHITE_SPACE_BREAK_SPACES
+      || (unsigned)options->white_space > GFNT_WHITE_SPACE_PRE_LINE
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
@@ -1552,6 +1573,53 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
             "an inline object descriptor must cover exactly one U+FFFC");
         goto done;
       }
+    }
+  }
+  if (options->white_space == GFNT_WHITE_SPACE_NORMAL
+      || options->white_space == GFNT_WHITE_SPACE_NOWRAP
+      || options->white_space == GFNT_WHITE_SPACE_PRE_LINE) {
+    collapsed = ALLOC(collapsed, n);
+    removed_break = ALLOC(removed_break, n);
+    if (!collapsed || !removed_break) {
+      r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "no memory for collapsed whitespace flags");
+      goto done;
+    }
+    for (size_t i = 0; i < n;) {
+      size_t end;
+      bool has_segment_break = false;
+      bool discard = false;
+      const bool pre_line = options->white_space == GFNT_WHITE_SPACE_PRE_LINE;
+
+      if (pre_line && css_segment_break(cps[i])) {
+        i++;
+        continue;
+      }
+      if (!css_collapsible_space(cps[i])) {
+        i++;
+        continue;
+      }
+      end = i;
+      while (end < n && css_collapsible_space(cps[end])
+          && !(pre_line && css_segment_break(cps[end]))) {
+        has_segment_break = has_segment_break || css_segment_break(cps[end]);
+        end++;
+      }
+      discard = i == 0 || (pre_line && i > 0 && css_segment_break(cps[i - 1]));
+      if (!pre_line && has_segment_break && i > 0 && end < n
+          && is_ideographic(cps[i - 1]) && is_ideographic(cps[end])) {
+        discard = true;
+        removed_break[i - 1] = options->line_break == GFNT_LINE_BREAK_ANYWHERE
+            || options->word_break != GFNT_WORD_BREAK_KEEP_ALL
+            || !keep_all_pair(cps[i - 1], cps[end],
+                options->line_break == GFNT_LINE_BREAK_STRICT
+                    ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL);
+      }
+      for (size_t c = i; c < end; c++) {
+        cps[c] = 0x20;
+        collapsed[c] = discard || c != i;
+      }
+      i = end;
     }
   }
   for (size_t i = 0; i < span_count; i++) {
@@ -1956,6 +2024,30 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
 
       u->opportunity = opp[u->cp_end];
       u->emergency = emergency_opp && emergency_opp[u->cp_end];
+      if (collapsed && u->cp_start < n && collapsed[u->cp_start]) {
+        bool all_collapsed = true;
+
+        for (size_t c = u->cp_start; c < u->cp_end; c++) {
+          all_collapsed = all_collapsed && collapsed[c];
+        }
+        if (all_collapsed) {
+          u->width = 0;
+          u->base_width = 0;
+          u->tab = false;
+          u->opportunity = false;
+          u->emergency = false;
+          for (size_t g = u->g_lo; g < u->g_hi; g++) {
+            p->glyphs[g].advance = 0;
+            p->glyphs[g].tab = false;
+          }
+        }
+      }
+      if (collapsed && u->space && u->cp_start < n && !collapsed[u->cp_start]) {
+        u->opportunity = true;
+      }
+      if (removed_break && u->cp_end && removed_break[u->cp_end - 1]) {
+        u->opportunity = true;
+      }
       if (options->white_space == GFNT_WHITE_SPACE_BREAK_SPACES && u->space) {
         u->opportunity = true;
       }
@@ -1976,8 +2068,8 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
                   ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL)) {
         u->opportunity = false;
       }
-      u->hard = is_newline(last)
-          && !(last == 0x0D && u->cp_end < n && cps[u->cp_end] == 0x0A);
+      u->hard = paragraph_hard_break(p, last)
+          && !(last == 0x0D && u->cp_end < n && css_segment_break(cps[u->cp_end]));
       if (u->object) {
         const GFNT_InlineObject * object = p->runs[u->run].object;
         u->opportunity = u->opportunity || object->break_after;
@@ -2034,6 +2126,8 @@ done:
   }
   allocator->free_fn(allocator->ctx, levels);
   allocator->free_fn(allocator->ctx, ori);
+  allocator->free_fn(allocator->ctx, collapsed);
+  allocator->free_fn(allocator->ctx, removed_break);
   allocator->free_fn(allocator->ctx, span_cp);
   allocator->free_fn(allocator->ctx, edge);
   allocator->free_fn(allocator->ctx, opp);
@@ -2284,7 +2378,8 @@ static BreakResult break_one_line(const GFNT_Paragraph * p, size_t start,
   size_t cands = 0;
   bool have_emergency = false;
   bool bounded = width != GFNT_LAYOUT_UNBOUNDED;
-  bool can_wrap = p->options.white_space != GFNT_WHITE_SPACE_PRE;
+  bool can_wrap = p->options.white_space != GFNT_WHITE_SPACE_PRE
+      && p->options.white_space != GFNT_WHITE_SPACE_NOWRAP;
 
   for (size_t j = i; j < p->unit_count; j++) {
     const Unit * u = &p->units[j];
@@ -2937,6 +3032,11 @@ static void place_line(PlacementState * state, GFNT_Line * line, size_t slice_co
         GFNT_F26Dot6 before = 0, after = 0, origin, l, t, r, b;
         GFNT_F26Dot6 shift = 0;
         if (slice->src == p->glyphs) advance -= state->ruby_reclaim[g];
+        if (slice->hang && (p->options.white_space == GFNT_WHITE_SPACE_NORMAL
+                || p->options.white_space == GFNT_WHITE_SPACE_NOWRAP
+                || p->options.white_space == GFNT_WHITE_SPACE_PRE_LINE)) {
+          advance = 0;
+        }
         if (advance < 0) {
           state->failed = true;
           return;
@@ -3038,7 +3138,7 @@ static void align_line(const GFNT_Paragraph * p, GFNT_Line * line,
       else hi = mid;
     }
     last = lo > 0 && lo <= p->length && p->cp_byte[lo] == line->end
-        && is_newline(p->cps[lo - 1]);
+        && paragraph_hard_break(p, p->cps[lo - 1]);
   }
   if (last && p->options.align_last != GFNT_ALIGN_LAST_AUTO) {
     switch (p->options.align_last) {

@@ -203,12 +203,11 @@ struct Para {
 };
 
 struct FlowBands {
-  size_t calls = 0;
   bool offset = true;
+  GFNT_F26Dot6 width = 800;
   bool zero_width = false;
   bool retry_by_height = false;
   bool clear = false;
-  bool oscillate = false;
   GFNT_Result result = GFNT_OK;
   bool invalid = false;
 };
@@ -216,7 +215,6 @@ struct FlowBands {
 GFNT_Result flow_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6 height,
     GFNT_Band * out) {
   auto & bands = *static_cast<FlowBands *>(context);
-  ++bands.calls;
   if (bands.invalid) {
     out->start = 0;
     out->width = -1;
@@ -224,7 +222,7 @@ GFNT_Result flow_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6 height,
     return GFNT_OK;
   }
   out->start = bands.offset ? (top == 0 ? 64 : 128) : 0;
-  out->width = 800;
+  out->width = bands.width;
   if (bands.zero_width) out->width = 0;
   out->next_top = 0;
   if (bands.retry_by_height && height > 0) out->width = 320;
@@ -232,7 +230,6 @@ GFNT_Result flow_band(void * context, GFNT_F26Dot6 top, GFNT_F26Dot6 height,
     out->width = 400;
     out->next_top = 1000;
   }
-  if (bands.oscillate && height > 0) out->width = (bands.calls & 1) ? 800 : 640;
   return bands.result;
 }
 
@@ -1054,9 +1051,99 @@ TEST(LayoutFlow, FullWidthBandMatchesTheExistingLayout) {
       EXPECT_EQ(actual.runs[0].glyphs[g].pen_y, expected.runs[0].glyphs[g].pen_y);
     }
   }
-  EXPECT_GE(context.calls, flow.line_count * 2);
   gfnt_layout_free(&flow);
   gfnt_layout_free(&legacy);
+}
+
+TEST(LayoutFlow, TextWrapBalanceUsesRepeatSafeCallbackBands) {
+  Font font(latin());
+  GFNT_ParagraphOptions balance_options{};
+  balance_options.text_wrap_style = GFNT_TEXT_WRAP_BALANCE;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para greedy("AB AB AB AB", {font.face});
+  Para balanced("AB AB AB AB", {font.face}, balance_options);
+  GFNT_Layout flow{};
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, width, &greedy.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(balanced.p, width, &balanced.layout, nullptr), GFNT_OK);
+  FlowBands context;
+  context.offset = false;
+  context.width = width;
+  GFNT_LineConstraint constraint{&context, flow_band};
+
+  ASSERT_EQ(gfnt_paragraph_layout_flow(balanced.p, &constraint, &flow, nullptr), GFNT_OK);
+  ASSERT_EQ(flow.line_count, balanced.layout.line_count);
+  ASSERT_EQ(flow.line_count, greedy.layout.line_count);
+  EXPECT_NE(flow.lines[0].end, greedy.layout.lines[0].end);
+  for (size_t i = 0; i < flow.line_count; i++) {
+    EXPECT_EQ(flow.lines[i].start, balanced.layout.lines[i].start);
+    EXPECT_EQ(flow.lines[i].end, balanced.layout.lines[i].end);
+    EXPECT_EQ(flow.lines[i].extent, balanced.layout.lines[i].extent);
+  }
+  gfnt_layout_free(&flow);
+}
+
+TEST(LayoutFlow, TextWrapBalanceKeepsForcedBreakGroupsIndependent) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_BALANCE;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para greedy("AB AB AB AB\nAB AB AB AB", {font.face});
+  Para balanced("AB AB AB AB\nAB AB AB AB", {font.face}, options);
+  GFNT_Layout flow{};
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, width, &greedy.layout, nullptr), GFNT_OK);
+  FlowBands context;
+  context.offset = false;
+  context.width = width;
+  GFNT_LineConstraint constraint{&context, flow_band};
+
+  ASSERT_EQ(gfnt_paragraph_layout_flow(balanced.p, &constraint, &flow, nullptr), GFNT_OK);
+  ASSERT_EQ(flow.line_count, greedy.layout.line_count);
+  ASSERT_EQ(flow.line_count, 4u);
+  EXPECT_NE(flow.lines[0].end, greedy.layout.lines[0].end);
+  EXPECT_NE(flow.lines[2].end, greedy.layout.lines[2].end);
+  EXPECT_EQ(flow.lines[2].start, 12u);
+  gfnt_layout_free(&flow);
+}
+
+TEST(LayoutFlow, TextWrapPrettyUsesRepeatSafeCallbackBands) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_PRETTY;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para greedy("AB AB AB AB", {font.face});
+  Para pretty("AB AB AB AB", {font.face}, options);
+  GFNT_Layout flow{};
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, width, &greedy.layout, nullptr), GFNT_OK);
+  FlowBands context;
+  context.offset = false;
+  context.width = width;
+  GFNT_LineConstraint constraint{&context, flow_band};
+
+  ASSERT_EQ(gfnt_paragraph_layout_flow(pretty.p, &constraint, &flow, nullptr), GFNT_OK);
+  ASSERT_EQ(flow.line_count, greedy.layout.line_count);
+  EXPECT_NE(flow.lines[0].end, greedy.layout.lines[0].end);
+  gfnt_layout_free(&flow);
+}
+
+TEST(LayoutFlow, AvoidShortLastLineUsesRepeatSafeCallbackBands) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para para("AB AB AB AB", {font.face}, options);
+  GFNT_Layout flow{};
+  ASSERT_EQ(para.created, GFNT_OK);
+  FlowBands context;
+  context.offset = false;
+  context.width = width;
+  GFNT_LineConstraint constraint{&context, flow_band};
+
+  ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &flow, nullptr), GFNT_OK);
+  ASSERT_EQ(flow.line_count, 2u);
+  EXPECT_EQ(flow.lines[0].end, 6u);
+  EXPECT_EQ(flow.lines[1].start, 6u);
+  EXPECT_EQ(flow.lines[1].extent, 4 * kLetter + kSpace);
+  gfnt_layout_free(&flow);
 }
 
 TEST(LayoutFlow, BandOffsetMovesLineBoxAndGlyphs) {
@@ -1117,7 +1204,6 @@ TEST(LayoutFlow, RebreaksWhenMeasuredHeightChangesTheBand) {
   context.retry_by_height = true;
   GFNT_LineConstraint constraint{&context, flow_band};
   ASSERT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &para.layout, nullptr), GFNT_OK);
-  EXPECT_GE(context.calls, 4u);
   ASSERT_GE(para.layout.line_count, 2u);
   EXPECT_EQ(para.layout.lines[0].end, 1u);
 }
@@ -1163,7 +1249,6 @@ TEST(LayoutFlow, FirstAndHangingIndentsChangeTheBandsAndBreaks) {
   hanging.hanging_indent = true;
   Para hung("A B C D E", {font.face}, hanging);
   ASSERT_EQ(hung.created, GFNT_OK);
-  context.calls = 0;
   ASSERT_EQ(gfnt_paragraph_layout_flow(hung.p, &constraint, &hung.layout, nullptr), GFNT_OK);
   ASSERT_GE(hung.layout.line_count, 2u);
   EXPECT_EQ(hung.layout.lines[0].box.x, 0);
@@ -1202,18 +1287,6 @@ TEST(LayoutFlow, VerticalBandsUseTheAlongLineAxis) {
     EXPECT_GE(glyph.pen_y, para.layout.lines[0].box.y);
     EXPECT_LE(glyph.pen_y, para.layout.lines[0].box.y + para.layout.lines[0].box.height);
   }
-}
-
-TEST(LayoutFlow, StopsWhenTheBandNeverStabilizes) {
-  Font font(latin());
-  Para para("AB CD", {font.face});
-  ASSERT_EQ(para.created, GFNT_OK);
-  FlowBands context;
-  context.oscillate = true;
-  GFNT_LineConstraint constraint{&context, flow_band};
-  GFNT_Layout layout{};
-  EXPECT_EQ(gfnt_paragraph_layout_flow(para.p, &constraint, &layout, nullptr), GFNT_ERR_LIMIT);
-  EXPECT_EQ(layout.lines, nullptr);
 }
 
 TEST(LayoutFlow, PropagatesCallbackErrorsAndRejectsInvalidBands) {

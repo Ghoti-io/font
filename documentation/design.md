@@ -1972,9 +1972,9 @@ offset for this fixture, so the comparison excludes that vertical coordinate;
 inline positions, advances and range-box sizes agree. Chromium does not support
 these values, so its unchanged text is not used as an oracle for them.
 `GFNT_TEXT_WRAP_BALANCE` implements CSS `text-wrap-style: balance` for
-static-width paragraphs. It preserves the greedy line count for groups of two
-through five resulting lines (and balances up to ten), balances each forced-break
-group independently, and uses the ordinary greedy breaker for longer groups.
+static-width paragraphs. It preserves the greedy line count for groups of up to
+ten resulting lines, balances each forced-break group independently, and uses
+the ordinary greedy breaker for longer groups.
 The Ghoti `pretty` policy uses the same bounded optimizer;
 `avoid-short-last-line` is a separate final-line adjustment: if the last line
 uses less than one third of its available measure, the breaker moves the
@@ -1988,12 +1988,20 @@ optimization details to the user agent. The adjustment preserves the greedy
 line count and never moves text across a forced break. Static-width balancing
 and last-line adjustment include position-dependent tab stops, ruby-reserved
 advance and AUTO ruby overhang, autospace, and text-spacing trims when scoring
-candidate lines. Callback-constrained flow keeps its forward greedy pass: a
-line-band callback can depend on the measured line height and its public
-contract does not permit speculative calls or replay. Applying a paragraph-wide
-optimizer there would change callback observations and could invalidate later
-bands. The unit cases cover short text, unbounded width, each added value,
-line counts, forced-break groups, tabs and annotations.
+candidate lines. Callback-constrained flow supports the same balance and
+pretty policies. Its callback contract requires repeat-safe output for identical
+arguments and allows hypothetical ranges and heights to be queried in any
+order. The flow planner retains the greedy line count within each forced-break
+group and commits a candidate only when it preserves the next group's block
+position. It searches groups of at most ten lines under a bounded candidate
+budget; longer groups, exhausted searches, and groups without a better valid
+candidate retain their greedy breaks. `avoid-short-last-line` also considers
+whitespace moves in callback-constrained flow and commits only when the moved
+lines fit and the following group keeps its original block position. Candidate
+callback errors or invalid bands make that candidate unavailable; errors from
+the initial committed greedy layout still fail the layout. Unit cases cover
+short text, unbounded width, each added value, line counts, forced-break groups,
+tabs, annotations, and callback-provided bands.
 The Chromium oracle compares balance geometry at multiple measures and for
 different paragraph lengths, and checks CSS parse support for all values. It
 does not claim a geometry match for `pretty`, whose optimization

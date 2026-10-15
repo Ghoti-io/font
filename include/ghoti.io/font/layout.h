@@ -561,7 +561,14 @@ typedef struct GFNT_Band {
   GFNT_F26Dot6 next_top; ///< Next block position with room, or <= top when there is none.
 } GFNT_Band;
 
-/** @brief Callback that returns the intersection band over a line's block-axis interval. */
+/**
+ * @brief Repeat-safe callback that returns the intersection band over a line's block-axis interval.
+ *
+ * Layout may query the same or hypothetical positions and heights more than once, in any order,
+ * while selecting line breaks. The callback must return the same result and band for the same
+ * arguments and must not base its output on invocation count or order. The context and any data it
+ * reads must remain valid and unchanged for the duration of layout.
+ */
 typedef GFNT_Result (*GFNT_LineBandFn)(void * ctx, GFNT_F26Dot6 top,
     GFNT_F26Dot6 height, GFNT_Band * out);
 
@@ -911,12 +918,17 @@ GFNT_API void gfnt_column_layout_free(GFNT_ColumnLayout * layout);
  * @brief Lay out a paragraph against a callback-provided band for each line.
  *
  * The callback is called first with height 0, then with the measured line height. If the
- * intersection changes, the line is broken and measured again. A stable band is required within
- * 2 * unit_count + 16 callback attempts per layout. When the first unbreakable stretch does not
- * fit, a later next_top moves the line down; without a later position it overflows, matching
+ * intersection changes, the line is broken and measured again. The callback must meet the
+ * repeat-safe contract of ::GFNT_LineBandFn. The initial forward pass has a total budget of
+ * 2 * unit_count + 16 callback queries to stabilize measured line bands. Text-wrap optimization
+ * can make additional speculative queries for hypothetical ranges and heights; its candidate
+ * search is bounded and falls back to the greedy breaks when that budget is exhausted. When the
+ * first unbreakable stretch does not fit, a later next_top moves the line down; without a later
+ * position it overflows, matching
  * ::gfnt_paragraph_layout(). A zero-width band with no next_top also overflows one stretch to
- * ensure progress. Callback errors propagate. Negative starts are allowed; widths must be
- * nonnegative and the band end must fit in the 26.6 coordinate range.
+ * ensure progress. Errors from the initial forward-pass queries propagate; errors or invalid bands
+ * from hypothetical optimization queries make those candidates unavailable. Negative starts are
+ * allowed; widths must be nonnegative and the band end must fit in the 26.6 coordinate range.
  */
 GFNT_API GFNT_Result gfnt_paragraph_layout_flow(const GFNT_Paragraph * paragraph,
     const GFNT_LineConstraint * constraint, GFNT_Layout * out, GFNT_Error * error);

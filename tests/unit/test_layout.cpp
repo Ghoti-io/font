@@ -2466,14 +2466,30 @@ TEST(LayoutContent, WhiteSpacePreKeepsSoftLineBreaksAndTrailingSpaces) {
   Font font(latin());
   GFNT_ParagraphOptions options{};
   options.white_space = GFNT_WHITE_SPACE_PRE;
+  options.overflow_wrap = GFNT_OVERFLOW_WRAP_ANYWHERE;
   Para para("AB  \nC", {font.face}, options);
-  GFNT_F26Dot6 minimum = 0;
+  GFNT_F26Dot6 minimum = 0, maximum = 0;
 
   ASSERT_EQ(gfnt_paragraph_min_content(para.p, &minimum), GFNT_OK);
   EXPECT_EQ(minimum, 2 * kLetter + 2 * kSpace);
+  ASSERT_EQ(gfnt_paragraph_max_content(para.p, &maximum), GFNT_OK);
+  EXPECT_EQ(maximum, 2 * kLetter + 2 * kSpace);
   ASSERT_EQ(para.lay(2 * kLetter), GFNT_OK);
   ASSERT_EQ(para.layout.line_count, 2u);
   EXPECT_EQ(para.layout.lines[0].extent, 2 * kLetter + 2 * kSpace);
+}
+
+TEST(LayoutContent, WhiteSpacePreKeepsConsecutiveAndTrailingHardBreaks) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.white_space = GFNT_WHITE_SPACE_PRE;
+  options.overflow_wrap = GFNT_OVERFLOW_WRAP_ANYWHERE;
+  Para para("A\n\nB\n", {font.face}, options);
+
+  ASSERT_EQ(para.lay(kLetter), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 4u);
+  EXPECT_EQ(para.layout.lines[1].extent, 0);
+  EXPECT_EQ(para.layout.lines[3].run_count, 0u);
 }
 
 TEST(LayoutContent, NoLineIsWiderThanTheMaxOrNarrowerThanItsMinimumAllows) {

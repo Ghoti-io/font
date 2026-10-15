@@ -66,10 +66,10 @@ Every recursion - composite glyphs, charstring subroutines, extension lookups,
 `COLR` v1 paint graphs - carries a depth counter with a limit that does not
 come from the file. Every count is capped by `GFNT_Limits`. And the one
 component that is a bytecode interpreter over file-supplied programs - the
-TrueType hinting VM - does not exist here (§2 M3). A malformed font produces a
-named result and a diagnostic naming the table and offset (§5.6); it never
-produces a crash, a hang, or a read past a buffer, and the fuzzers exist to
-keep that true.
+TrueType hinting VM - is not implemented yet (§2 M3, §8.5). A malformed font
+produces a named result and a diagnostic naming the table and offset (§5.6);
+it never produces a crash, a hang, or a read past a buffer, and the fuzzers
+exist to keep that true.
 
 ---
 
@@ -82,7 +82,7 @@ field's, and font engineering has a long list.
 | --- | --- | --- | --- |
 | M1 | Reading file data through a struct cast, or trusting an offset because the table directory said so | The font-parser CVE class, every major parser, for two decades | One bounds-checked reader (§6); offsets validated against the table's own extent |
 | M2 | Unbounded recursion through file-supplied references | Composite glyphs referencing themselves; charstring subroutines; nested lookups | A depth limit on every recursion, set by the Standard or by `GFNT_Limits`, never by the file (§6.2) |
-| M3 | A bytecode interpreter over programs the file supplies, run in a trusted context | TrueType instructions; Type 1 `OtherSubrs`; the kernel-mode parsers that led to Windows' `fontdrvhost` sandbox | No hinting interpreter (§8.5). Outlines are rendered unhinted with good anti-aliasing, which is what the web and every modern GUI toolkit now ship |
+| M3 | A bytecode interpreter over programs the file supplies, run in a trusted context | TrueType instructions; Type 1 `OtherSubrs`; the kernel-mode parsers that led to Windows' `fontdrvhost` sandbox | No hinting interpreter yet (§8.5); any implementation must honor the same bounded parsing and execution rules |
 | M4 | Line height from whichever metrics table the first platform used | Windows using `usWinAscent`/`usWinDescent`, macOS `hhea`, browsers a compromise; the same font a different height on each | `GFNT_LineMetrics` policy (§10.3), with the documented default following `OS/2` `fsSelection` bit 7 (`USE_TYPO_METRICS`) as the font's own request |
 | M5 | Measuring with fractional advances and painting with rounded ones | Every text box whose last glyph is clipped | Measure and paint are one code path in 26.6 fixed point (§10.2). Rounding, if any, is a named policy applied in both |
 | M6 | Shaping output that discards which characters made which glyphs | Every renderer that could draw text but not select it; `cjelly`'s `semantics.md` names this as the rewrite to avoid | The cluster map is a field of `GFNT_ShapedRun`, not an option (§9.3) |
@@ -126,7 +126,8 @@ which of them this library takes, and which of those it reads today.
 | | WOFF 2 | **implemented** (§7.1): one Brotli stream through `compress`, `glyf`/`loca` and `hmtx` transforms undone, collections rebuilt as `ttcf`; the metadata and private blocks are range-checked and not read. **Written** too (§12.4), one font at a time |
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
-| | `.dfont`, `.eot`, hinting | absent, §16 |
+| | `.dfont`, `.eot` | absent, §16 |
+| | TrueType hinting | not implemented yet; planned work, §8.5 |
 | **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
@@ -1309,17 +1310,16 @@ un-anti-aliased rendering of hinted outlines, which is absent), no embolden or
 oblique synthesis in the first release - synthetic styles are a fallback
 concern and belong with font discovery when it wants them.
 
-### 8.5 Hinting is absent, and stated absent
+### 8.5 TrueType hinting is planned
 
-There is no TrueType instruction interpreter and no autohinter. The `gasp`
-table is read and its per-range flags are exposed as advice. This is decision
-§17.2 and M3: the interpreter is the largest single file in any library that
-has one, a bytecode VM whose only observable output is pixel coverage, and a
-correctness problem whose only oracle is a differential against FreeType's own
-interpreter. Unhinted rendering with exact-area anti-aliasing at ordinary
-sizes is what every browser and every modern toolkit ships. The `gasp`
-advice, `ROUND_XY_TO_GRID` and the `cvt`/`fpgm`/`prep` tables are parsed for
-completeness and ignored.
+There is no TrueType instruction interpreter or autohinter yet. The project
+plans to implement TrueType hinting; the earlier decision to exclude it from
+the first release is superseded (§17.2). The `gasp` table is read and its
+per-range flags are exposed as advice. The `gasp` advice, `ROUND_XY_TO_GRID`
+and the `cvt`/`fpgm`/`prep` tables are currently parsed for completeness and
+ignored. Until hinting is implemented, outlines are rendered unhinted with
+exact-area anti-aliasing. Any future interpreter must treat font bytecode as
+untrusted input and retain the bounds and resource limits described in §§1–2.
 
 ---
 
@@ -2986,8 +2986,6 @@ creates, keyed by `GFNT_AtlasEntry`'s key, with a stated capacity and an LRU.
 Absent, not stubbed; each returns `ERR_UNSUPPORTED` at the point where the
 file or the request names it, and nowhere is there a function that pretends.
 
-- **The TrueType hinting interpreter and any autohinter** (M3, §8.5).
-- **A WOFF 2 collection writer.**
 - **Drawing or rewriting the `SVG ` table's documents.** The table is read (`svg.h`: the index, the
   document for a glyph, gzip inflated) and carried by a subset that retains glyph ids; the documents
   name glyph ids inside themselves, so a renumbering subset leaves the table out rather than rewrite
@@ -3008,7 +3006,9 @@ Listed so that they were decided on purpose. 1-3 were put to the author and
 answered on 2026-09-23/24; the rest stand as recommended.
 
 1. **Layout is in this library, up to the paragraph.** Decided (§10).
-2. **No hinting interpreter.** Decided (§8.5).
+2. **Hinting is planned.** The earlier decision to exclude a TrueType
+   interpreter from the first release is superseded; see §8.5 for current
+   status and security constraints.
 3. **Bitmap fonts are first-class in the API.** Decided (§5.3, §5.4); standalone and embedded strike formats are implemented.
 4. **Outlines and rasterisation both live here**, writing into `GIMG_Raster`
    when `image` is present and a byte buffer when not; `image` stays optional
@@ -4036,13 +4036,14 @@ What that cost in findings:
   `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
   which is a fact about the font rather than about the object model.
 
-**Remaining implementation gaps (current):** `FeatureVariations` condition
-format 2; multibyte Macintosh and Microsoft `name` encodings; `gasp`; native
-Windows and macOS font enumeration; `JSTF` and the AAT features listed in §9;
+**Remaining implementation gaps (current):** TrueType hinting (planned, §8.5);
+`FeatureVariations` condition format 2; multibyte Macintosh and Microsoft
+`name` encodings; `gasp`; native Windows and macOS font enumeration; `JSTF`
+and the AAT features listed in §9;
 PDF-specific writing helpers; and `COLR` v1 compositing and SVG drawing/rewriting.
 CSS decoration rectangles are available through the paragraph layout API; the
-remaining browser comparison limits are listed in §10.6. The TrueType hinting interpreter,
-WOFF 2 collection writer, and the formats/features in §16 are deliberate
+remaining browser comparison limits are listed in §10.6. WOFF 2 collection
+writing is implemented (§12.4). The formats and features in §16 remain
 first-release non-goals. These statements supersede the earlier phase notes in
 this section, which record implementation history rather than current status.
 

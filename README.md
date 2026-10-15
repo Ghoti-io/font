@@ -2,8 +2,9 @@
 
 Font files in, and glyph identities, advances and names out. The aim is every
 family a document might name — sfnt (`glyf` and `CFF`), the bitmap formats,
-Type 1, WOFF — a checked reader and no hinting interpreter, fixed-point
-rasterisation, shaping, and paragraph layout that stops at the paragraph.
+Type 1, WOFF — a checked reader, currently unhinted fixed-point rasterisation,
+shaping, and paragraph layout that stops at the paragraph. A TrueType hinting
+interpreter is planned; see design §8.5.
 
 ## What is implemented
 
@@ -28,7 +29,7 @@ This is what the library implements.
 
 **What shaping does not do**, stated rather than approximated: Apple's AAT beyond `morx`/`mort`, `kerx` (formats 0, 1, 2, 4 and 6) and `trak`, `GSUB`/`GPOS` `BASE` and `JSTF`, and a hinting device table unless the caller gives a pixel size. A mixed-direction paragraph is shaped by `gfnt_faces_shape_bidi()` (UAX #9 from the `unicode` library, one line, visual order); breaking it into lines is the caller's. A few characters in nine scripts are sorted into a different category than HarfBuzz sorts them into, and `tools/oracle/hb_diff.py` names them as a known gap.
 
-**Remaining gaps and stated limits:** `JSTF` justification, some AAT features, and hinting device-table adjustments without a pixel size are unsupported. HarfBuzz differential tests record a small set of script-character classification differences. Multibyte Macintosh and Microsoft `name` encodings are refused rather than guessed. Windows registry/DirectWrite and macOS CoreText discovery are marked platform TODOs in the design. `COLR` v1 is exposed as a paint graph, not rasterized, and `SVG ` documents are read and carried where safe but not drawn or rewritten. See design §§9–11 and §16 for these limits and the deliberate non-goals.
+**Remaining gaps and stated limits:** `JSTF` justification, some AAT features, and hinting device-table adjustments without a pixel size are unsupported. HarfBuzz differential tests record a small set of script-character classification differences. Multibyte Macintosh and Microsoft `name` encodings are refused rather than guessed. Windows registry/DirectWrite and macOS CoreText discovery are marked platform TODOs in the design. `COLR` v1 is exposed as a paint graph, not rasterized, and `SVG ` documents are read and carried where safe but not drawn or rewritten. See design §§9–11 and §16 for these limits and remaining first-release non-goals.
 ## Before you call it
 
 - A table this library does not parse yet comes back as `GFNT_ERR_UNSUPPORTED` and names what it could not read. An empty result is reserved for a font that states the thing is absent.

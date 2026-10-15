@@ -2825,7 +2825,7 @@ TEST(LayoutContent, TextWrapAvoidShortLastLineLeavesAnUnmovableWordAlone) {
   EXPECT_EQ(avoiding.layout.lines[1].start, 8u);
 }
 
-TEST(LayoutTabs, TextWrapAvoidShortLastLineRetainsGreedyBreaksAroundTabs) {
+TEST(LayoutTabs, TextWrapAvoidShortLastLineReflowsAroundPositionedTabs) {
   Font font(latin());
   GFNT_ParagraphOptions greedy_options{};
   greedy_options.tab_width = 800;
@@ -2841,13 +2841,32 @@ TEST(LayoutTabs, TextWrapAvoidShortLastLineRetainsGreedyBreaksAroundTabs) {
   ASSERT_GE(greedy.layout.line_count, 2u);
   ASSERT_EQ(avoiding.layout.line_count, greedy.layout.line_count);
   EXPECT_LT(greedy.layout.lines[greedy.layout.line_count - 1].extent, width / 3);
-  for (size_t i = 0; i < greedy.layout.line_count; i++) {
-    EXPECT_EQ(avoiding.layout.lines[i].start, greedy.layout.lines[i].start);
-    EXPECT_EQ(avoiding.layout.lines[i].end, greedy.layout.lines[i].end);
+  EXPECT_LT(avoiding.layout.lines[avoiding.layout.line_count - 1].start,
+      greedy.layout.lines[greedy.layout.line_count - 1].start);
+  EXPECT_GT(avoiding.layout.lines[avoiding.layout.line_count - 1].extent,
+      greedy.layout.lines[greedy.layout.line_count - 1].extent);
+  for (size_t i = 0; i < avoiding.layout.line_count; i++) {
+    EXPECT_LE(avoiding.layout.lines[i].extent, width);
   }
 }
 
-TEST(LayoutAnnotation, TextWrapAvoidShortLastLineRetainsGreedyBreaksForAnnotatedText) {
+TEST(LayoutTabs, TextWrapBalanceMeasuresTabStopsAtEachCandidatePosition) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_BALANCE;
+  options.tab_width = 800;
+  options.tabs_from_container = true;
+  const GFNT_F26Dot6 width = 2000;
+  Para para("AB\tAB AB AB AB AB", {font.face}, options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, width, &para.layout, nullptr), GFNT_OK);
+  ASSERT_GE(para.layout.line_count, 2u);
+  for (size_t i = 0; i < para.layout.line_count; i++) {
+    EXPECT_LE(para.layout.lines[i].extent, width);
+  }
+}
+
+TEST(LayoutAnnotation, TextWrapAvoidShortLastLineReflowsAnnotatedText) {
   Font font(latin());
   const GFNT_Face * faces[] = {font.face};
   GFNT_Annotation ruby{};
@@ -2875,9 +2894,40 @@ TEST(LayoutAnnotation, TextWrapAvoidShortLastLineRetainsGreedyBreaksForAnnotated
   ASSERT_EQ(greedy.layout.line_count, 2u);
   ASSERT_EQ(avoiding.layout.line_count, greedy.layout.line_count);
   EXPECT_LT(greedy.layout.lines[1].extent, width / 3);
-  for (size_t i = 0; i < greedy.layout.line_count; i++) {
-    EXPECT_EQ(avoiding.layout.lines[i].start, greedy.layout.lines[i].start);
-    EXPECT_EQ(avoiding.layout.lines[i].end, greedy.layout.lines[i].end);
+  EXPECT_LT(avoiding.layout.lines[avoiding.layout.line_count - 1].start,
+      greedy.layout.lines[greedy.layout.line_count - 1].start);
+  EXPECT_GT(avoiding.layout.lines[avoiding.layout.line_count - 1].extent,
+      greedy.layout.lines[greedy.layout.line_count - 1].extent);
+  for (size_t i = 0; i < avoiding.layout.line_count; i++) {
+    EXPECT_LE(avoiding.layout.lines[i].extent, width);
+  }
+}
+
+TEST(LayoutAnnotation, TextWrapBalanceMeasuresRubyReservedAdvance) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = 2;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "ABCD";
+  ruby.text_length = 4;
+  ruby.align = GFNT_ANNOTATION_ALIGN_CENTER;
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_BALANCE;
+  options.annotations = &ruby;
+  options.annotation_count = 1;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para para("AB AB AB AB", {font.face}, options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, width, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 2u);
+  for (size_t i = 0; i < para.layout.line_count; i++) {
+    EXPECT_LE(para.layout.lines[i].extent, width);
   }
 }
 

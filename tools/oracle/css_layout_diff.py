@@ -270,6 +270,25 @@ CASES.append(("text-wrap-avoid-short-last-line", "AB AB AB AB", "horizontal", "m
               {"textWrapStyle": "avoid-short-last-line",
                "driver": ("--text-wrap-style", "avoid-short-last-line"),
                "policyNoGeometryOracle": True}))
+# Balance is specified to preserve the greedy line count for groups of two to
+# five lines. Vary both the measure and the group length so the oracle covers
+# more than one convenient two-line fixture. `pretty` remains characterized
+# separately because its optimization details are UA-defined.
+for _name, _text, _width in (
+    ("text-wrap-balance-narrow", "AB AB AB AB AB AB", 190),
+    ("text-wrap-balance-wide", "AB AB AB AB AB AB", 330),
+    ("text-wrap-balance-forced-groups", "AB AB AB AB\nAB AB AB AB", 260),
+):
+    _wrap_oracle = {"textWrapStyle": "balance",
+                    "driver": ("--text-wrap-style", "balance")}
+    if _name == "text-wrap-balance-forced-groups":
+        # Chromium 154 does not rebalance a later group after a forced break.
+        # Keep the case as local validity coverage; line geometry is not a
+        # useful oracle for Ghoti's per-group policy in that browser build.
+        _wrap_oracle["policyNoGeometryOracle"] = True
+    CASES.append((_name, _text, "horizontal", "mixed", _width,
+                  "start", "ltr", "auto",
+                  _wrap_oracle))
 for _name, _text, _value, _driver in (
     ("text-autospace-normal-alpha", "日本A", "normal", "normal"),
     ("text-autospace-normal-reverse", "A日本", "normal", "normal"),

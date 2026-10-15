@@ -1985,13 +1985,18 @@ that fits, the greedy breaks remain. That one-third threshold is Ghoti's
 deterministic user-agent policy. These two
 styles therefore have documented Ghoti behavior even though CSS leaves their
 optimization details to the user agent. The adjustment preserves the greedy
-line count and never moves text across a forced break. The optimizer is
-currently bypassed for callback-constrained flow, tabs and annotated
-paragraphs; those combinations retain greedy behavior. The unit cases cover
-short text, unbounded width, each added value, line counts and forced-break
-groups.
-The Chromium oracle compares balance geometry and checks CSS parse support for
-all values. It does not claim a geometry match for `pretty`, whose optimization
+line count and never moves text across a forced break. Static-width balancing
+and last-line adjustment include position-dependent tab stops, ruby-reserved
+advance and AUTO ruby overhang, autospace, and text-spacing trims when scoring
+candidate lines. Callback-constrained flow keeps its forward greedy pass: a
+line-band callback can depend on the measured line height and its public
+contract does not permit speculative calls or replay. Applying a paragraph-wide
+optimizer there would change callback observations and could invalidate later
+bands. The unit cases cover short text, unbounded width, each added value,
+line counts, forced-break groups, tabs and annotations.
+The Chromium oracle compares balance geometry at multiple measures and for
+different paragraph lengths, and checks CSS parse support for all values. It
+does not claim a geometry match for `pretty`, whose optimization
 is user-agent-defined. Chromium 154 accepts `pretty`; its geometry is reported
 as non-comparable. Chromium 154 rejects `avoid-short-last-line`; the oracle
 reports that fact and checks local validity without presenting it as a browser

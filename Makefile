@@ -1204,7 +1204,7 @@ check-oracle-layout: $(EXAMPLES)
 
 check-oracle-css: ## Compare CSS text and transform geometry with Chromium and Firefox
 check-oracle-css: $(EXAMPLES)
-	@GHOTI_LAYOUT_SNAPSHOT_MODE=check $(ORACLE_RUN) chrome,firefox -- python3 $(ORACLE)/css_layout_diff.py
+	@GHOTI_LAYOUT_SNAPSHOT_MODE=$${GHOTI_LAYOUT_SNAPSHOT_MODE:-check} $(ORACLE_RUN) chrome,firefox -- python3 $(ORACLE)/css_layout_diff.py
 
 check-oracle-css-l1: $(EXAMPLES) ## Compare mixed-size, mixed-alignment character rectangles with Chromium
 	@$(ORACLE_RUN) chrome -- python3 $(ORACLE)/css_layout_diff.py mixed-size-length

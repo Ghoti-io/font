@@ -250,6 +250,9 @@ CASES.append(("white-space-pre-line-crlf", "A\r\nB", "horizontal", "mixed", 80,
               "start", "ltr", "auto",
               {"whiteSpace": "pre-line", "lineStructureOnly": True,
                "driver": ("--white-space", "pre-line")}))
+CASES.append(("text-wrap-auto", "AB AB AB AB", "horizontal", "mixed", 260,
+              "start", "ltr", "auto",
+              {"textWrapStyle": "auto", "driver": ("--text-wrap-style", "auto")}))
 CASES.append(("text-wrap-balance", "AB AB AB AB", "horizontal", "mixed", 260,
               "start", "ltr", "auto",
               {"textWrapStyle": "balance",
@@ -258,6 +261,15 @@ CASES.append(("text-wrap-stable", "AB AB AB AB", "horizontal", "mixed", 260,
               "start", "ltr", "auto",
               {"textWrapStyle": "stable",
                "driver": ("--text-wrap-style", "stable")}))
+CASES.append(("text-wrap-pretty", "AB AB AB AB", "horizontal", "mixed", 260,
+              "start", "ltr", "auto",
+              {"textWrapStyle": "pretty", "driver": ("--text-wrap-style", "pretty"),
+               "policyNoGeometryOracle": True}))
+CASES.append(("text-wrap-avoid-short-last-line", "AB AB AB AB", "horizontal", "mixed", 260,
+              "start", "ltr", "auto",
+              {"textWrapStyle": "avoid-short-last-line",
+               "driver": ("--text-wrap-style", "avoid-short-last-line"),
+               "policyNoGeometryOracle": True}))
 for _name, _text, _value, _driver in (
     ("text-autospace-normal-alpha", "日本A", "normal", "normal"),
     ("text-autospace-normal-reverse", "A日本", "normal", "normal"),
@@ -502,6 +514,8 @@ function measure(c) {
   }
   const out = {name: c.name, box: [b.x, b.y, b.width, b.height], chars: chars,
                minContent: minContent,
+               textWrapStyleSupported: c.textWrapStyle
+                 ? CSS.supports('text-wrap-style', c.textWrapStyle) : null,
                computedTextSpacingTrim: getComputedStyle(d).textSpacingTrim};
   d.remove();
   return out;
@@ -621,6 +635,15 @@ def ours(case):
     if len(case) <= 8:
         layout_snapshot.record("css", name, answer)
     return answer
+
+
+def check_invalid_text_wrap_style_cli():
+    """The layout oracle's built CLI must reject unknown enum spellings."""
+    result = subprocess.run([DRIVER, "--text-wrap-style", "not-a-style", FONT],
+                            capture_output=True, text=True)
+    if result.returncode != 2 or "invalid text-wrap-style value" not in result.stderr:
+        raise RuntimeError("font-layout did not reject an invalid text-wrap-style: exit %d, %r"
+                           % (result.returncode, result.stderr.strip()))
 
 
 def compare(case, theirs, mine, verbose):
@@ -1060,6 +1083,9 @@ def decoration_case(case):
 def main():
     verbose = "-v" in sys.argv
     names = [a for a in sys.argv[1:] if not a.startswith("-")]
+    check_invalid_text_wrap_style_cli()
+    if verbose:
+        print("  font-layout rejects invalid --text-wrap-style values")
     if "flow" in names:
         names = [name for name in names if name != "flow"] + FLOW_CASES
     selected = set(names)
@@ -1075,6 +1101,13 @@ def main():
     differ = compared = 0
     inconclusive = 0
     for case, theirs in zip(cases, measured):
+        if len(case) > 8 and case[8].get("textWrapStyle"):
+            value = case[8]["textWrapStyle"]
+            expected_support = value != "avoid-short-last-line"
+            actual_support = theirs.get("textWrapStyleSupported")
+            if actual_support != expected_support:
+                raise RuntimeError("%s: Chromium support for text-wrap-style:%s is %r, expected %r"
+                                   % (case[0], value, actual_support, expected_support))
         if case[0] in FLOW_CASES:
             flow = case[8]["flow"]
             chars = [r for r in theirs["chars"] if r is not None]
@@ -1091,6 +1124,14 @@ def main():
                 if len(rows) < 2 or not active_side:
                     raise RuntimeError("%s does not wrap into its narrowed float band" % case[0])
         mine = ours(case)
+        if len(case) > 8 and case[8].get("policyNoGeometryOracle"):
+            if not mine.get("lines"):
+                raise RuntimeError("%s: implementation produced no lines" % case[0])
+            inconclusive += 1
+            if verbose:
+                print("  %s: support=%s; exact geometry is UA-defined, local layout invariant passed"
+                      % (case[0], theirs.get("textWrapStyleSupported")))
+            continue
         expected = (case[8].get("textSpacingTrim", "space-all")
                     if len(case) > 8 else "space-all")
         actual = theirs.get("computedTextSpacingTrim")

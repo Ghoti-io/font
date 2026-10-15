@@ -1972,22 +1972,35 @@ offset for this fixture, so the comparison excludes that vertical coordinate;
 inline positions, advances and range-box sizes agree. Chromium does not support
 these values, so its unchanged text is not used as an oracle for them.
 `GFNT_TEXT_WRAP_BALANCE` implements CSS `text-wrap-style: balance` for
-static-width paragraphs. It preserves the greedy line count, balances forced
-break groups independently, and uses the ordinary greedy breaker for groups
-with more than ten lines. The CSS Text spec permits that ten-line fallback and
-requires forced-break groups to be processed separately. The Chromium oracle
-compares one two-line Latin case. Chromium 154 does not balance a later group
-after a forced break in the corresponding probe, so that case is checked by a
-unit test against the spec rule instead of being treated as an oracle match.
-Balancing is currently bypassed for callback-constrained flow, tabs and
-annotated paragraphs; those combinations are known implementation gaps.
+static-width paragraphs. It preserves the greedy line count for groups of two
+through five resulting lines (and balances up to ten), balances each forced-break
+group independently, and uses the ordinary greedy breaker for longer groups.
+The Ghoti `pretty` policy uses the same bounded optimizer;
+`avoid-short-last-line` is a separate final-line adjustment: if the last line
+uses less than one third of its available measure, the breaker moves the
+smallest trailing word sequence from the previous line that reaches the
+threshold while both lines still fit. Moves are considered only after
+whitespace break opportunities; if there is no whitespace boundary or no move
+that fits, the greedy breaks remain. That one-third threshold is Ghoti's
+deterministic user-agent policy. These two
+styles therefore have documented Ghoti behavior even though CSS leaves their
+optimization details to the user agent. The adjustment preserves the greedy
+line count and never moves text across a forced break. The optimizer is
+currently bypassed for callback-constrained flow, tabs and annotated
+paragraphs; those combinations retain greedy behavior. The unit cases cover
+short text, unbounded width, each added value, line counts and forced-break
+groups.
+The Chromium oracle compares balance geometry and checks CSS parse support for
+all values. It does not claim a geometry match for `pretty`, whose optimization
+is user-agent-defined. Chromium 154 accepts `pretty`; its geometry is reported
+as non-comparable. Chromium 154 rejects `avoid-short-last-line`; the oracle
+reports that fact and checks local validity without presenting it as a browser
+match. The forced-break group case is also unit-tested because Chromium 154
+does not balance a later group after a forced break in the corresponding
+probe.
 `GFNT_TEXT_WRAP_STABLE` uses the ordinary greedy breaker, which already makes
 each break without considering later lines; Chromium compares that equivalence
-in the CSS matrix. `text-wrap-style: pretty` and `avoid-short-last-line` are not
-implemented. Chromium accepts `pretty`, but the exact improvements are
-user-agent-defined and its behavior still needs a named oracle case before the
-value can be claimed as implemented. The pinned Chromium rejects
-`avoid-short-last-line`.
+in the CSS matrix.
 `text-autospace` implements the spec-default `normal` (ideograph-alpha plus
 ideograph-numeric) and `no-autospace`, with spacing at direct same-line
 boundaries and in intrinsic sizing. Chromium 154 compares normal, disabled,

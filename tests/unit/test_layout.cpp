@@ -2499,6 +2499,10 @@ TEST(Layout, BadArgumentsAreRefused) {
   span.length = 3;
   EXPECT_EQ(gfnt_paragraph_create("ABC", 3, &span, 1, &bad, nullptr, &p, nullptr),
       GFNT_ERR_INVALID);
+  bad = {};
+  bad.text_wrap_style = static_cast<GFNT_TextWrapStyle>(99);
+  EXPECT_EQ(gfnt_paragraph_create("ABC", 3, &span, 1, &bad, nullptr, &p, nullptr),
+      GFNT_ERR_INVALID);
   GFNT_Layout layout{};
   EXPECT_EQ(gfnt_paragraph_layout(nullptr, 100, &layout, nullptr), GFNT_ERR_INVALID);
   gfnt_layout_free(&layout);
@@ -2703,6 +2707,178 @@ TEST(LayoutContent, TextWrapBalanceKeepsLineCountWithinForcedBreakGroups) {
   EXPECT_EQ(para.layout.lines[2].end, 18u);
   EXPECT_EQ(para.layout.lines[3].start, 18u);
   EXPECT_EQ(para.layout.lines[3].end, 23u);
+}
+
+TEST(LayoutContent, TextWrapPrettyUsesTheDocumentedBalancedPolicy) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_PRETTY;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para automatic("AB AB AB AB", {font.face});
+  Para pretty("AB AB AB AB", {font.face}, options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(automatic.p, width, &automatic.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(pretty.p, width, &pretty.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(automatic.layout.line_count, 2u);
+  ASSERT_EQ(pretty.layout.line_count, 2u);
+  EXPECT_EQ(automatic.layout.lines[0].end, 9u);
+  EXPECT_EQ(pretty.layout.lines[0].start, 0u);
+  EXPECT_EQ(pretty.layout.lines[0].end, 6u);
+  EXPECT_EQ(pretty.layout.lines[1].start, 6u);
+  EXPECT_EQ(pretty.layout.lines[1].end, 11u);
+}
+
+TEST(LayoutContent, TextWrapAddedPoliciesKeepShortAndUnboundedParagraphsValid) {
+  Font font(latin());
+  const GFNT_TextWrapStyle styles[] = {
+      GFNT_TEXT_WRAP_PRETTY, GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE};
+  for (const GFNT_TextWrapStyle style : styles) {
+    GFNT_ParagraphOptions options{};
+    options.text_wrap_style = style;
+    Para short_text("AB", {font.face}, options);
+    Para wrapped("AB AB AB AB\nAB AB AB AB", {font.face}, options);
+    ASSERT_EQ(short_text.created, GFNT_OK);
+    ASSERT_EQ(wrapped.created, GFNT_OK);
+    ASSERT_EQ(gfnt_paragraph_layout(short_text.p, 20 * kLetter,
+        &short_text.layout, nullptr), GFNT_OK);
+    EXPECT_EQ(short_text.layout.line_count, 1u);
+    ASSERT_EQ(gfnt_paragraph_layout(wrapped.p, 6 * kLetter + 2 * kSpace,
+        &wrapped.layout, nullptr), GFNT_OK);
+    EXPECT_EQ(wrapped.layout.line_count, 4u);
+    ASSERT_EQ(gfnt_paragraph_layout(wrapped.p, GFNT_LAYOUT_UNBOUNDED,
+        &wrapped.layout, nullptr), GFNT_OK);
+    EXPECT_EQ(wrapped.layout.line_count, 2u);
+  }
+}
+
+TEST(LayoutContent, TextWrapAvoidShortLastLineMovesBreakWhenTheLastLineIsShort) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para greedy("AB AB AB AB", {font.face});
+  Para avoiding("AB AB AB AB", {font.face}, options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, width, &greedy.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(avoiding.p, width, &avoiding.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(greedy.layout.line_count, 2u);
+  ASSERT_EQ(avoiding.layout.line_count, greedy.layout.line_count);
+  EXPECT_EQ(greedy.layout.lines[0].end, 9u);
+  EXPECT_EQ(avoiding.layout.lines[0].end, 6u);
+  EXPECT_EQ(avoiding.layout.lines[1].start, 6u);
+}
+
+TEST(LayoutContent, TextWrapAvoidShortLastLineHandlesForcedBreakGroupsIndependently) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para para("AB AB AB AB\nAB AB AB AB", {font.face}, options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(para.p, width, &para.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(para.layout.line_count, 4u);
+  EXPECT_EQ(para.layout.lines[0].start, 0u);
+  EXPECT_EQ(para.layout.lines[0].end, 6u);
+  EXPECT_EQ(para.layout.lines[1].start, 6u);
+  EXPECT_EQ(para.layout.lines[1].end, 12u);
+  EXPECT_EQ(para.layout.lines[2].start, 12u);
+  EXPECT_EQ(para.layout.lines[2].end, 18u);
+  EXPECT_EQ(para.layout.lines[3].start, 18u);
+  EXPECT_EQ(para.layout.lines[3].end, 23u);
+}
+
+TEST(LayoutContent, TextWrapAvoidShortLastLineLeavesNoWordBoundaryMovesAlone) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+  options.overflow_wrap = GFNT_OVERFLOW_WRAP_ANYWHERE;
+  options.line_break = GFNT_LINE_BREAK_ANYWHERE;
+  GFNT_ParagraphOptions greedy_options = options;
+  greedy_options.text_wrap_style = GFNT_TEXT_WRAP_AUTO;
+  Para greedy("ABABA", {font.face}, greedy_options);
+  Para avoiding("ABABA", {font.face}, options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, 2 * kLetter, &greedy.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(avoiding.p, 2 * kLetter,
+      &avoiding.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(avoiding.layout.line_count, greedy.layout.line_count);
+  for (size_t i = 0; i < greedy.layout.line_count; i++) {
+    EXPECT_EQ(avoiding.layout.lines[i].start, greedy.layout.lines[i].start);
+    EXPECT_EQ(avoiding.layout.lines[i].end, greedy.layout.lines[i].end);
+  }
+}
+
+TEST(LayoutContent, TextWrapAvoidShortLastLineLeavesAnUnmovableWordAlone) {
+  Font font(latin());
+  GFNT_ParagraphOptions options{};
+  options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+  Para greedy("ABCDEFG H", {font.face});
+  Para avoiding("ABCDEFG H", {font.face}, options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, 5 * kLetter, &greedy.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(avoiding.p, 5 * kLetter,
+      &avoiding.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(greedy.layout.line_count, 2u);
+  ASSERT_EQ(avoiding.layout.line_count, greedy.layout.line_count);
+  EXPECT_EQ(greedy.layout.lines[0].end, 8u);
+  EXPECT_EQ(avoiding.layout.lines[0].end, 8u);
+  EXPECT_EQ(avoiding.layout.lines[1].start, 8u);
+}
+
+TEST(LayoutTabs, TextWrapAvoidShortLastLineRetainsGreedyBreaksAroundTabs) {
+  Font font(latin());
+  GFNT_ParagraphOptions greedy_options{};
+  greedy_options.tab_width = 800;
+  GFNT_ParagraphOptions avoiding_options = greedy_options;
+  avoiding_options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+  const GFNT_F26Dot6 width = 2000;
+  const std::string text = "AB\tAB AB AB AB AB AB";
+  Para greedy(text, {font.face}, greedy_options);
+  Para avoiding(text, {font.face}, avoiding_options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, width, &greedy.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(avoiding.p, width, &avoiding.layout, nullptr), GFNT_OK);
+  ASSERT_GE(greedy.layout.line_count, 2u);
+  ASSERT_EQ(avoiding.layout.line_count, greedy.layout.line_count);
+  EXPECT_LT(greedy.layout.lines[greedy.layout.line_count - 1].extent, width / 3);
+  for (size_t i = 0; i < greedy.layout.line_count; i++) {
+    EXPECT_EQ(avoiding.layout.lines[i].start, greedy.layout.lines[i].start);
+    EXPECT_EQ(avoiding.layout.lines[i].end, greedy.layout.lines[i].end);
+  }
+}
+
+TEST(LayoutAnnotation, TextWrapAvoidShortLastLineRetainsGreedyBreaksForAnnotatedText) {
+  Font font(latin());
+  const GFNT_Face * faces[] = {font.face};
+  GFNT_Annotation ruby{};
+  ruby.base_start = 0;
+  ruby.base_end = 2;
+  ruby.kind = GFNT_ANNOTATION_RUBY;
+  ruby.position = GFNT_ANNOTATION_OVER;
+  ruby.style.faces = faces;
+  ruby.style.face_count = 1;
+  ruby.style.size = kSize;
+  ruby.text = "A";
+  ruby.text_length = 1;
+  ruby.align = GFNT_ANNOTATION_ALIGN_CENTER;
+  GFNT_ParagraphOptions greedy_options{};
+  greedy_options.annotations = &ruby;
+  greedy_options.annotation_count = 1;
+  GFNT_ParagraphOptions avoiding_options = greedy_options;
+  avoiding_options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+  const GFNT_F26Dot6 width = 6 * kLetter + 2 * kSpace;
+  Para greedy("AB AB AB AB", {font.face}, greedy_options);
+  Para avoiding("AB AB AB AB", {font.face}, avoiding_options);
+
+  ASSERT_EQ(gfnt_paragraph_layout(greedy.p, width, &greedy.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_paragraph_layout(avoiding.p, width, &avoiding.layout, nullptr), GFNT_OK);
+  ASSERT_EQ(greedy.layout.line_count, 2u);
+  ASSERT_EQ(avoiding.layout.line_count, greedy.layout.line_count);
+  EXPECT_LT(greedy.layout.lines[1].extent, width / 3);
+  for (size_t i = 0; i < greedy.layout.line_count; i++) {
+    EXPECT_EQ(avoiding.layout.lines[i].start, greedy.layout.lines[i].start);
+    EXPECT_EQ(avoiding.layout.lines[i].end, greedy.layout.lines[i].end);
+  }
 }
 
 TEST(LayoutContent, WhiteSpacePreKeepsSoftLineBreaksAndTrailingSpaces) {

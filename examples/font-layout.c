@@ -565,8 +565,16 @@ int main(int argc, char ** argv) {
     }
     else if (strcmp(argv[a], "--text-wrap-style") == 0 && a + 1 < argc) {
       const char * v = argv[++a];
-      options.text_wrap_style = strcmp(v, "balance") == 0 ? GFNT_TEXT_WRAP_BALANCE
-          : strcmp(v, "stable") == 0 ? GFNT_TEXT_WRAP_STABLE : GFNT_TEXT_WRAP_AUTO;
+      if (strcmp(v, "auto") == 0) options.text_wrap_style = GFNT_TEXT_WRAP_AUTO;
+      else if (strcmp(v, "balance") == 0) options.text_wrap_style = GFNT_TEXT_WRAP_BALANCE;
+      else if (strcmp(v, "stable") == 0) options.text_wrap_style = GFNT_TEXT_WRAP_STABLE;
+      else if (strcmp(v, "pretty") == 0) options.text_wrap_style = GFNT_TEXT_WRAP_PRETTY;
+      else if (strcmp(v, "avoid-short-last-line") == 0)
+        options.text_wrap_style = GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE;
+      else {
+        fprintf(stderr, "invalid text-wrap-style value %s\n", v);
+        return 2;
+      }
     }
     else if (strcmp(argv[a], "--text-autospace") == 0 && a + 1 < argc) {
       const char * v = argv[++a];

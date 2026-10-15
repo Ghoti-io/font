@@ -1829,7 +1829,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       || (unsigned)options->white_space > GFNT_WHITE_SPACE_PRE_LINE
       || (unsigned)options->line_break > GFNT_LINE_BREAK_ANYWHERE
       || (unsigned)options->hyphens > GFNT_HYPHENS_MANUAL_PANGO
-      || (unsigned)options->text_wrap_style > GFNT_TEXT_WRAP_STABLE
+      || (unsigned)options->text_wrap_style > GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE
       || (unsigned)options->text_autospace > GFNT_TEXT_AUTOSPACE_NUMERIC
       || (unsigned)options->text_spacing_trim > GFNT_TEXT_SPACING_TRIM_TRIM_START
       || (unsigned)options->justify > GFNT_JUSTIFY_NONE
@@ -3474,13 +3474,76 @@ static uint64_t balance_variance(const GFNT_Paragraph * p, size_t first_line,
   return score;
 }
 
+/** Reflow the end of a short final line within its forced-break group. */
+static void avoid_short_last_line(const GFNT_Paragraph * p, size_t line_count,
+    GFNT_F26Dot6 * band_widths, size_t * starts, bool * hyphened) {
+  size_t group_start = 0, first_line = 0;
+
+  while (group_start < p->unit_count) {
+    size_t group_end = group_start;
+    size_t after_group = first_line;
+    bool has_tab = false;
+
+    while (group_end < p->unit_count && !p->units[group_end].hard) group_end++;
+    if (group_end < p->unit_count) group_end++;
+    for (size_t i = group_start; i < group_end; i++) has_tab = has_tab || p->units[i].tab;
+    while (after_group < line_count && starts[after_group] < group_end) after_group++;
+    if (!has_tab && !p->annotation_count && after_group - first_line >= 2) {
+      const size_t last = after_group - 1;
+      const size_t previous = last - 1;
+      const size_t last_start = starts[last];
+      const size_t previous_start = starts[previous];
+      const int64_t last_width = balanced_line_width(p, last_start, group_end,
+          hyphened[last]);
+      const int64_t available = band_widths[last];
+      size_t best_boundary = 0;
+      int64_t best_last_width = INT64_MAX;
+
+      /* One third of the line measure is Ghoti's documented short-line threshold. */
+      if (last_start > previous_start && last_width < available / 3) {
+        /* Only whitespace opportunities delimit words; character and hyphen breaks do not. */
+        for (size_t boundary = last_start; boundary > previous_start + 1;) {
+          int64_t before_width, after_width;
+          boundary--;
+          if (!p->units[boundary - 1].opportunity || !p->units[boundary - 1].space) continue;
+          before_width = balanced_line_width(p, previous_start, boundary,
+              p->units[boundary - 1].hyphen);
+          after_width = balanced_line_width(p, boundary, group_end, false);
+          if (before_width <= band_widths[previous] && after_width <= available
+              && after_width >= available / 3 && after_width > last_width
+              && after_width < best_last_width) {
+            best_boundary = boundary;
+            best_last_width = after_width;
+          }
+        }
+      }
+      if (best_boundary) {
+        starts[last] = best_boundary;
+        hyphened[previous] = p->units[best_boundary - 1].hyphen;
+        hyphened[last] = false;
+      }
+    }
+    group_start = group_end;
+    first_line = after_group;
+  }
+}
+
 /** Balance short forced-break groups by selecting soft-wrap points near their average line width. */
 static size_t break_lines_balanced(const GFNT_Paragraph * p, GFNT_F26Dot6 width,
     size_t * starts, bool * hyphened, size_t * cand_at, GFNT_F26Dot6 * cand_fit,
     GFNT_F26Dot6 * band_starts, GFNT_F26Dot6 * band_widths) {
   size_t lines = 0, group_start = 0;
 
-  if (width == GFNT_LAYOUT_UNBOUNDED || p->options.text_wrap_style != GFNT_TEXT_WRAP_BALANCE) {
+  if (p->options.text_wrap_style == GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE) {
+    lines = break_lines(p, width, starts, hyphened, cand_at, cand_fit,
+        band_starts, band_widths);
+    if (width != GFNT_LAYOUT_UNBOUNDED && lines > 1) {
+      avoid_short_last_line(p, lines, band_widths, starts, hyphened);
+    }
+    return lines;
+  }
+  if (width == GFNT_LAYOUT_UNBOUNDED || p->options.text_wrap_style == GFNT_TEXT_WRAP_AUTO
+      || p->options.text_wrap_style == GFNT_TEXT_WRAP_STABLE) {
     return break_lines(p, width, starts, hyphened, cand_at, cand_fit,
         band_starts, band_widths);
   }

@@ -409,7 +409,9 @@ typedef enum GFNT_WhiteSpace {
 typedef enum GFNT_TextWrapStyle {
   GFNT_TEXT_WRAP_AUTO = 0, ///< Use the ordinary greedy line breaker.
   GFNT_TEXT_WRAP_BALANCE,  ///< Balance line lengths within short forced-break groups.
-  GFNT_TEXT_WRAP_STABLE    ///< Keep the greedy break decisions independent of later lines.
+  GFNT_TEXT_WRAP_STABLE,   ///< Keep the greedy break decisions independent of later lines.
+  GFNT_TEXT_WRAP_PRETTY,   ///< Prefer balanced line lengths in short groups (Ghoti policy).
+  GFNT_TEXT_WRAP_AVOID_SHORT_LAST_LINE ///< Move a trailing word to a short final line when it fits.
 } GFNT_TextWrapStyle;
 
 /** @brief Automatic spacing at boundaries between ideographs and Latin characters/numbers. */

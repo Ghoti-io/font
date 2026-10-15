@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghoti Font: auto and pretty wrapping</title>
+<style>
+@font-face {
+  font-family: GhotiFixture;
+  src: url("../../tests/data/fonts/vertical-text.ttf") format("truetype");
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 36px; color: #17212b; background: #f3f6f8;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+main { max-width: 980px; margin: 0 auto; }
+h1 { margin: 0 0 8px; font-size: 28px; }
+.intro { margin: 0 0 28px; color: #52616d; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+article {
+  min-height: 270px; padding: 22px; border: 1px solid #d7e0e6;
+  border-radius: 12px; background: white; box-shadow: 0 5px 18px #2437460d;
+}
+h2 { margin: 0 0 8px; font-size: 18px; }
+.meta { margin: 0 0 24px; color: #667784; font-size: 13px; }
+.sample {
+  box-sizing: content-box; width: 260px; min-height: 112px; padding: 14px;
+  border-left: 3px solid #4785a6; background: #f6fafc;
+  font: 50px/1.25 GhotiFixture, monospace;
+}
+.line { display: block; white-space: pre; }
+.pretty { border-left-color: #7d65b4; }
+.note { margin: 22px 0 0; color: #52616d; font-size: 13px; }
+@media (max-width: 680px) {
+  body { padding: 20px; }
+  .grid { grid-template-columns: 1fr; }
+}
+</style>
+<main>
+  <h1>One paragraph, two wrap styles</h1>
+  <p class="intro">Ghoti Font renderer output · 50 px text · 260 px line measure</p>
+  <div class="grid">
+    <article>
+      <h2>auto</h2>
+      <p class="meta">Greedy breaks as each line fills</p>
+      <div class="sample auto"><span class="line">AB AB AB </span>
+<span class="line">AB</span></div>
+    </article>
+    <article>
+      <h2>pretty</h2>
+      <p class="meta">Ghoti's short-group balancing policy</p>
+      <div class="sample pretty"><span class="line">AB AB </span>
+<span class="line">AB AB</span></div>
+    </article>
+  </div>
+  <p class="note">Generated from the current font-layout executable. The fixture font draws the glyphs; the explicit line breaks come from each Ghoti Font layout result.</p>
+</main>
+</html>

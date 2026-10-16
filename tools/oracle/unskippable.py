@@ -67,6 +67,11 @@ FIXTURES = os.path.join(oracle_env.ROOT, "tests", "data", "fonts")
 # exists to assert that difference, which means the reference failing on it is
 # the fixture working.
 EXPECTED = {
+    "tt_decode_diff": {
+        "outline-broken-loca.ttf":
+            "the same fixture, for the same reason: fontTools refuses the whole "
+            "font and this library refuses that glyph",
+    },
     "glyf_diff": {
         "outline-broken-loca.ttf":
             "loca names a glyph past the end of glyf, which is what the fixture "

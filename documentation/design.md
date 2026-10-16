@@ -1321,6 +1321,21 @@ ignored. Until hinting is implemented, outlines are rendered unhinted with
 exact-area anti-aliasing. Any future interpreter must treat font bytecode as
 untrusted input and retain the bounds and resource limits described in §§1–2.
 
+**What exists: the programs, read and checked, not run.** `hint.h` hands over a
+glyph's own instructions (`gfnt_face_glyph_program()`; `fpgm`, `prep` and `cvt `
+are tables, so `gfnt_face_table_data()` reaches them), says whether a program's
+structure holds (`gfnt_program_validate()`: every push is complete, `IF`/`ELSE`/
+`EIF` and `FDEF`/`IDEF`/`ENDF` nest and close) and prints it as the
+specification's mnemonics (`gfnt_program_disassemble()`, and the
+`font-program` example). Internally the opcode table (`src/hint/tt_ops.c`) is the
+one source of mnemonic, flag width, stack effect and operand length, so the
+decoder and the interpreter to come cannot disagree about how long an
+instruction is. `make check-oracle-tt-decode` decodes `fpgm`, `prep` and every
+glyph program of every TrueType font in the corpus and compares them,
+instruction by instruction and push value by push value, with fontTools. One
+spelling differs and is accepted by name: fontTools has no mnemonic for `GETDATA`
+(0x92) and prints `INSTR146`.
+
 ---
 
 ## 9. Shaping

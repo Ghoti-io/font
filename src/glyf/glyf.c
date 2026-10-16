@@ -972,6 +972,73 @@ GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,
   return GFNT_OK;
 }
 
+GFNT_Result gfnt_glyf_program(const GFNT_Face * face, uint32_t glyph,
+    const uint8_t ** out_bytes, size_t * out_length, GFNT_Error * error) {
+  GFNT_Reader reader;
+  bool empty = false;
+  int16_t contours = 0;
+  uint16_t length = 0;
+  GFNT_Result result;
+
+  gfnt_error_clear(error);
+  if (!face || !out_bytes || !out_length) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_glyf_reader(face, glyph, &reader, &empty, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (empty) {
+    *out_bytes = NULL;
+    *out_length = 0;
+    return GFNT_OK;
+  }
+  result = gfnt_read_s16(&reader, &contours);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (contours >= 0) {
+    // The header's remaining eight bytes, then one end point per contour.
+    result = gfnt_reader_seek(&reader,
+        GFNT_GLYF_HEADER_BYTES + (size_t)contours * 2u);
+  }
+  else {
+    uint16_t flags = 0;
+
+    result = gfnt_reader_seek(&reader, GFNT_GLYF_HEADER_BYTES);
+    while (result == GFNT_OK) {
+      GFNT_Component component;
+
+      result = gfnt_glyf_component(&reader, glyph, &component, error);
+      if (result != GFNT_OK) {
+        break;
+      }
+      flags = component.flags;
+      if (!(flags & GFNT_GLYF_MORE_COMPONENTS)) {
+        break;
+      }
+    }
+    if (result == GFNT_OK && !(flags & GFNT_GLYF_HAVE_INSTRUCTIONS)) {
+      *out_bytes = NULL;
+      *out_length = 0;
+      return GFNT_OK;
+    }
+  }
+  if (result != GFNT_OK) {
+    return result;
+  }
+  result = gfnt_read_u16(&reader, &length);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  result = gfnt_read_bytes(&reader, length, out_bytes);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  *out_length = length;
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_glyf_stated_box(const GFNT_Face * face, uint32_t glyph,
     GFNT_Box * out_box, GFNT_Error * error) {
   GFNT_Reader reader;

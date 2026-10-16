@@ -155,6 +155,7 @@ asks which glyph a code point maps to does not link a rasteriser or a shaper.
 - **`blob.h`** — the bytes of a font, copied or read from a file.
 - **`face.h`** — one font from a blob and an index: the sfnt version, the table directory, collections, and the `GFNT_Variation` every accessor takes.
 - **`variation.h`** — a variable font's axes and named instances, and `gfnt_face_normalize()`, which makes the normalised coordinates every accessor takes out of the ones a person types.
+- **`hint.h`** — a TrueType glyph's own instructions, a structural check of any program, and its disassembly. Programs are read and checked, **not run**: hinting is planned (`documentation/design.md` §8.5).
 - **`stat.h`, `featurevar.h`, `cvt.h`** — what a variable font names, replaces and moves besides its outlines: `STAT`'s axes and axis values and which of them name a location; which `FeatureVariations` record applies at one, and the lookups it substitutes; and the `cvt ` control values at a location through `cvar`.
 - **`metrics.h`** — `head`, `hhea`, `OS/2`, `post`, `unitsPerEm`, and per-glyph advances from `hmtx`.
 - **`cmap.h`** — code point to glyph, formats 0, 4, 6 and 12, and which subtable answered.

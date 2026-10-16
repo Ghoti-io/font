@@ -699,7 +699,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-hint check-hint-mutations check-oracle-tt-decode check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -1011,7 +1011,7 @@ check-oracle-ttx: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/ttx_diff.py --quiet
 
 check-oracle: ## Run every oracle differential there is
-check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf
+check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf check-oracle-tt-decode
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
 check-oracle: check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-flow check-oracle-layout-l2 check-oracle-layout-l3b check-oracle-layout-l4 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
@@ -1257,6 +1257,19 @@ check-layout-l4: check-layout-unit-snapshot check-layout-l4-mutations check-orac
 	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/testLayout$(EXE_EXTENSION) --gtest_filter='LayoutAnnotation.*' --gtest_brief=1
 	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/testLayout_vertical$(EXE_EXTENSION) --gtest_filter='LayoutVertical.RubyAndEmphasisTracksUseTheColumnCrossAxis' --gtest_brief=1
 
+check-oracle-tt-decode: ## Decode every TrueType program of the corpus and compare with fontTools
+check-oracle-tt-decode: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+		python3 $(ORACLE)/tt_decode_diff.py --quiet
+
+check-hint-mutations: ## Plant decoder defects; the unit tests and the fontTools comparison must both refuse each
+check-hint-mutations: $(APP_DIR)/testHint$(EXE_EXTENSION) $(EXAMPLES)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/tt_decode_mutation_check.py
+
+check-hint: ## Every TrueType hinting gate: the unit tests, the fontTools comparison and its mutation check
+check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) check-oracle-tt-decode check-hint-mutations
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/testHint$(EXE_EXTENSION) --gtest_brief=1
+
 check-layout: ## Every layout feature gate: unit snapshot, mutation checks and the browser and Pango comparisons
 check-layout: check-layout-l1 check-layout-l2 check-layout-l3 check-layout-l3b check-layout-l4
 
@@ -1501,7 +1514,7 @@ TIER0_FILES := include/ghoti.io/font/core.h include/ghoti.io/font/blob.h \
 	include/ghoti.io/font/cmap.h include/ghoti.io/font/name.h \
 	include/ghoti.io/font/glyph.h include/ghoti.io/font/bitmap.h \
 	include/ghoti.io/font/color.h include/ghoti.io/font/variation.h include/ghoti.io/font/stat.h include/ghoti.io/font/featurevar.h \
-	include/ghoti.io/font/cvt.h \
+	include/ghoti.io/font/cvt.h include/ghoti.io/font/hint.h \
 	include/ghoti.io/font/font.h include/ghoti.io/font/allocator.h \
 	src/core/*.c src/core/*.h src/reader/*.c src/reader/*.h src/blob/*.c src/blob/*.h \
 	src/sfnt/*.c src/sfnt/*.h src/woff/*.c src/woff/*.h src/tables/*.c src/tables/*.h \
@@ -1518,8 +1531,8 @@ TIER0_FORBIDDEN := font/(outline|raster|shape|layout|discover|write)\.h
 # what they produce, and the gate would have fired on the first one to land,
 # for the right reason under a misleading message.
 TIER1_FILES := include/ghoti.io/font/outline.h include/ghoti.io/font/raster.h \
-	include/ghoti.io/font/charstring.h \
-	src/outline/*.c src/outline/*.h src/raster/*.c src/raster/*.h \
+	include/ghoti.io/font/charstring.h include/ghoti.io/font/hint.h \
+	src/hint/*.c src/hint/*.h src/outline/*.c src/outline/*.h src/raster/*.c src/raster/*.h \
 	src/glyf/*.c src/glyf/*.h src/cff/*.c src/cff/*.h \
 	src/type1/*.c src/type1/*.h src/charstring/*.c src/charstring/*.h
 TIER1_FORBIDDEN := font/(shape|layout|discover|write)\.h

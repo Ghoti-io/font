@@ -104,6 +104,23 @@ GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,
     bool * out_composite, GFNT_Error * error);
 
 /**
+ * This glyph's own instructions, borrowed from the face's data.
+ *
+ * A simple glyph's, or a composite's when the last component says it has some.
+ * No instructions is NULL and 0, not an error.
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param out_bytes Receives the program, or NULL. Written only on success.
+ * @param out_length Receives its length. Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED or
+ *   ::GFNT_ERR_CORRUPT.
+ */
+GFNT_Result gfnt_glyf_program(const GFNT_Face * face, uint32_t glyph,
+    const uint8_t ** out_bytes, size_t * out_length, GFNT_Error * error);
+
+/**
  * The bounding box this glyph's `glyf` entry states.
  *
  * The `glyf` half of ::gfnt_face_glyph_stated_box().

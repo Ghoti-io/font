@@ -29,8 +29,8 @@ def run(command: list[str], *, expect_failure: bool = False) -> None:
 
 def rejects_object_mutant() -> None:
     global SOURCE
-    needle = "if (end == start + 1 && cps[start] == 0xFFFC && style->inline_object) {"
-    replacement = "if (end == start + 1 && cps[start] == 0xFFFC && !style->inline_object) {"
+    needle = "if (end == start + 1 && cs->cps[start] == 0xFFFC && style->inline_object) {"
+    replacement = "if (end == start + 1 && cs->cps[start] == 0xFFFC && !style->inline_object) {"
     SOURCE = source_with(ROOT, needle)
     original = SOURCE.read_text()
     artifacts = (APP, APP.parent / "libghoti.io-font-7.a", object_of(ROOT, BUILD, SOURCE))

@@ -300,78 +300,13 @@ static GFNT_Result ruby_fragment_cross_extent(const GFNT_Paragraph * parent,
   return r;
 }
 
-static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnotation * source,
-    size_t index, GFNT_Line * base_line, size_t base_start, size_t base_end,
-    size_t base_cp_start, size_t base_cp_end,
-    GFNT_LineAnnotation * out, GFNT_Error * error) {
-  GFNT_Layout shaped = {0};
-  GFNT_Paragraph * fragment_paragraph = NULL;
-  PAnnotation fragment_source;
-  const PAnnotation * placement = source;
-  const GFNT_Allocator * allocator = p->allocator;
-  const GFNT_Line * source_line;
-  GFNT_F26Dot6 lo = 0, hi = 0, target, base_lo, shift_along, shift_across, dx, dy;
+/** The cross-axis room the same-side ruby tracks on one base take, and the part before this one. */
+static GFNT_Result annotation_same_side_extent(const GFNT_Paragraph * p, const PAnnotation * source,
+    size_t index, size_t base_cp_start, size_t base_cp_end, int64_t * total, int64_t * before,
+    GFNT_Error * error) {
   int64_t same_side_total = 0, same_side_before = 0;
-  GFNT_F26Dot6 base_cross_half = 0;
-  bool vertical = p->vertical;
-  bool rtl = source->unit_start < p->unit_count
-      && (p->runs[p->units[source->unit_start].run].level & 1);
   GFNT_Result r;
 
-  if (source->descriptor.kind == GFNT_ANNOTATION_RUBY
-      && (base_cp_start != source->cp_start || base_cp_end != source->cp_end)) {
-    size_t byte_first, byte_last;
-    if (!ruby_fragment_text_range(source, base_cp_start, base_cp_end,
-            &byte_first, &byte_last)) return GFNT_OK;
-    GFNT_TextSpan span = {0};
-    GFNT_ParagraphOptions options = p->options;
-    GFNT_Error child_error;
-    GFNT_Annotation * children = NULL;
-    size_t child_count = 0;
-    span.length = byte_last - byte_first;
-    span.style = source->shaped->styles[0];
-    options.direction = GFNT_BIDI_AUTO;
-    options.align = GFNT_ALIGN_START;
-    options.max_lines = 0;
-    options.ellipsis = NULL;
-    options.text_indent = 0;
-    options.hanging_indent = false;
-    r = copy_annotation_slice(source->shaped, byte_first, byte_last,
-        &children, &child_count);
-    if (r != GFNT_OK) return gfnt_error_set(error, r, 0, base_start,
-        GFNT_GLYPH_NONE, "could not copy nested ruby annotations for a line fragment");
-    options.annotations = children;
-    options.annotation_count = child_count;
-    r = gfnt_paragraph_create(source->text + byte_first, span.length, &span, 1, &options,
-        allocator, &fragment_paragraph, &child_error);
-    free_annotation_slice(allocator, children, child_count);
-    if (r != GFNT_OK) return gfnt_error_set(error, r, child_error.table, base_start,
-        child_error.glyph, "could not shape a ruby line fragment");
-    fragment_source = *source;
-    fragment_source.shaped = fragment_paragraph;
-    if (gfnt_paragraph_max_content(fragment_paragraph, &fragment_source.advance) != GFNT_OK) {
-      gfnt_paragraph_free(fragment_paragraph);
-      return GFNT_ERR_INVALID;
-    }
-    placement = &fragment_source;
-  }
-  r = gfnt_paragraph_layout(placement->shaped, GFNT_LAYOUT_UNBOUNDED, &shaped, error);
-  if (r != GFNT_OK) { gfnt_paragraph_free(fragment_paragraph); return r; }
-  if (!shaped.line_count) {
-    gfnt_layout_free(&shaped);
-    gfnt_paragraph_free(fragment_paragraph);
-    return GFNT_OK;
-  }
-  source_line = &shaped.lines[0];
-  if (vertical) {
-    for (size_t ui = 0; ui < p->unit_count; ui++) {
-      const Unit * unit = &p->units[ui];
-      if (unit->cp_start >= base_cp_end || unit->cp_end <= base_cp_start) continue;
-      const PRun * run = &p->runs[unit->run];
-      const GFNT_F26Dot6 thickness = run->ascent + run->descent;
-      if (thickness / 2 > base_cross_half) base_cross_half = thickness / 2;
-    }
-  }
   if (source->descriptor.kind == GFNT_ANNOTATION_RUBY
       && source->descriptor.position != GFNT_ANNOTATION_INTER_CHARACTER) {
     for (size_t ai = 0; ai < p->annotation_count; ai++) {
@@ -384,36 +319,27 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       r = ruby_fragment_cross_extent(p, other, base_cp_start, base_cp_end,
           &fragment_extent, &fragment_present, error);
       if (r != GFNT_OK) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return r;
       }
       if (!fragment_present) continue;
       const int64_t extent = fragment_extent;
       if (other->descriptor.position != source->descriptor.position) continue;
       if (extent < 0 || same_side_total > INT32_MAX - extent) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       same_side_total += extent;
       if (ai < index) same_side_before += extent;
     }
   }
-  if (!line_base_extent(base_line, base_start, base_end, vertical, &lo, &hi)) {
-    lo = vertical ? base_line->offset : base_line->offset;
-    hi = lo;
-  }
-  target = hi - lo;
-  base_lo = lo;
-  if (placement->descriptor.align == GFNT_ANNOTATION_ALIGN_START && rtl) {
-    lo = hi - source_line->extent;
-  }
-  else if (placement->descriptor.align == GFNT_ANNOTATION_ALIGN_CENTER
-      || placement->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_AROUND
-      || placement->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN) {
-    lo += (target - source_line->extent) / 2;
-  }
+  *total = same_side_total;
+  *before = same_side_before;
+  return GFNT_OK;
+}
+
+/** Where an over-wide ruby starts once it may hang over a plain neighbor, and no further than the line. */
+static GFNT_F26Dot6 annotation_overhang_start(const GFNT_Paragraph * p, const PAnnotation * source,
+    const GFNT_Line * base_line, const GFNT_Line * source_line, bool vertical, GFNT_F26Dot6 lo,
+    GFNT_F26Dot6 hi, GFNT_F26Dot6 target, GFNT_F26Dot6 base_lo) {
   if (source->descriptor.overhang == GFNT_RUBY_OVERHANG_AUTO) {
     const GFNT_F26Dot6 line_start = vertical ? base_line->box.y : base_line->box.x;
     const GFNT_F26Dot6 line_end = line_start + (vertical ? base_line->box.height : base_line->box.width);
@@ -476,11 +402,19 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       if (lo < line_start) lo = line_start;
     }
   }
+  return lo;
+}
+
+/** The shifts that put the annotation's line where its base is: along the line and across it. */
+static GFNT_Result annotation_shifts(const GFNT_Paragraph * p, const PAnnotation * source,
+    const GFNT_Line * base_line, const GFNT_Line * source_line, bool vertical, GFNT_F26Dot6 lo,
+    GFNT_F26Dot6 base_cross_half, int64_t same_side_total, int64_t same_side_before,
+    GFNT_F26Dot6 * out_along, GFNT_F26Dot6 * out_across) {
+  GFNT_F26Dot6 shift_along, shift_across;
+
   if (vertical) {
     const int64_t along = (int64_t)lo - source_line->offset;
     if (along < INT32_MIN || along > INT32_MAX) {
-      gfnt_layout_free(&shaped);
-      gfnt_paragraph_free(fragment_paragraph);
       return GFNT_ERR_LIMIT;
     }
     shift_along = (GFNT_F26Dot6)along;
@@ -491,8 +425,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
     if (source->descriptor.position == GFNT_ANNOTATION_INTER_CHARACTER) {
       const int64_t value = (int64_t)base_line->baseline + base_line->ascent;
       if (value < INT32_MIN || value > INT32_MAX) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       shift_across = (GFNT_F26Dot6)value;
@@ -502,8 +434,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
           ? (int64_t)base_line->baseline - base_line->descent + source_line->ascent
           : (int64_t)base_line->baseline + base_line->ascent - source->ascent;
       if (value < INT32_MIN || value > INT32_MAX) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       shift_across = (GFNT_F26Dot6)value;
@@ -513,8 +443,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       const int64_t value = (int64_t)base_line->baseline - base_cross_half
           - same_side_before - extent;
       if (value < INT32_MIN || value > INT32_MAX) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       shift_across = (GFNT_F26Dot6)value;
@@ -523,8 +451,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       const int64_t value = (int64_t)base_line->baseline + base_cross_half
           + same_side_before;
       if (value < INT32_MIN || value > INT32_MAX) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       shift_across = (GFNT_F26Dot6)value;
@@ -533,8 +459,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
   else {
     const int64_t along = (int64_t)lo - source_line->offset;
     if (along < INT32_MIN || along > INT32_MAX) {
-      gfnt_layout_free(&shaped);
-      gfnt_paragraph_free(fragment_paragraph);
       return GFNT_ERR_LIMIT;
     }
     shift_along = (GFNT_F26Dot6)along;
@@ -543,8 +467,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
           ? (int64_t)base_line->baseline + base_line->descent - source_line->descent
           : (int64_t)base_line->baseline - base_line->ascent + source_line->ascent;
       if (value < INT32_MIN || value > INT32_MAX) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       shift_across = (GFNT_F26Dot6)value;
@@ -553,8 +475,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       const int64_t value = (int64_t)base_line->baseline + base_line->descent
           - same_side_total + same_side_before + source_line->ascent;
       if (value < INT32_MIN || value > INT32_MAX) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       shift_across = (GFNT_F26Dot6)value;
@@ -564,69 +484,21 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       const int64_t value = (int64_t)base_line->baseline - base_line->ascent
           + same_side_total - same_side_before - extent + source_line->ascent;
       if (value < INT32_MIN || value > INT32_MAX) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       shift_across = (GFNT_F26Dot6)value;
     }
   }
-  {
-    const int64_t cross_extent = (int64_t)source_line->ascent + source_line->descent;
-    const int64_t box_x = vertical ? shift_across : lo;
-    const int64_t box_y = vertical ? lo : (int64_t)shift_across - source_line->ascent;
-    const int64_t box_width = vertical ? cross_extent : source_line->extent;
-    const int64_t box_height = vertical ? source_line->extent : cross_extent;
-    const int64_t dx64 = vertical ? (int64_t)shift_across - source_line->baseline : shift_along;
-    const int64_t dy64 = vertical ? shift_along : (int64_t)shift_across - source_line->baseline;
-    if (cross_extent < 0 || box_x < INT32_MIN || box_x > INT32_MAX
-        || box_y < INT32_MIN || box_y > INT32_MAX || box_width < 0 || box_width > INT32_MAX
-        || box_height < 0 || box_height > INT32_MAX || dx64 < INT32_MIN || dx64 > INT32_MAX
-        || dy64 < INT32_MIN || dy64 > INT32_MAX
-        || box_x + box_width > INT32_MAX || box_y + box_height > INT32_MAX) {
-      gfnt_layout_free(&shaped);
-      gfnt_paragraph_free(fragment_paragraph);
-      return GFNT_ERR_LIMIT;
-    }
-    out->box = (GFNT_Rect){(GFNT_F26Dot6)box_x, (GFNT_F26Dot6)box_y,
-        (GFNT_F26Dot6)box_width, (GFNT_F26Dot6)box_height};
-    dx = (GFNT_F26Dot6)dx64;
-    dy = (GFNT_F26Dot6)dy64;
-  }
-  if (source_line->ink.width > 0 && source_line->ink.height > 0) {
-    GFNT_Rect ink = source_line->ink;
-    const int64_t ink_x = (int64_t)ink.x + dx;
-    const int64_t ink_y = (int64_t)ink.y + dy;
-    const int64_t ink_right = ink_x + ink.width;
-    const int64_t ink_bottom = ink_y + ink.height;
-    if (ink_x < INT32_MIN || ink_x > INT32_MAX || ink_y < INT32_MIN || ink_y > INT32_MAX
-        || ink_right > INT32_MAX || ink_bottom > INT32_MAX) {
-      gfnt_layout_free(&shaped);
-      gfnt_paragraph_free(fragment_paragraph);
-      return GFNT_ERR_LIMIT;
-    }
-    ink.x = (GFNT_F26Dot6)ink_x;
-    ink.y = (GFNT_F26Dot6)ink_y;
-    if (base_line->ink.width <= 0 || base_line->ink.height <= 0) base_line->ink = ink;
-    else {
-      const int64_t old_right = (int64_t)base_line->ink.x + base_line->ink.width;
-      const int64_t old_bottom = (int64_t)base_line->ink.y + base_line->ink.height;
-      const int64_t left = ink.x < base_line->ink.x ? ink.x : base_line->ink.x;
-      const int64_t top = ink.y < base_line->ink.y ? ink.y : base_line->ink.y;
-      const int64_t right = old_right > ink_right ? old_right : ink_right;
-      const int64_t bottom = old_bottom > ink_bottom ? old_bottom : ink_bottom;
-      if (old_right > INT32_MAX || old_bottom > INT32_MAX || right > INT32_MAX
-          || bottom > INT32_MAX || right - left > INT32_MAX || bottom - top > INT32_MAX) {
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
-        return GFNT_ERR_LIMIT;
-      }
-      base_line->ink.x = (GFNT_F26Dot6)left;
-      base_line->ink.y = (GFNT_F26Dot6)top;
-      base_line->ink.width = (GFNT_F26Dot6)(right - left);
-      base_line->ink.height = (GFNT_F26Dot6)(bottom - top);
-    }
-  }
+  *out_along = shift_along;
+  *out_across = shift_across;
+  return GFNT_OK;
+}
+
+/** Copy the shaped annotation's runs and nested tracks into @p out, moved by the shifts. */
+static GFNT_Result annotation_emit(const GFNT_Allocator * allocator, const PAnnotation * source,
+    size_t index, size_t base_start, size_t base_end, const GFNT_Line * source_line, bool vertical,
+    GFNT_F26Dot6 shift_along, GFNT_F26Dot6 shift_across, GFNT_F26Dot6 dx, GFNT_F26Dot6 dy,
+    GFNT_LineAnnotation * out) {
   out->base_start = base_start;
   out->base_end = base_end;
   out->kind = source->descriptor.kind;
@@ -636,8 +508,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
   GFNT_LineRun * runs = allocator->calloc_fn(allocator->ctx,
       out->run_count ? out->run_count : 1, sizeof *runs);
   if (!runs) {
-    gfnt_layout_free(&shaped);
-    gfnt_paragraph_free(fragment_paragraph);
     return GFNT_ERR_OOM;
   }
   out->runs = runs;
@@ -650,8 +520,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       free_annotation_runs(allocator, runs, ri);
       out->runs = NULL;
       out->run_count = 0;
-      gfnt_layout_free(&shaped);
-      gfnt_paragraph_free(fragment_paragraph);
       return GFNT_ERR_OOM;
     }
     runs[ri].glyphs = glyphs;
@@ -669,8 +537,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
         free_annotation_runs(allocator, runs, ri + 1);
         out->runs = NULL;
         out->run_count = 0;
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       glyphs[gi].pen_x = (GFNT_F26Dot6)pen_x;
@@ -684,8 +550,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
         free_annotation_runs(allocator, runs, ri + 1);
         out->runs = NULL;
         out->run_count = 0;
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return GFNT_ERR_LIMIT;
       }
       runs[ri].pos = (GFNT_F26Dot6)pos;
@@ -699,8 +563,6 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
       free_annotation_runs(allocator, runs, out->run_count);
       out->runs = NULL;
       out->run_count = 0;
-      gfnt_layout_free(&shaped);
-      gfnt_paragraph_free(fragment_paragraph);
       return GFNT_ERR_OOM;
     }
     out->children = children;
@@ -715,16 +577,172 @@ static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnot
         gfnt_lay_free_line_annotation_tree(allocator, children, out->child_count);
         out->children = NULL;
         out->child_count = 0;
-        gfnt_layout_free(&shaped);
-        gfnt_paragraph_free(fragment_paragraph);
         return child_result;
       }
       out->child_count++;
     }
   }
+  return GFNT_OK;
+}
+
+static GFNT_Result append_line_annotation(const GFNT_Paragraph * p, const PAnnotation * source,
+    size_t index, GFNT_Line * base_line, size_t base_start, size_t base_end,
+    size_t base_cp_start, size_t base_cp_end,
+    GFNT_LineAnnotation * out, GFNT_Error * error) {
+  GFNT_Layout shaped = {0};
+  GFNT_Paragraph * fragment_paragraph = NULL;
+  PAnnotation fragment_source;
+  const PAnnotation * placement = source;
+  const GFNT_Allocator * allocator = p->allocator;
+  const GFNT_Line * source_line;
+  GFNT_F26Dot6 lo = 0, hi = 0, target, base_lo, shift_along, shift_across, dx, dy;
+  int64_t same_side_total = 0, same_side_before = 0;
+  GFNT_F26Dot6 base_cross_half = 0;
+  bool vertical = p->vertical;
+  bool rtl = source->unit_start < p->unit_count
+      && (p->runs[p->units[source->unit_start].run].level & 1);
+  GFNT_Result r;
+
+  if (source->descriptor.kind == GFNT_ANNOTATION_RUBY
+      && (base_cp_start != source->cp_start || base_cp_end != source->cp_end)) {
+    size_t byte_first, byte_last;
+    if (!ruby_fragment_text_range(source, base_cp_start, base_cp_end,
+            &byte_first, &byte_last)) return GFNT_OK;
+    GFNT_TextSpan span = {0};
+    GFNT_ParagraphOptions options = p->options;
+    GFNT_Error child_error;
+    GFNT_Annotation * children = NULL;
+    size_t child_count = 0;
+    span.length = byte_last - byte_first;
+    span.style = source->shaped->styles[0];
+    options.direction = GFNT_BIDI_AUTO;
+    options.align = GFNT_ALIGN_START;
+    options.max_lines = 0;
+    options.ellipsis = NULL;
+    options.text_indent = 0;
+    options.hanging_indent = false;
+    r = copy_annotation_slice(source->shaped, byte_first, byte_last,
+        &children, &child_count);
+    if (r != GFNT_OK) return gfnt_error_set(error, r, 0, base_start,
+        GFNT_GLYPH_NONE, "could not copy nested ruby annotations for a line fragment");
+    options.annotations = children;
+    options.annotation_count = child_count;
+    r = gfnt_paragraph_create(source->text + byte_first, span.length, &span, 1, &options,
+        allocator, &fragment_paragraph, &child_error);
+    free_annotation_slice(allocator, children, child_count);
+    if (r != GFNT_OK) return gfnt_error_set(error, r, child_error.table, base_start,
+        child_error.glyph, "could not shape a ruby line fragment");
+    fragment_source = *source;
+    fragment_source.shaped = fragment_paragraph;
+    if (gfnt_paragraph_max_content(fragment_paragraph, &fragment_source.advance) != GFNT_OK) {
+      gfnt_paragraph_free(fragment_paragraph);
+      return GFNT_ERR_INVALID;
+    }
+    placement = &fragment_source;
+  }
+  r = gfnt_paragraph_layout(placement->shaped, GFNT_LAYOUT_UNBOUNDED, &shaped, error);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  if (!shaped.line_count) {
+    r = GFNT_OK;
+    goto done;
+  }
+  source_line = &shaped.lines[0];
+  if (vertical) {
+    for (size_t ui = 0; ui < p->unit_count; ui++) {
+      const Unit * unit = &p->units[ui];
+      if (unit->cp_start >= base_cp_end || unit->cp_end <= base_cp_start) continue;
+      const PRun * run = &p->runs[unit->run];
+      const GFNT_F26Dot6 thickness = run->ascent + run->descent;
+      if (thickness / 2 > base_cross_half) base_cross_half = thickness / 2;
+    }
+  }
+  r = annotation_same_side_extent(p, source, index, base_cp_start, base_cp_end,
+      &same_side_total, &same_side_before, error);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  if (!line_base_extent(base_line, base_start, base_end, vertical, &lo, &hi)) {
+    lo = vertical ? base_line->offset : base_line->offset;
+    hi = lo;
+  }
+  target = hi - lo;
+  base_lo = lo;
+  if (placement->descriptor.align == GFNT_ANNOTATION_ALIGN_START && rtl) {
+    lo = hi - source_line->extent;
+  }
+  else if (placement->descriptor.align == GFNT_ANNOTATION_ALIGN_CENTER
+      || placement->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_AROUND
+      || placement->descriptor.align == GFNT_ANNOTATION_ALIGN_SPACE_BETWEEN) {
+    lo += (target - source_line->extent) / 2;
+  }
+  lo = annotation_overhang_start(p, source, base_line, source_line, vertical, lo, hi, target,
+      base_lo);
+  r = annotation_shifts(p, source, base_line, source_line, vertical, lo, base_cross_half,
+      same_side_total, same_side_before, &shift_along, &shift_across);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  {
+    const int64_t cross_extent = (int64_t)source_line->ascent + source_line->descent;
+    const int64_t box_x = vertical ? shift_across : lo;
+    const int64_t box_y = vertical ? lo : (int64_t)shift_across - source_line->ascent;
+    const int64_t box_width = vertical ? cross_extent : source_line->extent;
+    const int64_t box_height = vertical ? source_line->extent : cross_extent;
+    const int64_t dx64 = vertical ? (int64_t)shift_across - source_line->baseline : shift_along;
+    const int64_t dy64 = vertical ? shift_along : (int64_t)shift_across - source_line->baseline;
+    if (cross_extent < 0 || box_x < INT32_MIN || box_x > INT32_MAX
+        || box_y < INT32_MIN || box_y > INT32_MAX || box_width < 0 || box_width > INT32_MAX
+        || box_height < 0 || box_height > INT32_MAX || dx64 < INT32_MIN || dx64 > INT32_MAX
+        || dy64 < INT32_MIN || dy64 > INT32_MAX
+        || box_x + box_width > INT32_MAX || box_y + box_height > INT32_MAX) {
+      r = GFNT_ERR_LIMIT;
+      goto done;
+    }
+    out->box = (GFNT_Rect){(GFNT_F26Dot6)box_x, (GFNT_F26Dot6)box_y,
+        (GFNT_F26Dot6)box_width, (GFNT_F26Dot6)box_height};
+    dx = (GFNT_F26Dot6)dx64;
+    dy = (GFNT_F26Dot6)dy64;
+  }
+  if (source_line->ink.width > 0 && source_line->ink.height > 0) {
+    GFNT_Rect ink = source_line->ink;
+    const int64_t ink_x = (int64_t)ink.x + dx;
+    const int64_t ink_y = (int64_t)ink.y + dy;
+    const int64_t ink_right = ink_x + ink.width;
+    const int64_t ink_bottom = ink_y + ink.height;
+    if (ink_x < INT32_MIN || ink_x > INT32_MAX || ink_y < INT32_MIN || ink_y > INT32_MAX
+        || ink_right > INT32_MAX || ink_bottom > INT32_MAX) {
+      r = GFNT_ERR_LIMIT;
+      goto done;
+    }
+    ink.x = (GFNT_F26Dot6)ink_x;
+    ink.y = (GFNT_F26Dot6)ink_y;
+    if (base_line->ink.width <= 0 || base_line->ink.height <= 0) base_line->ink = ink;
+    else {
+      const int64_t old_right = (int64_t)base_line->ink.x + base_line->ink.width;
+      const int64_t old_bottom = (int64_t)base_line->ink.y + base_line->ink.height;
+      const int64_t left = ink.x < base_line->ink.x ? ink.x : base_line->ink.x;
+      const int64_t top = ink.y < base_line->ink.y ? ink.y : base_line->ink.y;
+      const int64_t right = old_right > ink_right ? old_right : ink_right;
+      const int64_t bottom = old_bottom > ink_bottom ? old_bottom : ink_bottom;
+      if (old_right > INT32_MAX || old_bottom > INT32_MAX || right > INT32_MAX
+          || bottom > INT32_MAX || right - left > INT32_MAX || bottom - top > INT32_MAX) {
+        r = GFNT_ERR_LIMIT;
+        goto done;
+      }
+      base_line->ink.x = (GFNT_F26Dot6)left;
+      base_line->ink.y = (GFNT_F26Dot6)top;
+      base_line->ink.width = (GFNT_F26Dot6)(right - left);
+      base_line->ink.height = (GFNT_F26Dot6)(bottom - top);
+    }
+  }
+  r = annotation_emit(allocator, source, index, base_start, base_end, source_line, vertical,
+      shift_along, shift_across, dx, dy, out);
+done:
   gfnt_layout_free(&shaped);
   gfnt_paragraph_free(fragment_paragraph);
-  return GFNT_OK;
+  return r;
 }
 
 GFNT_Result gfnt_lay_shape_default_emphasis(const GFNT_Paragraph * p, const PAnnotation * source,

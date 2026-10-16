@@ -348,46 +348,42 @@ static GFNT_Result add_units(GFNT_Paragraph * p, const GFNT_FaceRun * fr,
   return GFNT_OK;
 }
 
-GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
-    const GFNT_TextSpan * spans, size_t span_count,
-    const GFNT_ParagraphOptions * options, const GFNT_Allocator * allocator,
-    GFNT_Paragraph ** out, GFNT_Error * error) {
-  static const GFNT_ParagraphOptions zero;
-  GFNT_Paragraph * p = NULL;
-  uint32_t * cps = NULL;
-  uint8_t * levels = NULL;
-  uint8_t * ori = NULL;         // per code point, in vertical text: ORI_UPRIGHT or ORI_SIDEWAYS
-  size_t * span_cp = NULL;      // span_count + 1 code point starts
-  size_t * source_span_cp = NULL;
-  size_t * source_to_layout = NULL;
-  uint32_t * transformed_cps = NULL;
-  size_t * transformed_bytes = NULL;
-  size_t * transformed_spans = NULL;
-  bool * edge = NULL;           // item boundaries
-  bool * opp = NULL;
-  bool * emergency_opp = NULL;
-  bool * collapsed = NULL;
-  bool * removed_break = NULL;
-  const bool emergency_breaks = options && (options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL
-      || options->word_break == GFNT_WORD_BREAK_BREAK_ALL
-      || options->word_break == GFNT_WORD_BREAK_BREAK_WORD);
-  size_t * breaks = NULL;
-  GUNI_ScriptItem * scripts = NULL;
-  size_t n = 0;
-  bool cps_owned = false;   // the paragraph holds cps, and frees it
-  size_t total_runs = 0;
-  GFNT_Result r = GFNT_OK;
+/** Everything the stages of gfnt_paragraph_create() share. */
+typedef struct {
+  const char * text;
+  size_t length;
+  const GFNT_TextSpan * spans;
+  size_t span_count;
+  const GFNT_ParagraphOptions * options;
+  const GFNT_Allocator * allocator;
+  GFNT_Error * error;
+  GFNT_Paragraph * p;
+  uint32_t * cps;
+  uint8_t * levels;
+  uint8_t * ori;               // per code point, in vertical text: ORI_UPRIGHT or ORI_SIDEWAYS
+  size_t * span_cp;            // span_count + 1 code point starts
+  size_t * source_span_cp;
+  size_t * source_to_layout;
+  uint32_t * transformed_cps;
+  size_t * transformed_bytes;
+  size_t * transformed_spans;
+  bool * edge;                 // item boundaries
+  bool * opp;
+  bool * emergency_opp;
+  bool * collapsed;
+  bool * removed_break;
+  bool emergency_breaks;
+  size_t * breaks;
+  GUNI_ScriptItem * scripts;
+  size_t n;
+  bool cps_owned;              // the paragraph holds cps, and frees it
+  size_t total_runs;
+} CreateState;
 
-  gfnt_error_clear(error);
-  if ((!text && length) || !spans || !span_count || !out) {
-    return GFNT_ERR_INVALID;
-  }
-  if (!options) {
-    options = &zero;
-  }
-  if (!allocator) {
-    allocator = gfnt_allocator_default();
-  }
+/** Refuse an option, a style or a span list the paragraph cannot be made from. */
+static GFNT_Result create_validate(const char * text, size_t length, const GFNT_TextSpan * spans,
+    size_t span_count, const GFNT_ParagraphOptions * options, GFNT_Error * error) {
+  (void)text;
   if ((unsigned)options->direction > GFNT_BIDI_AUTO
       || (unsigned)options->align > GFNT_ALIGN_JUSTIFY
       || (unsigned)options->align_last > GFNT_ALIGN_LAST_JUSTIFY
@@ -457,17 +453,29 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           "the spans do not tile the text");
     }
   }
+  return GFNT_OK;
+}
 
-  p = allocator->calloc_fn(allocator->ctx, 1, sizeof *p);
-  cps = ALLOC(cps, length);
-  span_cp = ALLOC(span_cp, span_count + 1);
+/** Allocate the paragraph and its per-code-point and per-span arrays. */
+static GFNT_Result create_allocate(CreateState * cs) {
+  const size_t length = cs->length;
+  const size_t span_count = cs->span_count;
+  const GFNT_ParagraphOptions * options = cs->options;
+  const GFNT_Allocator * allocator = cs->allocator;
+  GFNT_Error * error = cs->error;
+  GFNT_Paragraph * p = cs->p;
+  GFNT_Result r = GFNT_OK;
+
+  p = cs->p = allocator->calloc_fn(allocator->ctx, 1, sizeof *p);
+  cs->cps = ALLOC(cs->cps, length);
+  cs->span_cp = ALLOC(cs->span_cp, span_count + 1);
   if (p) {
     p->allocator = allocator;
   }
-  if (!p || !cps || !span_cp) {
+  if (!p || !cs->cps || !cs->span_cp) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the paragraph");
-    goto done;
+    return r;
   }
   p->allocator = allocator;
   p->options = *options;
@@ -493,8 +501,21 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   if (!p->cp_byte || !p->styles || !p->ideographic_advance || !p->owned_features) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the paragraph");
-    goto done;
+    return r;
   }
+  return r;
+}
+
+/** Decode the UTF-8 text and note the code point at which every span starts. */
+static GFNT_Result create_decode(CreateState * cs) {
+  const char * text = cs->text;
+  const size_t length = cs->length;
+  const GFNT_TextSpan * spans = cs->spans;
+  const size_t span_count = cs->span_count;
+  GFNT_Error * error = cs->error;
+  GFNT_Paragraph * p = cs->p;
+  GFNT_Result r = GFNT_OK;
+
   {
     // Decode, noting the code point at which every span starts.
     size_t pos = 0;
@@ -502,153 +523,189 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     size_t boundary = 0;   // the byte at which span next_span starts
 
     for (size_t s = 0; s <= span_count; s++) {
-      span_cp[s] = (size_t)-1;
+      cs->span_cp[s] = (size_t)-1;
     }
     while (pos < length) {
       uint32_t cp;
       size_t used;
 
       while (next_span < span_count && boundary == pos) {
-        span_cp[next_span] = n;
+        cs->span_cp[next_span] = cs->n;
         boundary += spans[next_span].length;
         next_span++;
       }
       if (boundary < pos) {
         r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, pos, GFNT_GLYPH_NONE,
             "a span ends inside a character");
-        goto done;
+        return r;
       }
       used = guni_utf8_decode(text + pos, length - pos, &cp, NULL);
-      p->cp_byte[n] = pos;
-      cps[n++] = cp;
+      p->cp_byte[cs->n] = pos;
+      cs->cps[cs->n++] = cp;
       pos += used;
     }
     while (next_span < span_count && boundary == pos) {
-      span_cp[next_span] = n;
+      cs->span_cp[next_span] = cs->n;
       boundary += spans[next_span].length;
       next_span++;
     }
     if (next_span < span_count) {
       r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, pos, GFNT_GLYPH_NONE,
           "a span ends inside a character");
-      goto done;
+      return r;
     }
-    p->cp_byte[n] = length;
-    span_cp[span_count] = n;
+    p->cp_byte[cs->n] = length;
+    cs->span_cp[span_count] = cs->n;
   }
-  source_span_cp = ALLOC(source_span_cp, span_count + 1);
-  if (!source_span_cp) {
+  return r;
+}
+
+/** Apply text-transform, then check the annotation ranges and the inline-object spans. */
+static GFNT_Result create_transform(CreateState * cs) {
+  const size_t length = cs->length;
+  const GFNT_TextSpan * spans = cs->spans;
+  const size_t span_count = cs->span_count;
+  const GFNT_ParagraphOptions * options = cs->options;
+  const GFNT_Allocator * allocator = cs->allocator;
+  GFNT_Error * error = cs->error;
+  GFNT_Paragraph * p = cs->p;
+  GFNT_Result r = GFNT_OK;
+
+  cs->source_span_cp = ALLOC(cs->source_span_cp, span_count + 1);
+  if (!cs->source_span_cp) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for source span boundaries");
-    goto done;
+    return r;
   }
-  memcpy(source_span_cp, span_cp, (span_count + 1) * sizeof *source_span_cp);
+  memcpy(cs->source_span_cp, cs->span_cp, (span_count + 1) * sizeof *cs->source_span_cp);
   {
     bool needs_transform = false;
     for (size_t s = 0; s < span_count; s++) {
       needs_transform = needs_transform
           || spans[s].style.text_transform != GFNT_TEXT_TRANSFORM_NONE;
     }
-    if (needs_transform && n) {
+    if (needs_transform && cs->n) {
       size_t transformed_length = 0;
-      r = gfnt_lay_transform_case(cps, n, p->cp_byte, spans, span_count, span_cp, options->white_space, allocator,
-          &transformed_cps, &transformed_bytes, &transformed_length, &transformed_spans,
-          &source_to_layout);
+      r = gfnt_lay_transform_case(cs->cps, cs->n, p->cp_byte, spans, span_count, cs->span_cp, options->white_space, allocator,
+          &cs->transformed_cps, &cs->transformed_bytes, &transformed_length, &cs->transformed_spans,
+          &cs->source_to_layout);
       if (r != GFNT_OK) {
         r = gfnt_error_set(error, r, 0, 0, GFNT_GLYPH_NONE,
             r == GFNT_ERR_OOM ? "no memory for transformed text" : "text transform failed");
-        goto done;
+        return r;
       }
-      allocator->free_fn(allocator->ctx, cps);
+      allocator->free_fn(allocator->ctx, cs->cps);
       allocator->free_fn(allocator->ctx, p->cp_byte);
-      allocator->free_fn(allocator->ctx, span_cp);
-      cps = transformed_cps;
-      p->cp_byte = transformed_bytes;
-      span_cp = transformed_spans;
-      transformed_cps = NULL;
-      transformed_bytes = NULL;
-      transformed_spans = NULL;
-      n = transformed_length;
+      allocator->free_fn(allocator->ctx, cs->span_cp);
+      cs->cps = cs->transformed_cps;
+      p->cp_byte = cs->transformed_bytes;
+      cs->span_cp = cs->transformed_spans;
+      cs->transformed_cps = NULL;
+      cs->transformed_bytes = NULL;
+      cs->transformed_spans = NULL;
+      cs->n = transformed_length;
     }
   }
   if (!gfnt_lay_annotation_tree_valid(options->annotations, options->annotation_count,
           length, 0, length, 0)) {
     r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
         "annotation ranges or descriptors are invalid");
-    goto done;
+    return r;
   }
-  p->length = n;
-  p->cps = cps;
-  cps_owned = true;
+  p->length = cs->n;
+  p->cps = cs->cps;
+  cs->cps_owned = true;
   p->span_count = span_count;
   for (size_t s = 0; s < span_count; s++) {
     if (spans[s].style.inline_object) {
-      if (spans[s].length != 3 || span_cp[s + 1] != span_cp[s] + 1
-          || span_cp[s] >= n || cps[span_cp[s]] != 0xFFFC) {
+      if (spans[s].length != 3 || cs->span_cp[s + 1] != cs->span_cp[s] + 1
+          || cs->span_cp[s] >= cs->n || cs->cps[cs->span_cp[s]] != 0xFFFC) {
         r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
             "an inline object descriptor must cover exactly one U+FFFC");
-        goto done;
+        return r;
       }
     }
   }
+  return r;
+}
+
+/** Mark the whitespace that white-space collapsing removes. */
+static GFNT_Result create_collapse(CreateState * cs) {
+  const GFNT_ParagraphOptions * options = cs->options;
+  const GFNT_Allocator * allocator = cs->allocator;
+  GFNT_Error * error = cs->error;
+  GFNT_Result r = GFNT_OK;
+
   if (options->white_space == GFNT_WHITE_SPACE_NORMAL
       || options->white_space == GFNT_WHITE_SPACE_NOWRAP
       || options->white_space == GFNT_WHITE_SPACE_PRE_LINE) {
-    collapsed = ALLOC(collapsed, n);
-    removed_break = ALLOC(removed_break, n);
-    if (!collapsed || !removed_break) {
+    cs->collapsed = ALLOC(cs->collapsed, cs->n);
+    cs->removed_break = ALLOC(cs->removed_break, cs->n);
+    if (!cs->collapsed || !cs->removed_break) {
       r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-          "no memory for collapsed whitespace flags");
-      goto done;
+          "no memory for cs->collapsed whitespace flags");
+      return r;
     }
-    for (size_t i = 0; i < n;) {
+    for (size_t i = 0; i < cs->n;) {
       size_t end;
       bool has_segment_break = false;
       bool discard = false;
       const bool pre_line = options->white_space == GFNT_WHITE_SPACE_PRE_LINE;
 
-      if (pre_line && gfnt_lay_css_segment_break(cps[i])) {
+      if (pre_line && gfnt_lay_css_segment_break(cs->cps[i])) {
         i++;
         continue;
       }
-      if (!gfnt_lay_css_collapsible_space(cps[i])) {
+      if (!gfnt_lay_css_collapsible_space(cs->cps[i])) {
         i++;
         continue;
       }
       end = i;
-      while (end < n && gfnt_lay_css_collapsible_space(cps[end])
-          && !(pre_line && gfnt_lay_css_segment_break(cps[end]))) {
-        has_segment_break = has_segment_break || gfnt_lay_css_segment_break(cps[end]);
+      while (end < cs->n && gfnt_lay_css_collapsible_space(cs->cps[end])
+          && !(pre_line && gfnt_lay_css_segment_break(cs->cps[end]))) {
+        has_segment_break = has_segment_break || gfnt_lay_css_segment_break(cs->cps[end]);
         end++;
       }
-      discard = i == 0 || (pre_line && i > 0 && gfnt_lay_css_segment_break(cps[i - 1]));
-      if (!pre_line && has_segment_break && i > 0 && end < n
-          && gfnt_lay_is_ideographic(cps[i - 1]) && gfnt_lay_is_ideographic(cps[end])) {
+      discard = i == 0 || (pre_line && i > 0 && gfnt_lay_css_segment_break(cs->cps[i - 1]));
+      if (!pre_line && has_segment_break && i > 0 && end < cs->n
+          && gfnt_lay_is_ideographic(cs->cps[i - 1]) && gfnt_lay_is_ideographic(cs->cps[end])) {
         discard = true;
-        removed_break[i - 1] = options->line_break == GFNT_LINE_BREAK_ANYWHERE
+        cs->removed_break[i - 1] = options->line_break == GFNT_LINE_BREAK_ANYWHERE
             || options->word_break != GFNT_WORD_BREAK_KEEP_ALL
-            || !gfnt_lay_keep_all_pair(cps[i - 1], cps[end],
+            || !gfnt_lay_keep_all_pair(cs->cps[i - 1], cs->cps[end],
                 options->line_break == GFNT_LINE_BREAK_STRICT
                     ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL);
       }
       for (size_t c = i; c < end; c++) {
-        cps[c] = 0x20;
-        collapsed[c] = discard || c != i;
+        cs->cps[c] = 0x20;
+        cs->collapsed[c] = discard || c != i;
       }
       i = end;
     }
   }
+  return r;
+}
+
+/** Copy the span styles, mapping shaping-feature ranges across a text transform. */
+static GFNT_Result create_styles(CreateState * cs) {
+  const GFNT_TextSpan * spans = cs->spans;
+  const size_t span_count = cs->span_count;
+  const GFNT_Allocator * allocator = cs->allocator;
+  GFNT_Error * error = cs->error;
+  GFNT_Paragraph * p = cs->p;
+  GFNT_Result r = GFNT_OK;
+
   for (size_t i = 0; i < span_count; i++) {
     p->styles[i] = spans[i].style;
-    if (source_to_layout && spans[i].style.feature_count) {
-      const size_t source_start = source_span_cp[i];
-      const size_t source_length = source_span_cp[i + 1] - source_start;
-      const size_t layout_start = span_cp[i];
+    if (cs->source_to_layout && spans[i].style.feature_count) {
+      const size_t source_start = cs->source_span_cp[i];
+      const size_t source_length = cs->source_span_cp[i + 1] - source_start;
+      const size_t layout_start = cs->span_cp[i];
       p->owned_features[i] = ALLOC(p->owned_features[i], spans[i].style.feature_count);
       if (!p->owned_features[i]) {
         r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
             "no memory for transformed shaping features");
-        goto done;
+        return r;
       }
       memcpy(p->owned_features[i], spans[i].style.features,
           spans[i].style.feature_count * sizeof *p->owned_features[i]);
@@ -657,96 +714,108 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         size_t start = feature->start > source_length ? source_length : feature->start;
         size_t end = feature->end == GFNT_SHAPE_END ? source_length
             : (feature->end > source_length ? source_length : feature->end);
-        feature->start = source_to_layout[source_start + start] - layout_start;
+        feature->start = cs->source_to_layout[source_start + start] - layout_start;
         if (feature->end != GFNT_SHAPE_END) {
-          feature->end = source_to_layout[source_start + end] - layout_start;
+          feature->end = cs->source_to_layout[source_start + end] - layout_start;
         }
       }
       p->styles[i].features = p->owned_features[i];
     }
   }
+  return r;
+}
 
-  levels = ALLOC(levels, n);
-  ori = ALLOC(ori, n);
-  edge = ALLOC(edge, n + 1);
-  opp = ALLOC(opp, n + 1);
-  if (emergency_breaks) {
-    emergency_opp = ALLOC(emergency_opp, n + 1);
+/** Bidirectional levels, vertical orientation, item edges and break opportunities. */
+static GFNT_Result create_analyse(CreateState * cs) {
+  const GFNT_TextSpan * spans = cs->spans;
+  const size_t span_count = cs->span_count;
+  const GFNT_ParagraphOptions * options = cs->options;
+  const GFNT_Allocator * allocator = cs->allocator;
+  GFNT_Error * error = cs->error;
+  GFNT_Paragraph * p = cs->p;
+  GFNT_Result r = GFNT_OK;
+
+  cs->levels = ALLOC(cs->levels, cs->n);
+  cs->ori = ALLOC(cs->ori, cs->n);
+  cs->edge = ALLOC(cs->edge, cs->n + 1);
+  cs->opp = ALLOC(cs->opp, cs->n + 1);
+  if (cs->emergency_breaks) {
+    cs->emergency_opp = ALLOC(cs->emergency_opp, cs->n + 1);
   }
-  if (!levels || !ori || !edge || !opp
-      || (emergency_breaks && !emergency_opp)) {
+  if (!cs->levels || !cs->ori || !cs->edge || !cs->opp
+      || (cs->emergency_breaks && !cs->emergency_opp)) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
         "no memory for the paragraph");
-    goto done;
+    return r;
   }
-  if (n) {
+  if (cs->n) {
     GUNI_BidiDirection dir = options->direction == GFNT_BIDI_RTL ? GUNI_BIDI_RTL
         : options->direction == GFNT_BIDI_AUTO ? GUNI_BIDI_AUTO : GUNI_BIDI_LTR;
     size_t script_count = 0;
     GUNI_BreakOptions bo;
     size_t break_count = 0;
 
-    if (guni_bidi_levels_with_allocator(cps, n, dir, NULL, levels, n,
+    if (guni_bidi_levels_with_allocator(cs->cps, cs->n, dir, NULL, cs->levels, cs->n,
             &p->para_level, NULL) != GUNI_OK) {
       r = gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
           "the text is too long for the bidirectional algorithm");
-      goto done;
+      return r;
     }
     if (p->vertical && options->text_orientation == GFNT_ORIENT_UPRIGHT
         && p->mode != GFNT_WRITING_SIDEWAYS_RL && p->mode != GFNT_WRITING_SIDEWAYS_LR) {
       // Upright text reads as left to right whatever its characters are (CSS Writing Modes).
-      memset(levels, 0, n);
+      memset(cs->levels, 0, cs->n);
       p->para_level = 0;
     }
     if (p->vertical) {
       size_t sp = 0;
 
-      for (size_t i = 0; i < n; i++) {
-        while (sp + 1 < span_count && span_cp[sp + 1] <= i) {
+      for (size_t i = 0; i < cs->n; i++) {
+        while (sp + 1 < span_count && cs->span_cp[sp + 1] <= i) {
           sp++;
         }
-        if (i > 0 && gfnt_lay_inherits_orientation(cps[i])) {
-          ori[i] = ori[i - 1];
+        if (i > 0 && gfnt_lay_inherits_orientation(cs->cps[i])) {
+          cs->ori[i] = cs->ori[i - 1];
         }
         else if (options->text_orientation == GFNT_ORIENT_MIXED_PANGO
-            && (cps[i] == 0x261D || (cps[i] >= 0x2795 && cps[i] <= 0x2797) || cps[i] == 0x27B0
-                || cps[i] == 0x27BF)) {
+            && (cs->cps[i] == 0x261D || (cs->cps[i] >= 0x2795 && cs->cps[i] <= 0x2797) || cs->cps[i] == 0x27B0
+                || cs->cps[i] == 0x27BF)) {
           // Pango sets these emoji-like symbols with the text they follow.
-          ori[i] = i > 0 ? ori[i - 1] : ORI_SIDEWAYS;
+          cs->ori[i] = i > 0 ? cs->ori[i - 1] : ORI_SIDEWAYS;
         }
         else {
-          ori[i] = gfnt_lay_char_orientation(p, &spans[sp].style, cps[i]);
+          cs->ori[i] = gfnt_lay_char_orientation(p, &spans[sp].style, cs->cps[i]);
         }
       }
     }
     // A call with no room reports the count it needs, with a limit error.
-    (void)guni_script_items(cps, n, NULL, 0, &script_count);
+    (void)guni_script_items(cs->cps, cs->n, NULL, 0, &script_count);
     if (script_count) {
-      scripts = ALLOC(scripts, script_count);
-      if (!scripts) {
+      cs->scripts = ALLOC(cs->scripts, script_count);
+      if (!cs->scripts) {
         r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
             "no memory for the paragraph");
-        goto done;
+        return r;
       }
-      if (guni_script_items(cps, n, scripts, script_count, &script_count)
+      if (guni_script_items(cs->cps, cs->n, cs->scripts, script_count, &script_count)
           == GUNI_OK) {
         for (size_t i = 0; i < script_count; i++) {
-          edge[scripts[i].start] = true;
+          cs->edge[cs->scripts[i].start] = true;
         }
       }
     }
     for (size_t s = 0; s < span_count; s++) {
-      if (span_cp[s] < n) {
-        edge[span_cp[s]] = true;
+      if (cs->span_cp[s] < cs->n) {
+        cs->edge[cs->span_cp[s]] = true;
       }
     }
-    for (size_t i = 1; i < n; i++) {
-      if (levels[i] != levels[i - 1] || (p->vertical && ori[i] != ori[i - 1])) {
-        edge[i] = true;
+    for (size_t i = 1; i < cs->n; i++) {
+      if (cs->levels[i] != cs->levels[i - 1] || (p->vertical && cs->ori[i] != cs->ori[i - 1])) {
+        cs->edge[i] = true;
       }
     }
-    edge[0] = true;
-    edge[n] = true;
+    cs->edge[0] = true;
+    cs->edge[cs->n] = true;
 
     memset(&bo, 0, sizeof bo);
     bo.kind = GUNI_BREAK_LINE;
@@ -755,59 +824,144 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         : options->line_break == GFNT_LINE_BREAK_LOOSE ? GUNI_LINE_BREAK_LOOSE
         : options->line_break == GFNT_LINE_BREAK_ANYWHERE
             ? GUNI_LINE_BREAK_ANYWHERE : GUNI_LINE_BREAK_NORMAL;
-    (void)guni_break_all_codepoints(&bo, cps, n, NULL, 0, &break_count);
+    (void)guni_break_all_codepoints(&bo, cs->cps, cs->n, NULL, 0, &break_count);
     if (break_count) {
-      breaks = ALLOC(breaks, break_count);
-      if (!breaks) {
+      cs->breaks = ALLOC(cs->breaks, break_count);
+      if (!cs->breaks) {
         r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
             "no memory for the paragraph");
-        goto done;
+        return r;
       }
-      if (guni_break_all_codepoints(&bo, cps, n, breaks, break_count,
+      if (guni_break_all_codepoints(&bo, cs->cps, cs->n, cs->breaks, break_count,
               &break_count) == GUNI_OK) {
         for (size_t i = 0; i < break_count; i++) {
-          if (breaks[i] <= n
-              && !(breaks[i] > 0 && breaks[i] < n
-                  && p->cp_byte[breaks[i]] == p->cp_byte[breaks[i] - 1])) {
-            opp[breaks[i]] = true;
+          if (cs->breaks[i] <= cs->n
+              && !(cs->breaks[i] > 0 && cs->breaks[i] < cs->n
+                  && p->cp_byte[cs->breaks[i]] == p->cp_byte[cs->breaks[i] - 1])) {
+            cs->opp[cs->breaks[i]] = true;
           }
         }
       }
     }
-    if (emergency_breaks) {
+    if (cs->emergency_breaks) {
       bo.kind = GUNI_BREAK_GRAPHEME;
-      (void)guni_break_all_codepoints(&bo, cps, n, NULL, 0, &break_count);
-      allocator->free_fn(allocator->ctx, breaks);
-      breaks = NULL;
+      (void)guni_break_all_codepoints(&bo, cs->cps, cs->n, NULL, 0, &break_count);
+      allocator->free_fn(allocator->ctx, cs->breaks);
+      cs->breaks = NULL;
       if (break_count) {
-        breaks = ALLOC(breaks, break_count);
-        if (!breaks) {
+        cs->breaks = ALLOC(cs->breaks, break_count);
+        if (!cs->breaks) {
           r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
               "no memory for the paragraph");
-          goto done;
+          return r;
         }
-        if (guni_break_all_codepoints(&bo, cps, n, breaks, break_count,
+        if (guni_break_all_codepoints(&bo, cs->cps, cs->n, cs->breaks, break_count,
                 &break_count) == GUNI_OK) {
           for (size_t i = 0; i < break_count; i++) {
-            if (breaks[i] > 0 && breaks[i] < n
-                && p->cp_byte[breaks[i]] != p->cp_byte[breaks[i] - 1]) {
-              emergency_opp[breaks[i]] = true;
+            if (cs->breaks[i] > 0 && cs->breaks[i] < cs->n
+                && p->cp_byte[cs->breaks[i]] != p->cp_byte[cs->breaks[i] - 1]) {
+              cs->emergency_opp[cs->breaks[i]] = true;
             }
           }
         }
       }
     }
   }
-  if (n) {
+  return r;
+}
+
+/** Shape one U+FFFC that carries an inline-object descriptor: one run, one glyph, one unit. */
+static GFNT_Result create_shape_object(CreateState * cs, size_t start, size_t end, size_t span,
+    size_t * glyph_cap) {
+  GFNT_Paragraph * p = cs->p;
+  const GFNT_Allocator * allocator = cs->allocator;
+  GFNT_Error * error = cs->error;
+  const GFNT_TextStyle * style = &cs->spans[span].style;
+  GFNT_Result r = GFNT_OK;
+
+  const GFNT_InlineObject * object = style->inline_object;
+  GFNT_TextStyle object_style = *style;
+  PRun * run = &p->runs[p->run_count];
+  PGlyph * glyph;
+  Unit * unit;
+
+  if (p->glyph_count == *glyph_cap) {
+    size_t cap = *glyph_cap ? *glyph_cap * 2 : 64;
+    PGlyph * bigger;
+    while (cap <= p->glyph_count) cap *= 2;
+    bigger = allocator->realloc_fn(allocator->ctx, p->glyphs, cap * sizeof *bigger);
+    if (!bigger) {
+      r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+          "no memory for the inline object glyph");
+      return r;
+    }
+    p->glyphs = bigger;
+    *glyph_cap = cap;
+  }
+  memset(run, 0, sizeof *run);
+  run->span = span;
+  run->level = cs->levels[start];
+  run->orient = p->vertical ? GFNT_ORIENT_RUN_UPRIGHT : GFNT_ORIENT_RUN_HORIZONTAL;
+  run->ascent = object->ascent;
+  run->descent = object->descent;
+  run->inline_ascent = object->ascent;
+  run->inline_descent = object->descent;
+  run->line_height = object->ascent + object->descent;
+  run->object = object;
+  object_style.vertical_align = object->align;
+  object_style.vertical_align_value = object->align_value;
+  if (!gfnt_lay_set_inline_metrics(run, &object_style)) {
+    r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, p->cp_byte[start], GFNT_GLYPH_NONE,
+        "an inline object has invalid computed line metrics");
+    return r;
+  }
+  glyph = &p->glyphs[p->glyph_count];
+  memset(glyph, 0, sizeof *glyph);
+  glyph->glyph = GFNT_GLYPH_NONE;
+  glyph->cluster = (uint32_t)p->cp_byte[start];
+  glyph->advance = object->advance;
+  glyph->has_ink = false;
+  unit = &p->units[p->unit_count++];
+  memset(unit, 0, sizeof *unit);
+  unit->cp_start = start;
+  unit->cp_end = end;
+  unit->run = p->run_count;
+  unit->g_lo = p->glyph_count;
+  unit->g_hi = p->glyph_count + 1;
+  unit->object = true;
+  if ((int64_t)object->advance + style->letter_spacing < INT32_MIN
+      || (int64_t)object->advance + style->letter_spacing > INT32_MAX) {
+    r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, p->cp_byte[start], GFNT_GLYPH_NONE,
+        "an inline object advance exceeds the supported layout range");
+    return r;
+  }
+  unit->width = (GFNT_F26Dot6)((int64_t)object->advance + style->letter_spacing);
+  unit->base_width = unit->width;
+  p->glyphs[p->glyph_count].advance = unit->width;
+  p->glyph_count++;
+  p->run_count++;
+  return r;
+}
+
+/** Shape every item into runs, glyphs and units. */
+static GFNT_Result create_shape(CreateState * cs) {
+  const GFNT_TextSpan * spans = cs->spans;
+  const size_t span_count = cs->span_count;
+  const GFNT_Allocator * allocator = cs->allocator;
+  GFNT_Error * error = cs->error;
+  GFNT_Paragraph * p = cs->p;
+  GFNT_Result r = GFNT_OK;
+
+  if (cs->n) {
     // Count the face runs the items will give, so the arrays can be sized: an
     // item shapes into at most one run per code point.
-    total_runs = n;
-    p->runs = ALLOC(p->runs, total_runs);
-    p->units = ALLOC(p->units, n + 1);
+    cs->total_runs = cs->n;
+    p->runs = ALLOC(p->runs, cs->total_runs);
+    p->units = ALLOC(p->units, cs->n + 1);
     if (!p->runs || !p->units) {
       r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
           "no memory for the paragraph");
-      goto done;
+      return r;
     }
   }
   {
@@ -815,7 +969,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
     size_t glyph_cap = 0;
     size_t span = 0;
 
-    for (size_t start = 0; start < n;) {
+    for (size_t start = 0; start < cs->n;) {
       size_t end = start + 1;
       GFNT_FaceRuns fr;
       GFNT_ShapeOptions so;
@@ -830,100 +984,43 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       size_t fcount;
       const GFNT_Face ** owned = NULL;
 
-      while (end < n && !edge[end]) {
+      while (end < cs->n && !cs->edge[end]) {
         end++;
       }
-      while (span + 1 < span_count && span_cp[span + 1] <= start) {
+      while (span + 1 < span_count && cs->span_cp[span + 1] <= start) {
         span++;
       }
       style = &spans[span].style;
-      if (end == start + 1 && cps[start] == 0xFFFC && style->inline_object) {
-        const GFNT_InlineObject * object = style->inline_object;
-        GFNT_TextStyle object_style = *style;
-        PRun * run = &p->runs[p->run_count];
-        PGlyph * glyph;
-        Unit * unit;
-
-        if (p->glyph_count == glyph_cap) {
-          size_t cap = glyph_cap ? glyph_cap * 2 : 64;
-          PGlyph * bigger;
-          while (cap <= p->glyph_count) cap *= 2;
-          bigger = allocator->realloc_fn(allocator->ctx, p->glyphs, cap * sizeof *bigger);
-          if (!bigger) {
-            r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-                "no memory for the inline object glyph");
-            goto done;
-          }
-          p->glyphs = bigger;
-          glyph_cap = cap;
+      if (end == start + 1 && cs->cps[start] == 0xFFFC && style->inline_object) {
+        r = create_shape_object(cs, start, end, span, &glyph_cap);
+        if (r != GFNT_OK) {
+          return r;
         }
-        memset(run, 0, sizeof *run);
-        run->span = span;
-        run->level = levels[start];
-        run->orient = p->vertical ? GFNT_ORIENT_RUN_UPRIGHT : GFNT_ORIENT_RUN_HORIZONTAL;
-        run->ascent = object->ascent;
-        run->descent = object->descent;
-        run->inline_ascent = object->ascent;
-        run->inline_descent = object->descent;
-        run->line_height = object->ascent + object->descent;
-        run->object = object;
-        object_style.vertical_align = object->align;
-        object_style.vertical_align_value = object->align_value;
-        if (!gfnt_lay_set_inline_metrics(run, &object_style)) {
-          r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, p->cp_byte[start], GFNT_GLYPH_NONE,
-              "an inline object has invalid computed line metrics");
-          goto done;
-        }
-        glyph = &p->glyphs[p->glyph_count];
-        memset(glyph, 0, sizeof *glyph);
-        glyph->glyph = GFNT_GLYPH_NONE;
-        glyph->cluster = (uint32_t)p->cp_byte[start];
-        glyph->advance = object->advance;
-        glyph->has_ink = false;
-        unit = &p->units[p->unit_count++];
-        memset(unit, 0, sizeof *unit);
-        unit->cp_start = start;
-        unit->cp_end = end;
-        unit->run = p->run_count;
-        unit->g_lo = p->glyph_count;
-        unit->g_hi = p->glyph_count + 1;
-        unit->object = true;
-        if ((int64_t)object->advance + style->letter_spacing < INT32_MIN
-            || (int64_t)object->advance + style->letter_spacing > INT32_MAX) {
-          r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, p->cp_byte[start], GFNT_GLYPH_NONE,
-              "an inline object advance exceeds the supported layout range");
-          goto done;
-        }
-        unit->width = (GFNT_F26Dot6)((int64_t)object->advance + style->letter_spacing);
-        unit->base_width = unit->width;
-        p->glyphs[p->glyph_count].advance = unit->width;
-        p->glyph_count++;
-        p->run_count++;
         start = end;
         continue;
       }
       flist = style->faces;
       fcount = style->face_count;
-      upright = p->vertical && ori[start] == ORI_UPRIGHT;
-      rtl = !upright && (levels[start] & 1) != 0;
-      rev = upright && (levels[start] & 1) != 0;
+      upright = p->vertical && cs->ori[start] == ORI_UPRIGHT;
+      rtl = !upright && (cs->levels[start] & 1) != 0;
+      rev = upright && (cs->levels[start] & 1) != 0;
       memset(&so, 0, sizeof so);
       so.language = style->language;
       so.direction = upright ? GFNT_DIRECTION_TTB
                              : rtl ? GFNT_DIRECTION_RTL : GFNT_DIRECTION_LTR;
       so.variation = style->variation;
-      features = cut_features(allocator, style, span_cp[span], start, end,
+      features = cut_features(allocator, style, cs->span_cp[span], start, end,
           &feature_count);
       if (style->feature_count && !features) {
         r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
             "no memory for the features");
-        goto done;
+        return r;
       }
       so.features = features;
       so.feature_count = feature_count;
       memset(&fr, 0, sizeof fr);
       if (p->provider.font_for) {
-        GFNT_Tag item_script = gfnt_shape_script_of(cps + start, end - start);
+        GFNT_Tag item_script = gfnt_shape_script_of(cs->cps + start, end - start);
 
         owned = allocator->calloc_fn(allocator->ctx,
             style->face_count + PROVIDER_MAX, sizeof *owned);
@@ -931,7 +1028,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           allocator->free_fn(allocator->ctx, features);
           r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
               "no memory for the face list");
-          goto done;
+          return r;
         }
         memcpy(owned, style->faces, style->face_count * sizeof *owned);
         flist = owned;
@@ -940,16 +1037,16 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           bool mapped = false;
           const GFNT_Face * f;
 
-          if (provider_skips(cps[c])) {
+          if (provider_skips(cs->cps[c])) {
             continue;
           }
           for (size_t k = 0; k < fcount && !mapped; k++) {
-            mapped = gfnt_lay_face_maps(owned[k], cps[c]);
+            mapped = gfnt_lay_face_maps(owned[k], cs->cps[c]);
           }
           if (mapped) {
             continue;
           }
-          f = p->provider.font_for(p->provider.ctx, cps[c], item_script,
+          f = p->provider.font_for(p->provider.ctx, cs->cps[c], item_script,
               style->language, style);
           if (!f) {
             continue;
@@ -964,13 +1061,13 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           }
         }
       }
-      r = gfnt_faces_shape(flist, fcount, cps + start, end - start, &so,
+      r = gfnt_faces_shape(flist, fcount, cs->cps + start, end - start, &so,
           allocator, &fr, error);
       allocator->free_fn(allocator->ctx, features);
       if (r != GFNT_OK) {
         allocator->free_fn(allocator->ctx, owned);
         owned = NULL;
-        goto done;
+        return r;
       }
       // The face runs come back in visual order; take them in logical order.
       for (size_t k = 0; k < fr.count && r == GFNT_OK; k++) {
@@ -978,7 +1075,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         GFNT_F16Dot16 scale;
         PRun * pr;
 
-        if (p->run_count >= total_runs) {
+        if (p->run_count >= cs->total_runs) {
           r = gfnt_error_set(error, GFNT_ERR_INTERNAL, 0, 0, GFNT_GLYPH_NONE,
               "more face runs than characters");
           break;
@@ -1005,7 +1102,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
         pr->face = flist[f->face];
         pr->span = span;
         pr->face_index = f->face;
-        pr->level = levels[start];
+        pr->level = cs->levels[start];
         pr->orient = p->vertical ? (upright ? GFNT_ORIENT_RUN_UPRIGHT : GFNT_ORIENT_RUN_CW)
                                  : GFNT_ORIENT_RUN_HORIZONTAL;
         gfnt_lay_scale_metrics(pr->face, style, pr);
@@ -1026,7 +1123,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           size_t cp = start + sg->cluster;
 
           pg->glyph = sg->glyph;
-          pg->cluster = (uint32_t)p->cp_byte[cp < n ? cp : n];
+          pg->cluster = (uint32_t)p->cp_byte[cp < cs->n ? cp : cs->n];
           pg->advance = gfnt_units_to_pixels(upright ? -sg->y_advance : sg->x_advance, scale);
           pg->dx = gfnt_units_to_pixels(sg->x_offset, scale);
           pg->dy = gfnt_units_to_pixels(sg->y_offset, scale);
@@ -1044,7 +1141,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           // Not `r = `: an out-of-memory in a glyph's outline above would be lost,
           // and the glyphs after it would be left without their ink flag.
           GFNT_Result units = add_units(p, f, start, rtl || rev, rev, p->run_count,
-              p->glyph_count, cps, error);
+              p->glyph_count, cs->cps, error);
 
           if (r == GFNT_OK) {
             r = units;
@@ -1056,24 +1153,33 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       gfnt_face_runs_free(&fr);
       allocator->free_fn(allocator->ctx, owned);
       if (r != GFNT_OK) {
-        goto done;
+        return r;
       }
       start = end;
     }
   }
+  return r;
+}
+
+/** Put the break opportunities, collapsed spaces and hard breaks onto the units. */
+static GFNT_Result create_units(CreateState * cs) {
+  const GFNT_ParagraphOptions * options = cs->options;
+  GFNT_Paragraph * p = cs->p;
+  GFNT_Result r = GFNT_OK;
+
   {
     // Where a line may and must break, onto the units.
     for (size_t i = 0; i < p->unit_count; i++) {
       Unit * u = &p->units[i];
-      uint32_t last = cps[u->cp_end - 1];
+      uint32_t last = cs->cps[u->cp_end - 1];
 
-      u->opportunity = opp[u->cp_end];
-      u->emergency = emergency_opp && emergency_opp[u->cp_end];
-      if (collapsed && u->cp_start < n && collapsed[u->cp_start]) {
+      u->opportunity = cs->opp[u->cp_end];
+      u->emergency = cs->emergency_opp && cs->emergency_opp[u->cp_end];
+      if (cs->collapsed && u->cp_start < cs->n && cs->collapsed[u->cp_start]) {
         bool all_collapsed = true;
 
         for (size_t c = u->cp_start; c < u->cp_end; c++) {
-          all_collapsed = all_collapsed && collapsed[c];
+          all_collapsed = all_collapsed && cs->collapsed[c];
         }
         if (all_collapsed) {
           u->width = 0;
@@ -1087,34 +1193,34 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
           }
         }
       }
-      if (collapsed && u->space && u->cp_start < n && !collapsed[u->cp_start]) {
+      if (cs->collapsed && u->space && u->cp_start < cs->n && !cs->collapsed[u->cp_start]) {
         u->opportunity = true;
       }
-      if (removed_break && u->cp_end && removed_break[u->cp_end - 1]) {
+      if (cs->removed_break && u->cp_end && cs->removed_break[u->cp_end - 1]) {
         u->opportunity = true;
       }
       if (options->white_space == GFNT_WHITE_SPACE_BREAK_SPACES && u->space) {
         u->opportunity = true;
       }
       if (options->word_break == GFNT_WORD_BREAK_BREAK_ALL && u->emergency
-          && u->cp_end < n
-          && gfnt_lay_word_break_letter(cps[u->cp_end - 1],
+          && u->cp_end < cs->n
+          && gfnt_lay_word_break_letter(cs->cps[u->cp_end - 1],
               options->line_break == GFNT_LINE_BREAK_STRICT
                   ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL)
-          && gfnt_lay_word_break_letter(cps[u->cp_end],
+          && gfnt_lay_word_break_letter(cs->cps[u->cp_end],
               options->line_break == GFNT_LINE_BREAK_STRICT
                   ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL)) {
         u->opportunity = true;
       }
       if (options->word_break == GFNT_WORD_BREAK_KEEP_ALL
-          && options->line_break != GFNT_LINE_BREAK_ANYWHERE && u->cp_end < n
-          && gfnt_lay_keep_all_pair(cps[u->cp_end - 1], cps[u->cp_end],
+          && options->line_break != GFNT_LINE_BREAK_ANYWHERE && u->cp_end < cs->n
+          && gfnt_lay_keep_all_pair(cs->cps[u->cp_end - 1], cs->cps[u->cp_end],
               options->line_break == GFNT_LINE_BREAK_STRICT
                   ? GUNI_LINE_BREAK_STRICT : GUNI_LINE_BREAK_NORMAL)) {
         u->opportunity = false;
       }
       u->hard = gfnt_lay_paragraph_hard_break(p, last)
-          && !(last == 0x0D && u->cp_end < n && gfnt_lay_css_segment_break(cps[u->cp_end]));
+          && !(last == 0x0D && u->cp_end < cs->n && gfnt_lay_css_segment_break(cs->cps[u->cp_end]));
       if (u->object) {
         const GFNT_InlineObject * object = p->runs[u->run].object;
         u->opportunity = u->opportunity || object->break_after;
@@ -1130,19 +1236,31 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
       left->autospace_after = gap;
     }
   }
-  r = gfnt_lay_mark_hyphens(p, text, span_cp, error);
+  return r;
+}
+
+/** Hyphenation points, annotations, kashida, the tab width and the fallback metrics. */
+static GFNT_Result create_finish(CreateState * cs) {
+  const char * text = cs->text;
+  const GFNT_TextSpan * spans = cs->spans;
+  const GFNT_ParagraphOptions * options = cs->options;
+  GFNT_Error * error = cs->error;
+  GFNT_Paragraph * p = cs->p;
+  GFNT_Result r = GFNT_OK;
+
+  r = gfnt_lay_mark_hyphens(p, text, cs->span_cp, error);
   if (r != GFNT_OK) {
-    goto done;
+    return r;
   }
   r = gfnt_lay_create_annotations(p, options->annotations, options->annotation_count, error);
   if (r != GFNT_OK) {
-    goto done;
+    return r;
   }
   p->options.annotations = NULL;
   p->options.annotation_count = 0;
   r = gfnt_lay_find_kashida(p, error);
   if (r != GFNT_OK) {
-    goto done;
+    return r;
   }
   if (p->tab_width < 0) {
     if (options->tab_width > 0) {
@@ -1157,7 +1275,7 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
 
       r = gfnt_lay_shape_string(p, 0, &space, 1, g, &gn, &w, &tr, -1, error);
       if (r != GFNT_OK) {
-        goto done;
+        return r;
       }
       p->tab_width = w > 0 ? 8 * w : 2 * spans[0].style.size;
     }
@@ -1167,29 +1285,107 @@ GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
   if (!gfnt_lay_set_inline_metrics(&p->fallback_metrics, &spans[0].style)) {
     r = gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
         "the root span has an invalid line-height or vertical alignment");
+    return r;
+  }
+  return r;
+}
+
+/** Release what the stages made and the paragraph did not take. */
+static void create_state_free(CreateState * cs) {
+  cs->allocator->free_fn(cs->allocator->ctx, cs->source_span_cp);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->source_to_layout);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->transformed_cps);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->transformed_bytes);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->transformed_spans);
+  if (!cs->cps_owned) {
+    cs->allocator->free_fn(cs->allocator->ctx, cs->cps);
+  }
+  cs->allocator->free_fn(cs->allocator->ctx, cs->levels);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->ori);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->collapsed);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->removed_break);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->span_cp);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->edge);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->opp);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->emergency_opp);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->breaks);
+  cs->allocator->free_fn(cs->allocator->ctx, cs->scripts);
+  gfnt_paragraph_free(cs->p);
+}
+
+GFNT_Result gfnt_paragraph_create(const char * text, size_t length,
+    const GFNT_TextSpan * spans, size_t span_count,
+    const GFNT_ParagraphOptions * options, const GFNT_Allocator * allocator,
+    GFNT_Paragraph ** out, GFNT_Error * error) {
+  static const GFNT_ParagraphOptions zero;
+  CreateState state;
+  CreateState * cs = &state;
+  GFNT_Result r;
+
+  gfnt_error_clear(error);
+  if ((!text && length) || !spans || !span_count || !out) {
+    return GFNT_ERR_INVALID;
+  }
+  if (!options) {
+    options = &zero;
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  r = create_validate(text, length, spans, span_count, options, error);
+  if (r != GFNT_OK) {
+    return r;
+  }
+  memset(&state, 0, sizeof state);
+  state.text = text;
+  state.length = length;
+  state.spans = spans;
+  state.span_count = span_count;
+  state.options = options;
+  state.allocator = allocator;
+  state.error = error;
+  state.emergency_breaks = options->overflow_wrap != GFNT_OVERFLOW_WRAP_NORMAL
+      || options->word_break == GFNT_WORD_BREAK_BREAK_ALL
+      || options->word_break == GFNT_WORD_BREAK_BREAK_WORD;
+  r = create_allocate(cs);
+  if (r != GFNT_OK) {
     goto done;
   }
-  *out = p;
-  p = NULL;
-done:
-  allocator->free_fn(allocator->ctx, source_span_cp);
-  allocator->free_fn(allocator->ctx, source_to_layout);
-  allocator->free_fn(allocator->ctx, transformed_cps);
-  allocator->free_fn(allocator->ctx, transformed_bytes);
-  allocator->free_fn(allocator->ctx, transformed_spans);
-  if (!cps_owned) {
-    allocator->free_fn(allocator->ctx, cps);
+  r = create_decode(cs);
+  if (r != GFNT_OK) {
+    goto done;
   }
-  allocator->free_fn(allocator->ctx, levels);
-  allocator->free_fn(allocator->ctx, ori);
-  allocator->free_fn(allocator->ctx, collapsed);
-  allocator->free_fn(allocator->ctx, removed_break);
-  allocator->free_fn(allocator->ctx, span_cp);
-  allocator->free_fn(allocator->ctx, edge);
-  allocator->free_fn(allocator->ctx, opp);
-  allocator->free_fn(allocator->ctx, emergency_opp);
-  allocator->free_fn(allocator->ctx, breaks);
-  allocator->free_fn(allocator->ctx, scripts);
-  gfnt_paragraph_free(p);
+  r = create_transform(cs);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  r = create_collapse(cs);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  r = create_styles(cs);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  r = create_analyse(cs);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  r = create_shape(cs);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  r = create_units(cs);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  r = create_finish(cs);
+  if (r != GFNT_OK) {
+    goto done;
+  }
+  *out = cs->p;
+  cs->p = NULL;
+done:
+  create_state_free(cs);
   return r;
 }

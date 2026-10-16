@@ -40,17 +40,25 @@
  * ::gfnt_paragraph_layout() is the room *along* the lines, a height. A run says how its glyphs
  * sit (::GFNT_Orientation); a turned run's glyphs are drawn turned about their origin.
  *
- * **What it does not do, stated rather than approximated:** kashida (a justified line
- * widens its spaces and its ideograph gaps, which is all Chromium and Pango do to Arabic as well),
- * hyphenation data (a caller supplies the dictionary, ::GFNT_Hyphenator), and full CSS Ruby
- * behavior. Ruby and emphasis annotations are supported for shaped over/under tracks; see
- * ::GFNT_Annotation for the supported subset.
- * Per-line constraints use ::gfnt_paragraph_layout_flow(); ::GFNT_Exclusions supplies a built-in
- * callback for one-sided shapes. A caller may describe an atomic U+FFFC inline
- * object with ::GFNT_InlineObject; the library places its synthetic glyph and
- * returns its caller identity, but never paints it.
- * Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line;
- * the text is otherwise one bidirectional paragraph, so a caller with several
+ * **Beyond the paragraph** (design.md 10.8): ::gfnt_paragraph_layout_flow() lays lines out
+ * against a caller's per-line band (::GFNT_LineConstraint), and ::GFNT_Exclusions supplies a
+ * ready band for rectangles, circles and polygons that text keeps to one side of;
+ * ::gfnt_paragraph_layout_columns() fills equal columns, with orphans, widows and a resume
+ * offset. A caller may describe an atomic U+FFFC inline object with ::GFNT_InlineObject; the
+ * library places its synthetic glyph and returns the caller's identity, but never paints it.
+ * ::GFNT_ParagraphOptions::annotations attaches ruby and emphasis marks to byte ranges (see
+ * ::GFNT_Annotation for the supported subset), and ::gfnt_paragraph_decoration_layout()
+ * returns underline, overline and line-through rectangles. Justification can lengthen Arabic
+ * words by kashida (::GFNT_JUSTIFY_KASHIDA).
+ *
+ * **What it does not do, stated rather than approximated:** parse markup or CSS (the caller
+ * resolves styles to the values here), paint anything, hyphenate without a dictionary (a
+ * caller supplies one, ::GFNT_Hyphenator), flow text into several segments of one line or
+ * around shapes in vertical text with the built-in exclusions, apply the whole of CSS Ruby,
+ * or derive decoration offsets from a face. The unbuilt text properties are listed in design.md
+ * 10.7.
+ * Newline characters (LF, CR, VT, FF, U+0085, U+2028, U+2029) end a line, except where
+ * ::GFNT_ParagraphOptions::white_space collapses them; the text is otherwise one bidirectional paragraph, so a caller with several
  * paragraphs lays out one object per paragraph.
  */
 

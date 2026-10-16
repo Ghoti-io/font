@@ -178,7 +178,7 @@ to keep open.
 | `raster.h` | the scan converter; `GFNT_Coverage`; the `GIMG_Raster` bridge. The scan converter and `GFNT_Coverage` are implemented; the bridge waits on `image` |
 | `charstring.h` | the Type 1 and Type 2 interpreters, container-independent (§7.4). Implemented; of the four containers that feed them, `CFF ` inside an sfnt is read |
 | `shape.h` | `GFNT_ShapedRun`, features, `gfnt_face_shape()` and script shapers; see §9 for unsupported tables and known differential gaps |
-| `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, fallback providers; paragraph layout is implemented, while inline flow and ruby are not (§10) |
+| `layout.h` | `GFNT_Paragraph`, `GFNT_Line`, boxes, hit testing, fallback providers; paragraph layout with inline objects, per-line flow constraints, columns, ruby and emphasis annotation tracks and decoration geometry (§10); list markers, the box model and painting are the caller's |
 | `discover.h` | `GFNT_FontSet`, directory scanning, serialization, matching and fallback; native Windows/macOS enumeration remains TODO (§11) |
 | `write.h` | sfnt/WOFF/bitmap/standalone writers and subsetting; PDF-specific helpers are not implemented (§12–13) |
 | `font.h` | umbrella for what is implemented |
@@ -1505,12 +1505,16 @@ a later HarfBuzz may change any of them. Each has a test that names the case.
 
 ## 10. Layout
 
-Text layout is in this library up to the paragraph and not past it. A
-constraint-based layout system needs **min-content and max-content** widths
-from every piece of text, both of which require break analysis over shaped
-runs, so either this library exposes them or the GUI toolkit grows a second
-shaper. And the cluster map does not survive a line boundary someone else
-drew.
+Text layout is in this library: the paragraph, and the mechanisms that let a
+line be shared with something that is not text. A constraint-based layout
+system needs **min-content and max-content** widths from every piece of text,
+both of which require break analysis over shaped runs, so either this library
+exposes them or the GUI toolkit grows a second shaper. And the cluster map does
+not survive a line boundary someone else drew; that is why inline objects,
+per-line constraints and ruby are here as well (decided 2026-10-13, §17). The
+rule is that this library owns what can be computed from text, styles, faces and
+geometry the caller passes in, so that a program with no GUI can use it; what
+needs a widget tree, a window, markup or the CSS cascade is the caller's.
 
 ### 10.1 What is here and what is `cjelly`'s
 
@@ -1574,10 +1578,30 @@ positioned run slices with its own metrics, both boxes, and its logical range.
 `gfnt_paragraph_min_content()` and `_max_content()` answer the constraint
 system without producing lines.
 
-Justification is space expansion in the first release, with `JSTF` as a later
-option (kashida is built, §10.8); alignment is start/end/left/right/center
-with bidi-aware start/end; truncation is an ellipsis string shaped in the
-paragraph's own style; tabs are stops or a default interval.
+Justification widens spaces and ideograph gaps, or lengthens Arabic words by
+kashida (§10.8), with `JSTF` as a later option; alignment is
+start/end/left/right/center with bidi-aware start/end; truncation is an
+ellipsis string shaped in the paragraph's own style; tabs are stops or a default
+interval.
+
+**The surface at a glance.** Where each capability is described, and what holds it.
+Every option is zero-valid, and a zeroed value is the behaviour the library had before
+the option was added (`make check-layout-unit-snapshot` compares the unit layouts
+field by field with their recorded baseline).
+
+| Capability | API (`layout.h`) | Held to |
+| --- | --- | --- |
+| Lines, bidi, fallback, ink box, hit testing | `gfnt_paragraph_create()`, `_layout()`, `_min_content()`, `_max_content()`, `gfnt_layout_hit_test()`, `_caret()`, `_range_rects()` | ICU, HarfBuzz, fontTools (`check-oracle-layout`) |
+| Vertical writing modes | `writing_mode`, `text_orientation` | Chromium, Pango (`check-oracle-css`, `-pango`, `-orientation`) |
+| Line height, baseline shift, strut | `GFNT_TextStyle.line_height`, `vertical_align`, `GFNT_ParagraphOptions.strut` | Chromium (`check-layout-l1`) |
+| Inline objects | a one-character U+FFFC span with `GFNT_InlineObject` | Chromium, Pango, Firefox (`check-layout-l2`) |
+| Flow around boxes | `gfnt_paragraph_layout_flow()`, `GFNT_LineConstraint`, `GFNT_Exclusions` | Chromium (`check-layout-l3`, `check-oracle-flow`) |
+| Columns | `gfnt_paragraph_layout_columns()` | Chromium (`check-layout-l3b`) |
+| Ruby and emphasis marks | `GFNT_ParagraphOptions.annotations`, `GFNT_Annotation` | Chromium, Firefox (`check-layout-l4`) |
+| Decoration geometry | `gfnt_paragraph_decoration_layout()` | Chromium (`check-oracle-css`) |
+| Text properties | `white_space`, `word_break`, `overflow_wrap`, `line_break`, `text_align_last`, `text_wrap_style`, `text_autospace`, `text_spacing_trim`, `GFNT_TextStyle.word_spacing`, `text_transform` | Chromium and Firefox (`check-oracle-css`) |
+| Justification, kashida | `justify`, `space_share`, `justify_last` | Chromium; the Chromium patch's screenshots (`check-oracle-kashida`) |
+| Japanese phrase breaking | `GFNT_WORD_BREAK_AUTO_PHRASE`, `content_language` | Chromium, with a first-party model (`check-phrase-model`) |
 
 ### 10.5 Itemisation and fallback
 
@@ -2093,10 +2117,31 @@ behavior to match, so it is documented separately from this list.
 
 Hyphenation data (the `GFNT_Hyphenator` seam is built), dictionary word breaking
 for the `SA` scripts (a caller-supplied `unicode` break provider is supported),
-Knuth-Plass optimal breaking, full CSS Ruby behavior, and flow around non-text
-boxes are outside the current implementation. Inline objects and partial ruby
-and emphasis geometry are supported as described in §10.8.
-Vertical writing modes are implemented; see §10.8.
+Knuth-Plass optimal breaking, and the behaviours below are not built. Inline
+objects, flow, columns, ruby, emphasis marks, decoration geometry and vertical
+writing modes are built and described in §10.8; this is what is left of the plan
+in `notes/font/LAYOUT-PLAN.md`.
+
+- **Flow.** Lines split into several segments by a box in the middle (there is
+  no browser that does it, so no oracle); the built-in `GFNT_Exclusions` helper
+  in vertical writing modes (a vertical paragraph takes a custom
+  `GFNT_LineBandFn`); exclusions that leave text on both sides.
+- **Ruby.** The subset `GFNT_Annotation` documents. Not built: `ruby-position:
+  alternate`; `ruby-merge: auto` beyond the boolean `merge`; and no browser
+  oracle for `ruby-merge`, for `inter-character`, or for the exact amount of
+  `ruby-overhang: auto` (§10.8). The library takes ruby as data and parses no
+  `<ruby>` markup.
+- **Decorations.** The caller supplies the offset and thickness; deriving them from
+  the face (`post` underline position, `OS/2` strikeout) is not done, nor are
+  decoration style, colour or propagation across inline boxes.
+- **Line breaking and spacing.** An optimal (Knuth–Plass) `text-wrap-style`;
+  `text-autospace` `punctuation`, `insert`, `replace` and `math-auto`; `text-spacing-trim` `trim-both` and `trim-all`;
+  `hanging-punctuation` (neither pinned browser accepts it).
+- **Properties that touch shaping or the style:** `font-optical-sizing`,
+  `font-variant-caps` synthesis, `font-size-adjust`, `text-combine-upright`,
+  `unicode-bidi` at span level (the Unicode bidi control characters in the text go to UAX #9 with it, but no test pins their effect on layout),
+  `initial-letter`, and synthetic bold and oblique.
+- **Kashida** in vertical text, and the `JSTF` table.
 
 ---
 
@@ -3040,7 +3085,7 @@ file or the request names it, and nowhere is there a function that pretends.
 - **The rest of AAT** (`feat`, `kerx` format 3 and the like; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.
 - **Synthetic bold and oblique**, LCD filtering, stem darkening.
-- **Hyphenation data**, **`SA` dictionaries**, **Knuth-Plass**, ruby.
+- **Hyphenation data**, **`SA` dictionaries**, **Knuth-Plass**, and the layout items listed in §10.7.
 - **Predefined CJK CMaps** for PDF.
 - **Font *rendering* of colour**: `COLR` v1 is returned as a paint graph, not
   composited.
@@ -3052,7 +3097,13 @@ file or the request names it, and nowhere is there a function that pretends.
 Listed so that they were decided on purpose. 1-3 were put to the author and
 answered on 2026-09-23/24; the rest stand as recommended.
 
-1. **Layout is in this library, up to the paragraph.** Decided (§10).
+1. **Layout is in this library.** Decided (§10): paragraph layout, as first
+   decided 2026-09-23/24, and from 2026-10-13 also inline objects, per-line
+   constraints (flow), annotation tracks and decoration geometry, because a
+   program that sets text on an image or a video must not have to link a GUI
+   toolkit to get ruby. The rule is that the library owns what can be computed
+   from text, styles, faces and geometry the caller passes in; the box model,
+   markup and CSS parsing, list markers and painting stay the caller's.
 2. **Hinting is planned.** The earlier decision to exclude a TrueType
    interpreter from the first release is superseded; see §8.5 for current
    status and security constraints.
@@ -4088,8 +4139,8 @@ What that cost in findings:
 `name` encodings; `gasp`; native Windows and macOS font enumeration; `JSTF`
 and the AAT features listed in §9;
 PDF-specific writing helpers; and `COLR` v1 compositing and SVG drawing/rewriting.
-CSS decoration rectangles are available through the paragraph layout API; the
-remaining browser comparison limits are listed in §10.6. WOFF 2 collection
+Layout gaps are listed in §10.7 and the browser comparison limits in §10.8.
+WOFF 2 collection
 writing is implemented (§12.4). The formats and features in §16 remain
 first-release non-goals. These statements supersede the earlier phase notes in
 this section, which record implementation history rather than current status.

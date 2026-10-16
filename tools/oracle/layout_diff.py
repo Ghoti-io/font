@@ -25,7 +25,7 @@ three that are, each answering the question it is the authority on.
 
 What is left is the greedy line-breaking rule and the arithmetic of placing
 runs, and *that is written a second time here* - structured differently from
-`src/layout/layout.c` (chunks between break opportunities, not a scan with a
+`src/layout/break.c` (chunks between break opportunities, not a scan with a
 candidate) but from the same reading of `design.md` section 10 and CSS Text. So
 the gate holds the library's use of Unicode, of the shaper and of the font to
 three independent implementations, and holds its own rule only to a second
@@ -139,7 +139,7 @@ def round_shift10(v):
 
 
 def ink_px(units, scale):
-    """scale_v() in layout.c: a bound in font units, as 26.6 of a unit, to 26.6 pixels."""
+    """scale_v() in src/layout/paragraph.c: a bound in font units, as 26.6 of a unit, to 26.6 pixels."""
     t = int(round(units * 64)) * scale
     return (1 if t >= 0 else -1) * ((abs(t) + 32768) >> 16)
 

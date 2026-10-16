@@ -3018,6 +3018,22 @@ tests/
   unit/  conformance/  fuzz/  data/fonts/<family>/  data/golden/  data/built/
 ```
 
+**`src/layout/`** is one file per concern, all sharing `layout_internal.h` (the shaped paragraph, the
+layout state, and the functions the files call across each other, named `gfnt_lay_*`). Public entry
+points are in `paragraph.c` (`gfnt_paragraph_create`), `layout.c` (the layout calls and the line loop),
+`content.c`, `decoration.c`, `columns.c`, `exclusions.c` and `hit.c`.
+
+| File | Concern |
+| --- | --- |
+| `paragraph.c` | Making a paragraph: decode, itemise, shape, keep the units |
+| `textrules.c`, `transform.c`, `orientation.c`, `hyphenate.c` | Character rules (white-space, word-break, autospace, spacing trim), `text-transform`, vertical orientation, hyphenation points |
+| `annotation.c`, `annotation_line.c` | Ruby and emphasis marks: validation and shaping at creation, tracks on each line |
+| `kashida.c`, `kashida_layout.c` | The kashida chooser, and reshaping a word with tatweels |
+| `break.c`, `flow_wrap.c` | Line breaking: greedy, balanced, last-line adjustment; the same for flow layouts |
+| `line_measure.c`, `line_place.c`, `justify.c` | Measuring a line, placing its glyphs and aligning it, spreading its slack |
+| `layout.c`, `columns.c`, `exclusions.c` | The line loop and layout state, columns, the exclusion callback |
+| `content.c`, `decoration.c`, `hit.c`, `phrase.c` | Min and max content, decoration geometry, hit testing, the Japanese phrase model |
+
 ### 15.1 Allocation
 
 Everything the library allocates goes through `GFNT_Allocator`, a typedef of

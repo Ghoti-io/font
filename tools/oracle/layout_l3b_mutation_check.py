@@ -10,8 +10,11 @@ import sys
 import tempfile
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from layout_sources import source_with
+
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "src/layout/layout.c"
+SOURCE = ROOT / "src/layout/layout.c"   # replaced by the file holding the site
 PREFIX = os.environ.get("PREFIX", "/home/corey/Documents/ghoti.io/.local")
 REQUESTED_BUILD = Path(os.environ.get("BUILD", "linux/release"))
 BUILD_PARENT = REQUESTED_BUILD.parent if len(REQUESTED_BUILD.parts) > 1 else Path("linux")
@@ -56,15 +59,18 @@ def check_build(command: list[str], label: str) -> None:
 
 
 def main() -> int:
-    original = SOURCE.read_bytes()
-    mode = SOURCE.stat().st_mode & 0o7777
+    global SOURCE
     needle = (
         b"while (layout->line_count - at < widows && at > begin\n"
         b"          && at - begin > orphans) {"
     )
-    if original.count(needle) != 1:
-        print("layout_l3b_mutation_check: expected one widow adjustment", file=sys.stderr)
+    try:
+        SOURCE = source_with(ROOT, needle.decode())
+    except RuntimeError as exc:
+        print(f"layout_l3b_mutation_check: expected one widow adjustment: {exc}", file=sys.stderr)
         return 1
+    original = SOURCE.read_bytes()
+    mode = SOURCE.stat().st_mode & 0o7777
 
     error: Exception | None = None
     restored = False

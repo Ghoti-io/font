@@ -8,8 +8,11 @@ import subprocess
 import sys
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from layout_sources import object_of, source_with
+
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "src/layout/layout.c"
+SOURCE = ROOT / "src/layout/layout.c"   # replaced by the file holding each site
 PREFIX = os.environ.get("PREFIX", "/home/corey/Documents/ghoti.io/.local")
 BUILD = os.environ.get("BUILD", "linux/release")
 MAKE_BUILD = BUILD.removeprefix("linux/")
@@ -25,13 +28,12 @@ def run(command: list[str], *, expect_failure: bool = False) -> None:
 
 
 def rejects_object_mutant() -> None:
-    original = SOURCE.read_text()
+    global SOURCE
     needle = "if (end == start + 1 && cps[start] == 0xFFFC && style->inline_object) {"
     replacement = "if (end == start + 1 && cps[start] == 0xFFFC && !style->inline_object) {"
-    if original.count(needle) != 1:
-        raise RuntimeError(f"expected one mutation site, found {original.count(needle)}")
-    artifacts = (APP, APP.parent / "libghoti.io-font-7.a",
-        ROOT / "build" / BUILD / "objects/layout/layout.o")
+    SOURCE = source_with(ROOT, needle)
+    original = SOURCE.read_text()
+    artifacts = (APP, APP.parent / "libghoti.io-font-7.a", object_of(ROOT, BUILD, SOURCE))
     try:
         SOURCE.write_text(original.replace(needle, replacement))
         for artifact in artifacts:

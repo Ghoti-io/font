@@ -8,15 +8,17 @@ import subprocess
 import sys
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from layout_sources import object_of, source_with
+
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "src/layout/layout.c"
+SOURCE = ROOT / "src/layout/layout.c"   # replaced by the file holding each site
 PREFIX = os.environ.get("PREFIX", "/home/corey/Documents/ghoti.io/.local")
 BUILD = os.environ.get("BUILD", "linux/release")
 MAKE_BUILD = BUILD.removeprefix("linux/")
 APP = ROOT / "build" / BUILD / "apps" / "testLayout"
 LD_PATH = f"{PREFIX}/lib/ghoti.io:{PREFIX}/lib"
-ARTIFACTS = (APP, APP.parent / "libghoti.io-font-7.a",
-             ROOT / "build" / BUILD / "objects/layout/layout.o")
+ARTIFACTS = ()   # set per mutation: the library, the app and the mutated file's object
 
 
 def run(command: list[str], *, expect_failure: bool = False) -> None:
@@ -27,9 +29,10 @@ def run(command: list[str], *, expect_failure: bool = False) -> None:
 
 
 def rejects_mutant(name: str, needle: str, replacement: str, test: str) -> None:
+    global SOURCE, ARTIFACTS
+    SOURCE = source_with(ROOT, needle)
+    ARTIFACTS = (APP, APP.parent / "libghoti.io-font-7.a", object_of(ROOT, BUILD, SOURCE))
     original = SOURCE.read_text()
-    if original.count(needle) != 1:
-        raise RuntimeError(f"{name}: expected one mutation site, found {original.count(needle)}")
     try:
         SOURCE.write_text(original.replace(needle, replacement))
         for artifact in ARTIFACTS:

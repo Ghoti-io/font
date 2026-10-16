@@ -78,15 +78,12 @@ cannot run them, and the refusal says nothing about the library, so they **skip,
 rather than fail. Set `GHOTI_REQUIRE_NAMESPACES=1` and the skip becomes the failure it would
 otherwise hide: use it on the development host and on any gate meant to run them.
 
-On the EVO-X2 the build container is Docker's default, which refuses `unshare`. To run the eight
-there, pass the profile off for that job (our own code only, never untrusted input):
+A build container running under Docker's default seccomp profile refuses `unshare`. To run the
+eight there, start it with the profile off (for our own code only, never untrusted input), for
+example `docker run --security-opt seccomp=unconfined ...`, and set `GHOTI_REQUIRE_NAMESPACES=1`.
 
-```
-tools/evo run JOB --docker-arg --security-opt=seccomp=unconfined -- 'export GHOTI_REQUIRE_NAMESPACES=1; ...'
-```
-
-Measured 2026-10-16 on the box: without the flag `make test` exits 0 with the eight skipped; with
-the flag and `GHOTI_REQUIRE_NAMESPACES=1` it exits 0 with all eight passing; without the flag and
+Measured in such a container: without the profile change `make test` exits 0 with the eight
+skipped; with it and `GHOTI_REQUIRE_NAMESPACES=1` it exits 0 with all eight passing; without it and
 with `GHOTI_REQUIRE_NAMESPACES=1` it exits 2 with all eight failing.
 
 ## Fuzzing
@@ -299,7 +296,7 @@ The same three-gate split as the vectors, for the same reason:
 | gate | finds | needs |
 | --- | --- | --- |
 | `testGolden` | a change to the rasteriser nobody meant | nothing |
-| `check-golden` | a rendering that differs on a **big-endian** target | the workspace's `ghoti-xarch` container |
+| `check-golden` | a rendering that differs on a **big-endian** target | the suite's `ghoti-xarch` container |
 | `check-oracle-glyf` | an **outline** wrong about reality, over 37,218 glyphs | the `fonttools` image |
 | `check-oracle-cff` | a **charstring** wrong about reality - its program, its path and the advance it states - over 4,172 glyphs | the `fonttools` image |
 

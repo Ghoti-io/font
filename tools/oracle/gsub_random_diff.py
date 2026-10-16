@@ -23,8 +23,7 @@ What it found when it was first run: Latin agreed on every seed (3,000 seeds,
 36,000 strings), which is what `make check-oracle-gsub` holds. Devanagari showed
 four differences in the feature plan, fixed, and some in how the Indic shaper
 orders glyphs after `blwf`, `pstf`, `vatu` and `rphf`, which are not (about one
-string in ten); `--script deva` shows them and is not part of the gate. See
-notes/font/SHAPING.md, "Random lookups".
+string in ten); `--script deva` shows them and is not part of the gate.
 
 Usage: gsub_random_diff.py [--seeds N] [--first K] [--script latn|deva|deva-old|khmr|mym2|arab|thai|hang|tibt|bali|sinh]
                            [--reuse] [-v] [--driver PATH] [--scratch DIR]

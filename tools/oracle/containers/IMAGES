@@ -23,10 +23,10 @@
 #       tools/oracle/containers/fonttools
 # `make oracle-build` does exactly that.
 
-# EVO has no container engine in its build container. Transfer prebuilt oracle
-# images with `tools/evo image load TAG`; do not build them inside an EVO job.
-# The host-after phase runs oracle scripts directly after the build container
-# exits, using those images on EVO's Docker daemon.
+# A build container with no container engine inside it cannot start these images.
+# Where that is the case, copy prebuilt oracle images into the engine of the machine
+# that runs the gates (`podman save | docker load`) rather than building them in the
+# build container, and run the oracle scripts directly on that machine afterwards.
 
 # fontTools, and the real fonts. Both halves are deliberate: this is the
 # reference for every table's fields (ttx_diff) and for every codepoint's glyph

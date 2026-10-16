@@ -11,7 +11,7 @@
 """Paragraph layout against Pango, with the options that follow Pango: where each line breaks and
 where each character lies along its line, in rows and in columns.
 
-notes/font/VERTICAL.md. Pango (the pinned `pango` image) lays a paragraph out in the frame in
+Pango (the pinned `pango` image) lays a paragraph out in the frame in
 which text runs along x and lines stack along y; for a vertical gravity that frame is the one the
 page is turned a quarter from. This library lays out the same text with
 `GFNT_ORIENT_MIXED_PANGO` and `GFNT_HYPHENS_MANUAL_PANGO` in a column and in a row, and the two

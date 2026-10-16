@@ -198,7 +198,7 @@ static GFNT_Result discover_platform_dirs(DiscoverDirs * dirs,
 
   /* TODO(windows): never compiled or run on Windows. %WINDIR%\Fonts and
    * %LOCALAPPDATA%\Microsoft\Windows\Fonts. The registry and DirectWrite are
-   * not read. notes/suite/WINDOWS-TODO.md says how to verify this list.
+   * not read.
    */
   result = discover_env(dirs->allocator, "WINDIR", &windir);
   if (result == GFNT_OK && windir) {
@@ -230,7 +230,6 @@ static GFNT_Result discover_platform_dirs(DiscoverDirs * dirs,
 
   /* TODO(macos): never compiled or run on macOS. /System/Library/Fonts,
    * /Library/Fonts and ~/Library/Fonts. CoreText is not consulted.
-   * notes/suite/WINDOWS-TODO.md says how to verify this list.
    */
   system_fonts = dirs->allocator->malloc_fn(dirs->allocator->ctx,
       sizeof "/System/Library/Fonts");

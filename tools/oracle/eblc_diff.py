@@ -45,7 +45,7 @@ offset moves a count that a sample could step over.
 **The population is thirty-three fonts of Debian's 5,927 sfnts, and that is the
 finding rather than a limitation of this file.** It read *two* for a while, which
 is what a survey reports when its candidate list came from the hypothesis being
-tested; `notes/font/EBLC.md` has both the number and how the first one was wrong.
+tested; the whole-population number above is the one to trust.
 Two of the thirty-three carry what the rest do not:
 
   * `uming.ttc`, four faces over **one** `EBLC`/`EBDT` byte range, six strikes of
@@ -667,7 +667,7 @@ def main(argv):
           % (counts["absent-both"], counts["state-consequent"]))
     print("eblc_diff: %d font(s) are the whole Debian population of this table - "
           "589 font packages scanned, 5,927 distinct sfnt files, and these are "
-          "the ones that carry it (notes/font/EBLC.md). Index formats **4 and 5** "
+          "the ones that carry it. Index formats **4 and 5** "
           "are what no font here uses, and strike-formats.ttf is their only "
           "cover; index format 3 and image formats 1 and 2 are covered by real "
           "fonts, which an earlier survey of a guessed shortlist reported as "

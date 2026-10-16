@@ -11,7 +11,7 @@
 """How each character of the Basic Multilingual Plane sits in vertical text: this library
 (UAX #50, CSS `text-orientation: mixed`) against Pango (gravity east, hint natural).
 
-notes/font/VERTICAL.md. The two disagree for some characters because they decide differently:
+The two disagree for some characters because they decide differently:
 UAX #50 gives every character its own `Vertical_Orientation`, and Pango decides by script and
 East Asian width. This survey puts every assigned, non-control BMP character in a font made for
 the purpose (a box each, 600 across and 900 down, so that the advance a layout engine used says

@@ -25,7 +25,7 @@
  * so the priority scheme is held to a second implementation; the page numbers a place by the
  * letter it stretches in front of, as this library does, except that for a tatweel the author
  * wrote it names the place after the stroke and this library the place before it (the same
- * picture). notes/font/KASHIDA.md.
+ * picture).
  */
 
 #include "test_helpers.h"

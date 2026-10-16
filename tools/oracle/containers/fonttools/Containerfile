@@ -60,7 +60,7 @@ RUN pip install --no-cache-dir --no-compile \
 # The embedded-bitmap half of the list is below, and it is the whole Debian
 # population rather than a sample of it: **589 font packages scanned, 5,927
 # distinct sfnt files, 33 carrying EBLC/EBDT and 11 of those also EBSC**
-# (notes/font/EBLC.md records the sweep and the command that re-runs it).
+# (`tools/oracle/eblc_diff.py` records the finding).
 #
 # An earlier survey probed a handful of *candidate* packages chosen from the guess
 # that embedded strikes are a CJK thing, reported "two fonts in all of Debian",

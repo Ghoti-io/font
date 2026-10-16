@@ -1476,8 +1476,7 @@ them. Departures from 9.2, each stated rather than approximated: no `GFNT_Scale`
 coordinates, and a device table for a pixel size is read only when the caller gives
 `ppem`. The oracle (§14) is `hb-shape`, and `tools/oracle/hb_diff.py` names a few
 characters in nine scripts that are sorted differently as a known gap and holds the
-rest to the glyph, the cluster, the advance and the offset; `notes/font/SHAPING.md`
-records how each rule was found and what is still open in the Indic scripts.
+rest to the glyph, the cluster, the advance and the offset.
 
 ### 9.7 Behaviour followed from HarfBuzz with no reason found
 
@@ -1819,7 +1818,7 @@ cut by `max_lines` shows the ellipsis and no hyphen. The library carries no hyph
 (§10.7); the tests use a callback that names offsets.
 
 **Vertical text** (`GFNT_ParagraphOptions::writing_mode` and `text_orientation`, CSS Writing
-Modes; the design notes and measurements are in `notes/font/VERTICAL.md`). The coordinates stay
+Modes). The coordinates stay
 physical: lines are columns that stack from the right (`VERTICAL_RL`, `SIDEWAYS_RL`) or the left
 (`VERTICAL_LR`), the room given to `gfnt_paragraph_layout()` is a height, and a line reports its
 `box`, where its text begins (`offset`) and how long it is (`extent`). Each run says how its
@@ -2119,8 +2118,7 @@ Hyphenation data (the `GFNT_Hyphenator` seam is built), dictionary word breaking
 for the `SA` scripts (a caller-supplied `unicode` break provider is supported),
 Knuth-Plass optimal breaking, and the behaviours below are not built. Inline
 objects, flow, columns, ruby, emphasis marks, decoration geometry and vertical
-writing modes are built and described in §10.8; this is what is left of the plan
-in `notes/font/LAYOUT-PLAN.md`.
+writing modes are built and described in §10.8; this is what is left.
 
 - **Flow.** Lines split into several segments by a box in the middle (there is
   no browser that does it, so no oracle); the built-in `GFNT_Exclusions` helper
@@ -2697,7 +2695,7 @@ vertical, rasterised and hashed; the hashes committed to
   `make test` on a fresh clone, and it catches an unintended change to the
   rasteriser.
 - `make check-golden` cross-builds the library for s390x, powerpc64 and sparc64
-  in the workspace's `ghoti-xarch` container and requires the same renderings
+  in the suite's `ghoti-xarch` container and requires the same renderings
   byte for byte. A rendering that differs by platform is a host-dependent read,
   and this is the only gate that sees one.
 

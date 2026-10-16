@@ -41,7 +41,7 @@ CORPUS = os.path.join(ROOT, "build", "oracle", "corpus")
 # reports the same clean number whatever it covered. The bitmap corpus is several
 # hundred PCF files, and the EBDT corpus is the **whole** Debian population of
 # embedded bitmap strikes inside an sfnt - thirty-three fonts of the 506 sfnts in
-# the image, which is the measurement `notes/font/EBLC.md` records and the reason
+# the image, which is the measurement `eblc_diff.py` records and the reason
 # that differential's report says what rests on fixtures instead.
 #
 # `sfnt` and `ebdt` are one program in the image with one argument between them,

@@ -7,8 +7,8 @@
 # the real guarantee. Debian no longer serves this exact package from its
 # current archive. Keep the exact pin: changing Chromium changes oracle answers.
 # Until a durable source is selected and verified, rebuilds may fail at apt-get;
-# use the already-built pinned image where available (or transfer it with
-# `tools/evo image load`). A Debian snapshot is a candidate, not a verified
+# use the already-built pinned image where available (or copy it from another
+# machine with `podman save | docker load`). A Debian snapshot is a candidate, not a verified
 # reproducible build input.
 #
 # No fonts are installed (no Recommends), so a page can only draw with the font it names in an

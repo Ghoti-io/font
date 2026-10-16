@@ -10,7 +10,7 @@
 # published by the Free Software Foundation.
 """Kashida justification against the screenshots of the Chromium kashida patch.
 
-notes/font/KASHIDA.md. No build of the patch (CL 7957320) runs here, so its oracle is the set of
+No build of the patch (CL 7957320) runs here, so its oracle is the set of
 screenshots its published page shows ("expected": Amiri, `text-justify: kashida`, one line each,
 `text-align-last: justify`). `--fetch` downloads them and the Amiri font the page uses into
 build/oracle/kashida/ and checks them against the hashes below (the Google Fonts Arabic subset of

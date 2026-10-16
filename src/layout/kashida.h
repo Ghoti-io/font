@@ -25,7 +25,7 @@
  * Arabic-script justification lengthens the pen stroke inside a word rather
  * than widening the space between words. One place is chosen per word, by the
  * connection-priority scheme Microsoft documented for Internet Explorer 6 and
- * Word and InDesign follow (notes/font/KASHIDA.md): an author's own tatweel,
+ * Word and InDesign follow: an author's own tatweel,
  * then after a seen or sad, then before a word-final letter by class, then
  * before a medial beh followed by a reh or yeh, then (last of all) before any
  * medial letter. Which pairs of letters may be pulled apart comes from the

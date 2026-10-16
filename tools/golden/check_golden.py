@@ -59,7 +59,7 @@ GOLDEN = os.path.join(ROOT, "tests", "data", "golden", "coverage.txt")
 GENERATOR = os.path.join(HERE, "make_golden.py")
 SHIM = os.path.join(HERE, "cross_shim.c")
 
-# The image the workspace's cross toolchains live in, and the targets to use.
+# The image the suite's cross toolchains live in, and the targets to use.
 # Big-endian is the point; sparc64 is here as well because it is big-endian
 # *and* strict-alignment, which is the other thing the checked reader promises.
 IMAGE = "localhost/ghoti-xarch:deb13"
@@ -101,7 +101,7 @@ def have_image(tool):
         capture_output=True)
     if found.returncode != 0:
         raise Unavailable(
-            "%s is not built; see notes/suite/CONTAINERS.md section 3" % IMAGE)
+            "%s is not built; build it from the suite's tools/xarch" % IMAGE)
 
 
 def committed():

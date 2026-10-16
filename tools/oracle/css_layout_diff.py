@@ -10,7 +10,7 @@
 # published by the Free Software Foundation.
 """Paragraph layout against Chromium, with Firefox for extended text-transform values.
 
-documentation/design.md section 10 and notes/font/VERTICAL.md. Chromium (the pinned image,
+documentation/design.md section 10. Chromium (the pinned image,
 `chrome` in tools/oracle/containers/IMAGES) is asked to lay each case out in a page whose only
 font is the test font, and to say where every character is: the rectangle of each code point
 (`Range.getClientRects`, united). This library lays out the same text with the same
@@ -347,7 +347,7 @@ CASES.append(("text-transform-capitalize", "abc abc", "horizontal", "mixed", 200
 # Not here, on purpose: mixed Latin, spaces and ideographs in a right-to-left paragraph. Chromium
 # 154 does not fill some of those lines (two opportunities of a line of "ab \u65e5" repeated go
 # nowhere), and counts one more on others, so it is not a reference for them; this library fills
-# the line and spreads the slack over the opportunities it has. See notes/font/VERTICAL.md.
+# the line and spreads the slack over the opportunities it has.
 # Soft hyphens (hyphens: manual, Chromium's default) in both axes, with the hyphen that ends a line.
 for _mode, _room in (("horizontal", 170), ("vertical-rl", 170), ("vertical-lr", 170),
                      ("sideways-lr", 170)):

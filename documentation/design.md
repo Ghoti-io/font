@@ -1332,9 +1332,9 @@ one source of mnemonic, flag width, stack effect and operand length, so the
 decoder and the interpreter to come cannot disagree about how long an
 instruction is. `make check-oracle-tt-decode` decodes `fpgm`, `prep` and every
 glyph program of every TrueType font in the corpus and compares them,
-instruction by instruction and push value by push value, with fontTools. One
-spelling differs and is accepted by name: fontTools has no mnemonic for `GETDATA`
-(0x92) and prints `INSTR146`.
+instruction by instruction and push value by push value, with fontTools. The
+opcode table follows the published specification and nothing else: an opcode the
+specification does not define (0x92 among them) is undefined here.
 
 ---
 

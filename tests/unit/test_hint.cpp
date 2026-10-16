@@ -61,11 +61,12 @@ TEST(HintOps, EveryOpcodeHasARowAndTheDefinedOnesAreTheSpecifications) {
       ++defined;
     }
   }
-  // 0x00-0x27, 0x29-0x7A, 0x7C-0x82, 0x85-0x8E, 0x91-0x92, 0xB0-0xFF.
-  EXPECT_EQ(defined, 40u + 82u + 7u + 10u + 2u + 80u);
+  // 0x00-0x27, 0x29-0x7A, 0x7C-0x82, 0x85-0x8E, 0x91, 0xB0-0xFF.
+  EXPECT_EQ(defined, 40u + 82u + 7u + 10u + 1u + 80u);
   EXPECT_FALSE(gfnt_hint_op(0x28)->defined);
   EXPECT_FALSE(gfnt_hint_op(0x7B)->defined);
   EXPECT_FALSE(gfnt_hint_op(0xAF)->defined);
+  EXPECT_FALSE(gfnt_hint_op(0x92)->defined);  // not in the specification
   EXPECT_STREQ(gfnt_hint_op(0xC1)->name, "MDRP");
   EXPECT_EQ(gfnt_hint_op(0xC1)->flag_bits, 5);
   EXPECT_STREQ(gfnt_hint_op(0x6B)->name, "ROUND");

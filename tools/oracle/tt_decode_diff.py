@@ -25,9 +25,7 @@ decoders over everything the corpus holds:
 An 'NPUSHB' or 'NPUSHW' of zero values is legal and fontTools asserts on it, so
 the sweep gives each one value; the empty push is in this library's unit tests.
 
-fontTools does not name 0x92 (`GETDATA`, which the specification lists and
-FreeType implements); it prints `INSTR146`. That one spelling is accepted and
-counted. A program fontTools cannot read at all is counted, not compared.
+A program fontTools cannot read at all is counted, not compared.
 
 Usage:
     tt_decode_diff.py [--quiet] [font...]
@@ -48,8 +46,6 @@ DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
 REFERENCE = os.path.join(ROOT, "tools", "oracle", "fonttools_programs.py")
 FIXTURES = os.path.join(ROOT, "tests", "data", "fonts")
 
-# fontTools has no name for 0x92.
-SPELLINGS = {"INSTR146[ ]": "GETDATA[ ]"}
 
 
 def opcode_program():
@@ -91,7 +87,7 @@ def sections(text):
             heading = line[3:]
             found[heading] = []
         elif heading is not None and not line.startswith("!! "):
-            found[heading].append(SPELLINGS.get(line, line))
+            found[heading].append(line)
     return found
 
 

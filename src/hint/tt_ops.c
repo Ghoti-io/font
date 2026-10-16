@@ -22,8 +22,9 @@
  * @file
  *
  * The TrueType opcode table, from the OpenType specification's "TrueType
- * Instruction Set" chapter: mnemonic, how many low bits are flags, the stack
- * effect and what data follows.
+ * Instruction Set" chapter and from nothing else: mnemonic, how many low bits
+ * are flags, the stack effect and what data follows. An opcode the chapter does
+ * not define is undefined here.
  */
 
 #include "hint_internal.h"
@@ -159,7 +160,6 @@ static const GFNT_HintRange gfnt_hint_ranges[] = {
   R(0x8D, 0x8D, "SCANTYPE", 0, 1, 0, GFNT_HINT_DATA_NONE),
   R(0x8E, 0x8E, "INSTCTRL", 0, 2, 0, GFNT_HINT_DATA_NONE),
   R(0x91, 0x91, "GETVARIATION", 0, 0, GFNT_HINT_VARIABLE, GFNT_HINT_DATA_NONE),
-  R(0x92, 0x92, "GETDATA", 0, 0, 1, GFNT_HINT_DATA_NONE),
   R(0xB0, 0xB7, "PUSHB", 0, 0, GFNT_HINT_VARIABLE, GFNT_HINT_DATA_PUSHB),
   R(0xB8, 0xBF, "PUSHW", 0, 0, GFNT_HINT_VARIABLE, GFNT_HINT_DATA_PUSHW),
   R(0xC0, 0xDF, "MDRP", 5, 1, 0, GFNT_HINT_DATA_NONE),

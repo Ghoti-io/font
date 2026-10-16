@@ -176,6 +176,19 @@ def render(weights, bias, observation_sha):
             padded = units + (0,) * (3 - len(units))
             tables[table].append((len(units), units, padded, quantized))
     lines = [
+        "/*",
+        " * SPDX-License-Identifier: LGPL-3.0-only",
+        " * Copyright (C) 2026 Corey Pennycuff",
+        " *",
+        " * This file is part of Ghoti.io Font.",
+        " *",
+        " * Ghoti.io Font is free software: you can redistribute it and/or modify it",
+        " * under the terms of the GNU Lesser General Public License version 3 as",
+        " * published by the Free Software Foundation.",
+        " */",
+        "",
+        "#include <ghoti.io/font/macros.h>",
+        "",
         "/* Generated from first-party text and pinned Chromium break observations.",
         " * Observation data SHA-256: %s. Regenerate with tools/layout/train_phrase_model.py." % observation_sha,
         " * No third-party model source or weights are used. */",

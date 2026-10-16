@@ -1,3 +1,16 @@
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Font.
+ *
+ * Ghoti.io Font is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ */
+
+#include <ghoti.io/font/macros.h>
+
 /* Generated from first-party text and pinned Chromium break observations.
  * Observation data SHA-256: 0ab4fc1fe30b4f7326ebafe66b7f4f0d06797d4d1ac6c580eff1e7a9a525b06d. Regenerate with tools/layout/train_phrase_model.py.
  * No third-party model source or weights are used. */

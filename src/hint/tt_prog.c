@@ -56,6 +56,7 @@ void gfnt_hint_ctx_destroy(GFNT_HintContext * ctx) {
   gfnt_hint_free(a, ctx->idefs);
   gfnt_hint_free(a, ctx->cvt);
   gfnt_hint_free(a, ctx->storage);
+  gfnt_hint_zone_free(a, &ctx->twilight);
   gfnt_hint_free(a, ctx);
 }
 
@@ -72,7 +73,9 @@ void gfnt_hint_run_destroy(GFNT_HintRun * run) {
   if (run->owns_state) {
     gfnt_hint_free(a, run->storage);
     gfnt_hint_free(a, run->cvt);
+    gfnt_hint_zone_free(a, &run->zone[0]);
   }
+  gfnt_hint_zone_free(a, &run->zone[1]);
   gfnt_hint_free(a, run);
 }
 
@@ -98,6 +101,8 @@ static GFNT_Result gfnt_hint_run_create(GFNT_HintContext * ctx, bool building,
     run->cvt = ctx->cvt;
     run->gs = ctx->gstate;
     run->instruct_control = 0;
+    /* The twilight zone is shared with the context, which keeps what prep makes. */
+    run->zone[0] = ctx->twilight;
   }
   else {
     run->owns_state = true;
@@ -109,6 +114,12 @@ static GFNT_Result gfnt_hint_run_create(GFNT_HintContext * ctx, bool building,
     }
     run->gs = ctx->gstate;
     run->instruct_control = ctx->instruct_control;
+    if (gfnt_hint_zone_alloc(a, &run->zone[0], ctx->twilight.capacity, 0) == GFNT_OK) {
+      gfnt_hint_zone_copy(&run->zone[0], &ctx->twilight);
+    }
+    else {
+      run->storage = NULL;   /* fails the check below */
+    }
   }
   if (!run->stack || !run->frames || !run->storage || !run->cvt) {
     gfnt_hint_run_destroy(run);
@@ -193,6 +204,15 @@ GFNT_Result gfnt_hint_ctx_create(const GFNT_Allocator * allocator,
     ctx->cvt[i] = gfnt_hint_mul_fix(cvt[i], ctx->scale);
   }
   gfnt_hint_gstate_default(&ctx->gstate);
+  if (shape->twilight > caps.max_points) {
+    gfnt_hint_ctx_destroy(ctx);
+    return GFNT_ERR_LIMIT;
+  }
+  if (gfnt_hint_zone_alloc(allocator, &ctx->twilight, shape->twilight, 0) != GFNT_OK) {
+    gfnt_hint_ctx_destroy(ctx);
+    return GFNT_ERR_OOM;
+  }
+  ctx->twilight.count = shape->twilight;
 
   result = gfnt_hint_run_create(ctx, true, &run);
   if (result != GFNT_OK) {
@@ -229,6 +249,9 @@ GFNT_Result gfnt_hint_ctx_create(const GFNT_Allocator * allocator,
     memcpy(ctx->gstate.rp, defaults.rp, sizeof defaults.rp);
     memcpy(ctx->gstate.zp, defaults.zp, sizeof defaults.zp);
     ctx->gstate.loop = 1;
+    /* The rounding state is not carried over either: every glyph starts at the
+       grid, whatever the control value program left. */
+    gfnt_hint_set_round(&ctx->gstate, GFNT_HINT_ROUND_GRID);
     ctx->instruct_control = run->instruct_control;
   }
   gfnt_hint_run_destroy(run);
@@ -263,7 +286,8 @@ uint32_t gfnt_hint_ctx_instruct_control(const GFNT_HintContext * ctx) {
 }
 
 GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
-    const uint8_t * program, size_t length, GFNT_HintRun ** out) {
+    const GFNT_HintGlyphInput * input, const uint8_t * program, size_t length,
+    GFNT_HintRun ** out) {
   GFNT_HintRun * run = NULL;
   GFNT_Result result;
 
@@ -282,6 +306,47 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
   run->glyph_code = program;
   run->glyph_length = length;
   *out = run;
+  if (input) {
+    GFNT_HintZone * z = &run->zone[1];
+
+    if (input->point_count > ctx->limits.max_points
+        || gfnt_hint_zone_alloc(run->allocator, z, input->point_count,
+            input->contour_count) != GFNT_OK) {
+      run->fault.failure = GFNT_HINT_FAIL_NO_MEMORY;
+      return GFNT_ERR_OOM;
+    }
+    z->count = input->point_count;
+    z->contour_count = input->contour_count;
+    for (size_t i = 0; i < input->point_count; ++i) {
+      z->orus[i].x = input->x[i];
+      z->orus[i].y = input->y[i];
+      z->org[i].x = gfnt_hint_mul_fix(input->x[i], ctx->scale);
+      z->org[i].y = gfnt_hint_mul_fix(input->y[i], ctx->scale);
+      z->cur[i] = z->org[i];
+      z->flags[i] = input->on_curve[i] ? GFNT_HINT_ON_CURVE : 0;
+    }
+    for (size_t c = 0; c < input->contour_count; ++c) {
+      z->ends[c] = input->ends[c];
+    }
+    if (input->point_count >= 4) {
+      /* The phantom points are placed on the pixel grid before the program runs:
+         the origin and the advance across, the top and the bottom up and down. */
+      GFNT_HintGState grid;
+      size_t n = input->point_count;
+
+      gfnt_hint_gstate_default(&grid);
+      /* Where they are now is on the grid; where they began is not, so a program
+         that moves with them (SHP from the advance, say) sees the rounding as a
+         shift. */
+      for (size_t i = n - 4u; i < n; ++i) {
+        z->cur[i] = z->org[i];
+      }
+      z->cur[n - 4u].x = gfnt_hint_round(&grid, z->org[n - 4u].x);
+      z->cur[n - 3u].x = gfnt_hint_round(&grid, z->org[n - 3u].x);
+      z->cur[n - 2u].y = gfnt_hint_round(&grid, z->org[n - 2u].y);
+      z->cur[n - 1u].y = gfnt_hint_round(&grid, z->org[n - 1u].y);
+    }
+  }
   if (length > ctx->limits.max_program) {
     run->fault.failure = GFNT_HINT_FAIL_BUDGET;
     return GFNT_ERR_LIMIT;
@@ -291,6 +356,27 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
 
 GFNT_HintFault gfnt_hint_run_fault(const GFNT_HintRun * run) {
   return run->fault;
+}
+
+bool gfnt_hint_run_normalised(const GFNT_HintRun * run) {
+  return run->normalised;
+}
+
+uint8_t gfnt_hint_run_touch(const GFNT_HintRun * run, size_t index) {
+  return index < run->zone[1].count ? (uint8_t)(run->zone[1].flags[index] & 3u) : 0;
+}
+
+size_t gfnt_hint_run_point_count(const GFNT_HintRun * run) {
+  return run->zone[1].count;
+}
+
+bool gfnt_hint_run_point(const GFNT_HintRun * run, size_t index, int32_t * x, int32_t * y) {
+  if (index >= run->zone[1].count) {
+    return false;
+  }
+  *x = run->zone[1].cur[index].x;
+  *y = run->zone[1].cur[index].y;
+  return true;
 }
 
 size_t gfnt_hint_run_depth(const GFNT_HintRun * run) {

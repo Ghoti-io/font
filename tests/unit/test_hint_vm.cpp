@@ -83,7 +83,7 @@ struct Vm {
 
   Vm(Bytes font_program = {}, Bytes cvt_program = {},
       std::vector<int32_t> cvt = {}, int version = 40, uint32_t ppem = 16,
-      GFNT_HintShape shape = {64, 32, 16, 4}, const GFNT_HintLimits * limits = nullptr)
+      GFNT_HintShape shape = {64, 32, 16, 4, 8}, const GFNT_HintLimits * limits = nullptr)
       : fpgm(std::move(font_program)), prep(std::move(cvt_program)) {
     GFNT_HintParams params{};
     params.ppem = ppem;
@@ -105,7 +105,7 @@ struct Prog {
   Bytes program;
 
   Prog(const Vm & vm, Bytes code) : program(std::move(code)) {
-    result = gfnt_hint_run_glyph(vm.ctx, program.data(), program.size(), &run);
+    result = gfnt_hint_run_glyph(vm.ctx, nullptr, program.data(), program.size(), &run);
   }
   ~Prog() { gfnt_hint_run_destroy(run); }
   Prog(const Prog &) = delete;
@@ -385,7 +385,7 @@ TEST(HintVmControl, ALoopWithoutAnEndStopsAtTheBudget) {
   GFNT_HintLimits limits;
   gfnt_hint_limits_default(&limits);
   limits.max_instructions = 1000;
-  Vm vm({}, {}, {}, 40, 16, {64, 32, 16, 4}, &limits);
+  Vm vm({}, {}, {}, 40, 16, {64, 32, 16, 4, 8}, &limits);
   // Push -N and jump back to the push: JMPR with a negative offset to the start.
   Bytes loop = cat({push({-5}), op({JMPR})});   // NPUSHW(4) + JMPR at 4 -> offset -4 would be start
   Prog r(vm, cat({push({-4}), op({JMPR})}));      // jumps to the NPUSHW at 0
@@ -496,7 +496,9 @@ TEST(HintVmGraphicsState, TheDefaultsAreTheSpecificationsAndPrepChangesThem) {
   EXPECT_EQ(gs->delta_shift, 5);
   EXPECT_EQ(gs->sw_value, 512);
   EXPECT_EQ(gs->sw_cut_in, 40);
-  EXPECT_EQ(gs->round, GFNT_HINT_ROUND_HALF);
+  // The rounding state is the one thing prep sets that a glyph does not start
+  // from (FreeType resets it, and a glyph that wants half-grid says so).
+  EXPECT_EQ(gs->round, GFNT_HINT_ROUND_GRID);
   EXPECT_EQ(gs->scan_control, 0x0A10);
   EXPECT_EQ(gs->scan_type, 4);
   // A glyph starts from what prep left, and its own changes stay its own.
@@ -578,7 +580,7 @@ TEST(HintVmFaults, AFailingFontProgramMakesTheContextUnusable) {
   EXPECT_EQ(gfnt_hint_ctx_fault(bad_fpgm.ctx).program, GFNT_HINT_PROGRAM_FONT);
   GFNT_HintRun * run = nullptr;
   Bytes none;
-  EXPECT_EQ(gfnt_hint_run_glyph(bad_fpgm.ctx, none.data(), 0, &run), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_hint_run_glyph(bad_fpgm.ctx, nullptr, none.data(), 0, &run), GFNT_ERR_INVALID);
   Vm bad_prep({}, op({ADD}));
   EXPECT_FALSE(gfnt_hint_ctx_usable(bad_prep.ctx));
   EXPECT_EQ(gfnt_hint_ctx_fault(bad_prep.ctx).program, GFNT_HINT_PROGRAM_CVT);
@@ -597,7 +599,7 @@ TEST(HintVmFaults, EveryPopFailsCleanlyOnAnEmptyStack) {
 }
 
 TEST(HintVmFaults, ThePushesAndTheStackCapacityAreChecked) {
-  Vm small({}, {}, {}, 40, 16, {0, 8, 4, 4});   // capacity 64 (minimum)
+  Vm small({}, {}, {}, 40, 16, {0, 8, 4, 4, 8});   // capacity 64 (minimum)
   // 65 values on a stack of 64.
   Bytes many(2 + 255, 1);
   many[0] = 0x40;
@@ -636,7 +638,7 @@ TEST(HintVmContext, BadArgumentsAndLimitsAreRefused) {
   params.ppem = 16;
   params.units_per_em = 1000;
   params.version = 40;
-  GFNT_HintShape shape{64, 32, 16, 4};
+  GFNT_HintShape shape{64, 32, 16, 4, 8};
 
   EXPECT_EQ(gfnt_hint_ctx_create(nullptr, nullptr, &params, &shape, nullptr, 0,
       nullptr, 0, nullptr, 0, &ctx), GFNT_ERR_INVALID);
@@ -648,7 +650,7 @@ TEST(HintVmContext, BadArgumentsAndLimitsAreRefused) {
   EXPECT_EQ(gfnt_hint_ctx_create(gfnt_allocator_default(), nullptr, &params, &shape,
       nullptr, 0, nullptr, 0, nullptr, 0, &ctx), GFNT_ERR_INVALID);
   params.ppem = 16;
-  GFNT_HintShape huge{64, 1u << 24, 16, 4};
+  GFNT_HintShape huge{64, 1u << 24, 16, 4, 8};
   EXPECT_EQ(gfnt_hint_ctx_create(gfnt_allocator_default(), nullptr, &params, &huge,
       nullptr, 0, nullptr, 0, nullptr, 0, &ctx), GFNT_ERR_LIMIT);
   EXPECT_EQ(ctx, nullptr);
@@ -727,7 +729,7 @@ TEST(HintVmFace, AContextIsBuiltFromAFacesTablesAndSizes) {
   EXPECT_EQ(gfnt_hint_ctx_cvt(ctx, 1), 40);      // prep wrote it
   GFNT_HintRun * run = nullptr;
   Bytes glyph = cat({push({2}), op({RS}), push({0}), op({RCVT})});
-  ASSERT_EQ(gfnt_hint_run_glyph(ctx, glyph.data(), glyph.size(), &run), GFNT_OK);
+  ASSERT_EQ(gfnt_hint_run_glyph(ctx, nullptr, glyph.data(), glyph.size(), &run), GFNT_OK);
   EXPECT_EQ(gfnt_hint_run_stack(run, 0), 6);
   EXPECT_EQ(gfnt_hint_run_stack(run, 1), 512);
   gfnt_hint_run_destroy(run);

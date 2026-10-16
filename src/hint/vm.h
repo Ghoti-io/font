@@ -40,6 +40,7 @@
 #include <ghoti.io/font/allocator.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
+#include <ghoti.io/font/outline.h>
 #include <ghoti.io/font/macros.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -60,6 +61,7 @@ typedef struct GFNT_HintLimits {
   size_t max_instructions; ///< Instructions one program may execute. 4,000,000.
   size_t max_loop;         ///< The `SLOOP` count. 65,535.
   size_t max_program;      ///< Bytes in one program. 1 MiB.
+  size_t max_points;       ///< Points in a zone, twilight or glyph. 65,540.
 } GFNT_HintLimits;
 
 /** Fill in the default limits. */
@@ -151,7 +153,21 @@ typedef struct GFNT_HintShape {
   size_t storage;   ///< maxStorage.
   size_t functions; ///< maxFunctionDefs.
   size_t idefs;     ///< maxInstructionDefs.
+  size_t twilight;  ///< maxTwilightPoints.
 } GFNT_HintShape;
+
+/**
+ * A glyph's points as the run takes them: in font units, the four phantom points
+ * last, with the contours that end at each point.
+ */
+typedef struct GFNT_HintGlyphInput {
+  size_t point_count;        ///< Points including the four phantom points.
+  const int32_t * x;         ///< Font units.
+  const int32_t * y;
+  const uint8_t * on_curve;  ///< Non-zero for an on-curve point.
+  size_t contour_count;
+  const size_t * ends;       ///< The last point of each contour.
+} GFNT_HintGlyphInput;
 
 typedef struct GFNT_HintContext GFNT_HintContext;
 typedef struct GFNT_HintRun GFNT_HintRun;
@@ -205,6 +221,40 @@ GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
     int version, bool grayscale, const GFNT_HintLimits * limits,
     GFNT_HintContext ** out, GFNT_Error * error);
 
+/** What became of a glyph asked to be hinted. */
+typedef enum GFNT_HintStatus {
+  GFNT_HINT_STATUS_HINTED = 0,                 ///< Its program ran.
+  GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM,        ///< It has none.
+  GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED,    ///< The context or its program failed.
+  GFNT_HINT_STATUS_UNHINTED_COMPOSITE          ///< Composites arrive with the next step.
+} GFNT_HintStatus;
+
+/**
+ * Hint one glyph: its outline in pixels after its program has run, or unhinted
+ * and scaled the same way when it cannot be, and the status says which.
+ *
+ * @param face The face the context was made from.
+ * @param ctx The context.
+ * @param glyph The glyph.
+ * @param out Receives the outline, in ::GFNT_OUTLINE_PIXELS.
+ * @param status Receives what happened.
+ * @param fault Receives the program's fault when it failed, or NULL.
+ * @param advance Receives the advance in 26.6 as the glyph's phantom points left
+ *   it (the scaled advance when unhinted), or NULL.
+ * @param touches Receives one touch byte per outline point (bit 0 x, bit 1 y) when
+ *   the glyph was hinted, or NULL. A diagnostic: it says which points the program
+ *   moved and which the interpolation placed.
+ * @param touch_capacity How many bytes @p touches holds.
+ * @param normalised Receives whether the program made a vector from a direction
+ *   (see ::gfnt_hint_run_normalised()), or NULL.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK (hinted or not), or a failure to read or allocate.
+ */
+GFNT_Result gfnt_hint_glyph_outline(const GFNT_Face * face,
+    const GFNT_HintContext * ctx, uint32_t glyph, GFNT_Outline ** out,
+    GFNT_HintStatus * status, GFNT_HintFault * fault, int32_t * advance,
+    uint8_t * touches, size_t touch_capacity, bool * normalised, GFNT_Error * error);
+
 /** Free a context. NULL is ignored. */
 void gfnt_hint_ctx_destroy(GFNT_HintContext * ctx);
 
@@ -234,6 +284,7 @@ uint32_t gfnt_hint_ctx_instruct_control(const GFNT_HintContext * ctx);
  * different threads.
  *
  * @param ctx The context; one that is not usable is refused.
+ * @param input The glyph's points, or NULL for none (a test of the arithmetic).
  * @param program The glyph's instructions.
  * @param length Their length.
  * @param out Receives the run, **also when the program fails** (so its fault and
@@ -243,7 +294,8 @@ uint32_t gfnt_hint_ctx_instruct_control(const GFNT_HintContext * ctx);
  *   that failed (see ::gfnt_hint_run_fault()); ::GFNT_ERR_OOM.
  */
 GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
-    const uint8_t * program, size_t length, GFNT_HintRun ** out);
+    const GFNT_HintGlyphInput * input, const uint8_t * program, size_t length,
+    GFNT_HintRun ** out);
 
 /** Free a run. NULL is ignored. */
 void gfnt_hint_run_destroy(GFNT_HintRun * run);
@@ -262,6 +314,18 @@ int32_t gfnt_hint_run_storage(const GFNT_HintRun * run, size_t index);
 
 /** The control value @p index, in 26.6, as the run left it; 0 if out of range. */
 int32_t gfnt_hint_run_cvt(const GFNT_HintRun * run, size_t index);
+
+/** How many points the glyph zone holds. */
+size_t gfnt_hint_run_point_count(const GFNT_HintRun * run);
+
+/** Where point @p index of the glyph zone ended up, in 26.6; false if out of range. */
+bool gfnt_hint_run_point(const GFNT_HintRun * run, size_t index, int32_t * x, int32_t * y);
+
+/** Whether the run made a unit vector from a direction (`SPVTL` and its kin), which is where this library and FreeType can differ by a 16384th. */
+bool gfnt_hint_run_normalised(const GFNT_HintRun * run);
+
+/** The touch flags (bit 0 x, bit 1 y) of glyph-zone point @p index at the end of the run. */
+uint8_t gfnt_hint_run_touch(const GFNT_HintRun * run, size_t index);
 
 /** The `INSTCTRL` flags the run ended with. */
 uint32_t gfnt_hint_run_instruct_control(const GFNT_HintRun * run);

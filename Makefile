@@ -699,7 +699,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-hint check-hint-mutations check-oracle-tt-decode check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-oracle-hint-batteries check-hint check-hint-mutations check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-hint-point-mutations check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -1011,7 +1011,7 @@ check-oracle-ttx: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/ttx_diff.py --quiet
 
 check-oracle: ## Run every oracle differential there is
-check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf check-oracle-tt-decode
+check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
 check-oracle: check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-flow check-oracle-layout-l2 check-oracle-layout-l3b check-oracle-layout-l4 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
@@ -1262,13 +1262,36 @@ check-oracle-tt-decode: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools -- \
 		python3 $(ORACLE)/tt_decode_diff.py --quiet
 
+check-oracle-hint: ## Hint glyphs of corpus fonts and compare every point with FreeType's
+check-oracle-hint: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_diff.py --version 35 --fonts 6 --ppem 11,12,17 --stride 9 --quiet
+
+check-oracle-hint-probe: ## Run random hinting programs through this library and FreeType and compare every point
+check-oracle-hint-probe: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
+		python3 $(ORACLE)/hint_probe_diff.py --seed 51 --fonts 4 --glyphs 100 --steps 1 --vectors axis --version 35 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
+		python3 $(ORACLE)/hint_probe_diff.py --seed 52 --fonts 4 --glyphs 100 --steps 8 --vectors axis --version 35 --show 0
+
+check-oracle-hint-batteries: ## Sweep each instruction's thresholds and ties against FreeType
+check-oracle-hint-batteries: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/hint_batteries.py
+
+check-hint-point-mutations: ## Plant point-instruction defects; the FreeType comparison must refuse each
+check-hint-point-mutations: $(EXAMPLES)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/hint_mutation_check.py
+
 check-hint-mutations: ## Plant decoder defects; the unit tests and the fontTools comparison must both refuse each
 check-hint-mutations: $(APP_DIR)/testHint$(EXE_EXTENSION) $(EXAMPLES)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/tt_decode_mutation_check.py
 
 check-hint: ## Every TrueType hinting gate: the unit tests, the fontTools comparison and its mutation check
-check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) check-oracle-tt-decode check-hint-mutations
-	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/testHint$(EXE_EXTENSION) --gtest_brief=1
+check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) $(APP_DIR)/testHint_vm$(EXE_EXTENSION) $(APP_DIR)/testHint_point$(EXE_EXTENSION)
+check-hint: check-oracle-tt-decode check-hint-mutations check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries check-hint-point-mutations
+	@for t in testHint testHint_vm testHint_point; do \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
+	done
 
 check-layout: ## Every layout feature gate: unit snapshot, mutation checks and the browser and Pango comparisons
 check-layout: check-layout-l1 check-layout-l2 check-layout-l3 check-layout-l3b check-layout-l4

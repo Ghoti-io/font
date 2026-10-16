@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-3.0-only
+#
+# Copyright (C) 2026 Corey Pennycuff
+#
+# This file is part of Ghoti.io Font.
+#
+# Ghoti.io Font is free software: you can redistribute it and/or modify it
+# under the terms of the GNU Lesser General Public License version 3 as
+# published by the Free Software Foundation.
+"""Targeted hinting batteries: one instruction's meaning pinned down against FreeType.
+
+documentation/design.md section 8.5. hint_probe_diff.py samples random programs;
+this sweeps the edges, each battery being a small family of programs on a few
+points that varies one thing at a time - an operand, a flag, an angle - because
+the places two interpreters part are thresholds and ties, and a random sample
+meets them rarely (a planted change to ISECT's cutoff for grazing lines went
+unseen by it, which is why the ISECT battery exists).
+
+Every battery runs in both interpreter versions it applies to, and every point of
+every case is compared in 26.6 with FreeType's, with no tolerance. A battery that
+disagrees prints its first cases.
+
+Usage: hint_batteries.py [battery...]   (none: all)
+"""
+
+import itertools
+import json
+import os
+import random
+import shutil
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hint_diff
+import oracle_env
+
+ROOT = oracle_env.ROOT
+SCRATCH = os.path.join(ROOT, "build", "oracle", "probe")
+
+
+def build(name, spec):
+    os.makedirs(SCRATCH, exist_ok=True)
+    spec_path = os.path.join(SCRATCH, name + ".json")
+    font = os.path.join(SCRATCH, name + ".ttf")
+    with open(spec_path, "w") as handle:
+        json.dump(spec, handle)
+    done = subprocess.run(oracle_env.command("fonttools", [
+        "python3", os.path.join(ROOT, "tools", "oracle", "hint_case_font.py"),
+        font, spec_path], scratch=SCRATCH), capture_output=True, text=True)
+    if done.returncode != 0:
+        raise RuntimeError("could not build %s: %s" % (name, done.stderr[-300:]))
+    return font
+
+
+def compare(name, spec, versions=("35", "40"), ppem=10, label=None):
+    """Run a spec through both interpreters; return the mismatching cases."""
+    font = build(name, spec)
+    bad = []
+    for version in versions:
+        mine, _ = hint_diff.ours(font, int(version), ppem, 1)
+        yours, _ = hint_diff.theirs(font, int(version), ppem, 1)
+        if mine is None or yours is None:
+            return [("driver failed", version)]
+        for index, case in enumerate(spec["cases"]):
+            a, b = mine.get(index + 1), yours.get(index + 1)
+            if isinstance(a, str) or isinstance(b, str) or a is None or b is None:
+                if a != b:
+                    bad.append((version, (label or (lambda c: c["asm"][-2:]))(case), a, b))
+            elif a[1] != b[1]:
+                bad.append((version, (label or (lambda c: c["asm"][-2:]))(case),
+                            [(k, p[:2], q[:2]) for k, (p, q) in enumerate(zip(a[1], b[1])) if p != q][:2]))
+    return bad
+
+
+def case(points, asm, ends=None):
+    return {"points": points, "ends": ends or [len(points) - 1], "asm": asm}
+
+
+# -- the batteries ---------------------------------------------------------------
+
+def rounding():
+    """Every rounding state, over -200..200, by way of MDAP[1]."""
+    modes = ["RTG[ ]", "RTHG[ ]", "RTDG[ ]", "RDTG[ ]", "RUTG[ ]", "ROFF[ ]"]
+    cases = []
+    for mode in modes:
+        for v in range(-200, 201, 3):
+            cases.append(case([[0, v, 1], [10, 10, 1], [20, 20, 1]],
+                              ["SVTCA[0]", mode, "PUSH[ ] 0", "MDAP[1]"]))
+    for operand in (0x48, 0x68, 0x40, 0x88, 0x4F, 0x58, 0x0B, 0xA3, 0x20):
+        for v in range(-130, 131, 7):
+            cases.append(case([[0, v, 1], [10, 10, 1], [20, 20, 1]],
+                              ["SVTCA[0]", "PUSH[ ] %d" % operand, "SROUND[ ]", "PUSH[ ] 0", "MDAP[1]"]))
+    return {"upem": 640, "cases": cases}, ("35", "40"), 10
+
+
+def mdrp():
+    cases = []
+    for D in (5, 10, 30, 31, 32, 33, 70, 100, 0, -5, -10, -30, -31, -32, -33, -70, -100):
+        for bits in itertools.product("01", repeat=2):
+            cases.append(case([[100, 0, 1], [100 + D, 0, 1], [0, 300, 1], [300, 300, 1]],
+                              ["SVTCA[1]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1", "MDRP[0%s%s00]" % bits]))
+    return {"upem": 640, "cases": cases}, ("35",), 10
+
+
+def mirp():
+    cvt = [30, -30, 100, -100, 200, 5, -5, 0]
+    cases = []
+    for D in (30, -30, 100, -100, 0, 10, -10, 150):
+        for ci in range(len(cvt) - 1):
+            for bits in itertools.product("01", repeat=2):
+                cases.append(case([[100, 0, 1], [100 + D, 0, 1], [0, 300, 1], [300, 300, 1]],
+                                  ["SVTCA[1]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1 %d" % ci,
+                                   "MIRP[0%s00]" % "".join(bits)]))
+    return {"upem": 640, "cvt": cvt + [0] * 8, "cases": cases}, ("35",), 10
+
+
+def original_distance():
+    """MDRP measures the original in font units, MIRP in scaled points (at 12 ppem on 1000)."""
+    rng = random.Random(5)
+    cases = []
+    for _ in range(150):
+        a, b = rng.randrange(-300, 900), rng.randrange(-300, 900)
+        cases.append(case([[0, a, 1], [0, b, 1], [100, 0, 1]],
+                          ["SVTCA[0]", "ROFF[ ]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1 0", "MIRP[00100]"]))
+        cases.append(case([[0, a, 1], [0, b, 1], [100, 0, 1]],
+                          ["SVTCA[0]", "ROFF[ ]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1", "MDRP[00000]"]))
+    return {"upem": 1000, "cvt": [30000], "cases": cases}, ("35",), 12
+
+
+def isect():
+    """Crossings, parallel lines, and the cutoff in between (tan 1/19)."""
+    cases = []
+    for dy in range(98, 110):
+        cases.append(case([[900, 900, 1], [0, 0, 1], [6400, 0, 1], [3200, 0, 1], [5200, dy, 1]],
+                          ["SVTCA[1]", "PUSH[ ] 0 1 2 3 4", "ISECT[ ]"]))
+    for dy in list(range(1, 14)) + [20, 50, 200]:
+        cases.append(case([[900, 900, 1], [0, 0, 1], [640, 0, 1], [320, 0, 1], [520, dy, 1]],
+                          ["SVTCA[1]", "PUSH[ ] 0 1 2 3 4", "ISECT[ ]"]))
+    for q in itertools.permutations([1, 2, 3, 4]):
+        cases.append(case([[900, 900, 1], [0, 0, 1], [640, 100, 1], [100, 640, 1], [500, 0, 1]],
+                          ["SVTCA[1]", "PUSH[ ] 0 %d %d %d %d" % q, "ISECT[ ]"]))
+    rng = random.Random(9)
+    for _ in range(120):
+        pts = [[rng.randrange(0, 2000), rng.randrange(-1500, 2000), 1] for _ in range(5)]
+        cases.append(case(pts, ["SVTCA[1]", "PUSH[ ] 0 1 2 3 4", "ISECT[ ]"]))
+    return {"upem": 640, "cases": cases}, ("35", "40"), 10
+
+
+def measuring():
+    """MD[0] differences the current points, MD[1] the original in font units."""
+    rng = random.Random(3)
+    cases = []
+    for variant in (0, 1):
+        for _ in range(100):
+            a, b = rng.randrange(-400, 900), rng.randrange(-400, 900)
+            cases.append(case([[10, a, 1], [10, b, 1], [0, 0, 1], [500, 500, 1], [300, 0, 1]],
+                              ["SVTCA[0]", "PUSH[ ] 0 1", "MD[%d]" % variant, "PUSH[ ] 4", "SWAP[ ]", "SCFS[ ]"]))
+    return {"upem": 1000, "cases": cases}, ("35", "40"), 12
+
+
+def freedom():
+    """A freedom vector nearly at right angles to the projection vector moves nothing."""
+    cases = []
+    for dx in (0, 5, 10, 20, 30, 40, 60, 62, 64, 66, 80, 100, 160, 200, 300, 500, 1000):
+        cases.append(case([[100, 53, 1], [0, 0, 1], [0, 0, 1], [dx, -1000, 1]],
+                          ["SVTCA[1]", "PUSH[ ] 2 3", "SPVTL[0]", "PUSH[ ] 0", "MDAP[1]"]))
+    return {"upem": 640, "cases": cases}, ("35", "40"), 10
+
+
+def environment():
+    """What MPPEM, MPS and GETINFO answer, read out through y."""
+    tests = [["MPPEM[ ]"], ["MPS[ ]"]]
+    for sel in (0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 31, 63, 127, 255, 1023, 8191):
+        tests.append(["PUSH[ ] %d" % sel, "GETINFO[ ]"])
+    cases = [case([[0, 0, 1], [10, 10, 1]], ["SVTCA[0]"] + t + ["PUSH[ ] 0", "SWAP[ ]", "SCFS[ ]"]) for t in tests]
+    return {"upem": 640, "cases": cases}, ("35", "40"), 12
+
+
+def compat():
+    """Version 40's compatibility rules: which moves are ignored, which points are touched."""
+    pts = [[0, 0, 1], [50, 100, 1], [100, 200, 1], [150, 300, 1]]
+    programs = [
+        ["SVTCA[0]", "PUSH[ ] 1 30", "SHPIX[ ]"],
+        ["SVTCA[0]", "PUSH[ ] 1", "MDAP[0]", "PUSH[ ] 1 30", "SHPIX[ ]"],
+        ["SVTCA[0]", "PUSH[ ] 1", "MDAP[1]", "PUSH[ ] 1 30", "SHPIX[ ]"],
+        ["SVTCA[0]", "PUSH[ ] 1 30", "SHPIX[ ]", "PUSH[ ] 1 20", "SHPIX[ ]"],
+        ["SVTCA[0]", "IUP[0]", "PUSH[ ] 1 30", "SHPIX[ ]"],
+        ["SVTCA[0]", "IUP[0]", "IUP[1]", "PUSH[ ] 1 30", "SHPIX[ ]"],
+        ["SVTCA[1]", "PUSH[ ] 1 30", "SHPIX[ ]"],
+        ["SVTCA[0]", "PUSH[ ] 1 30", "SHPIX[ ]", "IUP[0]"],
+        ["SVTCA[1]", "PUSH[ ] 1", "MDAP[1]", "PUSH[ ] 3 20", "SHPIX[ ]", "IUP[1]"],
+        ["SVTCA[1]", "PUSH[ ] 2 3", "ALIGNPTS[ ]", "IUP[1]"],
+        ["SVTCA[0]", "PUSH[ ] 0 1 2 3 1", "ISECT[ ]", "IUP[0]", "IUP[1]"],
+        ["SVTCA[0]", "PUSH[ ] 0 1 2 3 1", "ISECT[ ]", "IUP[1]", "IUP[0]"],
+        ["SVTCA[1]", "PUSH[ ] 1", "MDRP[10000]", "IUP[0]", "IUP[1]", "PUSH[ ] 2 15", "SHPIX[ ]"],
+    ]
+    cases = [case(pts, p) for p in programs]
+    return {"upem": 640, "cases": cases}, ("40",), 10
+
+
+def zones():
+    """SHZ acts on zp2's zone; IUP adds a lone touched point's shift to where points are."""
+    pts = [[0, 0, 1], [300, 100, 1], [600, 0, 1], [500, 700, 1], [100, 600, 1], [300, 350, 1]]
+    base = ["SVTCA[0]", "PUSH[ ] 1", "MDAP[1]"]
+    programs = [
+        base + ["PUSH[ ] 1", "SRP1[ ]", "PUSH[ ] 1", "SHZ[1]"],
+        base + ["PUSH[ ] 1", "SRP2[ ]", "PUSH[ ] 1", "SHZ[0]", "IUP[0]"],
+        base + ["PUSH[ ] 1", "SRP1[ ]", "PUSH[ ] 1", "SHZ[1]", "IUP[0]"],
+        base + ["PUSH[ ] 0", "SHZ[1]"],
+        base + ["PUSH[ ] 1", "SRP1[ ]", "PUSH[ ] 1", "SHC[1]"],
+    ]
+    return {"upem": 640, "cases": [case(pts, p, [3, 5]) for p in programs]}, ("35", "40"), 10
+
+
+def iup():
+    rng = random.Random(1)
+    cases = []
+    for _ in range(300):
+        pts = [[rng.randrange(0, 700), rng.randrange(-200, 800), 1] for _ in range(12)]
+        asm = ["SVTCA[%d]" % rng.randrange(2)]
+        for t in rng.sample(range(12), rng.randrange(1, 7)):
+            asm += ["PUSH[ ] %d %d" % (t, rng.randrange(-70, 70)), "SHPIX[ ]"]
+        asm += rng.choice([["IUP[0]"], ["IUP[1]"], ["IUP[0]", "IUP[1]"]])
+        cases.append(case(pts, asm, [5, 11]))
+    return {"upem": 1000, "cases": cases}, ("35",), 12
+
+
+def iup_ties():
+    """Points a font unit apart whose scaled positions tie, which is where IUP's choice of side shows."""
+    rng = random.Random(2)
+    cases = []
+    for _ in range(300):
+        pts = [[rng.choice([600, 601, 602, 603, 604, 605, 606, 607, 608, 100, 101, 102, 350, 351]),
+                rng.choice([300, 301, 302, 303, 304, 305, 306, 307, 308, 100, 101, 102, 650, 651]), 1]
+               for _ in range(12)]
+        asm = ["SVTCA[%d]" % rng.randrange(2)]
+        for t in rng.sample(range(12), rng.randrange(2, 5)):
+            asm += ["PUSH[ ] %d %d" % (t, rng.randrange(-60, 60)), "SHPIX[ ]"]
+        asm += rng.choice([["IUP[0]"], ["IUP[1]"], ["IUP[0]", "IUP[1]"]])
+        cases.append(case(pts, asm, [5, 11]))
+    return {"upem": 1000, "cases": cases}, ("35",), 12
+
+
+def state():
+    """What the control value program leaves for a glyph, and what it does not."""
+    pts = [[100, 100, 1], [300, 500, 1], [500, 100, 1], [700, 500, 1]]
+    tests = [
+        (["SVTCA[0]"], ["PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1", "ALIGNRP[ ]"]),
+        (["PUSH[ ] 2", "SRP0[ ]"], ["SVTCA[0]", "PUSH[ ] 1", "ALIGNRP[ ]"]),
+        (["PUSH[ ] 0", "SZP0[ ]"], ["SVTCA[0]", "PUSH[ ] 1", "MDAP[0]"]),
+        (["PUSH[ ] 2", "SLOOP[ ]"], ["SVTCA[0]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1 2", "ALIGNRP[ ]"]),
+        (["RTHG[ ]"], ["SVTCA[0]", "PUSH[ ] 0", "MDAP[1]"]),
+        (["ROFF[ ]"], ["SVTCA[0]", "PUSH[ ] 0", "MDAP[1]"]),
+        (["PUSH[ ] 20", "SMD[ ]"], ["SVTCA[0]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1", "MDRP[01000]"]),
+        (["PUSH[ ] 0", "SCVTCI[ ]"], ["SVTCA[0]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1 0", "MIRP[00100]"]),
+        (["FLIPOFF[ ]"], ["SVTCA[0]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1 1", "MIRP[00000]"]),
+        (["PUSH[ ] 10", "SDB[ ]"], ["SVTCA[0]", "PUSH[ ] 1 1 0", "DELTAP1[ ]"]),
+        (["PUSH[ ] 80", "SSW[ ]", "PUSH[ ] 50", "SSWCI[ ]"], ["SVTCA[0]", "PUSH[ ] 0", "SRP0[ ]", "PUSH[ ] 1", "MDRP[00000]"]),
+    ]
+    return tests, ("35", "40"), 10
+
+
+BATTERIES = {
+    "rounding": rounding, "mdrp": mdrp, "mirp": mirp,
+    "original-distance": original_distance, "isect": isect, "measuring": measuring,
+    "freedom": freedom, "environment": environment, "compat": compat,
+    "zones": zones, "iup": iup, "iup-ties": iup_ties,
+}
+
+
+def run_state():
+    """Each (prep, glyph) pair is its own font: the prep is the thing varied."""
+    tests, versions, ppem = state()
+    pts = [[100, 100, 1], [300, 500, 1], [500, 100, 1], [700, 500, 1]]
+    bad = []
+    for n, (prep, glyph) in enumerate(tests):
+        spec = {"upem": 640, "cvt": [300, -80, 50], "prep": prep + ["PUSH[ ] 0", "POP[ ]"],
+                "cases": [case(pts, glyph)]}
+        bad += compare("state%d" % n, spec, versions, ppem, label=lambda c, p=prep: p)
+    return bad, len(tests) * len(versions)
+
+
+def main(argv):
+    wanted = argv[1:] or (list(BATTERIES) + ["state"])
+    failed = 0
+    for name in wanted:
+        if name == "state":
+            bad, count = run_state()
+        else:
+            spec, versions, ppem = BATTERIES[name]()
+            count = len(spec["cases"]) * len(versions)
+            bad = compare(name, spec, versions, ppem)
+        print("%-18s %5d cases, %d disagree" % (name, count, len(bad)))
+        for entry in bad[:4]:
+            print("    ", entry)
+        failed += bool(bad)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

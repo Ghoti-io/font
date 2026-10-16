@@ -53,6 +53,28 @@ typedef struct GFNT_HintFrame {
   uint8_t return_program;
 } GFNT_HintFrame;
 
+/** A point of a zone, in 26.6 pixels (or font units, for the unscaled copy). */
+typedef struct GFNT_HintPoint {
+  int32_t x;
+  int32_t y;
+} GFNT_HintPoint;
+
+#define GFNT_HINT_TOUCH_X 1u
+#define GFNT_HINT_TOUCH_Y 2u
+#define GFNT_HINT_ON_CURVE 4u
+
+/** A zone: the twilight zone (0) or the glyph's own points (1). */
+typedef struct GFNT_HintZone {
+  size_t count;            ///< Points in use.
+  size_t capacity;         ///< Points allocated.
+  GFNT_HintPoint * cur;    ///< Where they are now.
+  GFNT_HintPoint * org;    ///< Where they started, scaled and unhinted.
+  GFNT_HintPoint * orus;   ///< Where they started, in font units.
+  uint8_t * flags;         ///< ON_CURVE and the two touch bits.
+  size_t * ends;           ///< The last point of each contour.
+  size_t contour_count;
+} GFNT_HintZone;
+
 struct GFNT_HintContext {
   const GFNT_Allocator * allocator;
   GFNT_HintLimits limits;
@@ -74,6 +96,7 @@ struct GFNT_HintContext {
   size_t stack_capacity;
   GFNT_HintGState gstate;
   uint32_t instruct_control;
+  GFNT_HintZone twilight;         ///< As `prep` left it.
   bool usable;
   GFNT_HintFault fault;
 };
@@ -92,11 +115,14 @@ struct GFNT_HintRun {
   bool owns_state;                ///< Whether storage and cvt are this run's own.
   GFNT_HintGState gs;
   uint32_t instruct_control;
+  GFNT_HintZone zone[2];          ///< 0 twilight, 1 glyph.
   GFNT_HintFrame * frames;
   uint8_t * glyph_boundary;
   const uint8_t * glyph_code;
   size_t glyph_length;
   GFNT_HintFault fault;
+  bool normalised;                ///< Whether a vector was made from a direction.
+  bool iup_called[2];             ///< Whether IUP has run along y, along x.
 };
 
 /**
@@ -107,6 +133,32 @@ struct GFNT_HintRun {
  * @return ::GFNT_HINT_OK or the failure; the run's fault holds the detail.
  */
 GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program);
+
+/** Allocate a zone's arrays for @p capacity points and @p contours. */
+GFNT_Result gfnt_hint_zone_alloc(const GFNT_Allocator * allocator,
+    GFNT_HintZone * zone, size_t capacity, size_t contours);
+
+/** Free a zone's arrays. */
+void gfnt_hint_zone_free(const GFNT_Allocator * allocator, GFNT_HintZone * zone);
+
+/** Copy @p from into @p to, which must be at least as large. */
+void gfnt_hint_zone_copy(GFNT_HintZone * to, const GFNT_HintZone * from);
+
+/** Whether @p op is one of the instructions that move or measure points. */
+bool gfnt_hint_is_point_op(uint8_t op);
+
+/**
+ * Execute one of the point instructions: pop its operands, do its work in the
+ * run's zones.
+ *
+ * @param run The run.
+ * @param op The opcode.
+ * @param program The program being executed (the interpreter treats glyph
+ *   programs and font programs differently in a few places).
+ * @return ::GFNT_HINT_OK or the failure.
+ */
+GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
+    GFNT_HintProgram program);
 
 /** Mark the offsets of @p code that begin an instruction; NULL on no memory. */
 uint8_t * gfnt_hint_boundaries(const GFNT_Allocator * allocator,

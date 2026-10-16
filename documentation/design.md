@@ -1321,20 +1321,53 @@ ignored. Until hinting is implemented, outlines are rendered unhinted with
 exact-area anti-aliasing. Any future interpreter must treat font bytecode as
 untrusted input and retain the bounds and resource limits described in §§1–2.
 
-**What exists: the programs, read and checked, not run.** `hint.h` hands over a
-glyph's own instructions (`gfnt_face_glyph_program()`; `fpgm`, `prep` and `cvt `
-are tables, so `gfnt_face_table_data()` reaches them), says whether a program's
-structure holds (`gfnt_program_validate()`: every push is complete, `IF`/`ELSE`/
-`EIF` and `FDEF`/`IDEF`/`ENDF` nest and close) and prints it as the
-specification's mnemonics (`gfnt_program_disassemble()`, and the
-`font-program` example). Internally the opcode table (`src/hint/tt_ops.c`) is the
-one source of mnemonic, flag width, stack effect and operand length, so the
-decoder and the interpreter to come cannot disagree about how long an
-instruction is. `make check-oracle-tt-decode` decodes `fpgm`, `prep` and every
-glyph program of every TrueType font in the corpus and compares them,
-instruction by instruction and push value by push value, with fontTools. The
-opcode table follows the published specification and nothing else: an opcode the
-specification does not define (0x92 among them) is undefined here.
+**What exists, internally: a bounded virtual machine and a hinter for simple
+glyphs.** (`src/hint/`; the public `hint.h` still only reads, checks and prints
+programs.) The opcode table (`tt_ops.c`) is the one source of mnemonic, flag
+width, stack effect and operand length for the decoder and the interpreter. The
+interpreter (`tt_exec.c`, `tt_move.c`) is written from the specification's
+instruction-set chapter and runs a face's `fpgm` and `prep` once per size into a
+context, then a glyph's own program over a copy of that context's control values,
+storage and state, so one context serves every glyph on any number of threads.
+Font programs are untrusted: every access is checked, every loop is bounded by an
+instruction budget (counted across skipped regions and loop calls too), a jump
+must land on an instruction, and a program that fails stops with a named fault
+and leaves the glyph unhinted, never the face.
+
+**It is held to FreeType 2.14.3, point for point.** `make check-oracle-hint` hints
+corpus fonts at several sizes in both interpreter versions and compares every
+point of every glyph, in 26.6, with FreeType's; `make check-oracle-hint-probe`
+does the same for random valid programs over random points, so that each
+instruction, flag and combination is exercised, not only the ones real fonts use;
+and `make check-hint-point-mutations` shows the comparison refuses a defect planted
+in each of several instructions. The chapter fixes what an instruction does and not
+the rounding of every intermediate value, so those were settled by experiment
+against FreeType (the unit tests say which). Three behaviours are FreeType's and
+not the chapter's, and are noted here because a font can depend on them:
+
+- Version 40 runs in a compatibility mode unless the font asks for native
+  ClearType (`INSTCTRL`, selector 3, value 4): moves along x are ignored (the point
+  is still marked touched), `SHPIX` and `DELTAP` move only points already moved
+  vertically, and once `IUP` has run along both axes nothing moves again.
+- Between the font's programs and each glyph's, the rounding state is reset to the
+  grid; the minimum distance, cut-in, auto-flip, delta settings and single-width
+  values are what the control value program left. The reference points, zones and
+  vectors are reset too.
+- Two reference points that coincide along the projection vector (which the
+  chapter calls invalid) make `IP` use the unscaled original distance as it stands.
+
+**Known differences, stated.** (1) A unit vector made from a direction (`SPVTL`,
+`SFVTL`, `SDPVTL`, `SPVFS`, `SFVFS`) is exact here and approximate in FreeType, to
+within a 16384th; the hint it feeds can land a few 64ths of a pixel apart, and the
+comparison reports those glyphs separately, bounded. (2) FreeType hints a font with
+no control value program from a zeroed graphics state (no auto-flip, minimum
+distance 0) and not from the specification's defaults, which this follows; such
+fonts are left out of the comparison and counted. (3) What FreeType tolerates in a
+broken program is not yet matched; a program that makes a bad access leaves its
+glyph unhinted here.
+
+Composites, hinted advances, variable fonts, the original (version 35) behaviour of
+`GETINFO`'s remaining bits, and the public API are not built yet.
 
 ---
 

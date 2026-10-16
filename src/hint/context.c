@@ -33,6 +33,7 @@
 #include "../sfnt/sfnt.h"
 
 /* The offsets of the TrueType fields in a version 1.0 `maxp`. */
+#define GFNT_MAXP_TWILIGHT 16u
 #define GFNT_MAXP_STORAGE 18u
 #define GFNT_MAXP_FUNCTIONS 20u
 #define GFNT_MAXP_IDEFS 22u
@@ -61,6 +62,11 @@ static GFNT_Result gfnt_hint_read_shape(const GFNT_Face * face,
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG('m', 'a', 'x', 'p'), 0, 0,
         "a version 1.0 maxp is 32 bytes");
   }
+  result = gfnt_reader_u16_at(&reader, GFNT_MAXP_TWILIGHT, &value);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  shape->twilight = value;
   result = gfnt_reader_u16_at(&reader, GFNT_MAXP_STORAGE, &value);
   if (result != GFNT_OK) {
     return result;

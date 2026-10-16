@@ -76,6 +76,7 @@ void gfnt_hint_limits_default(GFNT_HintLimits * limits) {
   limits->max_instructions = 4000000;
   limits->max_loop = 65535;
   limits->max_program = 1048576;
+  limits->max_points = 65540;
 }
 
 uint8_t * gfnt_hint_boundaries(const GFNT_Allocator * allocator,
@@ -501,15 +502,27 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         break;
       }
       case 0x4B: ROOM(1); PUSH((int32_t)ctx->params.ppem); break; /* MPPEM */
-      case 0x4C: ROOM(1); PUSH((int32_t)(ctx->params.ppem * 64u)); break; /* MPS: unspecified */
+      case 0x4C: /* MPS: the size in pixels for the original interpreter, in 26.6 for 40 */
+        ROOM(1);
+        PUSH(ctx->params.version >= 40 ? (int32_t)(ctx->params.ppem * 64u) : (int32_t)ctx->params.ppem);
+        break;
       case 0x88: { /* GETINFO */
         int32_t selector;
         int32_t result = 0;
         NEED(1);
         selector = TOP();
         if (selector & 1) result |= ctx->params.version;
-        if ((selector & 32) && ctx->params.grayscale) result |= 1 << 12;
-        if ((selector & 64) && ctx->params.version >= 40) result |= 1 << 13;
+        /* The size of the answer for each question is FreeType's: the chapter's
+           table names the bits, and which of them a renderer sets is its own. */
+        if (ctx->params.version >= 40) {
+          if (selector & 64) result |= 1 << 13;     /* ClearType */
+          if (selector & 1024) result |= 1 << 17;   /* sub-pixel positioning */
+          if (selector & 2048) result |= 1 << 18;   /* symmetric rendering */
+          if (selector & 4096) result |= 1 << 19;   /* gray ClearType */
+        }
+        else if ((selector & 32) && ctx->params.grayscale) {
+          result |= 1 << 12;                        /* grayscale */
+        }
         TOP() = result;
         break;
       }
@@ -663,6 +676,11 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
 
       default: {
         size_t i;
+        if (gfnt_hint_is_point_op(op)) {
+          failure = gfnt_hint_point_op(run, op, current);
+          if (failure != GFNT_HINT_OK) goto fault;
+          break;
+        }
         /* An opcode with no meaning of its own runs its instruction definition,
            if it has one. */
         for (i = 0; i < ctx->idef_count; ++i) {

@@ -138,7 +138,7 @@ vector generators.
 | --- | --- |
 | `make examples` | The programs under `examples/` |
 | `make check-oracle` | Differentials against fontTools, FreeType and HarfBuzz, in pinned containers |
-| `make check-layout-l1` … `l4`, `check-layout-l3b` | One layout feature each (line box, inline objects, flow, columns, ruby and emphasis): the unit snapshot, a mutation check that must fail, and the Chromium, Firefox and Pango comparisons. Not part of `check-oracle`; they need the browser images (`tools/oracle/containers`) |
+| `make check-layout`, or `check-layout-l1` … `l4`, `check-layout-l3b` | One layout feature each (line box, inline objects, flow, columns, ruby and emphasis): the unit snapshot, a mutation check that must fail, and the Chromium, Firefox and Pango comparisons. The comparisons are also in `check-oracle`; both need the browser images (`tools/oracle/containers`) |
 | `make check-golden` | The same pixels, rebuilt for three big-endian targets |
 | `make fuzz` | The sfnt, cmap, glyf, raster, CFF and charstring fuzzers |
 | `make docs` | The Doxygen manual, into `./docs` |

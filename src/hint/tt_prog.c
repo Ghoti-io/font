@@ -1,0 +1,318 @@
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Font.
+ *
+ * Ghoti.io Font is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Font is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/**
+ * @file
+ *
+ * Building a per-size hinting context (running `fpgm` and `prep`) and running a
+ * glyph's program over it.
+ */
+
+#include "vm_internal.h"
+
+#include <string.h>
+
+static void * gfnt_hint_calloc(const GFNT_Allocator * a, size_t n, size_t size) {
+  return a->calloc_fn(a->ctx, n ? n : 1u, size);
+}
+
+static void gfnt_hint_free(const GFNT_Allocator * a, void * p) {
+  if (p) {
+    a->free_fn(a->ctx, p);
+  }
+}
+
+static size_t gfnt_hint_min(size_t a, size_t b) {
+  return a < b ? a : b;
+}
+
+void gfnt_hint_ctx_destroy(GFNT_HintContext * ctx) {
+  const GFNT_Allocator * a;
+
+  if (!ctx) {
+    return;
+  }
+  a = ctx->allocator;
+  gfnt_hint_free(a, ctx->boundary[0]);
+  gfnt_hint_free(a, ctx->boundary[1]);
+  gfnt_hint_free(a, ctx->functions);
+  gfnt_hint_free(a, ctx->idefs);
+  gfnt_hint_free(a, ctx->cvt);
+  gfnt_hint_free(a, ctx->storage);
+  gfnt_hint_free(a, ctx);
+}
+
+void gfnt_hint_run_destroy(GFNT_HintRun * run) {
+  const GFNT_Allocator * a;
+
+  if (!run) {
+    return;
+  }
+  a = run->allocator;
+  gfnt_hint_free(a, run->stack);
+  gfnt_hint_free(a, run->frames);
+  gfnt_hint_free(a, run->glyph_boundary);
+  if (run->owns_state) {
+    gfnt_hint_free(a, run->storage);
+    gfnt_hint_free(a, run->cvt);
+  }
+  gfnt_hint_free(a, run);
+}
+
+static GFNT_Result gfnt_hint_run_create(GFNT_HintContext * ctx, bool building,
+    GFNT_HintRun ** out) {
+  const GFNT_Allocator * a = ctx->allocator;
+  GFNT_HintRun * run = gfnt_hint_calloc(a, 1, sizeof *run);
+
+  if (!run) {
+    return GFNT_ERR_OOM;
+  }
+  run->allocator = a;
+  run->ctx = ctx;
+  run->building = building;
+  run->stack_capacity = ctx->stack_capacity;
+  run->stack = gfnt_hint_calloc(a, run->stack_capacity, sizeof run->stack[0]);
+  run->frames = gfnt_hint_calloc(a, ctx->limits.max_call_depth, sizeof run->frames[0]);
+  run->storage_count = ctx->storage_count;
+  run->cvt_count = ctx->cvt_count;
+  if (building) {
+    /* The context's own arrays: what the font programs write is what stays. */
+    run->storage = ctx->storage;
+    run->cvt = ctx->cvt;
+    run->gs = ctx->gstate;
+    run->instruct_control = 0;
+  }
+  else {
+    run->owns_state = true;
+    run->storage = gfnt_hint_calloc(a, ctx->storage_count, sizeof run->storage[0]);
+    run->cvt = gfnt_hint_calloc(a, ctx->cvt_count, sizeof run->cvt[0]);
+    if (run->storage && run->cvt) {
+      memcpy(run->storage, ctx->storage, ctx->storage_count * sizeof run->storage[0]);
+      memcpy(run->cvt, ctx->cvt, ctx->cvt_count * sizeof run->cvt[0]);
+    }
+    run->gs = ctx->gstate;
+    run->instruct_control = ctx->instruct_control;
+  }
+  if (!run->stack || !run->frames || !run->storage || !run->cvt) {
+    gfnt_hint_run_destroy(run);
+    return GFNT_ERR_OOM;
+  }
+  *out = run;
+  return GFNT_OK;
+}
+
+static GFNT_Result gfnt_hint_result_of(GFNT_HintFailure failure) {
+  switch (failure) {
+    case GFNT_HINT_OK: return GFNT_OK;
+    case GFNT_HINT_FAIL_BUDGET:
+    case GFNT_HINT_FAIL_CALL_DEPTH: return GFNT_ERR_LIMIT;
+    case GFNT_HINT_FAIL_UNSUPPORTED: return GFNT_ERR_UNSUPPORTED;
+    case GFNT_HINT_FAIL_NO_MEMORY: return GFNT_ERR_OOM;
+    default: return GFNT_ERR_CORRUPT;
+  }
+}
+
+GFNT_Result gfnt_hint_ctx_create(const GFNT_Allocator * allocator,
+    const GFNT_HintLimits * limits, const GFNT_HintParams * params,
+    const GFNT_HintShape * shape, const uint8_t * fpgm, size_t fpgm_length,
+    const uint8_t * prep, size_t prep_length, const int32_t * cvt,
+    size_t cvt_count, GFNT_HintContext ** out) {
+  GFNT_HintContext * ctx;
+  GFNT_HintRun * run = NULL;
+  GFNT_Result result;
+  GFNT_HintLimits caps;
+  size_t stack;
+
+  if (!allocator || !params || !shape || !out || params->ppem == 0
+      || params->units_per_em == 0 || (params->version != 35 && params->version != 40)
+      || (!fpgm && fpgm_length) || (!prep && prep_length) || (!cvt && cvt_count)) {
+    return GFNT_ERR_INVALID;
+  }
+  if (limits) {
+    caps = *limits;
+  }
+  else {
+    gfnt_hint_limits_default(&caps);
+  }
+  if (shape->storage > caps.max_storage || shape->functions > caps.max_functions
+      || shape->idefs > caps.max_idefs || cvt_count > caps.max_cvt
+      || fpgm_length > caps.max_program || prep_length > caps.max_program) {
+    return GFNT_ERR_LIMIT;
+  }
+  ctx = gfnt_hint_calloc(allocator, 1, sizeof *ctx);
+  if (!ctx) {
+    return GFNT_ERR_OOM;
+  }
+  ctx->allocator = allocator;
+  ctx->limits = caps;
+  ctx->params = *params;
+  ctx->shape = *shape;
+  /* Pixels (26.6) per font unit, 16.16: the one scale every conversion uses. */
+  ctx->scale = gfnt_hint_div_fix((int32_t)(params->ppem * 64u),
+      (int32_t)params->units_per_em);
+  ctx->code[0] = fpgm;
+  ctx->code_length[0] = fpgm_length;
+  ctx->code[1] = prep;
+  ctx->code_length[1] = prep_length;
+  /* A font declares its stack depth in maxp, and some declare too little. */
+  stack = shape->stack + 32u;
+  ctx->stack_capacity = gfnt_hint_min(stack < 64u ? 64u : stack, caps.max_stack);
+  ctx->function_count = shape->functions;
+  ctx->idef_capacity = shape->idefs;
+  ctx->storage_count = shape->storage;
+  ctx->cvt_count = cvt_count;
+  ctx->functions = gfnt_hint_calloc(allocator, ctx->function_count, sizeof ctx->functions[0]);
+  ctx->idefs = gfnt_hint_calloc(allocator, ctx->idef_capacity, sizeof ctx->idefs[0]);
+  ctx->storage = gfnt_hint_calloc(allocator, ctx->storage_count, sizeof ctx->storage[0]);
+  ctx->cvt = gfnt_hint_calloc(allocator, ctx->cvt_count, sizeof ctx->cvt[0]);
+  ctx->boundary[0] = gfnt_hint_boundaries(allocator, fpgm, fpgm_length);
+  ctx->boundary[1] = gfnt_hint_boundaries(allocator, prep, prep_length);
+  if (!ctx->functions || !ctx->idefs || !ctx->storage || !ctx->cvt
+      || !ctx->boundary[0] || !ctx->boundary[1]) {
+    gfnt_hint_ctx_destroy(ctx);
+    return GFNT_ERR_OOM;
+  }
+  for (size_t i = 0; i < cvt_count; ++i) {
+    ctx->cvt[i] = gfnt_hint_mul_fix(cvt[i], ctx->scale);
+  }
+  gfnt_hint_gstate_default(&ctx->gstate);
+
+  result = gfnt_hint_run_create(ctx, true, &run);
+  if (result != GFNT_OK) {
+    gfnt_hint_ctx_destroy(ctx);
+    return result;
+  }
+  ctx->usable = true;
+  if (fpgm_length) {
+    if (gfnt_hint_exec(run, GFNT_HINT_PROGRAM_FONT) != GFNT_HINT_OK) {
+      ctx->usable = false;
+    }
+  }
+  if (ctx->usable && prep_length) {
+    /* The font program leaves a clean stack and state; prep starts from the
+       defaults, as every glyph will. */
+    run->depth = 0;
+    run->gs = ctx->gstate;
+    if (gfnt_hint_exec(run, GFNT_HINT_PROGRAM_CVT) != GFNT_HINT_OK) {
+      ctx->usable = false;
+    }
+  }
+  ctx->fault = run->fault;
+  if (ctx->usable) {
+    /* What prep leaves in the graphics state is each glyph's starting point;
+       these cannot carry the point-related parts (references, zones, vectors),
+       which return to the defaults for every glyph. */
+    GFNT_HintGState defaults;
+
+    gfnt_hint_gstate_default(&defaults);
+    ctx->gstate = run->gs;
+    memcpy(ctx->gstate.pv, defaults.pv, sizeof defaults.pv);
+    memcpy(ctx->gstate.fv, defaults.fv, sizeof defaults.fv);
+    memcpy(ctx->gstate.dpv, defaults.dpv, sizeof defaults.dpv);
+    memcpy(ctx->gstate.rp, defaults.rp, sizeof defaults.rp);
+    memcpy(ctx->gstate.zp, defaults.zp, sizeof defaults.zp);
+    ctx->gstate.loop = 1;
+    ctx->instruct_control = run->instruct_control;
+  }
+  gfnt_hint_run_destroy(run);
+  *out = ctx;
+  return GFNT_OK;
+}
+
+bool gfnt_hint_ctx_usable(const GFNT_HintContext * ctx) {
+  return ctx && ctx->usable;
+}
+
+GFNT_HintFault gfnt_hint_ctx_fault(const GFNT_HintContext * ctx) {
+  GFNT_HintFault none = {GFNT_HINT_OK, GFNT_HINT_PROGRAM_FONT, 0, 0};
+
+  return ctx ? ctx->fault : none;
+}
+
+int32_t gfnt_hint_ctx_cvt(const GFNT_HintContext * ctx, size_t index) {
+  return ctx && index < ctx->cvt_count ? ctx->cvt[index] : 0;
+}
+
+int32_t gfnt_hint_ctx_storage(const GFNT_HintContext * ctx, size_t index) {
+  return ctx && index < ctx->storage_count ? ctx->storage[index] : 0;
+}
+
+const GFNT_HintGState * gfnt_hint_ctx_gstate(const GFNT_HintContext * ctx) {
+  return &ctx->gstate;
+}
+
+uint32_t gfnt_hint_ctx_instruct_control(const GFNT_HintContext * ctx) {
+  return ctx->instruct_control;
+}
+
+GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
+    const uint8_t * program, size_t length, GFNT_HintRun ** out) {
+  GFNT_HintRun * run = NULL;
+  GFNT_Result result;
+
+  if (!ctx || !out || (!program && length)) {
+    return GFNT_ERR_INVALID;
+  }
+  *out = NULL;
+  if (!ctx->usable) {
+    return GFNT_ERR_INVALID;
+  }
+  /* The run only reads the context: its own copies take the writes. */
+  result = gfnt_hint_run_create((GFNT_HintContext *)(uintptr_t)ctx, false, &run);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  run->glyph_code = program;
+  run->glyph_length = length;
+  *out = run;
+  if (length > ctx->limits.max_program) {
+    run->fault.failure = GFNT_HINT_FAIL_BUDGET;
+    return GFNT_ERR_LIMIT;
+  }
+  return gfnt_hint_result_of(gfnt_hint_exec(run, GFNT_HINT_PROGRAM_GLYPH));
+}
+
+GFNT_HintFault gfnt_hint_run_fault(const GFNT_HintRun * run) {
+  return run->fault;
+}
+
+size_t gfnt_hint_run_depth(const GFNT_HintRun * run) {
+  return run->depth;
+}
+
+int32_t gfnt_hint_run_stack(const GFNT_HintRun * run, size_t index) {
+  return index < run->depth ? run->stack[index] : 0;
+}
+
+int32_t gfnt_hint_run_storage(const GFNT_HintRun * run, size_t index) {
+  return index < run->storage_count ? run->storage[index] : 0;
+}
+
+int32_t gfnt_hint_run_cvt(const GFNT_HintRun * run, size_t index) {
+  return index < run->cvt_count ? run->cvt[index] : 0;
+}
+
+const GFNT_HintGState * gfnt_hint_run_gstate(const GFNT_HintRun * run) {
+  return &run->gs;
+}
+
+uint32_t gfnt_hint_run_instruct_control(const GFNT_HintRun * run) {
+  return run->instruct_control;
+}

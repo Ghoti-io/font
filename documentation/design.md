@@ -1841,7 +1841,7 @@ ends in is upright on its vertical advance in a `vertical-rl` or `vertical-lr` c
 mixed or upright, and turned otherwise; and after an ideograph a soft hyphen is invisible and no place
 to break (`GFNT_HYPHENS_MANUAL_PANGO`: a place to break, as Pango has it, and the hyphen turned with
 the text). A caret is a horizontal bar, and a range's rectangles are
-as thick as the column. `make check-oracle-css` holds the layout to Chromium (the `chrome` image,
+as thick as the text they cover (its ascent and descent, as a DOM Range's are), not the column. `make check-oracle-css` holds the layout to Chromium (the `chrome` image,
 CSS Writing Modes): the rectangle of every character in 218 cases (5,957 characters), and the ink
 of 124 glyphs in 14 cases read from screenshots, agree to 0.05 and 1.6 pixels; a wrong orientation
 or direction fails both.

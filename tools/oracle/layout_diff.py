@@ -552,15 +552,18 @@ def consistency(mine, text_bytes, newline_bytes, boundaries):
     for line in mine["lines"]:
         covered = sum(g[3] for run in line["runs"] for g in run["g"]
                       if g[1] not in newline_bytes)
-        rects = [r for r in mine["rects"] if r[1] == line["t"]]
+        # A selection rectangle is as thick as the text it covers, the ascent and descent of the
+        # line's text without the line gap, as a DOM Range's is, so it sits at the baseline less
+        # the ascent and not at the top of the line box.
+        rects = [r for r in mine["rects"] if r[1] == line["baseline"] - line["ascent"]]
         total = sum(r[2] for r in rects)
         if line["runs"] and total != covered:
             diffs.append("selection of the line at %d is %d wide, glyphs %d" % (
                 line["t"], total, covered))
         for r in rects:
-            if r[3] != line["hh"]:
-                diffs.append("selection rectangle height %d, line %d" % (
-                    r[3], line["hh"]))
+            if r[3] != line["ascent"] + line["descent"]:
+                diffs.append("selection rectangle height %d, ascent and descent %d" % (
+                    r[3], line["ascent"] + line["descent"]))
     return diffs
 
 

@@ -123,7 +123,9 @@ def main():
         requests.append("%d\t%s" % (10 ** 7, (JI + chr(c) + JI).encode().hex()))
     orient = "mixed-pango" if "--pango" in sys.argv else "mixed"
     finished = subprocess.run([DRIVER, "--size", str(SIZE), "--mode", "vertical-rl",
-                               "--orient", orient, font],
+                               "--orient", orient,
+                               "--text-autospace", "no-autospace",
+                               "--text-spacing-trim", "space-all", font],
                               input="\n".join(requests) + "\n", capture_output=True, text=True)
     answers = [json.loads(line) for line in finished.stdout.splitlines()]
     for i, cp in enumerate(cps):

@@ -1037,9 +1037,10 @@ GFNT_API GFNT_Result gfnt_layout_caret(const GFNT_Paragraph * paragraph,
  *
  * One range gives several rectangles when it spans lines, and also when
  * right-to-left text puts part of it on one side of a left-to-right run and part
- * on the other. Rectangles that touch are merged. Each is as thick as its line;
- * when the selected byte range intersects an annotation, its rectangle includes
- * the annotation's contribution to the line box.
+ * on the other. Rectangles that touch are merged. Each is as thick as the text it
+ * covers, as a DOM Range's is: the ascent and descent of the line's text, without the
+ * line gap and without ruby or emphasis tracks, so it sits inside the line box and is
+ * usually thinner than it.
  *
  * @param start The first byte of the range.
  * @param end One past the last; a range with @p end not after @p start is empty.

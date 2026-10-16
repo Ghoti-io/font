@@ -97,7 +97,11 @@ def ours(case):
     name, text, mode, room = case[:4]
     style = case[4] if len(case) > 4 else {}
     argv = [DRIVER, "--size", str(SIZE), "--mode", mode, "--orient", "mixed-pango",
-            "--hyphens", "manual-pango", "--justify", "inter-word", FONT]
+            "--hyphens", "manual-pango", "--justify", "inter-word",
+            # Pango has neither text-autospace nor text-spacing-trim. CSS's defaults would add an
+            # eighth of an em between an ideograph and a Latin letter or digit, and set a closing
+            # mark at the end of a line at half width so that it fits; Pango does neither.
+            "--text-autospace", "no-autospace", "--text-spacing-trim", "space-all", FONT]
     if "line_height" in style:
         argv[-1:-1] = ["--line-height-multiple", str(style["line_height"])]
     if "rise" in style:

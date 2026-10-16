@@ -26,6 +26,7 @@
 
 #if defined(__linux__)
 #include <fcntl.h>
+#include <errno.h>
 #include <sched.h>
 #include <sys/mount.h>
 #include <sys/wait.h>
@@ -377,6 +378,43 @@ bool run_isolated(void (*fn)(IsolateReport *)) {
   }
   return true;
 }
+
+// Whether this process may enter the user and mount namespaces the isolated tests use to hide
+// the host's fonts. A container whose seccomp profile or user-namespace limit refuses unshare(2)
+// cannot run them, and a refusal there says nothing about the library, so such a test is
+// skipped with the reason. GHOTI_REQUIRE_NAMESPACES (set on the development host and on any gate
+// meant to run them) turns the skip into the failure it would otherwise hide.
+bool namespaces_usable(std::string * why) {
+  static int usable = -1;
+  if (std::getenv("GHOTI_REQUIRE_NAMESPACES")) {
+    return true;
+  }
+  if (usable < 0) {
+    pid_t pid = fork();
+    if (pid == 0) {
+      if (unshare(CLONE_NEWUSER | CLONE_NEWNS) == 0) {
+        _exit(0);
+      }
+      _exit(errno == EPERM || errno == EACCES || errno == ENOSYS || errno == EINVAL ? 42 : 43);
+    }
+    int status = 0;
+    usable = pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status)
+        && WEXITSTATUS(status) == 42 ? 0 : 1;
+  }
+  if (!usable && why) {
+    *why = "unshare(2) is refused here (a container's seccomp profile or user-namespace "
+           "limit); set GHOTI_REQUIRE_NAMESPACES=1 to make this a failure";
+  }
+  return usable != 0;
+}
+
+#define SKIP_WITHOUT_NAMESPACES()                \
+  do {                                           \
+    std::string namespaces_why_;                 \
+    if (!namespaces_usable(&namespaces_why_)) {  \
+      GTEST_SKIP() << namespaces_why_;           \
+    }                                            \
+  } while (0)
 
 struct IsolateCtx {
   std::string fixture;
@@ -961,6 +999,7 @@ TEST(Discover, BadArgs) {
 #if defined(__linux__)
 
 TEST(Discover, ScanDoesNotOpenHostFonts) {
+  SKIP_WITHOUT_NAMESPACES();
   TempTree tree;
   ASSERT_TRUE(tree.ok());
   ASSERT_TRUE(tree.mkdir_p("scan"));
@@ -976,6 +1015,7 @@ TEST(Discover, ScanDoesNotOpenHostFonts) {
 }
 
 TEST(Discover, System) {
+  SKIP_WITHOUT_NAMESPACES();
   TempTree tree;
   ASSERT_TRUE(tree.ok());
   ASSERT_TRUE(tree.mkdir_p("home/.local/share/fonts"));
@@ -997,6 +1037,7 @@ TEST(Discover, System) {
 }
 
 TEST(Discover, SystemUsesHomeWhenXdgDataHomeIsUnset) {
+  SKIP_WITHOUT_NAMESPACES();
   TempTree tree;
   ASSERT_TRUE(tree.ok());
   ASSERT_TRUE(tree.mkdir_p("home/.local/share/fonts"));
@@ -1015,6 +1056,7 @@ TEST(Discover, SystemUsesHomeWhenXdgDataHomeIsUnset) {
 }
 
 TEST(Discover, SystemListsHomeDotFonts) {
+  SKIP_WITHOUT_NAMESPACES();
   TempTree tree;
   ASSERT_TRUE(tree.ok());
   ASSERT_TRUE(tree.mkdir_p("home/.fonts"));
@@ -1030,6 +1072,7 @@ TEST(Discover, SystemListsHomeDotFonts) {
 }
 
 TEST(Discover, SystemDefaultDataDirs) {
+  SKIP_WITHOUT_NAMESPACES();
   TempTree tree;
   ASSERT_TRUE(tree.ok());
   ASSERT_TRUE(tree.mkdir_p("home"));
@@ -1043,6 +1086,7 @@ TEST(Discover, SystemDefaultDataDirs) {
 }
 
 TEST(Discover, SystemTwoDataDirs) {
+  SKIP_WITHOUT_NAMESPACES();
   TempTree tree;
   ASSERT_TRUE(tree.ok());
   ASSERT_TRUE(tree.mkdir_p("home"));
@@ -1062,6 +1106,7 @@ TEST(Discover, SystemTwoDataDirs) {
 }
 
 TEST(Discover, SystemDataDirsReplaceDefault) {
+  SKIP_WITHOUT_NAMESPACES();
   TempTree tree;
   ASSERT_TRUE(tree.ok());
   ASSERT_TRUE(tree.mkdir_p("home"));
@@ -1078,6 +1123,7 @@ TEST(Discover, SystemDataDirsReplaceDefault) {
 }
 
 TEST(Discover, SystemEmptyWhenDirectoriesAreAbsent) {
+  SKIP_WITHOUT_NAMESPACES();
   TempTree tree;
   ASSERT_TRUE(tree.ok());
   ASSERT_TRUE(tree.mkdir_p("home"));

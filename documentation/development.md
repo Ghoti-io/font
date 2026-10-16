@@ -69,6 +69,26 @@ rotted into matching nothing fails the build rather than reporting a clean tree.
 A gate that can only be trusted because someone once watched it fail is a gate
 whose sensitivity is a year out of date.
 
+### Tests that need a namespace
+
+Eight `Discover` tests (`tests/unit/test_discover.cpp`) call `unshare(2)` to enter a private user
+and mount namespace, so that they can hide the host's `/usr/share/fonts` and see what the system
+scan finds without it. A container whose seccomp profile or user-namespace limit refuses that call
+cannot run them, and the refusal says nothing about the library, so they **skip, with the reason**,
+rather than fail. Set `GHOTI_REQUIRE_NAMESPACES=1` and the skip becomes the failure it would
+otherwise hide: use it on the development host and on any gate meant to run them.
+
+On the EVO-X2 the build container is Docker's default, which refuses `unshare`. To run the eight
+there, pass the profile off for that job (our own code only, never untrusted input):
+
+```
+tools/evo run JOB --docker-arg --security-opt=seccomp=unconfined -- 'export GHOTI_REQUIRE_NAMESPACES=1; ...'
+```
+
+Measured 2026-10-16 on the box: without the flag `make test` exits 0 with the eight skipped; with
+the flag and `GHOTI_REQUIRE_NAMESPACES=1` it exits 0 with all eight passing; without the flag and
+with `GHOTI_REQUIRE_NAMESPACES=1` it exits 2 with all eight failing.
+
 ## Fuzzing
 
 The library is rebuilt with `-fsanitize=fuzzer-no-link` rather than linking the

@@ -27,9 +27,10 @@
  * documentation/design.md section 7.7. A TrueType font's hinting program refers
  * to a table of numbers in font units - stem widths, alignment heights - and a
  * variable font's `cvar` moves them with the same kind of tuples `gvar` moves
- * points with. This library has **no hinting interpreter**, so nothing here is
- * used to draw anything; it is the data, read exactly, for a caller that has an
- * interpreter of its own or wants to inspect the font.
+ * points with. The library's own TrueType hinting interpreter (hint.h, design
+ * section 8.5) reads these values when it hints a glyph; this header is the data
+ * itself, read exactly, for a caller that has an interpreter of its own or wants
+ * to inspect the font.
  *
  * Values are whole font units. A control value at a location is the default plus
  * the sum of every applicable tuple's delta, scaled and rounded **once**, a tie going

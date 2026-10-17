@@ -47,9 +47,12 @@
  * translation unit, because two IEEE-754 targets would agree about a float.
  *
  * What is deliberately absent (section 8.4): no LCD filtering, no stem
- * darkening, no dropout control, no embolden or oblique synthesis. And no
- * hinting anywhere (section 8.5): `ROUND_XY_TO_GRID` and the `gasp` advice are
- * read and ignored.
+ * darkening, no dropout control, no embolden or oblique synthesis. Hinting is
+ * not absent (section 8.5): it is on by default, so a TrueType outline is fitted
+ * to the pixel grid by the font's own instructions unless `hint_mode` is
+ * `GFNT_HINT_MODE_NONE` or the font's `gasp` table asks for no grid-fitting at
+ * the size. What is absent is an automatic hinter (`GFNT_HINT_MODE_AUTO` is
+ * reserved and refused) and any hinting of CFF, Type 1 or bitmap faces.
  */
 
 #ifndef GHOTI_IO_GFNT_RASTER_H

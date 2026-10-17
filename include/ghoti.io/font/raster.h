@@ -153,6 +153,12 @@ typedef struct GFNT_RasterOptions {
    */
   GFNT_HintMode hint_mode;
   GFNT_HintVersion hint_version;  ///< Which interpreter behaviour hinting runs under.
+  /**
+   * Where in a variable face's design space to render, or NULL for the default
+   * instance. Used by ::gfnt_face_render_glyph(), which loads and hints the glyph at it;
+   * ::gfnt_raster_outline() takes an outline already placed.
+   */
+  const GFNT_Variation * variation;
 } GFNT_RasterOptions;
 
 /**

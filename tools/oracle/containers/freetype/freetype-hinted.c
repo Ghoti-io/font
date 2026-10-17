@@ -1,7 +1,7 @@
 /*
  * FreeType's hinted outline for every glyph at a pixel size, as 26.6 integers.
  *
- * Usage: freetype-hinted <font> <face> <version> <ppem> <stride> <first> [target]
+ * Usage: freetype-hinted <font> <face> <version> <ppem> <stride> <first> [target [coords]]
  *
  *   version  35 or 40: the TrueType interpreter version FreeType is asked to run;
  *            0 asks for no hinting at all (the outline scaled and nothing else).
@@ -9,6 +9,8 @@
  *   stride   every nth glyph, from glyph `first`.
  *   target   normal (default), light, mono or lcd: the render target flag, which
  *            changes what a version 40 interpreter does.
+ *   coords   a comma-separated list of normalised axis coordinates in 2.14 (the
+ *            form this library's variations take), or `-` for the default instance.
  *
  * Prints, per glyph:
  *
@@ -31,6 +33,7 @@
 #include FT_FREETYPE_H
 #include FT_MODULE_H
 #include FT_OUTLINE_H
+#include FT_MULTIPLE_MASTERS_H
 
 int main(int argc, char ** argv) {
   FT_Library library;
@@ -42,6 +45,7 @@ int main(int argc, char ** argv) {
   long stride;
   long first;
   const char * target = argc > 7 ? argv[7] : "normal";
+  const char * coords = argc > 8 ? argv[8] : "-";
 
   if (argc < 7) {
     fprintf(stderr, "usage: %s <font> <face> <version> <ppem> <stride> <first> [target]\n",
@@ -75,6 +79,20 @@ int main(int argc, char ** argv) {
   if (FT_Set_Pixel_Sizes(face, 0, (FT_UInt)ppem)) {
     fprintf(stderr, "FT_Set_Pixel_Sizes failed\n");
     return 1;
+  }
+  if (strcmp(coords, "-") != 0) {
+    FT_Fixed blend[64];
+    unsigned count = 0;
+    char * end;
+
+    for (const char * c = coords; *c && count < 64; ) {
+      blend[count++] = (FT_Fixed)strtol(c, &end, 10) * 4;   /* 2.14 to 16.16 */
+      c = *end == ',' ? end + 1 : end;
+    }
+    if (FT_Set_Var_Blend_Coordinates(face, count, blend)) {
+      fprintf(stderr, "FT_Set_Var_Blend_Coordinates failed\n");
+      return 1;
+    }
   }
   flags = FT_LOAD_NO_BITMAP | FT_LOAD_NO_AUTOHINT;
   if (version == 0) {

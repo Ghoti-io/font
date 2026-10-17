@@ -512,6 +512,7 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         NEED(1);
         selector = TOP();
         if (selector & 1) result |= ctx->params.version;
+        if ((selector & 8) && ctx->params.axis_count) result |= 1 << 10;  /* a variable face */
         /* The size of the answer for each question is FreeType's: the chapter's
            table names the bits, and which of them a renderer sets is its own. */
         if (ctx->params.version >= 40) {
@@ -676,6 +677,13 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
 
       default: {
         size_t i;
+        if (op == 0x91 && ctx->params.axis_count) { /* GETVARIATION: one value per axis */
+          ROOM(ctx->params.axis_count);
+          for (size_t a = 0; a < ctx->params.axis_count; ++a) {
+            PUSH(a < ctx->params.coord_count ? (int32_t)ctx->params.coords[a] : 0);
+          }
+          break;
+        }
         if (gfnt_hint_is_point_op(op)) {
           failure = gfnt_hint_point_op(run, op, current);
           if (failure != GFNT_HINT_OK) goto fault;

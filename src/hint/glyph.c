@@ -39,6 +39,8 @@
 
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/outline.h>
+#include "../var/gvar.h"
+#include "../var/metvar.h"
 #include "../glyf/glyf.h"
 #include "../outline/outline.h"
 #include "../core/chain.h"
@@ -136,11 +138,114 @@ static GFNT_Result gfnt_hint_metrics(const GFNT_Face * face, uint32_t glyph,
   return r;
 }
 
+/* A `gvar` delta (font units with GFNT_GVAR_FRACTION_BITS fractional bits) to 16.16
+   font units, rounded half up. */
+static int32_t gfnt_hint_delta_fixed(int64_t delta) {
+  int64_t v = (delta + ((int64_t)1 << (GFNT_GVAR_FRACTION_BITS - 17))) >> (GFNT_GVAR_FRACTION_BITS - 16);
+
+  return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int32_t)v;
+}
+
+/* Whole font units from 16.16, rounded half up: -3.5 is -3. */
+static int32_t gfnt_hint_fixed_units(int32_t v) {
+  return (int32_t)(((int64_t)v + 0x8000) >> 16);
+}
+
+/* The bias, in 26.6 units of 16.16 (so 0x240 is 0.0088 of one 26.6 unit), that a scaled
+   position of a moved point carries before it is rounded. It is not in any specification:
+   the reference's positions for a variable instance behave as if rounded with it, which
+   was fitted to 57,802 points of random instances and agrees on all but 0.12% of them
+   (those are off by one 26.6 unit, at a value within a few thousandths of a half). */
+#define GFNT_HINT_VARIATION_BIAS 0x240
+
+/* A position in font units with a 16.16 delta, to 26.6 pixels: the sum is scaled and not
+   its rounded parts, as the reference does for a variable font's moved points. */
+static int32_t gfnt_hint_scaled_fixed(const GFNT_HintContext * ctx, int32_t units, int32_t delta16) {
+  int64_t u16 = ((int64_t)units << 16) + delta16;
+  int64_t v = (u16 * ctx->scale + ((int64_t)1 << 31) + ((int64_t)GFNT_HINT_VARIATION_BIAS << 16)) >> 32;
+
+  return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int32_t)v;
+}
+
+/* How far the first two phantom points move at the context's location, 16.16 font units.
+   A face whose `HVAR` states an advance variation takes it from there; otherwise `gvar`
+   carries the phantom points' deltas with the glyph's own. @p gvar_left and @p gvar_right
+   are those, and are what stand when `HVAR` has nothing to say. */
+static void gfnt_hint_phantom_moves(const GFNT_Face * face, const GFNT_HintContext * ctx,
+    uint32_t glyph, int32_t gvar_left, int32_t gvar_right, int32_t * left, int32_t * right) {
+  const GFNT_Variation * v = gfnt_hint_ctx_variation(ctx);
+  int64_t advance = 0;
+  int64_t bearing = 0;
+  GFNT_Error scratch;
+
+  *left = gvar_left;
+  *right = gvar_right;
+  if (!v || !gfnt_face_has_table(face, GFNT_TAG_HVAR)) return;
+  if (gfnt_hvar_delta(face, glyph, GFNT_HVAR_ADVANCE, v->coords, v->count, &advance, &scratch)
+      != GFNT_OK) {
+    return;
+  }
+  *left = 0;
+  if (gfnt_hvar_delta(face, glyph, GFNT_HVAR_LEFT_BEARING, v->coords, v->count, &bearing,
+      &scratch) == GFNT_OK) {
+    *left = -gfnt_hint_delta_fixed(bearing);
+  }
+  *right = *left + gfnt_hint_delta_fixed(advance);
+}
+
+/* What `gvar` does to a simple glyph at the context's location, in 16.16 font units:
+   @p dx and @p dy each hold the glyph's points and then its four phantom points. Zero
+   everywhere when the context is not at a location or the face has no `gvar`. */
+static GFNT_Result gfnt_hint_vary(const GFNT_Face * face, const GFNT_HintContext * ctx,
+    uint32_t glyph, size_t count, const int32_t * x, const int32_t * y,
+    const size_t * ends, size_t contours, int32_t * dx, int32_t * dy, GFNT_Error * error) {
+  const GFNT_Allocator * a = face->allocator;
+  const GFNT_Variation * variation = gfnt_hint_ctx_variation(ctx);
+  GFNT_GvarPoints points = {0};
+  size_t total = count + GFNT_GVAR_PHANTOM_POINTS;
+  int64_t * wide;
+  size_t * past;
+  GFNT_Result r;
+
+  memset(dx, 0, total * sizeof *dx);
+  memset(dy, 0, total * sizeof *dy);
+  if (!variation || !gfnt_face_has_table(face, GFNT_TAG_GVAR)) return GFNT_OK;
+  wide = a->calloc_fn(a->ctx, total * 2u, sizeof *wide);
+  past = a->calloc_fn(a->ctx, contours ? contours : 1u, sizeof *past);
+  if (!wide || !past) {
+    if (wide) a->free_fn(a->ctx, wide);
+    if (past) a->free_fn(a->ctx, past);
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_GVAR, 0, glyph,
+        "no memory for a glyph's variation deltas");
+  }
+  for (size_t c = 0; c < contours; ++c) past[c] = ends[c] + 1u;
+  points.count = count;
+  points.x = x;
+  points.y = y;
+  points.contour_ends = past;
+  points.contour_count = contours;
+  points.fixed_interpolation = true;
+  r = gfnt_gvar_glyph_deltas(face, glyph, variation->coords, variation->count, &points,
+      wide, wide + total, error);
+  if (r == GFNT_OK) {
+    for (size_t i = 0; i < total; ++i) {
+      dx[i] = gfnt_hint_delta_fixed(wide[i]);
+      dy[i] = gfnt_hint_delta_fixed(wide[total + i]);
+    }
+  }
+  a->free_fn(a->ctx, wide);
+  a->free_fn(a->ctx, past);
+  return r;
+}
+
 static void gfnt_hint_set_phantoms(const GFNT_HintContext * ctx, int32_t x_min,
-    int32_t bearing, int32_t advance, GFNT_HintPoint pp[4]) {
-  pp[0].x = gfnt_hint_scaled(ctx, x_min - bearing);
+    int32_t bearing, int32_t advance, int32_t d0, int32_t d1, GFNT_HintPoint pp[4]) {
+  bool varied = gfnt_hint_ctx_variation(ctx) != NULL;
+
+  pp[0].x = varied ? gfnt_hint_scaled_fixed(ctx, x_min - bearing, d0) : gfnt_hint_scaled(ctx, x_min - bearing);
   pp[0].y = 0;
-  pp[1].x = gfnt_hint_scaled(ctx, x_min - bearing + advance);
+  pp[1].x = varied ? gfnt_hint_scaled_fixed(ctx, x_min - bearing + advance, d1)
+               : gfnt_hint_scaled(ctx, x_min - bearing + advance);
   pp[1].y = 0;
   pp[2].x = pp[2].y = 0;
   pp[3].x = pp[3].y = 0;
@@ -164,12 +269,16 @@ static GFNT_Result gfnt_hint_simple(GFNT_HintWalk * w, uint32_t glyph, bool top,
   GFNT_HintGlyphInput input;
   int32_t * x = NULL;
   int32_t * y = NULL;
+  int32_t * org_x = NULL;      /* scaled originals where a variable font's deltas are fractional */
+  int32_t * org_y = NULL;
   uint8_t * on = NULL;
   size_t * ends = NULL;
   size_t n;
   int32_t x_min = 0;
   int32_t bearing = 0;
   int32_t advance = 0;
+  int32_t pd0 = 0;             /* the first two phantom points' 16.16 deltas */
+  int32_t pd1 = 0;
   bool hinted = false;
   GFNT_Result r;
 
@@ -203,6 +312,38 @@ static GFNT_Result gfnt_hint_simple(GFNT_HintWalk * w, uint32_t glyph, bool top,
   x[n - 4u] = x_min - bearing;
   x[n - 3u] = x_min - bearing + advance;
   for (size_t i = n - 4u; i < n; ++i) on[i] = 1;
+  if (gfnt_hint_ctx_variation(ctx)) {
+    int32_t * dx = a->calloc_fn(a->ctx, n * 2u, sizeof *dx);
+
+    org_x = a->calloc_fn(a->ctx, n, sizeof *org_x);
+    org_y = a->calloc_fn(a->ctx, n, sizeof *org_y);
+    if (!dx || !org_x || !org_y) {
+      if (dx) a->free_fn(a->ctx, dx);
+      r = GFNT_ERR_OOM;
+      goto done;
+    }
+    r = gfnt_hint_vary(w->face, ctx, glyph, units->point_count, x, y, ends,
+        units->contour_count, dx, dx + n, w->error);
+    if (r == GFNT_OK) {
+      gfnt_hint_phantom_moves(w->face, ctx, glyph, dx[n - 4u], dx[n - 3u], &pd0, &pd1);
+      dx[n - 4u] = pd0;
+      dx[n - 3u] = pd1;
+      for (size_t i = 0; i < n; ++i) {
+        int32_t d_x = dx[i];
+        int32_t d_y = dx[n + i];
+
+        /* Only the first two phantom points have a horizontal delta here; the vertical
+           ones are not derived from vertical metrics. */
+        if (i >= n - 2u) d_x = d_y = 0;
+        org_x[i] = gfnt_hint_scaled_fixed(ctx, x[i], d_x);
+        org_y[i] = gfnt_hint_scaled_fixed(ctx, y[i], d_y);
+        x[i] += gfnt_hint_fixed_units(d_x);
+        y[i] += gfnt_hint_fixed_units(d_y);
+      }
+    }
+    a->free_fn(a->ctx, dx);
+    if (r != GFNT_OK) goto done;
+  }
 
   /* Program present or not, the glyph goes through the same run, since that is
      where the phantom points are placed and the origin is found. */
@@ -214,6 +355,8 @@ static GFNT_Result gfnt_hint_simple(GFNT_HintWalk * w, uint32_t glyph, bool top,
     input.contour_count = units->contour_count;
     input.ends = ends;
     input.pixels = false;
+    input.org_x = org_x;
+    input.org_y = org_y;
     r = gfnt_hint_run_glyph(ctx, &input, program, program_length, &run);
     if (r == GFNT_ERR_OOM) goto done;
     if (r == GFNT_OK) {
@@ -264,7 +407,7 @@ static GFNT_Result gfnt_hint_simple(GFNT_HintWalk * w, uint32_t glyph, bool top,
     }
   }
   else {
-    gfnt_hint_set_phantoms(ctx, x_min, bearing, advance, out->phantom);
+    gfnt_hint_set_phantoms(ctx, x_min, bearing, advance, pd0, pd1, out->phantom);
     out->advance = gfnt_hint_grid(gfnt_hint_sub(out->phantom[1].x, out->phantom[0].x));
   }
   r = GFNT_OK;
@@ -274,6 +417,8 @@ done:
   gfnt_outline_destroy(units);
   if (x) a->free_fn(a->ctx, x);
   if (y) a->free_fn(a->ctx, y);
+  if (org_x) a->free_fn(a->ctx, org_x);
+  if (org_y) a->free_fn(a->ctx, org_y);
   if (on) a->free_fn(a->ctx, on);
   if (ends) a->free_fn(a->ctx, ends);
   return r;
@@ -315,6 +460,8 @@ static GFNT_Result gfnt_hint_composite_body(GFNT_HintWalk * w, uint32_t glyph, s
   bool borrowed = false;           /* USE_MY_METRICS supplied the phantom points */
   GFNT_HintPoint borrowed_pp[4];
   int32_t borrowed_advance = 0;
+  int32_t pd0 = 0;
+  int32_t pd1 = 0;
   GFNT_Result r;
 
   (void)top;
@@ -324,6 +471,31 @@ static GFNT_Result gfnt_hint_composite_body(GFNT_HintWalk * w, uint32_t glyph, s
   here.parent = chain;
   here.glyph = glyph;
   out->allocator = a;
+  if (gfnt_hint_ctx_variation(ctx) && gfnt_face_has_table(w->face, GFNT_TAG_GVAR)) {
+    /* gvar moves a composite's component offsets, and its first two phantom points. */
+    size_t total = component_count + GFNT_GVAR_PHANTOM_POINTS;
+    int64_t * wide = a->calloc_fn(a->ctx, total * 2u, sizeof *wide);
+    GFNT_GvarPoints points = {0};
+    const GFNT_Variation * v = gfnt_hint_ctx_variation(ctx);
+
+    if (!wide) return GFNT_ERR_OOM;
+    points.count = component_count;
+    r = gfnt_gvar_glyph_deltas(w->face, glyph, v->coords, v->count, &points, wide, wide + total,
+        w->error);
+    if (r != GFNT_OK) {
+      a->free_fn(a->ctx, wide);
+      return r;
+    }
+    for (size_t k = 0; k < component_count; ++k) {
+      if (components[k].flags & GFNT_GLYF_ARGS_ARE_XY) {
+        components[k].delta_x = gfnt_hint_delta_fixed(wide[k]);
+        components[k].delta_y = gfnt_hint_delta_fixed(wide[total + k]);
+      }
+    }
+    gfnt_hint_phantom_moves(w->face, ctx, glyph, gfnt_hint_delta_fixed(wide[component_count]),
+        gfnt_hint_delta_fixed(wide[component_count + 1u]), &pd0, &pd1);
+    a->free_fn(a->ctx, wide);
+  }
 
   for (size_t k = 0; k < component_count; ++k) {
     const GFNT_GlyfComponent * c = &components[k];
@@ -353,8 +525,9 @@ static GFNT_Result gfnt_hint_composite_body(GFNT_HintWalk * w, uint32_t glyph, s
       }
     }
     if (c->flags & GFNT_GLYF_ARGS_ARE_XY) {
-      int32_t ox = c->arg1;
-      int32_t oy = c->arg2;
+      /* gvar moves the offset in whole font units, rounded half up. */
+      int32_t ox = c->arg1 + gfnt_hint_fixed_units(c->delta_x);
+      int32_t oy = c->arg2 + gfnt_hint_fixed_units(c->delta_y);
 
       /* A scaled offset is scaled by the component's transform in font units, and
          only then to pixels: the two roundings happen in that order. */
@@ -410,7 +583,7 @@ static GFNT_Result gfnt_hint_composite_body(GFNT_HintWalk * w, uint32_t glyph, s
     memcpy(out->phantom, borrowed_pp, sizeof borrowed_pp);
   }
   else {
-    gfnt_hint_set_phantoms(ctx, x_min, bearing, advance, out->phantom);
+    gfnt_hint_set_phantoms(ctx, x_min, bearing, advance, pd0, pd1, out->phantom);
   }
   out->advance = borrowed ? borrowed_advance
       : gfnt_hint_grid(gfnt_hint_sub(out->phantom[1].x, out->phantom[0].x));
@@ -446,6 +619,7 @@ static GFNT_Result gfnt_hint_composite_body(GFNT_HintWalk * w, uint32_t glyph, s
     input.contour_count = out->end_count;
     input.ends = out->ends;
     input.pixels = true;
+    input.org_x = input.org_y = NULL;
     r = gfnt_hint_run_glyph(ctx, &input, program, program_length, &run);
     if (r == GFNT_OK) {
       for (size_t i = 0; i < out->count; ++i) {

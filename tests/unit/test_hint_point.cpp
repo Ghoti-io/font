@@ -104,7 +104,7 @@ struct Hinted {
     ends = std::move(contour_ends);
     program = std::move(code);
     GFNT_HintGlyphInput input{xs.size(), xs.data(), ys.data(), on.data(),
-        ends.size(), ends.data(), false};
+        ends.size(), ends.data(), false, nullptr, nullptr};
     result = gfnt_hint_run_glyph(ctx, &input, program.data(), program.size(), &run);
   }
   ~Hinted() {
@@ -355,7 +355,7 @@ TEST(HintPoint, ThePhantomPointsAreRoundedWhereTheyAreAndNotWhereTheyBegan) {
   int32_t ys[5] = {0, 0, 0, 0, 0};
   uint8_t on[5] = {1, 1, 1, 1, 1};
   size_t ends[1] = {0};
-  GFNT_HintGlyphInput input{5, xs, ys, on, 1, ends, false};
+  GFNT_HintGlyphInput input{5, xs, ys, on, 1, ends, false, nullptr, nullptr};
   // Point 2 is the advance phantom point (index count - 3). SVTCA x, SRP2 = 2
   // (zp1), SHP[0] on point 0 shifts it by (cur - org) of point 2.
   Bytes code = cat({op({SVTCA_X}), push({2}), op({SRP2}), push({0}), op({SHP0})});

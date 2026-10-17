@@ -10,7 +10,7 @@
 # published by the Free Software Foundation.
 """Generate TrueType fonts whose glyphs run small random hinting programs.
 
-    hint_probe_font.py <out-dir> <seed> <fonts> <glyphs-per-font> [max-steps] [axis|any] [composites]
+    hint_probe_font.py <out-dir> <seed> <fonts> <glyphs-per-font> [max-steps] [axis|any] [composites] [variable|variable-empty|variable-hvar]
 
 Run inside the fontTools image, for hint_probe_diff.py. A hand-written glyph
 program exercises what its author thought of; a random program of valid
@@ -21,7 +21,9 @@ index is inside the glyph, every control value index inside the table, so a
 difference is a difference in what an instruction means and not in how a
 malformed program is tolerated (that is a separate comparison).
 
-The fonts are written to <out-dir>/probe-<seed>-<n>.ttf.
+The fonts are written to <out-dir>/probe-<seed>-<n>.ttf. With `variable`, each also has
+one weight axis, random `gvar` deltas on every glyph (some left to interpolate) and
+random `cvar` deltas on the control values.
 """
 
 import os
@@ -53,8 +55,12 @@ class Maker:
     def cvt(self):
         return self.rng.randrange(CVT)
 
+    empty = False
+
     def program(self, steps):
         r = self.rng
+        if self.empty:
+            return []
         asm = []
         # Setup: vectors, reference points, rounding.
         asm.append(r.choice(["SVTCA[0]", "SVTCA[1]", "SVTCA[0]", "SVTCA[1]"]))
@@ -147,7 +153,67 @@ class Maker:
         return [push([r.randrange(-9000, 9000), r.randrange(-9000, 9000)]), r.choice(["SPVFS[ ]", "SFVFS[ ]"])]
 
 
-def make_font(rng, path, glyph_count, steps, oblique=True, composites=0):
+HVAR = [False]
+
+
+def add_variation(rng, fb, order, glyphs, glyph_count, cvt, hvar=False):
+    """One weight axis; deltas for every glyph on both sides of the default."""
+    from fontTools.ttLib import newTable
+    from fontTools.ttLib.tables.TupleVariation import TupleVariation
+
+    fb.setupFvar(axes=[("wght", 100, 400, 900, "Weight")], instances=[])
+    gvar = {}
+    for index, name in enumerate(order):
+        glyph = glyphs[name]
+        count = len(glyph.components) if glyph.isComposite() else POINTS
+        tuples = []
+        for peak in ("up", "down"):
+            deltas = []
+            for i in range(count):
+                if not glyph.isComposite() and rng.random() < 0.25:
+                    deltas.append(None)       # left for interpolation
+                else:
+                    deltas.append((rng.randrange(-70, 71), rng.randrange(-70, 71)))
+            if not glyph.isComposite() and all(d is None for d in deltas):
+                deltas[0] = (3, -2)
+            phantoms = [(rng.randrange(-40, 41), 0), (rng.randrange(-40, 41), 0), (0, 0), (0, 0)]
+            axis = {"wght": (0, 1, 1)} if peak == "up" else {"wght": (-1, -1, 0)}
+            tuples.append(TupleVariation(axis, deltas + phantoms))
+        gvar[name] = tuples
+    fb.setupGvar(gvar)
+    cvar = newTable("cvar")
+    cvar.version = 1
+    cvar.variations = []
+    for axis in ({"wght": (0, 1, 1)}, {"wght": (-1, -1, 0)}):
+        cvar.variations.append(TupleVariation(axis, [
+            rng.randrange(-60, 61) if rng.random() < 0.7 else None for _ in range(CVT)]))
+    fb.font["cvar"] = cvar
+    if hvar:
+        add_hvar(rng, fb, order)
+
+
+def add_hvar(rng, fb, order):
+    """An `HVAR` giving every glyph an advance delta (no side bearing mapping), so that a
+    face has two sources for its advance and the hinter has to pick the right one."""
+    from fontTools.ttLib import newTable
+    from fontTools.ttLib.tables import otTables as ot
+    from fontTools.varLib import builder
+
+    supports = [{"wght": (0, 1, 1)}, {"wght": (-1, -1, 0)}]
+    region_list = builder.buildVarRegionList(supports, ["wght"])
+    data = builder.buildVarData([0, 1], [[rng.randrange(-60, 61), rng.randrange(-60, 61)] for _ in order], optimize=False)
+    store = builder.buildVarStore(region_list, [data])
+    table = newTable("HVAR")
+    table.table = ot.HVAR()
+    table.table.Version = 0x00010000
+    table.table.VarStore = store
+    table.table.AdvWidthMap = None
+    table.table.LsbMap = None
+    table.table.RsbMap = None
+    fb.font["HVAR"] = table
+
+
+def make_font(rng, path, glyph_count, steps, oblique=True, composites=0, variable=False):
     upem = rng.choice([1000, 2048])
     maker = Maker(rng, upem, oblique)
     order = [".notdef"] + ["g%d" % i for i in range(1, glyph_count + composites)]
@@ -232,6 +298,8 @@ def make_font(rng, path, glyph_count, steps, oblique=True, composites=0):
     maxp.maxInstructionDefs = 0
     maxp.maxStackElements = 512
     maxp.maxSizeOfInstructions = 1024
+    if variable:
+        add_variation(rng, fb, order, glyphs, glyph_count, ttCvt, HVAR[0])
     fb.save(path)
     import json
     with open(path + ".json", "w") as handle:
@@ -244,10 +312,13 @@ def main(argv):
     steps = int(argv[5]) if len(argv) > 5 else 8
     oblique = not (len(argv) > 6 and argv[6] == "axis")
     composites = int(argv[7]) if len(argv) > 7 else 0
+    variable = len(argv) > 8 and argv[8].startswith("variable")
+    HVAR[0] = len(argv) > 8 and argv[8].endswith("-hvar")
+    Maker.empty = len(argv) > 8 and argv[8] == "variable-empty"
     os.makedirs(out, exist_ok=True)
     for n in range(fonts):
         rng = random.Random(seed * 100003 + n)
-        make_font(rng, os.path.join(out, "probe-%d-%d.ttf" % (seed, n)), glyphs, steps, oblique, composites)
+        make_font(rng, os.path.join(out, "probe-%d-%d.ttf" % (seed, n)), glyphs, steps, oblique, composites, variable)
     return 0
 
 

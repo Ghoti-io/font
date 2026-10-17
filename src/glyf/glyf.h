@@ -65,6 +65,8 @@ typedef struct GFNT_GlyfComponent {
   GFNT_F16Dot16 xy;
   GFNT_F16Dot16 yx;    ///< y' = yx*x + yy*y.
   GFNT_F16Dot16 yy;
+  int32_t delta_x;     ///< Not read from the file: a hinter's 16.16 offset delta (`gvar`), 0 as read.
+  int32_t delta_y;
 } GFNT_GlyfComponent;
 
 /**

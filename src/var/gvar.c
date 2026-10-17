@@ -504,6 +504,148 @@ static void gfnt_gvar_infer(const GFNT_GvarPoints * points, const uint8_t * have
   }
 }
 
+
+/* 16.16 multiply and divide, rounding half away from zero. */
+static int64_t gfnt_gvar_mulfix(int64_t a, int64_t b) {
+  int64_t m = a < 0 ? -a : a;
+  int64_t n = b < 0 ? -b : b;
+  int64_t r = (m * n + 0x8000) >> 16;
+
+  return ((a < 0) != (b < 0)) ? -r : r;
+}
+
+static int64_t gfnt_gvar_divfix(int64_t a, int64_t b) {
+  int64_t m = a < 0 ? -a : a;
+  int64_t n = b < 0 ? -b : b;
+  int64_t r = n ? ((m << 16) + (n >> 1)) / n : 0x7FFFFFFF;
+
+  return ((a < 0) != (b < 0)) ? -r : r;
+}
+
+/*
+ * One run of untouched points between two touched ones, along one axis, in 16.16.
+ *
+ * @p coord is the contour's original coordinates in font units and @p delta how far
+ * each point has moved, 16.16; both indexed from the contour's first point. A point's
+ * original place is its coordinate and its current place is that plus its delta.
+ */
+static void gfnt_gvar_interpolate_fixed(size_t p1, size_t p2, size_t ref1, size_t ref2,
+    const int32_t * coord, int64_t * delta) {
+  int64_t org1;
+  int64_t org2;
+  int64_t cur1;
+  int64_t cur2;
+  int64_t delta1;
+  int64_t delta2;
+  int64_t scale = 0;
+  bool scale_valid = false;
+
+  if (p1 > p2) {
+    return;
+  }
+  if (coord[ref1] > coord[ref2]) {
+    size_t swap = ref1;
+
+    ref1 = ref2;
+    ref2 = swap;
+  }
+  org1 = (int64_t)coord[ref1] << 16;
+  org2 = (int64_t)coord[ref2] << 16;
+  delta1 = delta[ref1];
+  delta2 = delta[ref2];
+  cur1 = org1 + delta1;
+  cur2 = org2 + delta2;
+  for (size_t i = p1; i <= p2; ++i) {
+    int64_t org = (int64_t)coord[i] << 16;
+    int64_t x = org;
+
+    if (org1 == org2) {
+      /* Both ends at one coordinate: they agree about the move or there is none. */
+      x = delta1 == delta2 ? x + delta1 : x;
+    }
+    else if (cur1 == cur2) {
+      x = x <= org1 ? x + delta1 : x >= org2 ? x + delta2 : cur1;
+    }
+    else if (x <= org1) {
+      x += delta1;
+    }
+    else if (x >= org2) {
+      x += delta2;
+    }
+    else {
+      if (!scale_valid) {
+        scale_valid = true;
+        scale = gfnt_gvar_divfix(cur2 - cur1, org2 - org1);
+      }
+      x = cur1 + gfnt_gvar_mulfix(x - org1, scale);
+    }
+    delta[i] = x - org;
+  }
+}
+
+/*
+ * ::gfnt_gvar_infer() in 16.16 fixed point, in the order a reference interpreter
+ * visits the points: the runs between touched points in index order, then the one
+ * that wraps round the contour's end.
+ */
+static void gfnt_gvar_infer_fixed(const GFNT_GvarPoints * points, const uint8_t * have,
+    int64_t * dx, int64_t * dy) {
+  size_t first = 0;
+
+  for (size_t c = 0; c < points->contour_count; ++c) {
+    size_t last = points->contour_ends[c];  // one past
+    size_t n = last - first;
+
+    for (int axis = 0; axis < 2; ++axis) {
+      const int32_t * coord = (axis == 0 ? points->x : points->y) + first;
+      int64_t * delta = (axis == 0 ? dx : dy) + first;
+      const uint8_t * named = have + first;
+      size_t ft = n;
+      size_t prev;
+
+      for (size_t i = 0; i < n; ++i) {
+        if (named[i]) {
+          ft = i;
+          break;
+        }
+      }
+      if (ft == n) {
+        continue;       // nothing named: nothing moves
+      }
+      /* From 24 fractional bits to 16, for the named points. */
+      for (size_t i = 0; i < n; ++i) {
+        delta[i] = named[i] ? (delta[i] + 128) >> 8 : 0;
+      }
+      prev = ft;
+      for (size_t j = ft + 1; j < n; ++j) {
+        if (!named[j]) {
+          continue;
+        }
+        gfnt_gvar_interpolate_fixed(prev + 1, j - 1, prev, j, coord, delta);
+        prev = j;
+      }
+      if (prev == ft) {
+        /* One touched point: the others move with it. */
+        for (size_t i = 0; i < n; ++i) {
+          if (i != ft) {
+            delta[i] = delta[ft];
+          }
+        }
+      }
+      else {
+        gfnt_gvar_interpolate_fixed(prev + 1, n - 1, prev, ft, coord, delta);
+        if (ft > 0) {
+          gfnt_gvar_interpolate_fixed(0, ft - 1, prev, ft, coord, delta);
+        }
+      }
+      for (size_t i = 0; i < n; ++i) {
+        delta[i] *= 256;
+      }
+    }
+    first = last;
+  }
+}
+
 GFNT_Result gfnt_gvar_glyph_deltas(const GFNT_Face * face, uint32_t glyph,
     const GFNT_F2Dot14 * coordinates, size_t coordinate_count,
     const GFNT_GvarPoints * points, int64_t * out_x, int64_t * out_y,
@@ -750,7 +892,12 @@ GFNT_Result gfnt_gvar_glyph_deltas(const GFNT_Face * face, uint32_t glyph,
       spread_y[point] = (int64_t)tuple_dy[i] * scalar;
     }
     if (points->x && points->y && points->contour_ends) {
-      gfnt_gvar_infer(points, have, spread_x, spread_y);
+      if (points->fixed_interpolation) {
+        gfnt_gvar_infer_fixed(points, have, spread_x, spread_y);
+      }
+      else {
+        gfnt_gvar_infer(points, have, spread_x, spread_y);
+      }
     }
     for (size_t i = 0; i < total; ++i) {
       acc_x[i] += spread_x[i];

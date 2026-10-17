@@ -328,7 +328,7 @@ static GFNT_Result gfnt_glyf_vary_simple(const GFNT_Face * face, uint32_t glyph,
     size_t point_count, size_t first_contour, size_t contour_count,
     GFNT_Error * error) {
   const GFNT_Allocator * allocator = face->allocator;
-  GFNT_GvarPoints points;
+  GFNT_GvarPoints points = {0};
   int32_t * original = NULL;
   int64_t * delta = NULL;
   size_t * ends = NULL;
@@ -694,7 +694,7 @@ static GFNT_Result gfnt_glyf_vary_composite(const GFNT_Face * face,
     int64_t ** out_deltas, size_t * out_count, GFNT_Error * error) {
   const GFNT_Allocator * allocator = face->allocator;
   GFNT_Reader scan = *reader;
-  GFNT_GvarPoints points;
+  GFNT_GvarPoints points = {0};
   GFNT_Component component;
   size_t count = 0;
   size_t total;
@@ -997,6 +997,8 @@ GFNT_Result gfnt_glyf_components(const GFNT_Face * face, uint32_t glyph,
       out[count].xy = component.xy;
       out[count].yx = component.yx;
       out[count].yy = component.yy;
+      out[count].delta_x = 0;
+      out[count].delta_y = 0;
     }
     ++count;
     if (!(component.flags & GFNT_GLYF_MORE_COMPONENTS)) {
@@ -1121,7 +1123,7 @@ GFNT_Result gfnt_glyf_phantom_deltas_all(const GFNT_Face * face, uint32_t glyph,
     int64_t * out_top_y, int64_t * out_bottom_y, GFNT_Error * error) {
   const GFNT_Allocator * allocator = face->allocator;
   GFNT_Reader reader;
-  GFNT_GvarPoints points;
+  GFNT_GvarPoints points = {0};
   GFNT_Component component;
   bool empty = false;
   int16_t contours = 0;

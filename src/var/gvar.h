@@ -70,6 +70,15 @@ extern "C" {
  */
 #define GFNT_GVAR_FRACTION_BITS 24
 
+/**
+ * ::gfnt_face_cvt_values() for the hinting interpreter: a `cvar` delta becomes whole font
+ * units the way the reference interpreter's arithmetic does (a floor with a small bias),
+ * not by ::GFNT_Variation.delta_rounding.
+ */
+GFNT_Result gfnt_face_cvt_values_interpreter(const GFNT_Face * face,
+    const GFNT_Variation * variation, int32_t * out_values, size_t capacity,
+    GFNT_Error * error);
+
 /** @brief Bytes in the `gvar` header before its offset array. */
 #define GFNT_GVAR_HEADER_BYTES 20u
 
@@ -124,6 +133,13 @@ typedef struct GFNT_GvarPoints {
    */
   const size_t * contour_ends;
   size_t contour_count;
+  /**
+   * Infer a point a tuple does not name in 16.16 fixed point, the way a hinting
+   * interpreter that must agree with FreeType does: each proportion is a 16.16
+   * ratio, so an inferred delta can differ from the exact one by a few thousandths of
+   * a font unit. False takes the exact rational.
+   */
+  bool fixed_interpolation;
 } GFNT_GvarPoints;
 
 /**

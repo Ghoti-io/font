@@ -1394,8 +1394,23 @@ over the assembled points, with their hinted places as their originals. The
 advance reported for a hinted glyph is the distance between its first two phantom
 points, rounded to a whole pixel; the outline is shifted so the first lies at zero.
 
-Variable fonts, the original (version 35) behaviour of `GETINFO`'s remaining bits,
-and the vertical phantom points are not built yet.
+**Variable fonts.** A `GFNT_HintContext` is made at a location (`gfnt_hint_context_create()`'s
+`variation`, or `GFNT_RasterOptions::variation`). Its control values come with `cvar`
+applied; `GETVARIATION` answers with the location and `GETINFO` reports a variable face
+(bit 10 for selector 8); a glyph's points, a composite's component offsets and the first
+two phantom points are moved by `gvar` before the program runs, and the advance comes
+from `HVAR` when the face has one. A face asked for with no location is, to the
+interpreter, not variable. The positions are held to FreeType's with a stated bound,
+and not point for point: it adds a delta in 16.16 fixed point and scales the sum, which
+this follows (inferred deltas are 16.16 interpolations, not exact ratios, and a moved
+point is scaled with a small bias before it is rounded), but its last rounding is not
+fully reproduced, so about one point in a thousand lands a 26.6 unit away from where it
+puts it, always at a value within a hundredth of a rounding boundary. `make
+check-oracle-hint-variable` accepts that one unit and nothing more, and reports how many
+points used it; every other comparison is exact.
+
+The original (version 35) behaviour of `GETINFO`'s remaining bits and the vertical
+phantom points are not built yet.
 
 ---
 

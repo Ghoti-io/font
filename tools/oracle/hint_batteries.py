@@ -62,8 +62,9 @@ def compare(name, spec, versions=("35", "40"), ppem=10, label=None):
     font = build(name, spec)
     bad = []
     for version in versions:
-        mine, _ = hint_diff.ours(font, int(version), ppem, 1)
-        yours, _ = hint_diff.theirs(font, int(version), ppem, 1)
+        coords = spec.get("coords", "-")
+        mine, _ = hint_diff.ours(font, int(version), ppem, 1, coords)
+        yours, _ = hint_diff.theirs(font, int(version), ppem, 1, coords)
         if mine is None or yours is None:
             return [("driver failed", version)]
         for index, case in enumerate(spec["cases"]):
@@ -182,6 +183,52 @@ def environment():
         tests.append(["PUSH[ ] %d" % sel, "GETINFO[ ]"])
     cases = [case([[0, 0, 1], [10, 10, 1]], ["SVTCA[0]"] + t + ["PUSH[ ] 0", "SWAP[ ]", "SCFS[ ]"]) for t in tests]
     return {"upem": 640, "cases": cases}, ("35", "40"), 12
+
+
+def variation():
+    """What a variable face's interpreter is told: GETVARIATION's values and order, and GETINFO's variation bit."""
+    tests = []
+    for read in (["GETVARIATION[ ]"], ["GETVARIATION[ ]", "POP[ ]"]):
+        tests.append(read + ["PUSH[ ] 0", "SWAP[ ]", "SCFS[ ]"])
+    for sel in (8, 9, 15, 63, 1023, 2047):
+        tests.append(["PUSH[ ] %d" % sel, "GETINFO[ ]", "PUSH[ ] 0", "SWAP[ ]", "SCFS[ ]"])
+    cases = [case([[0, 0, 1], [10, 10, 1]], ["SVTCA[0]"] + t) for t in tests]
+    return {"upem": 640, "cases": cases, "axes": 2, "coords": "8192,-4096"}, ("35", "40"), 12
+
+
+def variation_default():
+    """The same questions of a variable face at its default instance, which sets no coordinates."""
+    spec, versions, ppem = variation()
+    spec["coords"] = "-"
+    # GETVARIATION there is an undefined instruction, whose handling is the failure
+    # tolerance's business; the GETINFO answers are this battery's.
+    spec["cases"] = [c for c in spec["cases"] if "GETVARIATION[ ]" not in c["asm"]]
+    return spec, versions, ppem
+
+
+def cvar():
+    """The control values of a variable face: each one read out with RCVT, at coordinates that
+    make its delta a half, a third and a fraction of a unit."""
+    count = 40
+    cvt = [100 + 37 * i for i in range(count)]
+    deltas = [(-1) ** i * (1 + 2 * i) for i in range(count)]
+    cases = [case([[0, 0, 1], [10, 10, 1]],
+                  ["SVTCA[0]", "PUSH[ ] %d" % i, "RCVT[ ]", "PUSH[ ] 0", "SWAP[ ]", "SCFS[ ]"])
+             for i in range(count)]
+    return {"upem": 1000, "cases": cases, "axes": 1, "cvt": cvt, "cvar": deltas,
+            "coords": "8192"}, ("35", "40"), 12
+
+
+def cvar_other_coordinates():
+    spec, versions, ppem = cvar()
+    spec["coords"] = "5461"
+    return spec, versions, ppem
+
+
+def cvar_negative():
+    spec, versions, ppem = cvar()
+    spec["coords"] = "-8192"
+    return spec, versions, ppem
 
 
 def compat():
@@ -325,7 +372,8 @@ BATTERIES = {
     "rounding": rounding, "mdrp": mdrp, "mirp": mirp,
     "original-distance": original_distance, "isect": isect, "measuring": measuring,
     "freedom": freedom, "environment": environment, "compat": compat,
-    "zones": zones, "iup": iup, "iup-ties": iup_ties,
+    "zones": zones, "variation": variation, "variation-default": variation_default,
+    "cvar": cvar, "cvar-third": cvar_other_coordinates, "cvar-negative": cvar_negative, "iup": iup, "iup-ties": iup_ties,
     "phantom": phantom, "composites": composites,
 }
 

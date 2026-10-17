@@ -236,9 +236,12 @@ done:
   return result;
 }
 
-GFNT_Result gfnt_face_cvt_values(const GFNT_Face * face,
+/* The control values; @p interpreter picks how a delta becomes whole font units. */
+#define GFNT_CVAR_INTERPRETER_BIAS 0x200
+
+static GFNT_Result gfnt_cvt_values(const GFNT_Face * face,
     const GFNT_Variation * variation, int32_t * out_values, size_t capacity,
-    GFNT_Error * error) {
+    bool interpreter, GFNT_Error * error) {
   GFNT_Reader table;
   size_t count = 0;
   bool moves = false;
@@ -291,8 +294,13 @@ GFNT_Result gfnt_face_cvt_values(const GFNT_Face * face,
   if (result == GFNT_OK) {
     for (size_t i = 0; i < count; ++i) {
       int64_t moved = (int64_t)out_values[i]
-          + gfnt_round_shift_mode(gfnt_clamp64(acc[i]),
-              GFNT_GVAR_FRACTION_BITS, variation->delta_rounding);
+          + (interpreter
+              /* Floor, with the small bias a reference interpreter's 16.16 arithmetic
+                 carries (fitted, not specified): a delta of 2.9998 is 3 there. */
+              ? (gfnt_clamp64(acc[i]) + ((int64_t)GFNT_CVAR_INTERPRETER_BIAS
+                    << (GFNT_GVAR_FRACTION_BITS - 16))) >> GFNT_GVAR_FRACTION_BITS
+              : gfnt_round_shift_mode(gfnt_clamp64(acc[i]),
+                    GFNT_GVAR_FRACTION_BITS, variation->delta_rounding));
 
       out_values[i] = (int32_t)(moved > INT32_MAX ? INT32_MAX
           : moved < INT32_MIN ? INT32_MIN : moved);
@@ -300,4 +308,16 @@ GFNT_Result gfnt_face_cvt_values(const GFNT_Face * face,
   }
   face->allocator->free_fn(face->allocator->ctx, acc);
   return result;
+}
+
+GFNT_Result gfnt_face_cvt_values(const GFNT_Face * face,
+    const GFNT_Variation * variation, int32_t * out_values, size_t capacity,
+    GFNT_Error * error) {
+  return gfnt_cvt_values(face, variation, out_values, capacity, false, error);
+}
+
+GFNT_Result gfnt_face_cvt_values_interpreter(const GFNT_Face * face,
+    const GFNT_Variation * variation, int32_t * out_values, size_t capacity,
+    GFNT_Error * error) {
+  return gfnt_cvt_values(face, variation, out_values, capacity, true, error);
 }

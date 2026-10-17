@@ -70,7 +70,8 @@ struct Fixture {
 
   Fixture(const std::vector<Bytes> & glyphs, const std::vector<Metric> & metrics,
           const Bytes & prep = {}, int version = 35, uint32_t ppem = 10,
-          const Bytes & gasp = {}) {
+          const Bytes & gasp = {}, const std::vector<gfnttest::Table> & extra = {},
+          const std::vector<GFNT_F2Dot14> & location = {}) {
     Bytes glyf;
     Bytes loca;
     bool is_long = false;
@@ -95,12 +96,15 @@ struct Fixture {
     };
     if (!prep.empty()) tables.push_back({GFNT_TAG('p', 'r', 'e', 'p'), prep});
     if (!gasp.empty()) tables.push_back({GFNT_TAG('g', 'a', 's', 'p'), gasp});
+    for (const gfnttest::Table & t : extra) tables.push_back(t);
     bytes = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
     EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_BORROWED,
         nullptr, nullptr, &blob, nullptr), GFNT_OK);
     EXPECT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
-    EXPECT_EQ(gfnt_hint_ctx_from_face(face, ppem, version, true, nullptr, &ctx, &error),
-        GFNT_OK);
+    GFNT_Variation variation{location.data(), location.size(), GFNT_DELTA_ROUND_HALF_UP};
+
+    EXPECT_EQ(gfnt_hint_ctx_from_face_at(face, ppem, version, true, nullptr,
+        location.empty() ? nullptr : &variation, &ctx, &error), GFNT_OK);
   }
   ~Fixture() {
     gfnt_hint_ctx_destroy(ctx);

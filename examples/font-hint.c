@@ -24,7 +24,7 @@
  * Print every glyph's hinted outline at a pixel size, in the form the FreeType
  * oracle driver prints it, so the two can be compared line by line.
  *
- * Usage: font-hint <font> <face> <version> <ppem> <stride> <first>
+ * Usage: font-hint <font> <face> <version> <ppem> <stride> <first> [coords]
  *
  * `version` is 35 or 40. A glyph that is not hinted prints `g<N> unhinted <why>`
  * instead, and the comparison leaves it out.
@@ -48,7 +48,7 @@ int main(int argc, char ** argv) {
   long first;
 
   if (argc < 7) {
-    fprintf(stderr, "usage: %s <font> <face> <version> <ppem> <stride> <first>\n", argv[0]);
+    fprintf(stderr, "usage: %s <font> <face> <version> <ppem> <stride> <first> [coords]\n", argv[0]);
     return 2;
   }
   stride = strtol(argv[5], NULL, 10);
@@ -62,8 +62,19 @@ int main(int argc, char ** argv) {
     result = gfnt_face_load(blob, (size_t)strtoul(argv[2], NULL, 10), NULL, NULL, &face, &error);
   }
   if (result == GFNT_OK) {
-    result = gfnt_hint_ctx_from_face(face, (uint32_t)strtoul(argv[4], NULL, 10),
-        atoi(argv[3]), true, NULL, &ctx, &error);
+    GFNT_F2Dot14 coords[64];
+    GFNT_Variation variation = {coords, 0, 0};
+
+    /* An optional location: comma-separated normalised coordinates in 2.14. */
+    for (const char * c = argc > 7 && strcmp(argv[7], "-") != 0 ? argv[7] : ""; *c
+        && variation.count < 64; ) {
+      char * end;
+
+      coords[variation.count++] = (GFNT_F2Dot14)strtol(c, &end, 10);
+      c = *end == ',' ? end + 1 : end;
+    }
+    result = gfnt_hint_ctx_from_face_at(face, (uint32_t)strtoul(argv[4], NULL, 10),
+        atoi(argv[3]), true, NULL, variation.count ? &variation : NULL, &ctx, &error);
   }
   if (result != GFNT_OK || gfnt_face_num_glyphs(face, &glyphs, &error) != GFNT_OK) {
     fprintf(stderr, "%s: %s\n", argv[1], gfnt_result_string(result));
@@ -88,6 +99,7 @@ int main(int argc, char ** argv) {
         &fault, &advance, touches, sizeof touches, &normalised, &error);
     if (result != GFNT_OK) {
       printf("g%zu error %s\n", g, gfnt_result_string(result));
+      if (getenv("FONT_HINT_VERBOSE")) gfnt_error_dump(&error, stderr);
       continue;
     }
     if (status == GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED) {

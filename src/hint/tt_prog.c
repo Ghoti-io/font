@@ -61,6 +61,7 @@ void gfnt_hint_ctx_destroy(GFNT_HintContext * ctx) {
   gfnt_hint_free(a, ctx->idefs);
   gfnt_hint_free(a, ctx->cvt);
   gfnt_hint_free(a, ctx->storage);
+  gfnt_hint_free(a, ctx->coords);
   gfnt_hint_zone_free(a, &ctx->twilight);
   gfnt_hint_free(a, ctx);
 }
@@ -181,6 +182,24 @@ GFNT_Result gfnt_hint_ctx_create(const GFNT_Allocator * allocator,
   ctx->limits = caps;
   ctx->params = *params;
   ctx->shape = *shape;
+  if (params->coord_count) {
+    if (!params->coords) {
+      gfnt_hint_ctx_destroy(ctx);
+      return GFNT_ERR_INVALID;
+    }
+    ctx->coords = gfnt_hint_calloc(allocator, params->coord_count, sizeof *ctx->coords);
+    if (!ctx->coords) {
+      gfnt_hint_ctx_destroy(ctx);
+      return GFNT_ERR_OOM;
+    }
+    memcpy(ctx->coords, params->coords, params->coord_count * sizeof *ctx->coords);
+    ctx->params.coords = ctx->coords;
+    ctx->variation.coords = ctx->coords;
+    ctx->variation.count = params->coord_count;
+  }
+  else {
+    ctx->params.coords = NULL;
+  }
   /* Pixels (26.6) per font unit, 16.16: the one scale every conversion uses. */
   ctx->scale = gfnt_hint_div_fix((int32_t)(params->ppem * 64u),
       (int32_t)params->units_per_em);
@@ -330,8 +349,10 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
     for (size_t i = 0; i < input->point_count; ++i) {
       z->orus[i].x = input->x[i];
       z->orus[i].y = input->y[i];
-      z->org[i].x = input->pixels ? input->x[i] : gfnt_hint_mul_fix(input->x[i], ctx->scale);
-      z->org[i].y = input->pixels ? input->y[i] : gfnt_hint_mul_fix(input->y[i], ctx->scale);
+      z->org[i].x = input->pixels ? input->x[i] : input->org_x ? input->org_x[i]
+          : gfnt_hint_mul_fix(input->x[i], ctx->scale);
+      z->org[i].y = input->pixels ? input->y[i] : input->org_y ? input->org_y[i]
+          : gfnt_hint_mul_fix(input->y[i], ctx->scale);
       z->cur[i] = z->org[i];
       z->flags[i] = input->on_curve[i] ? GFNT_HINT_ON_CURVE : 0;
     }

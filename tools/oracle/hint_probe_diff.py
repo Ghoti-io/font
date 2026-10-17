@@ -88,7 +88,8 @@ def shrink(sidecar, name, version, ppem):
 
 def main(argv):
     opts = {"--seed": "1", "--fonts": "2", "--glyphs": "60", "--steps": "1",
-            "--version": "35", "--ppem": "12,16", "--show": "6", "--vectors": "any", "--shrink": "0", "--composites": "0"}
+            "--version": "35", "--ppem": "12,16", "--show": "6", "--vectors": "any", "--shrink": "0", "--composites": "0",
+            "--variable": "0", "--coords": "-", "--tolerance": "0"}
     args = argv[1:]
     while args:
         key = args.pop(0)
@@ -101,14 +102,16 @@ def main(argv):
     gen = subprocess.run(oracle_env.command("fonttools", [
         "python3", os.path.join(ROOT, "tools", "oracle", "hint_probe_font.py"),
         scratch, opts["--seed"], opts["--fonts"], opts["--glyphs"], opts["--steps"]]
-        + [opts["--vectors"] if opts["--vectors"] in ("axis", "any") else "any", opts["--composites"]],
+        + [opts["--vectors"] if opts["--vectors"] in ("axis", "any") else "any", opts["--composites"]]
+        + ([{"1": "variable", "empty": "variable-empty", "hvar": "variable-hvar"}[opts["--variable"]]] if opts["--variable"] != "0" else []),
         scratch=scratch), capture_output=True, text=True)
     if gen.returncode != 0:
         print(gen.stderr[-500:])
         return 2
     version = int(opts["--version"])
     shown = 0
-    same = different = declined = 0
+    same = different = declined = tolerated = advances = 0
+    tolerance = int(opts["--tolerance"])
     by_instruction = {}
     notes = {}
     shortest = []
@@ -118,9 +121,10 @@ def main(argv):
             sidecar = json.load(handle)
         listing = sidecar["programs"]
         names = list(listing)
-        for ppem in [int(v) for v in opts["--ppem"].split(",")]:
-            mine, _ = hint_diff.ours(path, version, ppem, 1)
-            yours, _ = hint_diff.theirs(path, version, ppem, 1)
+        for ppem, coords in [(int(v), c) for v in opts["--ppem"].split(",")
+                             for c in opts["--coords"].split(";")]:
+            mine, _ = hint_diff.ours(path, version, ppem, 1, coords)
+            yours, _ = hint_diff.theirs(path, version, ppem, 1, coords)
             if mine is None or yours is None:
                 print("a driver failed on %s" % path)
                 return 2
@@ -132,8 +136,14 @@ def main(argv):
                     note += "; FreeType: %s" % (other if isinstance(other, str) else "hinted" if other else "absent")
                     notes[note] = notes.get(note, 0) + 1
                     continue
+                if answer[0] != other[0]:
+                    advances += 1
                 if answer[1] == other[1]:
                     same += 1
+                    continue
+                if tolerance and len(answer[1]) == len(other[1]) and max(
+                        abs(a[k] - b[k]) for a, b in zip(answer[1], other[1]) for k in (0, 1)) <= tolerance:
+                    tolerated += 1
                     continue
                 different += 1
                 asm = [l for l in listing.get(names[gid], []) if not l.startswith("PUSH")] if gid < len(names) else []
@@ -163,12 +173,14 @@ def main(argv):
         print("    " + " ; ".join(full))
         if isinstance(sidecar_points(path).get(names_of(path)[gid]), list) and sidecar_points(path)[names_of(path)[gid]] and isinstance(sidecar_points(path)[names_of(path)[gid]][0][0], str):
             print("    components: %s" % sidecar_points(path)[names_of(path)[gid]])
-    print("%d identical, %d different, %d not compared" % (same, different, declined))
+    print("%d identical, %d different, %d not compared%s" % (same, different, declined,
+          ", %d within %d of FreeType's" % (tolerated, tolerance) if tolerance else ""))
+    print("%d advances differ" % advances)
     for note, count in sorted(notes.items(), key=lambda kv: -kv[1])[:6]:
         print("  not compared %4d x %s" % (count, note))
     for key, count in sorted(by_instruction.items(), key=lambda kv: -kv[1])[:15]:
         print("  %4d x %s" % (count, key))
-    return 1 if different else 0
+    return 1 if different or advances else 0
 
 
 if __name__ == "__main__":

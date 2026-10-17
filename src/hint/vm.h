@@ -146,6 +146,9 @@ typedef struct GFNT_HintParams {
   uint16_t units_per_em;   ///< The face's em.
   int version;             ///< The interpreter version: 35 or 40.
   bool grayscale;          ///< Whether to say the target is grayscale.
+  const GFNT_F2Dot14 * coords; ///< The normalised location of a variable face, or NULL.
+  size_t coord_count;      ///< How many axes @p coords has; 0 for the default instance.
+  size_t axis_count;       ///< How many axes the face has; 0 for a face that is not variable.
 } GFNT_HintParams;
 
 /** The sizes of the arrays a font declares in `maxp`. */
@@ -171,6 +174,8 @@ typedef struct GFNT_HintGlyphInput {
   bool pixels;               ///< The coordinates are already 26.6 pixels (a composite's
                              ///< hinted components), not font units: no scaling is applied
                              ///< and the originals are the positions given.
+  const int32_t * org_x;     ///< Optional: the points' original positions in 26.6 where they are not
+  const int32_t * org_y;     ///< the plain scaling of @p x and @p y (a variable font's fractional deltas).
 } GFNT_HintGlyphInput;
 
 typedef struct GFNT_HintRun GFNT_HintRun;
@@ -223,6 +228,20 @@ GFNT_Result gfnt_hint_ctx_create(const GFNT_Allocator * allocator,
 GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
     int version, bool grayscale, const GFNT_HintLimits * limits,
     GFNT_HintContext ** out, GFNT_Error * error);
+
+/**
+ * ::gfnt_hint_ctx_from_face() at a location of a variable face: the control
+ * values come with `cvar` applied, `GETVARIATION` answers with the location, and
+ * glyphs hint from their `gvar`-moved points.
+ *
+ * @param variation The normalised location, or NULL for the default instance.
+ */
+GFNT_Result gfnt_hint_ctx_from_face_at(const GFNT_Face * face, uint32_t ppem,
+    int version, bool grayscale, const GFNT_HintLimits * limits,
+    const GFNT_Variation * variation, GFNT_HintContext ** out, GFNT_Error * error);
+
+/** The location a context hints at, or NULL for the default instance. */
+const GFNT_Variation * gfnt_hint_ctx_variation(const GFNT_HintContext * ctx);
 
 /**
  * Hint one glyph: its outline in pixels after its program has run, or unhinted

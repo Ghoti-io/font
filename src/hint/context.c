@@ -29,8 +29,10 @@
 
 #include <ghoti.io/font/cvt.h>
 #include <ghoti.io/font/metrics.h>
+#include <ghoti.io/font/variation.h>
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
+#include "../var/gvar.h"
 
 /* The offsets of the TrueType fields in a version 1.0 `maxp`. */
 #define GFNT_MAXP_TWILIGHT 16u
@@ -90,9 +92,19 @@ static GFNT_Result gfnt_hint_read_shape(const GFNT_Face * face,
   return GFNT_OK;
 }
 
+const GFNT_Variation * gfnt_hint_ctx_variation(const GFNT_HintContext * ctx) {
+  return ctx && ctx->variation.count ? &ctx->variation : NULL;
+}
+
 GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
     int version, bool grayscale, const GFNT_HintLimits * limits,
     GFNT_HintContext ** out, GFNT_Error * error) {
+  return gfnt_hint_ctx_from_face_at(face, ppem, version, grayscale, limits, NULL, out, error);
+}
+
+GFNT_Result gfnt_hint_ctx_from_face_at(const GFNT_Face * face, uint32_t ppem,
+    int version, bool grayscale, const GFNT_HintLimits * limits,
+    const GFNT_Variation * variation, GFNT_HintContext ** out, GFNT_Error * error) {
   GFNT_HintParams params;
   GFNT_HintShape shape;
   const uint8_t * fpgm = NULL;
@@ -143,7 +155,8 @@ GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
       return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG('c', 'v', 't', ' '), 0, 0,
           "no memory for the control values");
     }
-    result = gfnt_face_cvt_values(face, NULL, values, cvt_count, error);
+    result = gfnt_face_cvt_values_interpreter(face, variation && variation->count ? variation : NULL,
+        values, cvt_count, error);
     if (result != GFNT_OK) {
       face->allocator->free_fn(face->allocator->ctx, values);
       return result;
@@ -154,6 +167,15 @@ GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
   params.units_per_em = units;
   params.version = version;
   params.grayscale = grayscale;
+  params.axis_count = 0;
+  /* Only a face asked for at a location is variable to the interpreter: at its default
+     instance, with no location, GETVARIATION is undefined and GETINFO reports nothing. */
+  if (variation && variation->count && gfnt_face_has_table(face, GFNT_TAG('f', 'v', 'a', 'r'))
+      && gfnt_face_has_table(face, GFNT_TAG('g', 'v', 'a', 'r'))) {
+    gfnt_face_axis_count(face, &params.axis_count, NULL);
+  }
+  params.coords = variation ? variation->coords : NULL;
+  params.coord_count = variation && variation->coords ? variation->count : 0;
   result = gfnt_hint_ctx_create(face->allocator, limits, &params, &shape, fpgm,
       fpgm_length, prep, prep_length, cvt, cvt_count, out);
   if (cvt) {

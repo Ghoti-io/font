@@ -80,6 +80,8 @@ struct GFNT_HintContext {
   GFNT_HintLimits limits;
   GFNT_HintParams params;
   GFNT_HintShape shape;
+  GFNT_F2Dot14 * coords;          ///< A copy of the location, or NULL.
+  GFNT_Variation variation;       ///< Over @p coords; count 0 for the default instance.
   int32_t scale;                  ///< 16.16: pixels (26.6) per font unit.
   const uint8_t * code[2];        ///< `fpgm`, `prep` (borrowed).
   size_t code_length[2];

@@ -162,14 +162,17 @@ typedef struct GFNT_HintContext GFNT_HintContext;
  * @param face The face.
  * @param ppem Pixels per em; zero is invalid, and above `max_ppem` is ::GFNT_ERR_LIMIT.
  * @param version The interpreter behaviour.
+ * @param variation The normalised location of a variable face, or NULL for the default
+ *   instance. The control values come with `cvar` applied, `GETVARIATION` answers with it
+ *   and every glyph hints from its `gvar`-moved points.
  * @param out_context Receives the context; free it with ::gfnt_hint_context_destroy().
  * @param error Receives a diagnostic on failure, or NULL.
  * @return ::GFNT_OK; ::GFNT_ERR_UNSUPPORTED for a face that has no TrueType
  *   outlines; ::GFNT_ERR_INVALID, ::GFNT_ERR_LIMIT, ::GFNT_ERR_CORRUPT or ::GFNT_ERR_OOM.
  */
 GFNT_API GFNT_Result gfnt_hint_context_create(const GFNT_Face * face,
-    uint32_t ppem, GFNT_HintVersion version, GFNT_HintContext ** out_context,
-    GFNT_Error * error);
+    uint32_t ppem, GFNT_HintVersion version, const GFNT_Variation * variation,
+    GFNT_HintContext ** out_context, GFNT_Error * error);
 
 /** Free a context. NULL is ignored. */
 GFNT_API void gfnt_hint_context_destroy(GFNT_HintContext * context);

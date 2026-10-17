@@ -58,6 +58,16 @@ MUTANTS = [
     ("src/hint/glyph.c", "if (c->flags & GFNT_GLYF_USE_MY_METRICS) {",
      "if (false && (c->flags & GFNT_GLYF_USE_MY_METRICS)) {",
      "a composite ignores USE_MY_METRICS"),
+    ("src/hint/glyph.c", "components[k].delta_x = gfnt_hint_delta_fixed(wide[k]);",
+     "components[k].delta_x = 0;",
+     "gvar does not move a composite's component offsets"),
+    ("src/hint/glyph.c", "if (!v || !gfnt_face_has_table(face, GFNT_TAG_HVAR)) return;",
+     "if (1) return;",
+     "the advance ignores HVAR and takes gvar's phantom points"),
+    ("src/hint/tt_exec.c", "result |= 1 << 10;  /* a variable face */", "result |= 1 << 9;",
+     "GETINFO reports a variable face in the wrong bit"),
+    ("src/var/cvar.c", "#define GFNT_CVAR_INTERPRETER_BIAS 0x200", "#define GFNT_CVAR_INTERPRETER_BIAS 0",
+     "a control value delta is floored with none of the interpreter's bias"),
     ("src/hint/tt_move.c", "org_dist = gfnt_hint_scaled_original_distance(run, z1, (size_t)p, z0, rp0);\n        cur_dist",
      "org_dist = gfnt_hint_original_distance(run, z1, (size_t)p, z0, rp0);\n        cur_dist",
      "MIRP measures the original distance in font units"),
@@ -109,6 +119,16 @@ def main():
                      "python3", "tools/oracle/hint_batteries.py"],
                     cwd=ROOT, capture_output=True, text=True)
                 refused = refused or done.returncode != 0
+                if not refused:
+                    done = subprocess.run(
+                        ["python3", "tools/oracle/oracle_run.py", "fonttools,freetype", "--",
+                         "python3", "tools/oracle/hint_probe_diff.py", "--seed", "43",
+                         "--fonts", "3", "--glyphs", "40", "--composites", "15", "--steps", "1",
+                         "--vectors", "axis", "--version", "40", "--variable", "hvar",
+                         "--coords", "16384;-16384;8192", "--ppem", "16", "--tolerance", "1",
+                         "--show", "0"],
+                        cwd=ROOT, capture_output=True, text=True)
+                    refused = refused or done.returncode != 0
                 if not refused:
                     raise RuntimeError(f"the comparison accepted: {what}")
             finally:

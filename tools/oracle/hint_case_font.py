@@ -112,6 +112,19 @@ def main(argv):
     maxp.maxInstructionDefs = 0
     maxp.maxStackElements = 512
     maxp.maxSizeOfInstructions = 1024
+    if spec.get("axes"):
+        # A variable face with nothing to vary: the interpreter's view of it is what is
+        # compared (what GETVARIATION and GETINFO answer), not any glyph's motion.
+        axes = [("wght", 100, 400, 900, "Weight"), ("wdth", 50, 100, 200, "Width")][:spec["axes"]]
+        fb.setupFvar(axes=axes, instances=[])
+        fb.setupGvar({n: [] for n in order})
+        if spec.get("cvar"):
+            from fontTools.ttLib.tables.TupleVariation import TupleVariation
+            cv = newTable("cvar")
+            cv.version = 1
+            cv.variations = [TupleVariation({"wght": (0, 1, 1)}, list(spec["cvar"])),
+                             TupleVariation({"wght": (-1, -1, 0)}, [-d if d is not None else None for d in spec["cvar"]])]
+            fb.font["cvar"] = cv
     fb.save(argv[1])
     return 0
 

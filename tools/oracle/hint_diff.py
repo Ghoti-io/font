@@ -94,18 +94,18 @@ def has_control_value_program(path):
     return "== prep" in done.stdout
 
 
-def ours(path, version, ppem, stride):
+def ours(path, version, ppem, stride, coords="-"):
     done = subprocess.run([DRIVER, path, "0", str(version), str(ppem),
-                           str(stride), "0"], capture_output=True, text=True)
+                           str(stride), "0", coords], capture_output=True, text=True)
     if done.returncode != 0:
         return None, done.stderr.strip()[-200:]
     return parse(done.stdout), ""
 
 
-def theirs(path, version, ppem, stride):
+def theirs(path, version, ppem, stride, coords="-"):
     argv = oracle_env.command("freetype", ["freetype-hinted", path, "0",
                                             str(version), str(ppem),
-                                            str(stride), "0"])
+                                            str(stride), "0", "normal", coords])
     done = subprocess.run(argv, capture_output=True, text=True)
     if done.returncode != 0:
         return None, done.stderr.strip()[-200:]
@@ -119,6 +119,9 @@ def main(argv):
     fonts = None
     advance = False
     quiet = False
+    coords = "-"
+    tolerance = 0
+    pool = "sfnt"
     paths = []
     args = argv[1:]
     while args:
@@ -135,17 +138,23 @@ def main(argv):
             advance = True
         elif a == "--quiet":
             quiet = True
+        elif a == "--tolerance":
+            tolerance = int(args.pop(0))
+        elif a == "--coords":
+            coords = args.pop(0)
+        elif a == "--corpus":
+            pool = args.pop(0)
         else:
             paths.append(a)
     sampled = not paths
     if sampled:
-        paths = corpus.fonts("sfnt")
+        paths = corpus.fonts(pool)
         # Every few fonts, so the sample is spread over the corpus rather than
         # the first foundry's, and only fonts with programs to compare count.
-        paths = paths[::7]
+        paths = paths[::7] if pool == "sfnt" else paths
 
     totals = {"compared": 0, "same": 0, "different": 0, "declined": 0,
-              "refused": 0, "advance": 0, "expected": 0, "oblique": 0, "no_prep": 0}
+              "refused": 0, "advance": 0, "expected": 0, "oblique": 0, "no_prep": 0, "tolerated": 0}
     expected_seen = set()
     shown_advance = [0]
     shown = 0
@@ -160,10 +169,10 @@ def main(argv):
             totals["no_prep"] += 1
             continue
         for ppem in ppems:
-            mine, why = ours(path, version, ppem, stride)
+            mine, why = ours(path, version, ppem, stride, coords)
             if mine is None:
                 continue
-            yours, why = theirs(path, version, ppem, stride)
+            yours, why = theirs(path, version, ppem, stride, coords)
             if yours is None:
                 continue
             for glyph, answer in sorted(mine.items()):
@@ -185,6 +194,8 @@ def main(argv):
                 elif (os.path.basename(path), version, ppem, glyph) in EXPECTED:
                     expected_seen.add((os.path.basename(path), version, ppem, glyph))
                     totals["expected"] += 1
+                elif tolerance and len(answer[1]) == len(other[1]) and max(abs(a[k] - b[k]) for a, b in zip(answer[1], other[1]) for k in (0, 1)) <= tolerance:
+                    totals["tolerated"] += 1
                 elif answer[4] and max(abs(a[k] - b[k]) for a, b in zip(answer[1], other[1]) for k in (0, 1)) <= OBLIQUE_BOUND:
                     # A program that makes a vector from a direction gets FreeType's
                     # approximation of it, good to a 16384th; see OBLIQUE_BOUND.
@@ -217,7 +228,7 @@ def main(argv):
             used += 1
     print("compared %(compared)d glyphs: %(same)d identical, %(different)d different; "
           "%(declined)d declined by this library, %(refused)d refused by FreeType, "
-          "%(advance)d advance differences; %(expected)d expected differences; %(oblique)d within the oblique-vector bound; %(no_prep)d fonts with no prep left out" % totals)
+          "%(advance)d advance differences; %(expected)d expected differences; %(oblique)d within the oblique-vector bound; %(tolerated)d within the stated tolerance; %(no_prep)d fonts with no prep left out" % totals)
     for key, count in sorted(kinds.items()):
         print("  differing coordinate: %d x %s" % (count, key))
     if not quiet:

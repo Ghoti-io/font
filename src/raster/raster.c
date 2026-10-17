@@ -845,7 +845,7 @@ GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
     const GFNT_Allocator * allocator, GFNT_Coverage * out_coverage,
     GFNT_Error * error) {
   static const GFNT_RasterOptions defaults = {GFNT_FILL_NONZERO, 0, 0, 0,
-      GFNT_HINT_MODE_FONT, GFNT_HINT_VERSION_AUTO};
+      GFNT_HINT_MODE_FONT, GFNT_HINT_VERSION_AUTO, NULL};
   static const GFNT_OutlineSink sink = {
     gfnt_raster_move,
     gfnt_raster_line_to,
@@ -1021,7 +1021,8 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
     GFNT_HintContext * context = NULL;
 
     result = gfnt_hint_context_create(face, ppem,
-        options ? options->hint_version : GFNT_HINT_VERSION_AUTO, &context, error);
+        options ? options->hint_version : GFNT_HINT_VERSION_AUTO,
+        options ? options->variation : NULL, &context, error);
     if (result == GFNT_OK) {
       GFNT_HintStatus status = GFNT_HINT_STATUS_HINTED;
 
@@ -1047,8 +1048,8 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
     }
     gfnt_error_clear(error);   /* a face with no TrueType outlines has nothing to hint */
   }
-  result = gfnt_face_glyph_outline(face, glyph, NULL, allocator, &outline,
-      error);
+  result = gfnt_face_glyph_outline(face, glyph, options ? options->variation : NULL,
+      allocator, &outline, error);
   if (result != GFNT_OK) {
     return result;
   }

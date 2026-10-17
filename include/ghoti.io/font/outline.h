@@ -50,6 +50,7 @@
 #include <ghoti.io/font/allocator.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
+#include <ghoti.io/font/hint.h>
 #include <ghoti.io/font/macros.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -508,6 +509,29 @@ GFNT_API GFNT_Result gfnt_face_glyph_is_composite(const GFNT_Face * face,
  */
 GFNT_API GFNT_Result gfnt_face_glyph_stated_box(const GFNT_Face * face,
     uint32_t glyph, GFNT_Box * out_box, GFNT_Error * error);
+
+/**
+ * @brief A glyph's outline in pixels, fitted to the grid by its program (see hint.h).
+ *
+ * Never a silent fallback (design M8): @p out_status says whether the glyph was
+ * hinted. An unhinted glyph is returned scaled exactly as ::gfnt_outline_scale()
+ * would, so a caller can use the result either way.
+ *
+ * @param face The face the context was made from.
+ * @param context The context.
+ * @param glyph The glyph index.
+ * @param allocator Allocator for the outline, or NULL for the face's.
+ * @param out_outline Receives the outline, in ::GFNT_OUTLINE_PIXELS.
+ * @param out_status Receives what happened, or NULL.
+ * @param out_advance Receives the advance in 26.6 pixels as the glyph's program
+ *   left it (the whole-pixel advance when hinted, the scaled one otherwise), or NULL.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK (hinted or not), or the failure to read the glyph or to allocate.
+ */
+GFNT_API GFNT_Result gfnt_face_hinted_outline(const GFNT_Face * face,
+    const GFNT_HintContext * context, uint32_t glyph,
+    const GFNT_Allocator * allocator, GFNT_Outline ** out_outline,
+    GFNT_HintStatus * out_status, GFNT_F26Dot6 * out_advance, GFNT_Error * error);
 
 #ifdef __cplusplus
 }

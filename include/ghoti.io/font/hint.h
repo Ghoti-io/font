@@ -116,6 +116,76 @@ GFNT_API GFNT_Result gfnt_program_validate(const uint8_t * bytes, size_t length,
 GFNT_API GFNT_Result gfnt_program_disassemble(const uint8_t * bytes,
     size_t length, FILE * stream);
 
+/**
+ * @brief Whether and how to hint (design.md section 8.5).
+ *
+ * The zero value is the font's own request, which is the library's rule for a
+ * policy (design.md section 10.3).
+ */
+typedef enum GFNT_HintMode {
+  /** Do what the font asks: run its program at a size its `gasp` applies grid-fitting to; a face with no program, or a program that fails, is left as drawn. */
+  GFNT_HINT_MODE_FONT = 0,
+  GFNT_HINT_MODE_NONE,         ///< The outline as drawn, scaled and not fitted.
+  GFNT_HINT_MODE_FONT_STRICT,  ///< As ::GFNT_HINT_MODE_FONT, but a program that fails fails the call.
+  GFNT_HINT_MODE_AUTO          ///< Reserved for an automatic hinter; refused as ::GFNT_ERR_UNSUPPORTED.
+} GFNT_HintMode;
+
+/** Which interpreter behaviour a TrueType program runs under. */
+typedef enum GFNT_HintVersion {
+  GFNT_HINT_VERSION_AUTO = 0,  ///< Version 40, which is what FreeType and Windows run.
+  GFNT_HINT_VERSION_35,        ///< The original interpreter.
+  GFNT_HINT_VERSION_40         ///< The ClearType-era interpreter, with its backward-compatibility rules.
+} GFNT_HintVersion;
+
+/** What became of a glyph asked to be hinted. */
+typedef enum GFNT_HintStatus {
+  GFNT_HINT_STATUS_HINTED = 0,                 ///< Its program ran.
+  GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM,        ///< It has none, or the font does not hint at this size.
+  GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED     ///< The context or a program failed; the outline is as drawn.
+} GFNT_HintStatus;
+
+/**
+ * @brief A face prepared for hinting at one size.
+ *
+ * Made by ::gfnt_hint_context_create(), which runs the font program and the
+ * control value program once. Immutable afterwards, so glyphs can be hinted
+ * from it on several threads at once. The face must outlive it.
+ */
+typedef struct GFNT_HintContext GFNT_HintContext;
+
+/**
+ * @brief Prepare a face for hinting at @p ppem.
+ *
+ * A program that fails does not fail this call; every glyph then comes back
+ * unhinted with ::GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED.
+ *
+ * @param face The face.
+ * @param ppem Pixels per em; zero is invalid, and above `max_ppem` is ::GFNT_ERR_LIMIT.
+ * @param version The interpreter behaviour.
+ * @param out_context Receives the context; free it with ::gfnt_hint_context_destroy().
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_UNSUPPORTED for a face that has no TrueType
+ *   outlines; ::GFNT_ERR_INVALID, ::GFNT_ERR_LIMIT, ::GFNT_ERR_CORRUPT or ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_hint_context_create(const GFNT_Face * face,
+    uint32_t ppem, GFNT_HintVersion version, GFNT_HintContext ** out_context,
+    GFNT_Error * error);
+
+/** Free a context. NULL is ignored. */
+GFNT_API void gfnt_hint_context_destroy(GFNT_HintContext * context);
+
+/**
+ * @brief Whether the font asks for grid-fitting at a size.
+ *
+ * Reads `gasp`: true when the range holding @p ppem sets its grid-fit bit, or
+ * when the face has no `gasp` (a font that carries a program is asking).
+ *
+ * @param face The face.
+ * @param ppem Pixels per em.
+ * @return Whether to hint.
+ */
+GFNT_API bool gfnt_face_gasp_gridfit(const GFNT_Face * face, uint32_t ppem);
+
 #ifdef __cplusplus
 }
 #endif

@@ -40,6 +40,7 @@
 #include <ghoti.io/font/allocator.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
+#include <ghoti.io/font/hint.h>
 #include <ghoti.io/font/outline.h>
 #include <ghoti.io/font/macros.h>
 #include <stdbool.h>
@@ -172,7 +173,6 @@ typedef struct GFNT_HintGlyphInput {
                              ///< and the originals are the positions given.
 } GFNT_HintGlyphInput;
 
-typedef struct GFNT_HintContext GFNT_HintContext;
 typedef struct GFNT_HintRun GFNT_HintRun;
 
 /**
@@ -224,13 +224,6 @@ GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
     int version, bool grayscale, const GFNT_HintLimits * limits,
     GFNT_HintContext ** out, GFNT_Error * error);
 
-/** What became of a glyph asked to be hinted. */
-typedef enum GFNT_HintStatus {
-  GFNT_HINT_STATUS_HINTED = 0,                 ///< Its program ran.
-  GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM,        ///< It has none.
-  GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED     ///< The context or a program failed.
-} GFNT_HintStatus;
-
 /**
  * Hint one glyph: its outline in pixels after its program has run, or unhinted
  * and scaled the same way when it cannot be, and the status says which.
@@ -256,6 +249,13 @@ GFNT_Result gfnt_hint_glyph_outline(const GFNT_Face * face,
     const GFNT_HintContext * ctx, uint32_t glyph, GFNT_Outline ** out,
     GFNT_HintStatus * status, GFNT_HintFault * fault, int32_t * advance,
     uint8_t * touches, size_t touch_capacity, bool * normalised, GFNT_Error * error);
+
+/** ::gfnt_hint_glyph_outline() with the outline made by @p out_allocator (NULL: the face's). */
+GFNT_Result gfnt_hint_glyph_outline_in(const GFNT_Face * face,
+    const GFNT_HintContext * ctx, uint32_t glyph, const GFNT_Allocator * out_allocator,
+    GFNT_Outline ** out, GFNT_HintStatus * status, GFNT_HintFault * fault,
+    int32_t * advance, uint8_t * touches, size_t touch_capacity, bool * normalised,
+    GFNT_Error * error);
 
 /** Free a context. NULL is ignored. */
 void gfnt_hint_ctx_destroy(GFNT_HintContext * ctx);

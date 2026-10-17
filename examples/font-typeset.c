@@ -442,6 +442,9 @@ int main(int argc, char ** argv) {
 
     memset(&ro, 0, sizeof ro);
     memset(&cov, 0, sizeof cov);
+    // Advances here are fractional and the oracles compare unfitted shapes, so the
+    // glyphs are drawn as the font drew them.
+    ro.hint_mode = GFNT_HINT_MODE_NONE;
     ro.origin_x = (GFNT_F26Dot6)(x64 & 63);
     ro.origin_y = (GFNT_F26Dot6)((-y64) & 63);
     pen64 += SCALE_OF(g->x_advance, gem);

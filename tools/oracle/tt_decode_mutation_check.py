@@ -36,7 +36,7 @@ MAKE_BUILD = BUILD.removeprefix("linux/")
 APPS = ROOT / "build" / BUILD / "apps"
 UNIT = APPS / "testHint"
 DRIVER = APPS / "examples" / "font-program"
-ARCHIVE = APPS / "libghoti.io-font-7.a"
+ARCHIVE = APPS / "libghoti.io-font-8.a"
 FIXTURE = ROOT / "tests" / "data" / "fonts" / "woff2-triplets-source.ttf"
 LD_PATH = f"{PREFIX}/lib/ghoti.io:{PREFIX}/lib"
 

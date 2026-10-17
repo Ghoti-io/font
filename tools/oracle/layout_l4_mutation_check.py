@@ -39,7 +39,7 @@ def rejects_mutant(needle: str, replacement: str, app: Path, test: str) -> None:
     global SOURCE, ARTIFACTS
     SOURCE = source_with(ROOT, needle)
     original = SOURCE.read_text()
-    ARTIFACTS = (APP, UNIT_APP, APP.parent / "libghoti.io-font-7.a", object_of(ROOT, BUILD, SOURCE))
+    ARTIFACTS = (APP, UNIT_APP, APP.parent / "libghoti.io-font-8.a", object_of(ROOT, BUILD, SOURCE))
     try:
         SOURCE.write_text(original.replace(needle, replacement))
         for artifact in ARTIFACTS:

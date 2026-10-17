@@ -189,6 +189,9 @@ TEST(Golden, EveryCommittedRenderingIsReproduced) {
     GFNT_RasterOptions options{};
     GFNT_Coverage coverage{};
     GFNT_Error error{};
+    // The committed renderings are of the outlines as drawn: the gate is the scan
+    // converter, and a font's program would make it a gate on the hinter too.
+    options.hint_mode = GFNT_HINT_MODE_NONE;
     options.origin_x = entry.origin_x;
     options.origin_y = entry.origin_y;
     // A strike's glyph is pixels, not a path, and reaches a coverage by the other

@@ -518,10 +518,11 @@ static GFNT_Result gfnt_hint_glyph_rec(GFNT_HintWalk * w, uint32_t glyph, size_t
                    : gfnt_hint_simple(w, glyph, top, out);
 }
 
-GFNT_Result gfnt_hint_glyph_outline(const GFNT_Face * face,
-    const GFNT_HintContext * ctx, uint32_t glyph, GFNT_Outline ** out,
-    GFNT_HintStatus * status, GFNT_HintFault * fault, int32_t * advance_out,
-    uint8_t * touches, size_t touch_capacity, bool * normalised, GFNT_Error * error) {
+GFNT_Result gfnt_hint_glyph_outline_in(const GFNT_Face * face,
+    const GFNT_HintContext * ctx, uint32_t glyph, const GFNT_Allocator * out_allocator,
+    GFNT_Outline ** out, GFNT_HintStatus * status, GFNT_HintFault * fault,
+    int32_t * advance_out, uint8_t * touches, size_t touch_capacity, bool * normalised,
+    GFNT_Error * error) {
   GFNT_HintWalk walk;
   GFNT_HintedGlyph g;
   GFNT_Outline * result = NULL;
@@ -547,7 +548,7 @@ GFNT_Result gfnt_hint_glyph_outline(const GFNT_Face * face,
     gfnt_hinted_free(&g);
     return r;
   }
-  r = gfnt_outline_create(face->allocator, &result, error);
+  r = gfnt_outline_create(out_allocator ? out_allocator : face->allocator, &result, error);
   if (r == GFNT_OK) {
     size_t first = 0;
     int32_t origin = g.phantom[0].x;
@@ -577,4 +578,12 @@ GFNT_Result gfnt_hint_glyph_outline(const GFNT_Face * face,
   gfnt_outline_destroy(result);
   gfnt_hinted_free(&g);
   return r;
+}
+
+GFNT_Result gfnt_hint_glyph_outline(const GFNT_Face * face,
+    const GFNT_HintContext * ctx, uint32_t glyph, GFNT_Outline ** out,
+    GFNT_HintStatus * status, GFNT_HintFault * fault, int32_t * advance_out,
+    uint8_t * touches, size_t touch_capacity, bool * normalised, GFNT_Error * error) {
+  return gfnt_hint_glyph_outline_in(face, ctx, glyph, NULL, out, status, fault,
+      advance_out, touches, touch_capacity, normalised, error);
 }

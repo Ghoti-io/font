@@ -36,13 +36,13 @@ def rejects_mutant(needle: str, replacement: str, test_name: str) -> None:
         SOURCE.write_text(original.replace(needle, replacement))
         # The project Makefile treats generated library artifacts as a
         # secondary build path; remove them so the mutated C source is linked.
-        for artifact in (APP, APP.parent / "libghoti.io-font-7.a", obj):
+        for artifact in (APP, APP.parent / "libghoti.io-font-8.a", obj):
             artifact.unlink(missing_ok=True)
         run(["make", f"PREFIX={PREFIX}", f"BUILD={MAKE_BUILD}", str(APP.relative_to(ROOT))])
         run([str(APP), f"--gtest_filter=LayoutLineBox.{test_name}", "--gtest_brief=1"], expect_failure=True)
     finally:
         SOURCE.write_text(original)
-    for artifact in (APP, APP.parent / "libghoti.io-font-7.a", obj):
+    for artifact in (APP, APP.parent / "libghoti.io-font-8.a", obj):
         artifact.unlink(missing_ok=True)
     run(["make", f"PREFIX={PREFIX}", f"BUILD={MAKE_BUILD}", str(APP.relative_to(ROOT))])
 

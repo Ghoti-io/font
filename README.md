@@ -2,9 +2,9 @@
 
 Font files in, and glyph identities, advances and names out. The aim is every
 family a document might name — sfnt (`glyf` and `CFF`), the bitmap formats,
-Type 1, WOFF — a checked reader, currently unhinted fixed-point rasterisation,
+Type 1, WOFF — a checked reader, fixed-point rasterisation,
 shaping, and paragraph layout with inline objects, flow around boxes, columns, ruby and
-emphasis marks. A TrueType hinting interpreter is planned; see design §8.5.
+emphasis marks. TrueType hinting (the font's own instructions) is on by default; see design §8.5.
 
 ## What is implemented
 
@@ -103,10 +103,10 @@ Once the library is installed, pkg-config carries the include path, the
 library, and its dependencies:
 
 ```bash
-cc -o show show.c $(pkg-config --cflags --libs ghoti.io-font-7)
+cc -o show show.c $(pkg-config --cflags --libs ghoti.io-font-8)
 ```
 
-The module name ends in the major version, `-7` for this release, so two
+The module name ends in the major version, `-8` for this release, so two
 majors can be installed side by side. A build made with `make BRANCH=-dev`
 installs `ghoti.io-font-dev` instead.
 
@@ -155,7 +155,7 @@ asks which glyph a code point maps to does not link a rasteriser or a shaper.
 - **`blob.h`** — the bytes of a font, copied or read from a file.
 - **`face.h`** — one font from a blob and an index: the sfnt version, the table directory, collections, and the `GFNT_Variation` every accessor takes.
 - **`variation.h`** — a variable font's axes and named instances, and `gfnt_face_normalize()`, which makes the normalised coordinates every accessor takes out of the ones a person types.
-- **`hint.h`** — a TrueType glyph's own instructions, a structural check of any program, and its disassembly. Programs are read and checked, **not run**: hinting is planned (`documentation/design.md` §8.5).
+- **`hint.h`** — a TrueType glyph's own instructions, a structural check of any program, and its disassembly; and the hinting interpreter's `GFNT_HintContext`, `gfnt_face_hinted_outline()` and `gfnt_face_gasp_gridfit()` (`documentation/design.md` §8.5). `GFNT_RasterOptions::hint_mode` chooses whether `gfnt_face_render_glyph()` hints; zero is the font's own request.
 - **`stat.h`, `featurevar.h`, `cvt.h`** — what a variable font names, replaces and moves besides its outlines: `STAT`'s axes and axis values and which of them name a location; which `FeatureVariations` record applies at one, and the lookups it substitutes; and the `cvt ` control values at a location through `cvar`.
 - **`metrics.h`** — `head`, `hhea`, `OS/2`, `post`, `unitsPerEm`, and per-glyph advances from `hmtx`.
 - **`cmap.h`** — code point to glyph, formats 0, 4, 6 and 12, and which subtable answered.
@@ -185,7 +185,7 @@ asks which glyph a code point maps to does not link a rasteriser or a shaper.
 ## Dependencies
 
 Found through pkg-config, and the installed `.pc` file names it, so a
-program that links `ghoti.io-font-7` links this too.
+program that links `ghoti.io-font-8` links this too.
 
 - [ghoti.io-cutil](https://github.com/Ghoti-io/cutil) — the allocator, the growable array, and the overflow-checked size arithmetic.
 - [ghoti.io-compress](https://github.com/Ghoti-io/compress) — gzip, for the `.pcf.gz` and `.psf.gz` a bitmap font usually arrives in, and zlib for WOFF 1.

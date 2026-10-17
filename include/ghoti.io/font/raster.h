@@ -59,6 +59,7 @@
 #include <ghoti.io/font/bitmap.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
+#include <ghoti.io/font/hint.h>
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/outline.h>
 #include <stdbool.h>
@@ -124,8 +125,8 @@ typedef struct GFNT_Coverage {
 /**
  * @brief How to rasterise.
  *
- * All-zero is the sensible default: non-zero winding, no sub-pixel offset, and
- * the default flattening tolerance. A caller that memsets one and sets nothing
+ * All-zero is the sensible default: non-zero winding, no sub-pixel offset, the
+ * default flattening tolerance, and the font's own hinting. A caller that memsets one and sets nothing
  * gets what it expects.
  */
 typedef struct GFNT_RasterOptions {
@@ -144,6 +145,14 @@ typedef struct GFNT_RasterOptions {
    * coverage can express.
    */
   GFNT_F26Dot6 tolerance;
+  /**
+   * Whether ::gfnt_face_render_glyph() fits the outline to the pixel grid with
+   * the font's own program. Zero is the font's own request; ::GFNT_HINT_MODE_NONE
+   * renders the outline as drawn. ::gfnt_raster_outline() takes an outline that
+   * is already in pixels and ignores this.
+   */
+  GFNT_HintMode hint_mode;
+  GFNT_HintVersion hint_version;  ///< Which interpreter behaviour hinting runs under.
 } GFNT_RasterOptions;
 
 /**
@@ -172,6 +181,12 @@ GFNT_API GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
  *
  * The whole path from a glyph index to pixels, so that a caller does not have
  * to know that scaling happens once and in one place (M5).
+ *
+ * Unless `options->hint_mode` says otherwise the glyph is hinted by the font's
+ * own program. That prepares the face for the size on every call (it runs the
+ * font's two programs), so a caller rendering many glyphs at one size should
+ * make a ::GFNT_HintContext once and use ::gfnt_face_hinted_outline() with
+ * ::gfnt_raster_outline().
  *
  * @param face The face.
  * @param glyph The glyph index.

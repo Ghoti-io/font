@@ -23,7 +23,7 @@
  *
  * Rasterise every glyph at every size and sub-pixel offset, and print a hash.
  *
- * Usage: font-render <label> <font> [--art <glyph> <ppem>]
+ * Usage: font-render <label> <font> [--hint] [--art <glyph> <ppem>]
  *
  * **This is the golden-bitmap gate's driver** (documentation/design.md section
  * 14.4). One line per rendering, carrying the shape, the origin, the coverage
@@ -36,6 +36,10 @@
  * The total is printed beside the hash deliberately. A hash says "different"
  * and nothing else; the total says *how* different, which is the difference
  * between a rendering that moved by a pixel and one that lost a contour.
+ *
+ * The golden file is of the outlines as drawn, so the default is
+ * ::GFNT_HINT_MODE_NONE; `--hint` renders with the font's own hinting instead,
+ * which the committed file does not cover.
  *
  * `--art` prints one rendering as characters instead, for a person looking at a
  * glyph that came out wrong.
@@ -75,6 +79,9 @@ static const GFNT_F26Dot6 offsets[] = {0, 16, 32, 48};
 #define GFNT_GOLDEN_VERTICAL_PPEM 16
 #define GFNT_GOLDEN_VERTICAL_OFFSET 32
 
+/** The hint mode every rendering uses: none unless --hint was given. */
+static GFNT_HintMode hint_mode = GFNT_HINT_MODE_NONE;
+
 static int render_one(const char * label, const GFNT_Face * face,
     uint32_t glyph, uint32_t ppem, GFNT_F26Dot6 x, GFNT_F26Dot6 y) {
   GFNT_RasterOptions options;
@@ -85,6 +92,7 @@ static int render_one(const char * label, const GFNT_Face * face,
   memset(&options, 0, sizeof options);
   memset(&coverage, 0, sizeof coverage);
   gfnt_error_clear(&error);
+  options.hint_mode = hint_mode;
   options.origin_x = x;
   options.origin_y = y;
 
@@ -114,8 +122,13 @@ int main(int argc, char ** argv) {
   GFNT_Error error;
   size_t glyphs = 0;
 
+  if (argc >= 4 && strcmp(argv[3], "--hint") == 0) {
+    hint_mode = GFNT_HINT_MODE_FONT;
+    memmove(argv + 3, argv + 4, (size_t)(argc - 3) * sizeof *argv);
+    --argc;
+  }
   if (argc < 3) {
-    fprintf(stderr, "usage: %s <label> <font> [--art <glyph> <ppem>]\n",
+    fprintf(stderr, "usage: %s <label> <font> [--hint] [--art <glyph> <ppem>]\n",
         argv[0]);
     return 2;
   }
@@ -147,6 +160,7 @@ int main(int argc, char ** argv) {
 
     memset(&options, 0, sizeof options);
     memset(&coverage, 0, sizeof coverage);
+    options.hint_mode = hint_mode;
     if (gfnt_face_render_glyph(face, glyph, ppem, &options, NULL, &coverage,
             &error)
         == GFNT_OK) {

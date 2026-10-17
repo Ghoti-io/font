@@ -844,7 +844,8 @@ GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
     const GFNT_RasterOptions * options, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_Coverage * out_coverage,
     GFNT_Error * error) {
-  static const GFNT_RasterOptions defaults = {GFNT_FILL_NONZERO, 0, 0, 0};
+  static const GFNT_RasterOptions defaults = {GFNT_FILL_NONZERO, 0, 0, 0,
+      GFNT_HINT_MODE_FONT, GFNT_HINT_VERSION_AUTO};
   static const GFNT_OutlineSink sink = {
     gfnt_raster_move,
     gfnt_raster_line_to,
@@ -988,6 +989,7 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
     GFNT_Error * error) {
   GFNT_Outline * outline = NULL;
   uint16_t upem = 0;
+  GFNT_HintMode mode;
   GFNT_Result result;
 
   gfnt_error_clear(error);
@@ -1005,6 +1007,45 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
   result = gfnt_face_units_per_em(face, &upem, error);
   if (result != GFNT_OK) {
     return result;
+  }
+  mode = options ? options->hint_mode : GFNT_HINT_MODE_FONT;
+  if (mode == GFNT_HINT_MODE_AUTO) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
+        "automatic hinting is reserved and not built");
+  }
+  if (mode != GFNT_HINT_MODE_FONT && mode != GFNT_HINT_MODE_NONE
+      && mode != GFNT_HINT_MODE_FONT_STRICT) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, glyph, "not a hinting mode");
+  }
+  if (mode != GFNT_HINT_MODE_NONE && gfnt_face_gasp_gridfit(face, ppem)) {
+    GFNT_HintContext * context = NULL;
+
+    result = gfnt_hint_context_create(face, ppem,
+        options ? options->hint_version : GFNT_HINT_VERSION_AUTO, &context, error);
+    if (result == GFNT_OK) {
+      GFNT_HintStatus status = GFNT_HINT_STATUS_HINTED;
+
+      result = gfnt_face_hinted_outline(face, context, glyph, allocator, &outline,
+          &status, NULL, error);
+      if (result == GFNT_OK && status == GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED
+          && mode == GFNT_HINT_MODE_FONT_STRICT) {
+        gfnt_outline_destroy(outline);
+        outline = NULL;
+        result = gfnt_error_set(error, GFNT_ERR_CORRUPT, 0, 0, glyph,
+            "a hinting program failed and the mode does not allow falling back");
+      }
+      gfnt_hint_context_destroy(context);
+      if (result == GFNT_OK) {
+        result = gfnt_raster_outline(outline, options, &face->limits, allocator,
+            out_coverage, error);
+      }
+      gfnt_outline_destroy(outline);
+      return result;
+    }
+    if (result != GFNT_ERR_UNSUPPORTED) {
+      return result;   /* a bad glyph or a limit is the caller's to hear about */
+    }
+    gfnt_error_clear(error);   /* a face with no TrueType outlines has nothing to hint */
   }
   result = gfnt_face_glyph_outline(face, glyph, NULL, allocator, &outline,
       error);

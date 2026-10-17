@@ -32,7 +32,7 @@ BUILD = os.environ.get("BUILD", "linux/release")
 MAKE_BUILD = BUILD.removeprefix("linux/")
 APPS = ROOT / "build" / BUILD / "apps"
 DRIVER = APPS / "examples" / "font-hint"
-ARCHIVE = APPS / "libghoti.io-font-7.a"
+ARCHIVE = APPS / "libghoti.io-font-8.a"
 
 MUTANTS = [
     ("src/hint/tt_move.c", "bool behind = org_dist < 0;", "bool behind = false;",

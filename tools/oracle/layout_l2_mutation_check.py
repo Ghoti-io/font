@@ -33,7 +33,7 @@ def rejects_object_mutant() -> None:
     replacement = "if (end == start + 1 && cs->cps[start] == 0xFFFC && !style->inline_object) {"
     SOURCE = source_with(ROOT, needle)
     original = SOURCE.read_text()
-    artifacts = (APP, APP.parent / "libghoti.io-font-7.a", object_of(ROOT, BUILD, SOURCE))
+    artifacts = (APP, APP.parent / "libghoti.io-font-8.a", object_of(ROOT, BUILD, SOURCE))
     try:
         SOURCE.write_text(original.replace(needle, replacement))
         for artifact in artifacts:

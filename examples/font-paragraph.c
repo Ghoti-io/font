@@ -190,6 +190,9 @@ int main(int argc, char ** argv) {
         int gy = (int)lround(pg->y / 64.0);
 
         memset(&ro, 0, sizeof ro);
+        // Advances here are fractional and the oracles compare unfitted shapes, so the
+        // glyphs are drawn as the font drew them.
+        ro.hint_mode = GFNT_HINT_MODE_NONE;
         ro.origin_x = turned ? 0 : pg->x - gx * 64;
         if (gfnt_face_render_glyph(run->face, pg->glyph, size, &ro, NULL, &cov, NULL)
                 != GFNT_OK) {

@@ -16,7 +16,7 @@ build our own text shaper and font manager over time"*); because `image` has
 no way to put text into a raster; and because a PDF library, should one come,
 needs to read four font formats and write two of them.
 
-The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-7`, the include
+The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-8`, the include
 path `<ghoti.io/font/...>`.
 
 ---
@@ -1310,20 +1310,36 @@ un-anti-aliased rendering of hinted outlines, which is absent), no embolden or
 oblique synthesis in the first release - synthetic styles are a fallback
 concern and belong with font discovery when it wants them.
 
-### 8.5 TrueType hinting is planned
+### 8.5 TrueType hinting
 
-There is no TrueType instruction interpreter or autohinter yet. The project
-plans to implement TrueType hinting; the earlier decision to exclude it from
-the first release is superseded (§17.2). The `gasp` table is read and its
-per-range flags are exposed as advice. The `gasp` advice, `ROUND_XY_TO_GRID`
-and the `cvt`/`fpgm`/`prep` tables are currently parsed for completeness and
-ignored. Until hinting is implemented, outlines are rendered unhinted with
-exact-area anti-aliasing. Any future interpreter must treat font bytecode as
-untrusted input and retain the bounds and resource limits described in §§1–2.
+The library runs a TrueType font's own instructions to fit outlines to the pixel
+grid. Hinting is **on by default**: the zero value of `GFNT_RasterOptions::hint_mode`
+is `GFNT_HINT_MODE_FONT`, the font's own request (the library's rule for a policy,
+§10.3), so `gfnt_face_render_glyph()` returns the rendering the font was designed
+to give. `GFNT_HINT_MODE_NONE` asks for the outline as drawn;
+`GFNT_HINT_MODE_FONT_STRICT` is `FONT` where a program that fails fails the call;
+`GFNT_HINT_MODE_AUTO` is reserved for an automatic hinter and refused. A face with
+no TrueType outlines (CFF, Type 1, bitmap), or whose `gasp` table sets no
+grid-fitting bit at the size, is rendered as before. `GFNT_HintVersion` picks the
+interpreter behaviour: `AUTO` is version 40, which FreeType and Windows run, and
+`35` is the original.
 
-**What exists, internally: a bounded virtual machine and a hinter for simple
-glyphs.** (`src/hint/`; the public `hint.h` still only reads, checks and prints
-programs.) The opcode table (`tt_ops.c`) is the one source of mnemonic, flag
+For one glyph the call prepares the face for the size every time (it runs `fpgm` and
+`prep`). A caller rendering many glyphs at a size makes a `GFNT_HintContext` once
+with `gfnt_hint_context_create()` (immutable afterwards, so any number of threads
+may hint from it), then takes each glyph's pixel outline from
+`gfnt_face_hinted_outline()` and rasterises that with `gfnt_raster_outline()`. That
+call reports a status per glyph, `HINTED`, `UNHINTED_NO_PROGRAM` or
+`UNHINTED_PROGRAM_FAILED`: a glyph that could not be hinted is returned unhinted
+and says so, never silently (M8). Hinting changed what the default rendering is,
+so it is a deliberate break and the ABI major moved.
+
+Font bytecode is untrusted input and keeps the bounds and resource limits of
+§§1-2. The version 40 default means advances stay fractional in shaping and layout,
+as the promise that measuring and painting are one path requires.
+
+**How it works** (`src/hint/`; `hint.h` is the public part, and also reads, checks
+and prints programs.) The opcode table (`tt_ops.c`) is the one source of mnemonic, flag
 width, stack effect and operand length for the decoder and the interpreter. The
 interpreter (`tt_exec.c`, `tt_move.c`) is written from the specification's
 instruction-set chapter and runs a face's `fpgm` and `prep` once per size into a
@@ -1379,7 +1395,7 @@ advance reported for a hinted glyph is the distance between its first two phanto
 points, rounded to a whole pixel; the outline is shifted so the first lies at zero.
 
 Variable fonts, the original (version 35) behaviour of `GETINFO`'s remaining bits,
-the vertical phantom points, and the public API are not built yet.
+and the vertical phantom points are not built yet.
 
 ---
 
@@ -2150,7 +2166,7 @@ and a fixture font can expose the spacing behavior.
 
 Adding `text_spacing_trim` changes the public `GFNT_ParagraphOptions` layout.
 The package, SONAME and symbol namespace therefore move to ABI major 7; callers
-must rebuild against the matching `ghoti.io-font-7` headers and library.
+must rebuild against the matching `ghoti.io-font-8` headers and library.
 
 Resolved decoration geometry is implemented for underline, overline and
 line-through, including byte-range selection and glyph-ink gaps. The caller

@@ -1366,8 +1366,20 @@ fonts are left out of the comparison and counted. (3) What FreeType tolerates in
 broken program is not yet matched; a program that makes a bad access leaves its
 glyph unhinted here.
 
-Composites, hinted advances, variable fonts, the original (version 35) behaviour of
-`GETINFO`'s remaining bits, and the public API are not built yet.
+**Composites and advances.** A composite's components are hinted first, each by its
+own program; then each is transformed (its 2x2, one rounded multiplication per
+term) and placed by its offset, which is scaled from font units (so a scaled offset
+is applied to the component's coordinates before it is scaled) or matched by points
+(which compare the hinted positions). `ROUND_XY_TO_GRID` rounds the scaled offset
+to whole pixels, ties upward; version 40 in its compatibility mode rounds only the
+vertical offset. The last component marked `USE_MY_METRICS` supplies the composite's
+phantom points and advance. A composite's own program, if it has one, then runs
+over the assembled points, with their hinted places as their originals. The
+advance reported for a hinted glyph is the distance between its first two phantom
+points, rounded to a whole pixel; the outline is shifted so the first lies at zero.
+
+Variable fonts, the original (version 35) behaviour of `GETINFO`'s remaining bits,
+the vertical phantom points, and the public API are not built yet.
 
 ---
 

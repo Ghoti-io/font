@@ -34,6 +34,16 @@ import oracle_env
 ROOT = oracle_env.ROOT
 
 
+def sidecar_points(path):
+    with open(path + ".json") as handle:
+        return json.load(handle)["points"]
+
+
+def names_of(path):
+    with open(path + ".json") as handle:
+        return list(json.load(handle)["programs"])
+
+
 def differs(sidecar, name, asm, version, ppem):
     """Whether this program on this glyph's points still disagrees with FreeType."""
     scratch = os.path.join(ROOT, "build", "oracle", "probe")
@@ -78,7 +88,7 @@ def shrink(sidecar, name, version, ppem):
 
 def main(argv):
     opts = {"--seed": "1", "--fonts": "2", "--glyphs": "60", "--steps": "1",
-            "--version": "35", "--ppem": "12,16", "--show": "6", "--vectors": "any", "--shrink": "0"}
+            "--version": "35", "--ppem": "12,16", "--show": "6", "--vectors": "any", "--shrink": "0", "--composites": "0"}
     args = argv[1:]
     while args:
         key = args.pop(0)
@@ -91,7 +101,7 @@ def main(argv):
     gen = subprocess.run(oracle_env.command("fonttools", [
         "python3", os.path.join(ROOT, "tools", "oracle", "hint_probe_font.py"),
         scratch, opts["--seed"], opts["--fonts"], opts["--glyphs"], opts["--steps"]]
-        + (["axis"] if opts["--vectors"] == "axis" else []),
+        + [opts["--vectors"] if opts["--vectors"] in ("axis", "any") else "any", opts["--composites"]],
         scratch=scratch), capture_output=True, text=True)
     if gen.returncode != 0:
         print(gen.stderr[-500:])
@@ -142,6 +152,8 @@ def main(argv):
                         answer[1][where][:2] if where is not None else "-",
                         other[1][where][:2] if where is not None else "-"))
                     print("    " + " ; ".join(full))
+        if isinstance(sidecar_points(path).get(names_of(path)[gid]), list) and sidecar_points(path)[names_of(path)[gid]] and isinstance(sidecar_points(path)[names_of(path)[gid]][0][0], str):
+            print("    components: %s" % sidecar_points(path)[names_of(path)[gid]])
     for size, path, ppem, gid, answer, other, full in sorted(shortest, key=lambda e: e[0])[:int(opts["--show"])]:
         where = next((i for i, (a, b) in enumerate(zip(answer[1], other[1])) if a != b), None)
         print("%s ppem %d glyph %d point %s: ours %s theirs %s" % (
@@ -149,6 +161,8 @@ def main(argv):
             answer[1][where][:2] if where is not None else "-",
             other[1][where][:2] if where is not None else "-"))
         print("    " + " ; ".join(full))
+        if isinstance(sidecar_points(path).get(names_of(path)[gid]), list) and sidecar_points(path)[names_of(path)[gid]] and isinstance(sidecar_points(path)[names_of(path)[gid]][0][0], str):
+            print("    components: %s" % sidecar_points(path)[names_of(path)[gid]])
     print("%d identical, %d different, %d not compared" % (same, different, declined))
     for note, count in sorted(notes.items(), key=lambda kv: -kv[1])[:6]:
         print("  not compared %4d x %s" % (count, note))

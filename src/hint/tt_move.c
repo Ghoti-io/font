@@ -233,7 +233,7 @@ static int32_t gfnt_hint_original_distance(const GFNT_HintRun * run,
      scale once, so the distance carries no rounding of its own points. */
   return gfnt_hint_mul_fix(gfnt_hint_dual_project(run,
       gfnt_hint_sub(za->orus[a].x, zb->orus[b].x),
-      gfnt_hint_sub(za->orus[a].y, zb->orus[b].y)), run->ctx->scale);
+      gfnt_hint_sub(za->orus[a].y, zb->orus[b].y)), run->scale);
 }
 
 static int32_t gfnt_hint_scaled_original_distance(const GFNT_HintRun * run,
@@ -605,8 +605,8 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       for (size_t i = 0; i < limit; ++i) {
         if (rz == z && i == rp) continue;
         /* The zone shift moves the point without marking it touched. */
-        if (gs->fv[0] != 0) z->cur[i].x = gfnt_hint_add(z->cur[i].x, dx);
-        if (gs->fv[1] != 0) z->cur[i].y = gfnt_hint_add(z->cur[i].y, dy);
+        if (gs->fv[0] != 0 && !gfnt_hint_compat(run)) z->cur[i].x = gfnt_hint_add(z->cur[i].x, dx);
+        if (gs->fv[1] != 0 && !gfnt_hint_frozen(run)) z->cur[i].y = gfnt_hint_add(z->cur[i].y, dy);
       }
       break;
     }
@@ -626,7 +626,7 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
         CHECK_POINT(z2, p);
         /* The version 40 compatibility behaviour moves only points the program
            has already moved vertically. */
-        if (gfnt_hint_compat(run) && !(z2->flags[p] & GFNT_HINT_TOUCH_Y)) {
+        if (gfnt_hint_compat(run) && !run->composite && !(z2->flags[p] & GFNT_HINT_TOUCH_Y)) {
           continue;
         }
         gfnt_hint_displace(run, z2, (size_t)p, dx, dy);
@@ -758,7 +758,7 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
         int32_t p = POP();
         int32_t arg = POP();
         CHECK_POINT(z0, p);
-        if (gfnt_hint_compat(run) && !(z0->flags[p] & GFNT_HINT_TOUCH_Y)) {
+        if (gfnt_hint_compat(run) && !run->composite && !(z0->flags[p] & GFNT_HINT_TOUCH_Y)) {
           continue;
         }
         if ((int32_t)ctx->params.ppem == first_ppem + ((arg >> 4) & 15)) {

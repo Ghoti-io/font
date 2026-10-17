@@ -90,16 +90,9 @@ int main(int argc, char ** argv) {
       printf("g%zu error %s\n", g, gfnt_result_string(result));
       continue;
     }
-    if (status != GFNT_HINT_STATUS_HINTED) {
-      const char * why = status == GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM ? "no-program"
-          : status == GFNT_HINT_STATUS_UNHINTED_COMPOSITE ? "composite" : "failed";
-
-      printf("g%zu unhinted %s", g, why);
-      if (status == GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED) {
-        printf(" %s at %zu opcode 0x%02x", gfnt_hint_failure_name(fault.failure),
-            fault.offset, fault.opcode);
-      }
-      printf("\n");
+    if (status == GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED) {
+      printf("g%zu unhinted failed %s at %zu opcode 0x%02x\n", g,
+          gfnt_hint_failure_name(fault.failure), fault.offset, fault.opcode);
       gfnt_outline_destroy(outline);
       continue;
     }

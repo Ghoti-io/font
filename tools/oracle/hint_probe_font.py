@@ -10,7 +10,7 @@
 # published by the Free Software Foundation.
 """Generate TrueType fonts whose glyphs run small random hinting programs.
 
-    hint_probe_font.py <out-dir> <seed> <fonts> <glyphs-per-font> [max-steps] [axis]
+    hint_probe_font.py <out-dir> <seed> <fonts> <glyphs-per-font> [max-steps] [axis|any] [composites]
 
 Run inside the fontTools image, for hint_probe_diff.py. A hand-written glyph
 program exercises what its author thought of; a random program of valid
@@ -147,15 +147,43 @@ class Maker:
         return [push([r.randrange(-9000, 9000), r.randrange(-9000, 9000)]), r.choice(["SPVFS[ ]", "SFVFS[ ]"])]
 
 
-def make_font(rng, path, glyph_count, steps, oblique=True):
+def make_font(rng, path, glyph_count, steps, oblique=True, composites=0):
     upem = rng.choice([1000, 2048])
     maker = Maker(rng, upem, oblique)
-    order = [".notdef"] + ["g%d" % i for i in range(1, glyph_count)]
+    order = [".notdef"] + ["g%d" % i for i in range(1, glyph_count + composites)]
     glyphs = {}
     listing = {}
     shape = {}
-    for name in order:
+    for index, name in enumerate(order):
         g = Glyph()
+        if index >= glyph_count:
+            # A composite of one to three earlier glyphs (simple or composite).
+            from fontTools.ttLib.tables._g_l_y_f import GlyphComponent
+            g.numberOfContours = -1
+            g.components = []
+            for _ in range(rng.randrange(1, 4)):
+                comp = GlyphComponent()
+                comp.glyphName = order[rng.randrange(1, index)]
+                comp.flags = 0x2 | (0x4 if rng.random() < 0.4 else 0) | (0x200 if rng.random() < 0.2 else 0)
+                if rng.random() < 0.15:
+                    comp.flags |= rng.choice([0x800, 0x1000])
+                comp.x, comp.y = rng.randrange(-200, 400), rng.randrange(-200, 400)
+                if rng.random() < 0.25:
+                    comp.transform = rng.choice([
+                        [[0.5, 0], [0, 0.5]], [[1.0, 0], [0, 0.75]], [[0.866, 0.5], [-0.5, 0.866]],
+                        [[1, 0.25], [0, 1]], [[0.75, 0.1], [-0.1, 0.75]]])
+                g.components.append(comp)
+            shape[name] = [[c.glyphName, c.x, c.y, c.flags, getattr(c, 'transform', None)] for c in g.components]
+            if rng.random() < 0.6:
+                asm = maker.program(steps)
+            else:
+                asm = []
+            listing[name] = asm
+            prog = ttProgram.Program()
+            prog.fromAssembly(asm)
+            g.program = prog
+            glyphs[name] = g
+            continue
         coords = []
         flags = []
         # Two contours of POINTS/2 points, spread over the em with some structure
@@ -215,10 +243,11 @@ def main(argv):
     out, seed, fonts, glyphs = argv[1], int(argv[2]), int(argv[3]), int(argv[4])
     steps = int(argv[5]) if len(argv) > 5 else 8
     oblique = not (len(argv) > 6 and argv[6] == "axis")
+    composites = int(argv[7]) if len(argv) > 7 else 0
     os.makedirs(out, exist_ok=True)
     for n in range(fonts):
         rng = random.Random(seed * 100003 + n)
-        make_font(rng, os.path.join(out, "probe-%d-%d.ttf" % (seed, n)), glyphs, steps, oblique)
+        make_font(rng, os.path.join(out, "probe-%d-%d.ttf" % (seed, n)), glyphs, steps, oblique, composites)
     return 0
 
 

@@ -1265,7 +1265,9 @@ check-oracle-tt-decode: $(EXAMPLES)
 check-oracle-hint: ## Hint glyphs of corpus fonts and compare every point with FreeType's
 check-oracle-hint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py freetype -- \
-		python3 $(ORACLE)/hint_diff.py --version 35 --fonts 6 --ppem 11,12,17 --stride 9 --quiet
+		python3 $(ORACLE)/hint_diff.py --version 35 --fonts 6 --ppem 11,12,17 --stride 9 --advance --quiet
+	@python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_diff.py --version 40 --fonts 6 --ppem 11,12,17 --stride 9 --advance --quiet
 
 check-oracle-hint-probe: ## Run random hinting programs through this library and FreeType and compare every point
 check-oracle-hint-probe: $(EXAMPLES)
@@ -1287,9 +1289,9 @@ check-hint-mutations: $(APP_DIR)/testHint$(EXE_EXTENSION) $(EXAMPLES)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/tt_decode_mutation_check.py
 
 check-hint: ## Every TrueType hinting gate: the unit tests, the fontTools comparison and its mutation check
-check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) $(APP_DIR)/testHint_vm$(EXE_EXTENSION) $(APP_DIR)/testHint_point$(EXE_EXTENSION)
+check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) $(APP_DIR)/testHint_vm$(EXE_EXTENSION) $(APP_DIR)/testHint_point$(EXE_EXTENSION) $(APP_DIR)/testHint_glyph$(EXE_EXTENSION)
 check-hint: check-oracle-tt-decode check-hint-mutations check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries check-hint-point-mutations
-	@for t in testHint testHint_vm testHint_point; do \
+	@for t in testHint testHint_vm testHint_point testHint_glyph; do \
 		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
 	done
 

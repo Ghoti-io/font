@@ -39,6 +39,11 @@ static void gfnt_hint_free(const GFNT_Allocator * a, void * p) {
   }
 }
 
+/* To the nearest whole pixel with a tie going up. */
+static int32_t gfnt_hint_pixel(int32_t v) {
+  return (int32_t)((uint32_t)gfnt_hint_add(v, 32) & ~63u);
+}
+
 static size_t gfnt_hint_min(size_t a, size_t b) {
   return a < b ? a : b;
 }
@@ -89,6 +94,7 @@ static GFNT_Result gfnt_hint_run_create(GFNT_HintContext * ctx, bool building,
   }
   run->allocator = a;
   run->ctx = ctx;
+  run->scale = ctx->scale;
   run->building = building;
   run->stack_capacity = ctx->stack_capacity;
   run->stack = gfnt_hint_calloc(a, run->stack_capacity, sizeof run->stack[0]);
@@ -317,11 +323,15 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
     }
     z->count = input->point_count;
     z->contour_count = input->contour_count;
+    if (input->pixels) {
+      run->composite = true;
+      run->scale = 0x10000;
+    }
     for (size_t i = 0; i < input->point_count; ++i) {
       z->orus[i].x = input->x[i];
       z->orus[i].y = input->y[i];
-      z->org[i].x = gfnt_hint_mul_fix(input->x[i], ctx->scale);
-      z->org[i].y = gfnt_hint_mul_fix(input->y[i], ctx->scale);
+      z->org[i].x = input->pixels ? input->x[i] : gfnt_hint_mul_fix(input->x[i], ctx->scale);
+      z->org[i].y = input->pixels ? input->y[i] : gfnt_hint_mul_fix(input->y[i], ctx->scale);
       z->cur[i] = z->org[i];
       z->flags[i] = input->on_curve[i] ? GFNT_HINT_ON_CURVE : 0;
     }
@@ -331,20 +341,22 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
     if (input->point_count >= 4) {
       /* The phantom points are placed on the pixel grid before the program runs:
          the origin and the advance across, the top and the bottom up and down. */
-      GFNT_HintGState grid;
       size_t n = input->point_count;
 
-      gfnt_hint_gstate_default(&grid);
       /* Where they are now is on the grid; where they began is not, so a program
          that moves with them (SHP from the advance, say) sees the rounding as a
          shift. */
       for (size_t i = n - 4u; i < n; ++i) {
         z->cur[i] = z->org[i];
       }
-      z->cur[n - 4u].x = gfnt_hint_round(&grid, z->org[n - 4u].x);
-      z->cur[n - 3u].x = gfnt_hint_round(&grid, z->org[n - 3u].x);
-      z->cur[n - 2u].y = gfnt_hint_round(&grid, z->org[n - 2u].y);
-      z->cur[n - 1u].y = gfnt_hint_round(&grid, z->org[n - 1u].y);
+      /* The version 40 compatibility behaviour does not move anything along x,
+         and placing the origin and the advance on the grid is such a move. */
+      if (!(ctx->params.version >= 40 && !(ctx->instruct_control & 4u))) {
+        z->cur[n - 4u].x = gfnt_hint_pixel(z->org[n - 4u].x);
+        z->cur[n - 3u].x = gfnt_hint_pixel(z->org[n - 3u].x);
+      }
+      z->cur[n - 2u].y = gfnt_hint_pixel(z->org[n - 2u].y);
+      z->cur[n - 1u].y = gfnt_hint_pixel(z->org[n - 1u].y);
     }
   }
   if (length > ctx->limits.max_program) {
@@ -356,6 +368,10 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
 
 GFNT_HintFault gfnt_hint_run_fault(const GFNT_HintRun * run) {
   return run->fault;
+}
+
+bool gfnt_hint_run_on_curve(const GFNT_HintRun * run, size_t index) {
+  return index < run->zone[1].count && (run->zone[1].flags[index] & GFNT_HINT_ON_CURVE);
 }
 
 bool gfnt_hint_run_normalised(const GFNT_HintRun * run) {

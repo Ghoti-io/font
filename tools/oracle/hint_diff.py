@@ -44,9 +44,11 @@ DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples",
 # now agrees fails the run (remove the entry), and a difference not listed fails
 # it too.
 # How far apart two hinted points may be, in 64ths of a pixel, when the program
-# turned a direction into a unit vector. A bound and not a pass: a glyph further
-# apart than this is a difference.
-OBLIQUE_BOUND = 4
+# turned a direction into a unit vector. The vectors differ by a 16384th; what that
+# does is a few 64ths where a distance is used as it stands, and a whole pixel where
+# it tips a rounding decision, which is why the bound is one pixel. A bound and not
+# a pass: a glyph further apart than this is a difference.
+OBLIQUE_BOUND = 64
 
 EXPECTED = {}
 
@@ -145,6 +147,7 @@ def main(argv):
     totals = {"compared": 0, "same": 0, "different": 0, "declined": 0,
               "refused": 0, "advance": 0, "expected": 0, "oblique": 0, "no_prep": 0}
     expected_seen = set()
+    shown_advance = [0]
     shown = 0
     reasons = {}
     kinds = {}
@@ -184,8 +187,7 @@ def main(argv):
                     totals["expected"] += 1
                 elif answer[4] and max(abs(a[k] - b[k]) for a, b in zip(answer[1], other[1]) for k in (0, 1)) <= OBLIQUE_BOUND:
                     # A program that makes a vector from a direction gets FreeType's
-                    # approximation of it, good to a 16384th; the difference it
-                    # makes is a few 64ths of a pixel and no more.
+                    # approximation of it, good to a 16384th; see OBLIQUE_BOUND.
                     totals["oblique"] += 1
                 else:
                     totals["different"] += 1
@@ -207,6 +209,10 @@ def main(argv):
                             "%d points vs %d" % (len(answer[1]), len(other[1]))))
                 if advance and answer[0] != other[0]:
                     totals["advance"] += 1
+                    if shown_advance[0] < 6:
+                        shown_advance[0] += 1
+                        print("%s ppem %d v%d glyph %d: advance ours %d theirs %d"
+                              % (os.path.basename(path), ppem, version, glyph, answer[0], other[0]))
         if totals["compared"] > before:
             used += 1
     print("compared %(compared)d glyphs: %(same)d identical, %(different)d different; "

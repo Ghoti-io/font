@@ -73,20 +73,6 @@
  */
 #define GFNT_GLYF_CUBIC 0x80u
 
-// Composite glyph flags, OpenType 1.9 table "Component Glyph Flags".
-#define GFNT_GLYF_ARGS_ARE_WORDS 0x0001u
-#define GFNT_GLYF_ARGS_ARE_XY 0x0002u
-#define GFNT_GLYF_ROUND_XY_TO_GRID 0x0004u
-#define GFNT_GLYF_HAVE_SCALE 0x0008u
-#define GFNT_GLYF_MORE_COMPONENTS 0x0020u
-#define GFNT_GLYF_HAVE_XY_SCALE 0x0040u
-#define GFNT_GLYF_HAVE_TWO_BY_TWO 0x0080u
-#define GFNT_GLYF_HAVE_INSTRUCTIONS 0x0100u
-#define GFNT_GLYF_USE_MY_METRICS 0x0200u
-#define GFNT_GLYF_OVERLAP_COMPOUND 0x0400u
-#define GFNT_GLYF_SCALED_OFFSET 0x0800u
-#define GFNT_GLYF_UNSCALED_OFFSET 0x1000u
-
 GFNT_Result gfnt_loca_range(const GFNT_Face * face, uint32_t glyph,
     size_t * out_offset, size_t * out_length, GFNT_Error * error) {
   const GFNT_Head * head = NULL;
@@ -970,6 +956,57 @@ GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,
   }
   *out_composite = contours < 0;
   return GFNT_OK;
+}
+
+GFNT_Result gfnt_glyf_components(const GFNT_Face * face, uint32_t glyph,
+    GFNT_GlyfComponent * out, size_t capacity, size_t * out_count,
+    GFNT_Error * error) {
+  GFNT_Reader reader;
+  bool empty = false;
+  int16_t contours = 0;
+  size_t count = 0;
+  GFNT_Result result;
+
+  gfnt_error_clear(error);
+  if (!face || !out_count || (!out && capacity)) {
+    return GFNT_ERR_INVALID;
+  }
+  *out_count = 0;
+  result = gfnt_glyf_reader(face, glyph, &reader, &empty, error);
+  if (result != GFNT_OK || empty) {
+    return result;
+  }
+  result = gfnt_read_s16(&reader, &contours);
+  if (result != GFNT_OK || contours >= 0) {
+    return result;
+  }
+  result = gfnt_reader_seek(&reader, GFNT_GLYF_HEADER_BYTES);
+  while (result == GFNT_OK) {
+    GFNT_Component component;
+
+    result = gfnt_glyf_component(&reader, glyph, &component, error);
+    if (result != GFNT_OK) {
+      break;
+    }
+    if (count < capacity) {
+      out[count].flags = component.flags;
+      out[count].glyph = component.glyph;
+      out[count].arg1 = component.arg1;
+      out[count].arg2 = component.arg2;
+      out[count].xx = component.xx;
+      out[count].xy = component.xy;
+      out[count].yx = component.yx;
+      out[count].yy = component.yy;
+    }
+    ++count;
+    if (!(component.flags & GFNT_GLYF_MORE_COMPONENTS)) {
+      break;
+    }
+  }
+  if (result == GFNT_OK) {
+    *out_count = count;
+  }
+  return result;
 }
 
 GFNT_Result gfnt_glyf_program(const GFNT_Face * face, uint32_t glyph,

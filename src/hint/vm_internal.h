@@ -122,6 +122,8 @@ struct GFNT_HintRun {
   size_t glyph_length;
   GFNT_HintFault fault;
   bool normalised;                ///< Whether a vector was made from a direction.
+  bool composite;                 ///< Whether the glyph zone is a composite's.
+  int32_t scale;                  ///< 16.16 pixels per font unit for the original coordinates.
   bool iup_called[2];             ///< Whether IUP has run along y, along x.
 };
 

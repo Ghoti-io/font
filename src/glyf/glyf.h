@@ -40,6 +40,50 @@
 extern "C" {
 #endif
 
+// Composite glyph flags, OpenType 1.9 table "Component Glyph Flags".
+#define GFNT_GLYF_ARGS_ARE_WORDS 0x0001u
+#define GFNT_GLYF_ARGS_ARE_XY 0x0002u
+#define GFNT_GLYF_ROUND_XY_TO_GRID 0x0004u
+#define GFNT_GLYF_HAVE_SCALE 0x0008u
+#define GFNT_GLYF_MORE_COMPONENTS 0x0020u
+#define GFNT_GLYF_HAVE_XY_SCALE 0x0040u
+#define GFNT_GLYF_HAVE_TWO_BY_TWO 0x0080u
+#define GFNT_GLYF_HAVE_INSTRUCTIONS 0x0100u
+#define GFNT_GLYF_USE_MY_METRICS 0x0200u
+#define GFNT_GLYF_OVERLAP_COMPOUND 0x0400u
+#define GFNT_GLYF_SCALED_OFFSET 0x0800u
+#define GFNT_GLYF_UNSCALED_OFFSET 0x1000u
+
+
+/** One component of a composite, as its record states it. */
+typedef struct GFNT_GlyfComponent {
+  uint16_t flags;      ///< The component's own flag word.
+  uint16_t glyph;      ///< Which glyph it places.
+  int32_t arg1;        ///< x offset, or a point index in the composite.
+  int32_t arg2;        ///< y offset, or a point index in the component.
+  GFNT_F16Dot16 xx;    ///< Its 2x2, row-major: x' = xx*x + xy*y.
+  GFNT_F16Dot16 xy;
+  GFNT_F16Dot16 yx;    ///< y' = yx*x + yy*y.
+  GFNT_F16Dot16 yy;
+} GFNT_GlyfComponent;
+
+/**
+ * The components of a composite glyph, in order.
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param out Receives up to @p capacity components; may be NULL with capacity 0.
+ * @param capacity How many @p out holds.
+ * @param out_count Receives how many the glyph has, whether or not they fit; 0
+ *   for a glyph that is not a composite.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK, ::GFNT_ERR_INVALID, ::GFNT_ERR_UNSUPPORTED or
+ *   ::GFNT_ERR_CORRUPT.
+ */
+GFNT_Result gfnt_glyf_components(const GFNT_Face * face, uint32_t glyph,
+    GFNT_GlyfComponent * out, size_t capacity, size_t * out_count,
+    GFNT_Error * error);
+
 /**
  * Where glyph @p glyph's description is within `glyf`, per `loca`.
  *

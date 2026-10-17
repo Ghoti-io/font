@@ -40,6 +40,9 @@ ROOT = oracle_env.ROOT
 SCRATCH = os.path.join(ROOT, "build", "oracle", "probe")
 
 
+COMPARED = [0]
+
+
 def build(name, spec):
     os.makedirs(SCRATCH, exist_ok=True)
     spec_path = os.path.join(SCRATCH, name + ".json")
@@ -65,12 +68,15 @@ def compare(name, spec, versions=("35", "40"), ppem=10, label=None):
             return [("driver failed", version)]
         for index, case in enumerate(spec["cases"]):
             a, b = mine.get(index + 1), yours.get(index + 1)
+            if not (isinstance(a, str) or isinstance(b, str) or a is None or b is None):
+                COMPARED[0] += 1
             if isinstance(a, str) or isinstance(b, str) or a is None or b is None:
                 if a != b:
                     bad.append((version, (label or (lambda c: c["asm"][-2:]))(case), a, b))
-            elif a[1] != b[1]:
+            elif a[1] != b[1] or a[0] != b[0]:
                 bad.append((version, (label or (lambda c: c["asm"][-2:]))(case),
-                            [(k, p[:2], q[:2]) for k, (p, q) in enumerate(zip(a[1], b[1])) if p != q][:2]))
+                            [(k, p[:2], q[:2]) for k, (p, q) in enumerate(zip(a[1], b[1])) if p != q][:2]
+                            or "advance ours %d theirs %d" % (a[0], b[0])))
     return bad
 
 
@@ -243,6 +249,59 @@ def iup_ties():
     return {"upem": 1000, "cases": cases}, ("35",), 12
 
 
+def phantom():
+    """Where the origin and the advance go: lsb against xMin, the advance, program or none."""
+    cases = []
+    for xmin in (0, 1, 31, 32, 33, 63, 64, 65, 70, 100, 200):
+        for adv in (0, 1, 31, 32, 33, 300, 500, 501):
+            for prog in ([], ["PUSH[ ] 0", "POP[ ]"], ["SVTCA[1]", "PUSH[ ] 1", "MDAP[1]"],
+                         ["SVTCA[1]", "PUSH[ ] 4", "SRP2[ ]", "PUSH[ ] 0", "SHP[0]"],
+                         ["SVTCA[1]", "PUSH[ ] 5", "SRP2[ ]", "PUSH[ ] 0", "SHP[0]"]):
+                cases.append({"points": [[xmin, 13, 1], [xmin + 200, 13, 1], [xmin + 200, 213, 1], [xmin, 213, 1]],
+                              "ends": [3], "asm": prog, "advance": adv, "bearing": 0})
+    return {"upem": 640, "cases": cases}, ("35", "40"), 10
+
+
+def composites():
+    """Placing hinted components: transforms, offsets, rounding, anchors, metrics, programs."""
+    XY, ROUND, USE_MY, SCALED, UNSCALED = 0x2, 0x4, 0x200, 0x800, 0x1000
+    A = [[40, 13, 1], [240, 13, 1], [240, 213, 1], [40, 213, 1]]
+    B = [[0, 0, 1], [100, 0, 1], [50, 100, 1]]
+    cases = [
+        {"points": A, "ends": [3], "asm": ["SVTCA[0]", "PUSH[ ] 0", "MDAP[1]", "PUSH[ ] 2", "MDAP[1]"], "advance": 300},
+        {"points": B, "ends": [2], "asm": [], "advance": 170},
+    ]
+    first = len(cases)
+    def comp(components, asm=(), advance=500):
+        cases.append({"components": components, "asm": list(asm), "advance": advance})
+    for flags in (XY, XY | ROUND, XY | USE_MY, XY | ROUND | USE_MY):
+        for dx, dy in ((100, 50), (37, 41), (-37, -41), (31, 31), (32, 32), (-32, -32), (33, -33), (0, 0)):
+            comp([[0, dx, dy, flags], [1, 300, 17, XY]])
+            comp([[0, dx, dy, XY], [1, 300, 17, flags]])
+            comp([[0, dx, dy, flags], [1, 300, 17, XY]], ["PUSH[ ] 0", "POP[ ]"])
+    for transform in ([[0.5, 0], [0, 0.5]], [[1.0, 0], [0, 0.75]], [[0.866, 0.5], [-0.5, 0.866]],
+                      [[1, 0.25], [0, 1]], [[0.75, 0.1], [-0.1, 0.75]]):
+        for flags in (XY, XY | SCALED, XY | UNSCALED, XY | ROUND | SCALED):
+            comp([[0, 37, 41, flags, transform], [1, 33, 29, XY]])
+    comp([[0, 100, 50, XY], [1, 2, 1, 0]])                         # point matching
+    comp([[0, 0, 0, XY], [1, 3, 0, 0, [[0.5, 0], [0, 0.5]]]])      # matching under a transform
+    comp([[0, 100, 50, XY], [1, 0, 2, 0], [1, 5, 1, 0]])
+    nested = len(cases) + first - first
+    comp([[0, 100, 50, XY | ROUND], [1, 30, 17, XY]])
+    comp([[nested, 10, 10, XY | ROUND], [1, 50, 20, XY]], ["SVTCA[0]", "PUSH[ ] 5", "MDAP[1]"])
+    for prog in (["SVTCA[0]", "PUSH[ ] 5", "GC[0]", "PUSH[ ] 0", "SWAP[ ]", "SCFS[ ]"],
+                 ["SVTCA[0]", "PUSH[ ] 0", "GC[1]", "PUSH[ ] 4", "SWAP[ ]", "SCFS[ ]"],
+                 ["SVTCA[0]", "PUSH[ ] 0 1", "MD[1]", "PUSH[ ] 4", "SWAP[ ]", "SCFS[ ]"],
+                 ["SVTCA[0]", "PUSH[ ] 1 20", "SHPIX[ ]"],
+                 ["SVTCA[0]", "PUSH[ ] 4 20", "SHPIX[ ]", "IUP[0]"],
+                 ["SVTCA[0]", "PUSH[ ] 4 1", "ALIGNPTS[ ]"],
+                 ["SVTCA[0]", "PUSH[ ] 0", "SRP1[ ]", "PUSH[ ] 4", "SRP2[ ]", "PUSH[ ] 5", "IP[ ]"],
+                 ["SVTCA[1]", "PUSH[ ] 7", "SRP2[ ]", "PUSH[ ] 1", "SHP[0]"],
+                 ["SVTCA[0]", "PUSH[ ] 3", "MDAP[1]", "PUSH[ ] 5", "MDRP[10100]", "PUSH[ ] 6", "MDRP[00100]", "IUP[0]"]):
+        comp([[0, 100, 50, XY], [1, 30, 17, XY]], prog)
+    return {"upem": 640, "cases": cases}, ("35", "40"), 10
+
+
 def state():
     """What the control value program leaves for a glyph, and what it does not."""
     pts = [[100, 100, 1], [300, 500, 1], [500, 100, 1], [700, 500, 1]]
@@ -267,6 +326,7 @@ BATTERIES = {
     "original-distance": original_distance, "isect": isect, "measuring": measuring,
     "freedom": freedom, "environment": environment, "compat": compat,
     "zones": zones, "iup": iup, "iup-ties": iup_ties,
+    "phantom": phantom, "composites": composites,
 }
 
 
@@ -292,7 +352,8 @@ def main(argv):
             spec, versions, ppem = BATTERIES[name]()
             count = len(spec["cases"]) * len(versions)
             bad = compare(name, spec, versions, ppem)
-        print("%-18s %5d cases, %d disagree" % (name, count, len(bad)))
+        print("%-18s %5d cases (%d hinted by both), %d disagree" % (name, count, COMPARED[0], len(bad)))
+        COMPARED[0] = 0
         for entry in bad[:4]:
             print("    ", entry)
         failed += bool(bad)

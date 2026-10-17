@@ -167,6 +167,9 @@ typedef struct GFNT_HintGlyphInput {
   const uint8_t * on_curve;  ///< Non-zero for an on-curve point.
   size_t contour_count;
   const size_t * ends;       ///< The last point of each contour.
+  bool pixels;               ///< The coordinates are already 26.6 pixels (a composite's
+                             ///< hinted components), not font units: no scaling is applied
+                             ///< and the originals are the positions given.
 } GFNT_HintGlyphInput;
 
 typedef struct GFNT_HintContext GFNT_HintContext;
@@ -225,8 +228,7 @@ GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
 typedef enum GFNT_HintStatus {
   GFNT_HINT_STATUS_HINTED = 0,                 ///< Its program ran.
   GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM,        ///< It has none.
-  GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED,    ///< The context or its program failed.
-  GFNT_HINT_STATUS_UNHINTED_COMPOSITE          ///< Composites arrive with the next step.
+  GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED     ///< The context or a program failed.
 } GFNT_HintStatus;
 
 /**
@@ -314,6 +316,9 @@ int32_t gfnt_hint_run_storage(const GFNT_HintRun * run, size_t index);
 
 /** The control value @p index, in 26.6, as the run left it; 0 if out of range. */
 int32_t gfnt_hint_run_cvt(const GFNT_HintRun * run, size_t index);
+
+/** Whether glyph-zone point @p index is on the curve at the end of the run (`FLIPPT` can change it). */
+bool gfnt_hint_run_on_curve(const GFNT_HintRun * run, size_t index);
 
 /** How many points the glyph zone holds. */
 size_t gfnt_hint_run_point_count(const GFNT_HintRun * run);

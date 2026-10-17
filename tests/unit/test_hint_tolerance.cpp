@@ -125,6 +125,24 @@ TEST(HintTolerance, TheFirstThingToleratedIsRecorded) {
   EXPECT_EQ(r.fault.failure, GFNT_HINT_FAIL_STACK_UNDERFLOW);   // the first of them
 }
 
+TEST(HintTolerance, AProgramThatNeverEndsIsStoppedAndKeepsWhatItDid) {
+  // Round point 0, then jump back to the start for ever: JMPR with an offset of minus the
+  // program's length. The instruction budget ends it.
+  Bytes body = y_axis(mdap(0));
+  Bytes loop = cat({body, push({-static_cast<int>(body.size() + 4)}), op({0x1C})});   // JMPR
+  Tolerant t(loop);
+  Result r(t.face, 0);
+
+  ASSERT_EQ(r.result, GFNT_OK);
+  EXPECT_EQ(r.status, GFNT_HINT_STATUS_HINTED_WITH_ERRORS);
+  EXPECT_EQ(r.fault.failure, GFNT_HINT_FAIL_BUDGET);
+  EXPECT_EQ(r.at(0).y, 0);
+  Tolerant strict(loop, false);
+  Result s(strict.face, 0);
+
+  EXPECT_EQ(s.status, GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED);
+}
+
 int main(int argc, char ** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

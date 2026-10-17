@@ -689,6 +689,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Debug build commands
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 # Fuzz commands
+.PHONY: fuzz-hint fuzz-run-hint
 .PHONY: fuzz fuzz-clean fuzz-sfnt fuzz-cmap fuzz-glyf fuzz-raster
 .PHONY: fuzz-gvar fuzz-variation fuzz-run-gvar fuzz-run-variation
 .PHONY: fuzz-cff2 fuzz-run-cff2 fuzz-metvar fuzz-run-metvar fuzz-vartables fuzz-run-vartables
@@ -1306,9 +1307,9 @@ check-hint-mutations: $(APP_DIR)/testHint$(EXE_EXTENSION) $(EXAMPLES)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/tt_decode_mutation_check.py
 
 check-hint: ## Every TrueType hinting gate: the unit tests, the fontTools comparison and its mutation check
-check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) $(APP_DIR)/testHint_vm$(EXE_EXTENSION) $(APP_DIR)/testHint_point$(EXE_EXTENSION) $(APP_DIR)/testHint_glyph$(EXE_EXTENSION) $(APP_DIR)/testHint_api$(EXE_EXTENSION) $(APP_DIR)/testHint_variation$(EXE_EXTENSION) $(APP_DIR)/testHint_tolerance$(EXE_EXTENSION)
+check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) $(APP_DIR)/testHint_vm$(EXE_EXTENSION) $(APP_DIR)/testHint_point$(EXE_EXTENSION) $(APP_DIR)/testHint_glyph$(EXE_EXTENSION) $(APP_DIR)/testHint_api$(EXE_EXTENSION) $(APP_DIR)/testHint_variation$(EXE_EXTENSION) $(APP_DIR)/testHint_tolerance$(EXE_EXTENSION) $(APP_DIR)/testHint_oom$(EXE_EXTENSION)
 check-hint: check-oracle-tt-decode check-hint-mutations check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries check-oracle-hint-variable check-hint-point-mutations
-	@for t in testHint testHint_vm testHint_point testHint_glyph testHint_api testHint_variation testHint_tolerance; do \
+	@for t in testHint testHint_vm testHint_point testHint_glyph testHint_api testHint_variation testHint_tolerance testHint_oom; do \
 		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
 	done
 
@@ -2071,6 +2072,11 @@ endef
 # the input is read as a list of points and tags. Reaching it through a font
 # would mean every interesting shape had to be a font first, and the shapes that
 # break a scan converter are degenerate rather than malformed.
+# fuzz_hint takes a version, a size and the three programs of a TrueType font, and hints a simple
+# glyph and a composite in a tolerant context and a strict one. It checks what no sanitizer sees: a
+# hinted glyph has the points the glyph has, one that was not hinted is the unhinted one, a strict
+# context never calls a program that went wrong hinted, and asking twice gives one answer.
+$(eval $(call fuzz-rule,fuzz_hint,hint))
 $(eval $(call fuzz-rule,fuzz_sfnt,sfnt))
 $(eval $(call fuzz-rule,fuzz_cmap,cmap))
 $(eval $(call fuzz-rule,fuzz_glyf,glyf))

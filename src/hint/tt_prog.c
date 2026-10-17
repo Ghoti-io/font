@@ -89,6 +89,7 @@ static GFNT_Result gfnt_hint_run_create(GFNT_HintContext * ctx, bool building,
     GFNT_HintRun ** out) {
   const GFNT_Allocator * a = ctx->allocator;
   GFNT_HintRun * run = gfnt_hint_calloc(a, 1, sizeof *run);
+  bool zone_failed = false;
 
   if (!run) {
     return GFNT_ERR_OOM;
@@ -125,10 +126,10 @@ static GFNT_Result gfnt_hint_run_create(GFNT_HintContext * ctx, bool building,
       gfnt_hint_zone_copy(&run->zone[0], &ctx->twilight);
     }
     else {
-      run->storage = NULL;   /* fails the check below */
+      zone_failed = true;    /* fails the check below; the arrays made so far are the run's to free */
     }
   }
-  if (!run->stack || !run->frames || !run->storage || !run->cvt) {
+  if (zone_failed || !run->stack || !run->frames || !run->storage || !run->cvt) {
     gfnt_hint_run_destroy(run);
     return GFNT_ERR_OOM;
   }

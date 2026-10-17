@@ -1429,8 +1429,21 @@ puts it, always at a value within a hundredth of a rounding boundary. `make
 check-oracle-hint-variable` accepts that one unit and nothing more, and reports how many
 points used it; every other comparison is exact.
 
-The original (version 35) behaviour of `GETINFO`'s remaining bits and the vertical
-phantom points are not built yet.
+**Not done, and why.** The vertical phantom points (top and bottom) are placed at zero rather
+than from vertical metrics, which only a program that measures vertically through them sees.
+The `hdmx` and `VDMX` tables are not read: FreeType's advances for the corpus fonts that carry
+`hdmx` equal the hinted ones, so there is no difference to reproduce, and `LTSH` only says at
+which sizes a font's advances are linear. Hinted advances in layout are the caller's choice: a
+glyph's hinted advance comes with its outline (`gfnt_face_hinted_outline()`), in 26.6 pixels,
+and shaping keeps fractional advances so that measuring and painting stay one path.
+There is no automatic hinter (`GFNT_HINT_MODE_AUTO` is reserved) and no hinting of CFF outlines.
+
+**Speed.** A glyph takes about eleven microseconds from the program to its pixel outline on the
+development machine (a 6,000-glyph font in seventy milliseconds at one size, output included),
+because the programs are short and the interpreter has no decisions to make that a branch
+predictor does not. A compiler for the bytecode would add a code generator to the
+untrusted-input surface for a cost nobody pays: a context is made once per size and its glyphs
+are hinted once, and a page of text hints each distinct glyph a single time.
 
 ---
 

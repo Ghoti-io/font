@@ -231,6 +231,121 @@ def cvar_negative():
     return spec, versions, ppem
 
 
+FAILURES = [
+    ("rcvt index", ["PUSH[ ] 999", "RCVT[ ]", "POP[ ]"]),
+    ("rcvt negative", ["PUSH[ ] -3", "RCVT[ ]", "POP[ ]"]),
+    ("wcvtp index", ["PUSH[ ] 999 50", "WCVTP[ ]"]),
+    ("mdap point", ["PUSH[ ] 99", "MDAP[1]"]),
+    ("mdrp point", ["PUSH[ ] 99", "MDRP[00000]"]),
+    ("mdap negative point", ["PUSH[ ] -1", "MDAP[1]"]),
+    ("srp0 point", ["PUSH[ ] 99", "SRP0[ ]"]),
+    ("underflow add", ["ADD[ ]"]),
+    ("underflow pop", ["POP[ ]"]),
+    ("underflow mdap", ["MDAP[1]"]),
+    ("div zero", ["PUSH[ ] 5 0", "DIV[ ]", "POP[ ]"]),
+    ("undefined call", ["PUSH[ ] 3", "CALL[ ]"]),
+    ("call out of range", ["PUSH[ ] 99", "CALL[ ]"]),
+    ("rs index", ["PUSH[ ] 99", "RS[ ]", "POP[ ]"]),
+    ("ws index", ["PUSH[ ] 99 5", "WS[ ]"]),
+    ("undefined opcode", ["INSTR127[ ]"]),
+    ("jmpr far", ["PUSH[ ] 500", "JMPR[ ]"]),
+    ("shp no loop", ["PUSH[ ] 77", "SHP[1]"]),
+    ("gc point", ["PUSH[ ] 77", "GC[0]", "POP[ ]"]),
+    ("deltap point", ["PUSH[ ] 1 99 0", "DELTAP1[ ]"]),
+    ("loop negative", ["PUSH[ ] -2", "SLOOP[ ]"]),
+    ("miap cvt", ["PUSH[ ] 0 500", "MIAP[0]"]),
+    ("miap point", ["PUSH[ ] 88 0", "MIAP[0]"]),
+    ("ip point", ["PUSH[ ] 88", "IP[ ]"]),
+    ("alignrp point", ["PUSH[ ] 88", "ALIGNRP[ ]"]),
+    ("shc contour", ["PUSH[ ] 9", "SHC[1]"]),
+    ("iup after fail", ["PUSH[ ] 1000", "RCVT[ ]", "POP[ ]", "IUP[0]"]),
+    # A move that does not happen still sets the reference points, which the next one uses.
+    ("mdrp bad then mdrp", ["PUSH[ ] 99", "MDRP[10000]", "PUSH[ ] 2", "MDRP[00100]"]),
+    ("mdrp bad (no rp0) then mdrp", ["PUSH[ ] 99", "MDRP[00000]", "PUSH[ ] 2", "MDRP[00100]"]),
+    ("mirp bad cvt then mdrp", ["PUSH[ ] 2 99", "MIRP[10000]", "PUSH[ ] 1", "MDRP[00100]"]),
+    ("miap bad then mdrp", ["PUSH[ ] 2 99", "MIAP[0]", "PUSH[ ] 1", "MDRP[00100]"]),
+    ("miap bad point then ip", ["PUSH[ ] 99 0", "MIAP[0]", "PUSH[ ] 1", "IP[ ]"]),
+    ("srp wide", ["PUSH[ ] 32767 32767", "ADD[ ]", "PUSH[ ] 3", "ADD[ ]", "SRP0[ ]", "PUSH[ ] 2", "MDRP[00100]"]),
+]
+
+
+def failures():
+    """What becomes of a glyph whose program does something invalid after moving a point."""
+    pts = [[0, 13, 1], [10, 200, 1], [20, 20, 1]]
+    cases = []
+    for name, bad in FAILURES:
+        cases.append(case(pts, ["SVTCA[0]", "PUSH[ ] 0", "MDAP[1]"] + bad + ["PUSH[ ] 1", "MDAP[1]"]))
+    return {"upem": 640, "cvt": [10, 20, 30], "cases": cases, "functions": 4}, ("35", "40"), 10
+
+
+STACK_OPS = [
+    ("ip rp1 bad", ["PUSH[ ] 200", "SRP1[ ]", "IP[ ]"], 3),
+    ("ip rp2 bad", ["PUSH[ ] 200", "SRP2[ ]", "IP[ ]"], 3),
+    ("ip loop 2 rp1 bad", ["PUSH[ ] 200", "SRP1[ ]", "PUSH[ ] 2", "SLOOP[ ]", "IP[ ]"], 4),
+    ("ip point bad", ["PUSH[ ] 99", "IP[ ]"], 3),
+    ("shp ref bad", ["PUSH[ ] 200", "SRP1[ ]", "SHP[1]"], 3),
+    ("shp2 ref bad", ["PUSH[ ] 200", "SRP2[ ]", "SHP[0]"], 3),
+    ("shp loop 3 short", ["PUSH[ ] 3", "SLOOP[ ]", "SHP[1]"], 2),
+    ("shp point bad", ["PUSH[ ] 99", "SHP[1]"], 3),
+    ("alignrp rp0 bad", ["PUSH[ ] 200", "SRP0[ ]", "ALIGNRP[ ]"], 3),
+    ("alignrp loop 2 rp0 bad", ["PUSH[ ] 200", "SRP0[ ]", "PUSH[ ] 2", "SLOOP[ ]", "ALIGNRP[ ]"], 4),
+    ("alignrp point bad", ["PUSH[ ] 99", "ALIGNRP[ ]"], 3),
+    ("shpix point bad", ["PUSH[ ] 99 5", "SHPIX[ ]"], 3),
+    ("shpix short loop", ["PUSH[ ] 4", "SLOOP[ ]", "PUSH[ ] 5", "SHPIX[ ]"], 3),
+    ("shc ref bad", ["PUSH[ ] 200", "SRP1[ ]", "PUSH[ ] 0", "SHC[1]"], 3),
+    ("shc contour bad", ["PUSH[ ] 9", "SHC[1]"], 3),
+    ("shz ref bad", ["PUSH[ ] 200", "SRP1[ ]", "PUSH[ ] 1", "SHZ[1]"], 3),
+    ("shz zone bad", ["PUSH[ ] 5", "SHZ[1]"], 3),
+    ("mdap bad", ["PUSH[ ] 99", "MDAP[1]"], 3),
+    ("miap point bad", ["PUSH[ ] 99 0", "MIAP[1]"], 3),
+    ("miap cvt bad", ["PUSH[ ] 1 99", "MIAP[1]"], 3),
+    ("mdrp point bad", ["PUSH[ ] 99", "MDRP[10000]"], 3),
+    ("mdrp rp0 bad", ["PUSH[ ] 200", "SRP0[ ]", "PUSH[ ] 1", "MDRP[00000]"], 3),
+    ("mirp cvt bad", ["PUSH[ ] 1 99", "MIRP[10000]"], 3),
+    ("mirp cvt -1", ["PUSH[ ] 1 -1", "MIRP[00000]"], 3),
+    ("mirp cvt -2", ["PUSH[ ] 1 -2", "MIRP[00000]"], 3),
+    ("msirp point bad", ["PUSH[ ] 99 5", "MSIRP[1]"], 3),
+    ("flippt loop 2 bad", ["PUSH[ ] 2", "SLOOP[ ]", "PUSH[ ] 99 1", "FLIPPT[ ]"], 3),
+    ("fliprgon bad", ["PUSH[ ] 1 99", "FLIPRGON[ ]"], 3),
+    ("gc bad", ["PUSH[ ] 99", "GC[0]"], 3),
+    ("md bad", ["PUSH[ ] 99 1", "MD[0]"], 3),
+    ("scfs bad", ["PUSH[ ] 99 5", "SCFS[ ]"], 3),
+    ("utp bad", ["PUSH[ ] 99", "UTP[ ]"], 3),
+    ("alignpts bad", ["PUSH[ ] 99 1", "ALIGNPTS[ ]"], 3),
+    ("isect bad", ["PUSH[ ] 99 1 2 3 4", "ISECT[ ]"], 3),
+    ("spvtl bad", ["PUSH[ ] 99 1", "SPVTL[0]"], 3),
+    ("deltap bad point", ["PUSH[ ] 17 99 1", "DELTAP1[ ]"], 3),
+    ("deltap short", ["PUSH[ ] 5", "DELTAP1[ ]"], 3),
+    ("deltap n 2 one pair", ["PUSH[ ] 17 1 2", "DELTAP1[ ]"], 3),
+    ("deltac short", ["PUSH[ ] 5", "DELTAC1[ ]"], 3),
+    ("deltac bad cvt", ["PUSH[ ] 17 99 1", "DELTAC1[ ]"], 3),
+    ("szp0 bad", ["PUSH[ ] 5", "SZP0[ ]"], 3),
+    ("cindex bad", ["PUSH[ ] 50", "CINDEX[ ]"], 3),
+    ("mindex bad", ["PUSH[ ] 50", "MINDEX[ ]"], 3),
+    ("rs bad", ["PUSH[ ] 99", "RS[ ]"], 3),
+    ("ws bad", ["PUSH[ ] 99 4", "WS[ ]"], 3),
+    ("rcvt bad", ["PUSH[ ] 99", "RCVT[ ]"], 3),
+    ("wcvtp bad", ["PUSH[ ] 99 4", "WCVTP[ ]"], 3),
+    ("add underflow with 1", ["CLEAR[ ]", "PUSH[ ] 7", "ADD[ ]"], 0),
+    ("mdrp underflow", ["CLEAR[ ]", "MDRP[00000]"], 0),
+    ("jmpr bad", ["PUSH[ ] 700", "JMPR[ ]"], 3),
+    ("call bad", ["PUSH[ ] 9", "CALL[ ]"], 3),
+    ("sdb big", ["PUSH[ ] 30000", "SDB[ ]"], 3),
+    ("sloop huge", ["PUSH[ ] 30000", "SLOOP[ ]"], 3),
+]
+
+
+def tolerance_stack():
+    """After something invalid, how much of the stack is left and what is on top."""
+    cases = []
+    for name, ops, _ in STACK_OPS:
+        base = ["SVTCA[0]", "PUSH[ ] 11 22 33 44 55 66 77"]
+        pts = [[0, 13, 1], [10, 200, 1], [20, 20, 1], [30, 40, 1], [40, 90, 1], [50, 120, 1]]
+        cases.append(case(pts, base + ops + ["DEPTH[ ]", "PUSH[ ] 0", "SWAP[ ]", "SCFS[ ]"]))
+        cases.append(case(pts, base + ops + ["PUSH[ ] 0", "SWAP[ ]", "SCFS[ ]"]))
+    return {"upem": 640, "cvt": [10, 20, 30], "cases": cases, "functions": 4}, ("35", "40"), 10
+
+
 def compat():
     """Version 40's compatibility rules: which moves are ignored, which points are touched."""
     pts = [[0, 0, 1], [50, 100, 1], [100, 200, 1], [150, 300, 1]]
@@ -373,6 +488,8 @@ BATTERIES = {
     "original-distance": original_distance, "isect": isect, "measuring": measuring,
     "freedom": freedom, "environment": environment, "compat": compat,
     "zones": zones, "variation": variation, "variation-default": variation_default,
+    "tolerance-stack": tolerance_stack,
+    "failures": failures,
     "cvar": cvar, "cvar-third": cvar_other_coordinates, "cvar-negative": cvar_negative, "iup": iup, "iup-ties": iup_ties,
     "phantom": phantom, "composites": composites,
 }

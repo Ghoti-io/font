@@ -99,11 +99,11 @@ const GFNT_Variation * gfnt_hint_ctx_variation(const GFNT_HintContext * ctx) {
 GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
     int version, bool grayscale, const GFNT_HintLimits * limits,
     GFNT_HintContext ** out, GFNT_Error * error) {
-  return gfnt_hint_ctx_from_face_at(face, ppem, version, grayscale, limits, NULL, out, error);
+  return gfnt_hint_ctx_from_face_at(face, ppem, version, grayscale, false, limits, NULL, out, error);
 }
 
 GFNT_Result gfnt_hint_ctx_from_face_at(const GFNT_Face * face, uint32_t ppem,
-    int version, bool grayscale, const GFNT_HintLimits * limits,
+    int version, bool grayscale, bool tolerant, const GFNT_HintLimits * limits,
     const GFNT_Variation * variation, GFNT_HintContext ** out, GFNT_Error * error) {
   GFNT_HintParams params;
   GFNT_HintShape shape;
@@ -167,6 +167,7 @@ GFNT_Result gfnt_hint_ctx_from_face_at(const GFNT_Face * face, uint32_t ppem,
   params.units_per_em = units;
   params.version = version;
   params.grayscale = grayscale;
+  params.tolerant = tolerant;
   params.axis_count = 0;
   /* Only a face asked for at a location is variable to the interpreter: at its default
      instance, with no location, GETVARIATION is undefined and GETINFO reports nothing. */

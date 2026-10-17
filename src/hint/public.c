@@ -60,7 +60,7 @@ bool gfnt_face_gasp_gridfit(const GFNT_Face * face, uint32_t ppem) {
 }
 
 GFNT_Result gfnt_hint_context_create(const GFNT_Face * face, uint32_t ppem,
-    GFNT_HintVersion version, const GFNT_Variation * variation,
+    GFNT_HintVersion version, GFNT_HintMode mode, const GFNT_Variation * variation,
     GFNT_HintContext ** out_context, GFNT_Error * error) {
   gfnt_error_clear(error);
   if (!face || !out_context) {
@@ -78,11 +78,15 @@ GFNT_Result gfnt_hint_context_create(const GFNT_Face * face, uint32_t ppem,
       && version != GFNT_HINT_VERSION_40) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0, "not a hinting version");
   }
+  if (mode != GFNT_HINT_MODE_FONT && mode != GFNT_HINT_MODE_FONT_STRICT) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0,
+        "a context is made for the font's own program, tolerant or strict");
+  }
   if (variation && variation->count && !variation->coords) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0, "a variation with a count and no coordinates");
   }
   return gfnt_hint_ctx_from_face_at(face, ppem, version == GFNT_HINT_VERSION_35 ? 35 : 40,
-      true, NULL, variation, out_context, error);
+      true, mode == GFNT_HINT_MODE_FONT, NULL, variation, out_context, error);
 }
 
 void gfnt_hint_context_destroy(GFNT_HintContext * context) {

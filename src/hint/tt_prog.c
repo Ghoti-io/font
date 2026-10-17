@@ -370,14 +370,15 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
       for (size_t i = n - 4u; i < n; ++i) {
         z->cur[i] = z->org[i];
       }
-      /* The version 40 compatibility behaviour does not move anything along x,
-         and placing the origin and the advance on the grid is such a move. */
-      if (!(ctx->params.version >= 40 && !(ctx->instruct_control & 4u))) {
-        z->cur[n - 4u].x = gfnt_hint_pixel(z->org[n - 4u].x);
-        z->cur[n - 3u].x = gfnt_hint_pixel(z->org[n - 3u].x);
-      }
+      z->cur[n - 4u].x = gfnt_hint_pixel(z->org[n - 4u].x);
+      z->cur[n - 3u].x = gfnt_hint_pixel(z->org[n - 3u].x);
       z->cur[n - 2u].y = gfnt_hint_pixel(z->org[n - 2u].y);
       z->cur[n - 1u].y = gfnt_hint_pixel(z->org[n - 1u].y);
+      /* What the glyph's bearings are taken from in version 40's compatibility behaviour,
+         whatever the program does: the unrounded originals. */
+      for (size_t i = 0; i < 4; ++i) {
+        run->start_pp[i] = z->org[n - 4u + i];
+      }
     }
   }
   if (length > ctx->limits.max_program) {
@@ -385,6 +386,21 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
     return GFNT_ERR_LIMIT;
   }
   return gfnt_hint_result_of(gfnt_hint_exec(run, GFNT_HINT_PROGRAM_GLYPH));
+}
+
+void gfnt_hint_run_phantom(const GFNT_HintRun * run, size_t i, int32_t * x, int32_t * y) {
+  const GFNT_HintZone * z = &run->zone[1];
+
+  /* In version 40's compatibility behaviour no movement along x means no reason to change
+     the bearings, so the phantom points are what the program began with, whatever it did to
+     them; otherwise they are where it left them. */
+  if (run->ctx->params.version >= 40 && !(run->instruct_control & 4u)) {
+    *x = run->start_pp[i].x;
+    *y = run->start_pp[i].y;
+    return;
+  }
+  *x = z->cur[z->count - 4u + i].x;
+  *y = z->cur[z->count - 4u + i].y;
 }
 
 GFNT_HintFault gfnt_hint_run_fault(const GFNT_HintRun * run) {

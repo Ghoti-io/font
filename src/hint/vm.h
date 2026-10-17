@@ -149,6 +149,7 @@ typedef struct GFNT_HintParams {
   const GFNT_F2Dot14 * coords; ///< The normalised location of a variable face, or NULL.
   size_t coord_count;      ///< How many axes @p coords has; 0 for the default instance.
   size_t axis_count;       ///< How many axes the face has; 0 for a face that is not variable.
+  bool tolerant;           ///< Carry on past what a program does wrong, as FreeType does, instead of failing.
 } GFNT_HintParams;
 
 /** The sizes of the arrays a font declares in `maxp`. */
@@ -234,10 +235,12 @@ GFNT_Result gfnt_hint_ctx_from_face(const GFNT_Face * face, uint32_t ppem,
  * values come with `cvar` applied, `GETVARIATION` answers with the location, and
  * glyphs hint from their `gvar`-moved points.
  *
+ * @param tolerant Whether programs carry on past what they do wrong, as FreeType does
+ *   (::GFNT_HintParams::tolerant), instead of failing at the first.
  * @param variation The normalised location, or NULL for the default instance.
  */
 GFNT_Result gfnt_hint_ctx_from_face_at(const GFNT_Face * face, uint32_t ppem,
-    int version, bool grayscale, const GFNT_HintLimits * limits,
+    int version, bool grayscale, bool tolerant, const GFNT_HintLimits * limits,
     const GFNT_Variation * variation, GFNT_HintContext ** out, GFNT_Error * error);
 
 /** The location a context hints at, or NULL for the default instance. */
@@ -282,6 +285,12 @@ void gfnt_hint_ctx_destroy(GFNT_HintContext * ctx);
 /** Whether `fpgm` and `prep` both ran to the end. */
 bool gfnt_hint_ctx_usable(const GFNT_HintContext * ctx);
 
+/** How many invalid things a tolerant run carried on past. */
+size_t gfnt_hint_run_tolerated(const GFNT_HintRun * run);
+
+/** The first of them, or one with ::GFNT_HINT_OK. */
+GFNT_HintFault gfnt_hint_run_first_tolerated(const GFNT_HintRun * run);
+
 /** The fault that stopped `fpgm` or `prep`, or one with ::GFNT_HINT_OK. */
 GFNT_HintFault gfnt_hint_ctx_fault(const GFNT_HintContext * ctx);
 
@@ -321,8 +330,24 @@ GFNT_Result gfnt_hint_run_glyph(const GFNT_HintContext * ctx,
 /** Free a run. NULL is ignored. */
 void gfnt_hint_run_destroy(GFNT_HintRun * run);
 
+/**
+ * Where phantom point @p i (0 to 3) ended up, for the glyph's bearings and advance: where the
+ * program left it, except in version 40's compatibility behaviour, where it is where it began.
+ */
+void gfnt_hint_run_phantom(const GFNT_HintRun * run, size_t i, int32_t * x, int32_t * y);
+
 /** Why the run stopped. */
 GFNT_HintFault gfnt_hint_run_fault(const GFNT_HintRun * run);
+
+/**
+ * How many invalid things a tolerant run (::GFNT_HintParams::tolerant) carried on
+ * past: an operand off the end of the stack, an index out of range. Zero for a strict
+ * one, which stops at the first.
+ */
+size_t gfnt_hint_run_tolerated(const GFNT_HintRun * run);
+
+/** The first of them, or a fault whose failure is ::GFNT_HINT_OK. */
+GFNT_HintFault gfnt_hint_run_first_tolerated(const GFNT_HintRun * run);
 
 /** How many values are on the stack. */
 size_t gfnt_hint_run_depth(const GFNT_HintRun * run);

@@ -1372,15 +1372,35 @@ not the chapter's, and are noted here because a font can depend on them:
 - Two reference points that coincide along the projection vector (which the
   chapter calls invalid) make `IP` use the unscaled original distance as it stands.
 
+**What a program may do wrong.** Fonts ship programs that pop from an empty stack, name a
+point or a control value that is not there, or call `IP` with a reference point that does
+not exist, and FreeType carries on past most of it; a hinter that stopped at the first would
+leave those fonts unhinted where every renderer hints them. A context made for
+`GFNT_HINT_MODE_FONT` is **tolerant** and does what FreeType does: an instruction that finds
+fewer operands than it pops runs on zeros that replace what was there; an index that is not
+there reads as zero and writes nothing; a point that is not there is skipped; `MDRP`, `MIRP`
+and `MIAP` still set the reference points; `IP` with a bad second reference point moves each
+point by its original distance, and with a bad first one takes its points off the stack and
+moves nothing; `DELTAP` and `DELTAC` do the pairs they have. A division by zero, a call of a
+function that is not defined, a jump out of the program, a negative loop count and the
+budget stop the program, and **what it had done by then is the outline**. The glyph says so,
+with `GFNT_HINT_STATUS_HINTED_WITH_ERRORS`, and the context records the first thing that went
+wrong. `GFNT_HINT_MODE_FONT_STRICT` fails at the first, and the glyph comes back as drawn. A
+control value or font program that stops the way a fatal error does leaves every glyph of
+the size unhinted, as it does in FreeType (which refuses to load them). Two FreeType
+behaviours are deliberately **not** followed because they make a glyph depend on the ones
+hinted before it: `WCVTF` in a glyph program changes the control value for every glyph after
+it, and a `MIAP` of a phantom point leaks into the next. A glyph program here works on its own
+copy.
+
 **Known differences, stated.** (1) A unit vector made from a direction (`SPVTL`,
 `SFVTL`, `SDPVTL`, `SPVFS`, `SFVFS`) is exact here and approximate in FreeType, to
 within a 16384th; the hint it feeds can land a few 64ths of a pixel apart, and the
 comparison reports those glyphs separately, bounded. (2) FreeType hints a font with
 no control value program from a zeroed graphics state (no auto-flip, minimum
 distance 0) and not from the specification's defaults, which this follows; such
-fonts are left out of the comparison and counted. (3) What FreeType tolerates in a
-broken program is not yet matched; a program that makes a bad access leaves its
-glyph unhinted here.
+fonts are left out of the comparison and counted. (3) The two things above that make FreeType's
+result depend on the order glyphs are hinted in.
 
 **Composites and advances.** A composite's components are hinted first, each by its
 own program; then each is transformed (its 2x2, one rounded multiplication per

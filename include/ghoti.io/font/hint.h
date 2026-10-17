@@ -141,7 +141,13 @@ typedef enum GFNT_HintVersion {
 typedef enum GFNT_HintStatus {
   GFNT_HINT_STATUS_HINTED = 0,                 ///< Its program ran.
   GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM,        ///< It has none, or the font does not hint at this size.
-  GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED     ///< The context or a program failed; the outline is as drawn.
+  GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED,    ///< The context or a program failed; the outline is as drawn.
+  /**
+   * A tolerant program did something invalid (an operand it did not have, an index out
+   * of range) or stopped on an error, and the outline is as far as it got - which is
+   * what FreeType returns. Not given in strict mode, where that is a failure.
+   */
+  GFNT_HINT_STATUS_HINTED_WITH_ERRORS
 } GFNT_HintStatus;
 
 /**
@@ -162,6 +168,8 @@ typedef struct GFNT_HintContext GFNT_HintContext;
  * @param face The face.
  * @param ppem Pixels per em; zero is invalid, and above `max_ppem` is ::GFNT_ERR_LIMIT.
  * @param version The interpreter behaviour.
+ * @param mode ::GFNT_HINT_MODE_FONT, whose programs carry on past what they do wrong as
+ *   FreeType's do, or ::GFNT_HINT_MODE_FONT_STRICT, whose programs fail at the first.
  * @param variation The normalised location of a variable face, or NULL for the default
  *   instance. The control values come with `cvar` applied, `GETVARIATION` answers with it
  *   and every glyph hints from its `gvar`-moved points.
@@ -171,8 +179,8 @@ typedef struct GFNT_HintContext GFNT_HintContext;
  *   outlines; ::GFNT_ERR_INVALID, ::GFNT_ERR_LIMIT, ::GFNT_ERR_CORRUPT or ::GFNT_ERR_OOM.
  */
 GFNT_API GFNT_Result gfnt_hint_context_create(const GFNT_Face * face,
-    uint32_t ppem, GFNT_HintVersion version, const GFNT_Variation * variation,
-    GFNT_HintContext ** out_context, GFNT_Error * error);
+    uint32_t ppem, GFNT_HintVersion version, GFNT_HintMode mode,
+    const GFNT_Variation * variation, GFNT_HintContext ** out_context, GFNT_Error * error);
 
 /** Free a context. NULL is ignored. */
 GFNT_API void gfnt_hint_context_destroy(GFNT_HintContext * context);

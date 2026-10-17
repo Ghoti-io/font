@@ -1021,7 +1021,7 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
     GFNT_HintContext * context = NULL;
 
     result = gfnt_hint_context_create(face, ppem,
-        options ? options->hint_version : GFNT_HINT_VERSION_AUTO,
+        options ? options->hint_version : GFNT_HINT_VERSION_AUTO, mode,
         options ? options->variation : NULL, &context, error);
     if (result == GFNT_OK) {
       GFNT_HintStatus status = GFNT_HINT_STATUS_HINTED;

@@ -89,7 +89,7 @@ def shrink(sidecar, name, version, ppem):
 def main(argv):
     opts = {"--seed": "1", "--fonts": "2", "--glyphs": "60", "--steps": "1",
             "--version": "35", "--ppem": "12,16", "--show": "6", "--vectors": "any", "--shrink": "0", "--composites": "0",
-            "--variable": "0", "--coords": "-", "--tolerance": "0"}
+            "--variable": "0", "--coords": "-", "--tolerance": "0", "--wild": "0"}
     args = argv[1:]
     while args:
         key = args.pop(0)
@@ -103,7 +103,8 @@ def main(argv):
         "python3", os.path.join(ROOT, "tools", "oracle", "hint_probe_font.py"),
         scratch, opts["--seed"], opts["--fonts"], opts["--glyphs"], opts["--steps"]]
         + [opts["--vectors"] if opts["--vectors"] in ("axis", "any") else "any", opts["--composites"]]
-        + ([{"1": "variable", "empty": "variable-empty", "hvar": "variable-hvar"}[opts["--variable"]]] if opts["--variable"] != "0" else []),
+        + ([{"1": "variable", "empty": "variable-empty", "hvar": "variable-hvar"}[opts["--variable"]]] if opts["--variable"] != "0" else (["none"] if opts["--wild"] != "0" else []))
+        + ([opts["--wild"]] if opts["--wild"] != "0" else []),
         scratch=scratch), capture_output=True, text=True)
     if gen.returncode != 0:
         print(gen.stderr[-500:])

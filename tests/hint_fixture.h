@@ -71,7 +71,7 @@ struct Fixture {
   Fixture(const std::vector<Bytes> & glyphs, const std::vector<Metric> & metrics,
           const Bytes & prep = {}, int version = 35, uint32_t ppem = 10,
           const Bytes & gasp = {}, const std::vector<gfnttest::Table> & extra = {},
-          const std::vector<GFNT_F2Dot14> & location = {}) {
+          const std::vector<GFNT_F2Dot14> & location = {}, bool tolerant = false) {
     Bytes glyf;
     Bytes loca;
     bool is_long = false;
@@ -103,7 +103,7 @@ struct Fixture {
     EXPECT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
     GFNT_Variation variation{location.data(), location.size(), GFNT_DELTA_ROUND_HALF_UP};
 
-    EXPECT_EQ(gfnt_hint_ctx_from_face_at(face, ppem, version, true, nullptr,
+    EXPECT_EQ(gfnt_hint_ctx_from_face_at(face, ppem, version, true, tolerant, nullptr,
         location.empty() ? nullptr : &variation, &ctx, &error), GFNT_OK);
   }
   ~Fixture() {

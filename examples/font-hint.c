@@ -74,7 +74,8 @@ int main(int argc, char ** argv) {
       c = *end == ',' ? end + 1 : end;
     }
     result = gfnt_hint_ctx_from_face_at(face, (uint32_t)strtoul(argv[4], NULL, 10),
-        atoi(argv[3]), true, NULL, variation.count ? &variation : NULL, &ctx, &error);
+        atoi(argv[3]), true, getenv("FONT_HINT_STRICT") == NULL, NULL,
+        variation.count ? &variation : NULL, &ctx, &error);
   }
   if (result != GFNT_OK || gfnt_face_num_glyphs(face, &glyphs, &error) != GFNT_OK) {
     fprintf(stderr, "%s: %s\n", argv[1], gfnt_result_string(result));

@@ -58,6 +58,21 @@ MUTANTS = [
     ("src/hint/glyph.c", "if (c->flags & GFNT_GLYF_USE_MY_METRICS) {",
      "if (false && (c->flags & GFNT_GLYF_USE_MY_METRICS)) {",
      "a composite ignores USE_MY_METRICS"),
+    ("src/hint/tt_move.c", "        run->depth -= (size_t)gs->loop;\n        gs->loop = 1;\n        break;\n      }\n      if (rp2 >= z1->count) {",
+     "        gs->loop = 1;\n        break;\n      }\n      if (rp2 >= z1->count) {",
+     "IP with no first reference point leaves its points on the stack"),
+    ("src/hint/tt_move.c", "        run->depth -= (size_t)gs->loop;      /* the points are taken and nothing is moved */",
+     "        /* left */",
+     "SHP with no reference point leaves its points on the stack"),
+    ("src/hint/tt_move.c", "          gs->rp[2] = (uint32_t)p & 0xFFFFu;\n          if (op & 0x10) gs->rp[0] = (uint32_t)p & 0xFFFFu;\n          break;\n        }\n        org_dist = gfnt_hint_original_distance",
+     "          break;\n        }\n        org_dist = gfnt_hint_original_distance",
+     "an MDRP of a point that is not there leaves the reference points alone"),
+    ("src/hint/tt_exec.c", "          if (run->depth < 2u) {\n            LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);\n            break;\n          }\n          index = POP();",
+     "          if (run->depth < 2u) {\n            LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);\n            run->depth = 0;\n            break;\n          }\n          index = POP();",
+     "DELTAC with too few pairs throws the rest of the stack away"),
+    ("src/hint/tt_prog.c", "  if (run->ctx->params.version >= 40 && !(run->instruct_control & 4u)) {\n    *x = run->start_pp[i].x;",
+     "  if (0) {\n    *x = run->start_pp[i].x;",
+     "version 40 reads the bearings back from the program's phantom points"),
     ("src/hint/glyph.c", "components[k].delta_x = gfnt_hint_delta_fixed(wide[k]);",
      "components[k].delta_x = 0;",
      "gvar does not move a composite's component offsets"),
@@ -119,6 +134,14 @@ def main():
                      "python3", "tools/oracle/hint_batteries.py"],
                     cwd=ROOT, capture_output=True, text=True)
                 refused = refused or done.returncode != 0
+                if not refused:
+                    done = subprocess.run(
+                        ["python3", "tools/oracle/oracle_run.py", "fonttools,freetype", "--",
+                         "python3", "tools/oracle/hint_probe_diff.py", "--seed", "73",
+                         "--fonts", "2", "--glyphs", "100", "--steps", "6", "--vectors", "axis",
+                         "--version", "40", "--wild", "0.3", "--ppem", "12,17", "--show", "0"],
+                        cwd=ROOT, capture_output=True, text=True)
+                    refused = refused or done.returncode != 0
                 if not refused:
                     done = subprocess.run(
                         ["python3", "tools/oracle/oracle_run.py", "fonttools,freetype", "--",

@@ -35,7 +35,16 @@
 #include <string.h>
 
 #define FAIL(code) do { failure = (code); goto fault; } while (0)
-#define NEED(n) do { if (run->depth < (size_t)(n)) FAIL(GFNT_HINT_FAIL_STACK_UNDERFLOW); } while (0)
+/* An instruction that finds fewer operands than it pops: a failure, or for a tolerant run
+   zeros in place of what is missing (they replace what is there, as the reference's do). */
+#define NEED(n) do { \
+    if (run->depth < (size_t)(n)) { \
+      if (!run->ctx->params.tolerant) FAIL(GFNT_HINT_FAIL_STACK_UNDERFLOW); \
+      gfnt_hint_soft(run, GFNT_HINT_FAIL_STACK_UNDERFLOW); \
+      memset(run->stack, 0, (size_t)(n) * sizeof run->stack[0]); \
+      run->depth = (size_t)(n); \
+    } \
+  } while (0)
 #define POP() (run->stack[--run->depth])
 #define PUSH(v) do { int32_t pushed_ = (v); run->stack[run->depth++] = pushed_; } while (0)
 
@@ -384,9 +393,20 @@ static void gfnt_hint_iup(GFNT_HintZone * z, bool x_axis) {
 /* -- the instructions ---------------------------------------------------------- */
 
 #define ZONE(n) (&run->zone[gs->zp[n]])
-#define CHECK_POINT(zone, p) do { \
-    if ((p) < 0 || (size_t)(p) >= (zone)->count) FAIL(GFNT_HINT_FAIL_BAD_INDEX); \
+/* Something wrong that a tolerant run carries on past, in the way @p action says: a strict
+   one fails here. */
+#define LENIENT(code) do { \
+    if (!run->ctx->params.tolerant) FAIL(code); \
+    gfnt_hint_soft(run, (code)); \
   } while (0)
+
+/* A point that does not exist: failure, or the tolerant run's @p action (break, continue). */
+/* Not a do/while: the action is a `break` or a `continue` for the caller's loop or switch. */
+#define CHECK_POINT_OR(zone, p, action) \
+  if ((p) < 0 || (size_t)(p) >= (zone)->count) { \
+    LENIENT(GFNT_HINT_FAIL_BAD_INDEX); \
+    action; \
+  }
 
 /* The shift of the reference point the SHP family follows, as a displacement. */
 static GFNT_HintFailure gfnt_hint_ref_shift(GFNT_HintRun * run, unsigned which,
@@ -433,7 +453,7 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       int32_t d = 0;
       NEED(1);
       p = POP();
-      CHECK_POINT(z0, p);
+      CHECK_POINT_OR(z0, p, break);
       if (op & 1) {
         int32_t now = gfnt_hint_project(run, z0->cur[p].x, z0->cur[p].y);
         d = gfnt_hint_sub(gfnt_hint_round(gs, now), now);
@@ -451,8 +471,12 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(2);
       n = POP();
       p = POP();
-      CHECK_POINT(z0, p);
-      if (n < 0 || (size_t)n >= run->cvt_count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+      if (p < 0 || (size_t)p >= z0->count || n < 0 || (size_t)n >= run->cvt_count) {
+        LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+        /* The reference points are set whether or not the move happened. */
+        gs->rp[0] = gs->rp[1] = (uint32_t)p & 0xFFFFu;
+        break;
+      }
       distance = run->cvt[n];
       if (gs->zp[0] == 0) {
         z0->org[p].x = gfnt_hint_mul14(distance, gs->fv[0]);
@@ -480,8 +504,11 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(2);
       d = POP();
       p = POP();
-      CHECK_POINT(z1, p);
-      if (rp0 >= z0->count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+      CHECK_POINT_OR(z1, p, break);
+      if (rp0 >= z0->count) {
+        LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+        break;
+      }
       if (gs->zp[1] == 0) {
         z1->org[p] = z0->org[rp0];
         z1->cur[p] = z1->org[p];
@@ -497,12 +524,25 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       GFNT_HintZone * z0 = ZONE(0);
       GFNT_HintZone * z1 = ZONE(1);
       uint32_t rp0 = gs->rp[0];
+      if (run->ctx->params.tolerant && (run->depth < (size_t)gs->loop || rp0 >= z0->count)) {
+        /* Too few operands for the loop: nothing is done. No reference point: the points
+           are taken off the stack and nothing is moved. */
+        if (run->depth < (size_t)gs->loop) {
+          LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);
+        }
+        else {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          run->depth -= (size_t)gs->loop;
+        }
+        gs->loop = 1;
+        break;
+      }
       if (rp0 >= z0->count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
       for (int32_t k = 0; k < gs->loop; ++k) {
         int32_t p;
         NEED(1);
         p = POP();
-        CHECK_POINT(z1, p);
+        CHECK_POINT_OR(z1, p, continue);
         gfnt_hint_move(run, z1, (size_t)p, gfnt_hint_sub(0,
             gfnt_hint_current_distance(run, z1, (size_t)p, z0, rp0)));
       }
@@ -518,8 +558,8 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(2);
       p1 = POP();
       p2 = POP();
-      CHECK_POINT(z1, p1);
-      CHECK_POINT(z0, p2);
+      CHECK_POINT_OR(z1, p1, break);
+      CHECK_POINT_OR(z0, p2, break);
       d = gfnt_hint_current_distance(run, z0, (size_t)p2, z1, (size_t)p1) / 2;
       gfnt_hint_move(run, z1, (size_t)p1, d);
       gfnt_hint_move(run, z0, (size_t)p2, gfnt_hint_sub(0, d));
@@ -530,14 +570,17 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       int32_t p;
       NEED(1);
       p = POP();
-      CHECK_POINT(z0, p);
+      CHECK_POINT_OR(z0, p, break);
       if (gs->fv[0] != 0) z0->flags[p] &= (uint8_t)~GFNT_HINT_TOUCH_X;
       if (gs->fv[1] != 0) z0->flags[p] &= (uint8_t)~GFNT_HINT_TOUCH_Y;
       break;
     }
     case 0x30: case 0x31: { /* IUP[a]: a == 1 is x */
       GFNT_HintZone * z2 = ZONE(2);
-      if (gs->zp[2] == 0) FAIL(GFNT_HINT_FAIL_BAD_ARGUMENT);
+      if (gs->zp[2] == 0) {
+        LENIENT(GFNT_HINT_FAIL_BAD_ARGUMENT);
+        z2 = &run->zone[1];       /* the glyph's own points, whatever zp2 says */
+      }
       if (!gfnt_hint_frozen(run)) {
         gfnt_hint_iup(z2, (op & 1) != 0);
       }
@@ -550,13 +593,24 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       size_t rp;
       int32_t dx;
       int32_t dy;
+      if (run->ctx->params.tolerant && run->depth < (size_t)gs->loop) {
+        LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);
+        gs->loop = 1;
+        break;
+      }
       failure = gfnt_hint_ref_shift(run, op & 1u, &rz, &rp, &dx, &dy);
-      if (failure != GFNT_HINT_OK) goto fault;
+      if (failure != GFNT_HINT_OK) {
+        if (!run->ctx->params.tolerant) goto fault;
+        gfnt_hint_soft(run, failure);
+        run->depth -= (size_t)gs->loop;      /* the points are taken and nothing is moved */
+        gs->loop = 1;
+        break;
+      }
       for (int32_t k = 0; k < gs->loop; ++k) {
         int32_t p;
         NEED(1);
         p = POP();
-        CHECK_POINT(z2, p);
+        CHECK_POINT_OR(z2, p, continue);
         gfnt_hint_displace(run, z2, (size_t)p, dx, dy);
       }
       gs->loop = 1;
@@ -574,11 +628,21 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(1);
       c = POP();
       failure = gfnt_hint_ref_shift(run, op & 1u, &rz, &rp, &dx, &dy);
-      if (failure != GFNT_HINT_OK) goto fault;
-      if (c < 0 || (size_t)c >= z2->contour_count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+      if (failure != GFNT_HINT_OK) {
+        if (!run->ctx->params.tolerant) goto fault;
+        gfnt_hint_soft(run, failure);
+        break;
+      }
+      if (c < 0 || (size_t)c >= z2->contour_count) {
+        LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+        break;
+      }
       first = c == 0 ? 0 : z2->ends[c - 1] + 1u;
       last = z2->ends[c];
-      if (last >= z2->count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+      if (last >= z2->count) {
+        LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+        break;
+      }
       for (size_t i = first; i <= last; ++i) {
         if (rz == z2 && i == rp) continue;
         gfnt_hint_displace(run, z2, i, dx, dy);
@@ -595,9 +659,16 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       size_t limit;
       NEED(1);
       e = POP();
-      if (e != 0 && e != 1) FAIL(GFNT_HINT_FAIL_BAD_ARGUMENT);
+      if (e != 0 && e != 1) {
+        LENIENT(GFNT_HINT_FAIL_BAD_ARGUMENT);
+        break;
+      }
       failure = gfnt_hint_ref_shift(run, op & 1u, &rz, &rp, &dx, &dy);
-      if (failure != GFNT_HINT_OK) goto fault;
+      if (failure != GFNT_HINT_OK) {
+        if (!run->ctx->params.tolerant) goto fault;
+        gfnt_hint_soft(run, failure);
+        break;
+      }
       /* The operand only has to name a zone; the points moved are those of zp2's. */
       z = ZONE(2);
       limit = gs->zp[2] == 0 ? z->count : (z->contour_count ? z->ends[z->contour_count - 1] + 1u : 0);
@@ -619,11 +690,16 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       amount = POP();
       dx = gfnt_hint_mul14(amount, gs->fv[0]);
       dy = gfnt_hint_mul14(amount, gs->fv[1]);
+      if (run->ctx->params.tolerant && run->depth < (size_t)gs->loop) {
+        LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);
+        gs->loop = 1;
+        break;
+      }
       for (int32_t k = 0; k < gs->loop; ++k) {
         int32_t p;
         NEED(1);
         p = POP();
-        CHECK_POINT(z2, p);
+        CHECK_POINT_OR(z2, p, continue);
         /* The version 40 compatibility behaviour moves only points the program
            has already moved vertically. */
         if (gfnt_hint_compat(run) && !run->composite && !(z2->flags[p] & GFNT_HINT_TOUCH_Y)) {
@@ -643,7 +719,27 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       int32_t old_range;
       int32_t cur_range;
       bool twilight = gs->zp[0] == 0 || gs->zp[1] == 0 || gs->zp[2] == 0;
-      if (rp1 >= z0->count || rp2 >= z1->count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+      if (run->ctx->params.tolerant && run->depth < (size_t)gs->loop) {
+        LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);
+        gs->loop = 1;
+        break;
+      }
+      if (rp1 >= z0->count) {
+        /* No reference point: the points are taken off the stack and nothing is moved. */
+        LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+        run->depth -= (size_t)gs->loop;
+        gs->loop = 1;
+        break;
+      }
+      if (rp2 >= z1->count) {
+        /* Some fonts call IP with a bad second reference point. The reference
+           interpreter then takes both ranges as nothing, which leaves each point
+           moved by how far it was from the first reference point to begin with. */
+        LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+        old_range = 0;
+        cur_range = 0;
+      }
+      else {
       /* In the glyph zone the proportion is taken in font units, where it is
          exact, and applied to the current range once. */
       old_range = twilight
@@ -653,6 +749,7 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
               gfnt_hint_sub(z1->orus[rp2].x, z0->orus[rp1].x),
               gfnt_hint_sub(z1->orus[rp2].y, z0->orus[rp1].y));
       cur_range = gfnt_hint_current_distance(run, z1, rp2, z0, rp1);
+      }
       for (int32_t k = 0; k < gs->loop; ++k) {
         int32_t p;
         int32_t org_dist;
@@ -660,7 +757,7 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
         int32_t new_dist;
         NEED(1);
         p = POP();
-        CHECK_POINT(z2, p);
+        CHECK_POINT_OR(z2, p, continue);
         org_dist = twilight
             ? gfnt_hint_dual_project(run, gfnt_hint_sub(z2->org[p].x, z0->org[rp1].x),
                 gfnt_hint_sub(z2->org[p].y, z0->org[rp1].y))
@@ -687,7 +784,11 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       int32_t p;
       NEED(1);
       p = POP();
-      CHECK_POINT(z2, p);
+      if (p < 0 || (size_t)p >= z2->count) {
+        LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+        PUSH(0);
+        break;
+      }
       PUSH(op & 1 ? gfnt_hint_dual_project(run, z2->org[p].x, z2->org[p].y)
                   : gfnt_hint_project(run, z2->cur[p].x, z2->cur[p].y));
       break;
@@ -699,7 +800,7 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(2);
       value = POP();
       p = POP();
-      CHECK_POINT(z2, p);
+      CHECK_POINT_OR(z2, p, break);
       gfnt_hint_move(run, z2, (size_t)p, gfnt_hint_sub(value,
           gfnt_hint_project(run, z2->cur[p].x, z2->cur[p].y)));
       if (gs->zp[2] == 0) z2->org[p] = z2->cur[p];
@@ -713,19 +814,27 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(2);
       p2 = POP();
       p1 = POP();
-      CHECK_POINT(z1, p1);
-      CHECK_POINT(z0, p2);
+      if (p1 < 0 || (size_t)p1 >= z1->count || p2 < 0 || (size_t)p2 >= z0->count) {
+        LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+        PUSH(0);
+        break;
+      }
       PUSH(op == 0x4A ? gfnt_hint_original_distance(run, z1, (size_t)p1, z0, (size_t)p2)
                   : gfnt_hint_current_distance(run, z1, (size_t)p1, z0, (size_t)p2));
       break;
     }
     case 0x80: { /* FLIPPT */
       GFNT_HintZone * z0 = ZONE(0);
+      if (run->ctx->params.tolerant && run->depth < (size_t)gs->loop) {
+        LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);
+        gs->loop = 1;
+        break;
+      }
       for (int32_t k = 0; k < gs->loop; ++k) {
         int32_t p;
         NEED(1);
         p = POP();
-        CHECK_POINT(z0, p);
+        CHECK_POINT_OR(z0, p, continue);
         z0->flags[p] ^= GFNT_HINT_ON_CURVE;
       }
       gs->loop = 1;
@@ -738,8 +847,8 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(2);
       high = POP();
       low = POP();
-      CHECK_POINT(z0, high);
-      CHECK_POINT(z0, low);
+      CHECK_POINT_OR(z0, high, break);
+      CHECK_POINT_OR(z0, low, break);
       for (int32_t i = low; i <= high; ++i) {
         if (op == 0x81) z0->flags[i] |= GFNT_HINT_ON_CURVE;
         else z0->flags[i] &= (uint8_t)~GFNT_HINT_ON_CURVE;
@@ -753,11 +862,18 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(1);
       n = POP();
       if (n < 0) FAIL(GFNT_HINT_FAIL_BAD_ARGUMENT);
-      NEED(2u * (size_t)n);
       while (n-- > 0) {
-        int32_t p = POP();
-        int32_t arg = POP();
-        CHECK_POINT(z0, p);
+        int32_t p;
+        int32_t arg;
+        if (run->depth < 2u) {
+          /* Fewer pairs than it was told of: the ones there are are done, and what is
+             left over stays. */
+          LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);
+          break;
+        }
+        p = POP();
+        arg = POP();
+        CHECK_POINT_OR(z0, p, continue);
         if (gfnt_hint_compat(run) && !run->composite && !(z0->flags[p] & GFNT_HINT_TOUCH_Y)) {
           continue;
         }
@@ -779,8 +895,9 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       int64_t dax, day, dbx, dby, denominator;
       NEED(5);
       b1 = POP(); b0 = POP(); a1 = POP(); a0 = POP(); p = POP();
-      CHECK_POINT(z2, p);
-      CHECK_POINT(z0, b1); CHECK_POINT(z0, b0); CHECK_POINT(z0, a1); CHECK_POINT(z0, a0);
+      CHECK_POINT_OR(z2, p, break);
+      CHECK_POINT_OR(z0, b1, break); CHECK_POINT_OR(z0, b0, break);
+      CHECK_POINT_OR(z0, a1, break); CHECK_POINT_OR(z0, a0, break);
       dax = (int64_t)z0->cur[a1].x - z0->cur[a0].x;
       day = (int64_t)z0->cur[a1].y - z0->cur[a0].y;
       dbx = (int64_t)z0->cur[b1].x - z0->cur[b0].x;
@@ -858,8 +975,8 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
       NEED(2);
       p2 = POP();
       p1 = POP();
-      CHECK_POINT(z1, p2);
-      CHECK_POINT(z2, p1);
+      CHECK_POINT_OR(z1, p2, break);
+      CHECK_POINT_OR(z2, p1, break);
       for (int pass = 0; pass < (op >= 0x86 ? 2 : 1); ++pass) {
         const GFNT_HintPoint * a = pass == 0 || op < 0x86 ? &z2->cur[p1] : &z2->org[p1];
         const GFNT_HintPoint * b = pass == 0 || op < 0x86 ? &z1->cur[p2] : &z1->org[p2];
@@ -903,8 +1020,13 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
         int32_t cur_dist;
         NEED(1);
         p = POP();
-        CHECK_POINT(z1, p);
-        if (rp0 >= z0->count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+        if (p < 0 || (size_t)p >= z1->count || rp0 >= z0->count) {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          gs->rp[1] = gs->rp[0];
+          gs->rp[2] = (uint32_t)p & 0xFFFFu;
+          if (op & 0x10) gs->rp[0] = (uint32_t)p & 0xFFFFu;
+          break;
+        }
         org_dist = gfnt_hint_original_distance(run, z1, (size_t)p, z0, rp0);
         {
           int64_t apart = (int64_t)org_dist - gs->sw_value;
@@ -944,10 +1066,16 @@ GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
         NEED(2);
         n = POP();
         p = POP();
-        CHECK_POINT(z1, p);
-        if (rp0 >= z0->count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
-        if (n < 0 || (size_t)n >= run->cvt_count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
-        cvt_dist = run->cvt[n];
+        if (p < 0 || (size_t)p >= z1->count || rp0 >= z0->count
+            || (n < -1 || (size_t)(n + 1) > run->cvt_count)
+            || (!run->ctx->params.tolerant && n < 0)) {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          gs->rp[1] = gs->rp[0];
+          gs->rp[2] = (uint32_t)p & 0xFFFFu;
+          if (op & 0x10) gs->rp[0] = (uint32_t)p & 0xFFFFu;
+          break;
+        }
+        cvt_dist = n == -1 ? 0 : run->cvt[n];     /* index -1 is a distance of nothing */
         {
           int64_t apart = (int64_t)cvt_dist - gs->sw_value;
           if ((apart < 0 ? -apart : apart) < gs->sw_cut_in) {

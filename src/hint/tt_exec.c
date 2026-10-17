@@ -36,11 +36,44 @@
 
 /* Flow of control inside the loop: a failure names itself and leaves. */
 #define FAIL(code) do { failure = (code); goto fault; } while (0)
-#define NEED(n) do { if (run->depth < (size_t)(n)) FAIL(GFNT_HINT_FAIL_STACK_UNDERFLOW); } while (0)
+/* An instruction that finds fewer operands than it pops: a failure, or for a tolerant run
+   zeros in place of what is missing (they replace what is there, as the reference's do). */
+#define NEED(n) do { \
+    if (run->depth < (size_t)(n)) { \
+      if (!run->ctx->params.tolerant) FAIL(GFNT_HINT_FAIL_STACK_UNDERFLOW); \
+      gfnt_hint_soft(run, GFNT_HINT_FAIL_STACK_UNDERFLOW); \
+      memset(run->stack, 0, (size_t)(n) * sizeof run->stack[0]); \
+      run->depth = (size_t)(n); \
+    } \
+  } while (0)
 #define ROOM(n) do { if (run->depth + (size_t)(n) > run->stack_capacity) FAIL(GFNT_HINT_FAIL_STACK_OVERFLOW); } while (0)
+/* A thing a program does wrong that the reference interpreter carries on past: strict
+   runs fail at it, tolerant ones count it and let the caller choose what to do instead. */
+#define LENIENT(code) do { \
+    if (!ctx->params.tolerant) FAIL(code); \
+    gfnt_hint_soft(run, (code)); \
+  } while (0)
 #define POP() (run->stack[--run->depth])
 #define PUSH(v) do { int32_t pushed_ = (v); run->stack[run->depth++] = pushed_; } while (0)
 #define TOP() (run->stack[run->depth - 1u])
+
+void gfnt_hint_soft(GFNT_HintRun * run, GFNT_HintFailure failure) {
+  if (run->soft_count == 0) {
+    run->soft.failure = failure;
+    run->soft.program = run->at_program;
+    run->soft.offset = run->at;
+    run->soft.opcode = run->at_op;
+  }
+  ++run->soft_count;
+}
+
+size_t gfnt_hint_run_tolerated(const GFNT_HintRun * run) {
+  return run->soft_count;
+}
+
+GFNT_HintFault gfnt_hint_run_first_tolerated(const GFNT_HintRun * run) {
+  return run->soft;
+}
 
 const char * gfnt_hint_failure_name(GFNT_HintFailure failure) {
   switch (failure) {
@@ -236,6 +269,20 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
     --budget;
     op = insn.opcode;
     ip += insn.length;
+    run->at = op_offset;
+    run->at_op = op;
+    run->at_program = current;
+    if (ctx->params.tolerant) {
+      /* An instruction that finds fewer operands than it pops runs on zeros instead,
+         which replace what was there (the reference interpreter does the same). */
+      const GFNT_HintOp * info = gfnt_hint_op(op);
+
+      if (info->defined && info->pops > 0 && run->depth < (size_t)info->pops) {
+        gfnt_hint_soft(run, GFNT_HINT_FAIL_STACK_UNDERFLOW);
+        memset(run->stack, 0, (size_t)info->pops * sizeof run->stack[0]);
+        run->depth = (size_t)info->pops;
+      }
+    }
 
     switch (op) {
       /* ---- pushing ---------------------------------------------------- */
@@ -278,7 +325,11 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         int32_t k;
         NEED(1);
         k = POP();
-        if (k < 1 || (size_t)k > run->depth) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+        if (k < 1 || (size_t)k > run->depth) {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          PUSH(0);
+          break;
+        }
         PUSH(run->stack[run->depth - (size_t)k]);
         break;
       }
@@ -287,7 +338,10 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         int32_t moved;
         NEED(1);
         k = POP();
-        if (k < 1 || (size_t)k > run->depth) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+        if (k < 1 || (size_t)k > run->depth) {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          break;
+        }
         moved = run->stack[run->depth - (size_t)k];
         memmove(&run->stack[run->depth - (size_t)k],
             &run->stack[run->depth - (size_t)k + 1u],
@@ -316,7 +370,10 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         NEED(2);
         value = POP();
         index = POP();
-        if (index < 0 || (size_t)index >= run->storage_count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+        if (index < 0 || (size_t)index >= run->storage_count) {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          break;
+        }
         run->storage[index] = value;
         break;
       }
@@ -324,7 +381,11 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         int32_t index;
         NEED(1);
         index = TOP();
-        if (index < 0 || (size_t)index >= run->storage_count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+        if (index < 0 || (size_t)index >= run->storage_count) {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          TOP() = 0;
+          break;
+        }
         TOP() = run->storage[index];
         break;
       }
@@ -334,7 +395,10 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         NEED(2);
         value = POP();
         index = POP();
-        if (index < 0 || (size_t)index >= run->cvt_count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+        if (index < 0 || (size_t)index >= run->cvt_count) {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          break;
+        }
         run->cvt[index] = op == 0x44 ? value : gfnt_hint_mul_fix(value, ctx->scale);
         break;
       }
@@ -342,7 +406,11 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         int32_t index;
         NEED(1);
         index = TOP();
-        if (index < 0 || (size_t)index >= run->cvt_count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+        if (index < 0 || (size_t)index >= run->cvt_count) {
+          LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+          TOP() = 0;
+          break;
+        }
         TOP() = run->cvt[index];
         break;
       }
@@ -443,14 +511,17 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         int32_t p;
         NEED(1);
         p = POP();
-        run->gs.rp[op - 0x10u] = (uint32_t)p;
+        run->gs.rp[op - 0x10u] = ctx->params.tolerant ? (uint32_t)p & 0xFFFFu : (uint32_t)p;
         break;
       }
       case 0x13: case 0x14: case 0x15: case 0x16: { /* SZP0-2, SZPS */
         int32_t zone;
         NEED(1);
         zone = POP();
-        if (zone != 0 && zone != 1) FAIL(GFNT_HINT_FAIL_BAD_ARGUMENT);
+        if (zone != 0 && zone != 1) {
+          LENIENT(GFNT_HINT_FAIL_BAD_ARGUMENT);
+          break;
+        }
         if (op == 0x16) {
           run->gs.zp[0] = run->gs.zp[1] = run->gs.zp[2] = (uint8_t)zone;
         }
@@ -536,13 +607,21 @@ GFNT_HintFailure gfnt_hint_exec(GFNT_HintRun * run, GFNT_HintProgram program) {
         NEED(1);
         n = POP();
         if (n < 0) FAIL(GFNT_HINT_FAIL_BAD_ARGUMENT);
-        NEED(2u * (size_t)n);
         while (n-- > 0) {
-          int32_t index = POP();
-          int32_t arg = POP();
+          int32_t index;
+          int32_t arg;
+          if (run->depth < 2u) {
+            LENIENT(GFNT_HINT_FAIL_STACK_UNDERFLOW);
+            break;
+          }
+          index = POP();
+          arg = POP();
           int32_t wanted = first_ppem + ((arg >> 4) & 15);
 
-          if (index < 0 || (size_t)index >= run->cvt_count) FAIL(GFNT_HINT_FAIL_BAD_INDEX);
+          if (index < 0 || (size_t)index >= run->cvt_count) {
+            LENIENT(GFNT_HINT_FAIL_BAD_INDEX);
+            continue;
+          }
           if ((int32_t)ctx->params.ppem == wanted) {
             run->cvt[index] = gfnt_hint_add(run->cvt[index],
                 gfnt_hint_delta_amount((unsigned)(arg & 15), run->gs.delta_shift));

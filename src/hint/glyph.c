@@ -68,6 +68,7 @@ typedef struct GFNT_HintWalk {
   const GFNT_HintContext * ctx;
   GFNT_Error * error;
   bool failed;             /* some program, or the context, could not run */
+  bool with_errors;        /* a tolerant program did something invalid, or stopped on it */
   bool ran_program;        /* some glyph's program ran to the end */
   GFNT_HintFault fault;    /* the first such failure */
   bool normalised;         /* the top glyph's program made a vector from a direction */
@@ -257,6 +258,21 @@ static int32_t gfnt_hint_reported_advance(const GFNT_HintPoint pp[4]) {
   return gfnt_hint_grid(gfnt_hint_sub(pp[1].x, pp[0].x));
 }
 
+/* Whether a run's geometry is to be used. A strict run is used when it succeeded; a tolerant
+   one also when it carried on past something or stopped on an error, as far as it got (what
+   the reference returns), and then the glyph says so. */
+static bool gfnt_hint_run_geometry(GFNT_HintWalk * w, GFNT_Result r, const GFNT_HintRun * run) {
+  if (r == GFNT_OK && (!run || gfnt_hint_run_tolerated(run) == 0)) return true;
+  if (!w->ctx->params.tolerant || !run || r == GFNT_ERR_OOM || r == GFNT_ERR_INVALID) {
+    return r == GFNT_OK;
+  }
+  if (!w->with_errors) {
+    w->with_errors = true;
+    w->fault = r == GFNT_OK ? gfnt_hint_run_first_tolerated(run) : gfnt_hint_run_fault(run);
+  }
+  return true;
+}
+
 /* A simple glyph: load it, run its program (even an empty one), read it back. */
 static GFNT_Result gfnt_hint_simple(GFNT_HintWalk * w, uint32_t glyph, bool top,
     GFNT_HintedGlyph * out) {
@@ -359,7 +375,7 @@ static GFNT_Result gfnt_hint_simple(GFNT_HintWalk * w, uint32_t glyph, bool top,
     input.org_y = org_y;
     r = gfnt_hint_run_glyph(ctx, &input, program, program_length, &run);
     if (r == GFNT_ERR_OOM) goto done;
-    if (r == GFNT_OK) {
+    if (gfnt_hint_run_geometry(w, r, run)) {
       hinted = true;
       if (program_length > 0) w->ran_program = true;
     }
@@ -396,7 +412,7 @@ static GFNT_Result gfnt_hint_simple(GFNT_HintWalk * w, uint32_t glyph, bool top,
   }
   if (hinted) {
     for (size_t i = 0; i < 4; ++i) {
-      gfnt_hint_run_point(run, n - 4u + i, &out->phantom[i].x, &out->phantom[i].y);
+      gfnt_hint_run_phantom(run, i, &out->phantom[i].x, &out->phantom[i].y);
     }
     out->advance = gfnt_hint_reported_advance(out->phantom);
     w->normalised = w->normalised || gfnt_hint_run_normalised(run);
@@ -621,13 +637,14 @@ static GFNT_Result gfnt_hint_composite_body(GFNT_HintWalk * w, uint32_t glyph, s
     input.pixels = true;
     input.org_x = input.org_y = NULL;
     r = gfnt_hint_run_glyph(ctx, &input, program, program_length, &run);
-    if (r == GFNT_OK) {
+    if (r != GFNT_ERR_OOM && gfnt_hint_run_geometry(w, r, run)) {
+      r = GFNT_OK;
       for (size_t i = 0; i < out->count; ++i) {
         gfnt_hint_run_point(run, i, &out->points[i].x, &out->points[i].y);
         out->on[i] = gfnt_hint_run_on_curve(run, i);
       }
       for (size_t i = 0; i < 4; ++i) {
-        gfnt_hint_run_point(run, out->count + i, &out->phantom[i].x, &out->phantom[i].y);
+        gfnt_hint_run_phantom(run, i, &out->phantom[i].x, &out->phantom[i].y);
       }
       out->advance = gfnt_hint_reported_advance(out->phantom);
       w->ran_program = true;
@@ -744,6 +761,7 @@ GFNT_Result gfnt_hint_glyph_outline_in(const GFNT_Face * face,
     *out = result;
     result = NULL;
     *status = walk.failed ? GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED
+        : walk.with_errors ? GFNT_HINT_STATUS_HINTED_WITH_ERRORS
         : walk.ran_program ? GFNT_HINT_STATUS_HINTED : GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM;
     if (advance_out) *advance_out = g.advance;
     if (fault) *fault = walk.fault;

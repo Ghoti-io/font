@@ -127,6 +127,12 @@ struct GFNT_HintRun {
   bool composite;                 ///< Whether the glyph zone is a composite's.
   int32_t scale;                  ///< 16.16 pixels per font unit for the original coordinates.
   bool iup_called[2];             ///< Whether IUP has run along y, along x.
+  GFNT_HintPoint start_pp[4];     ///< The phantom points as the program began.
+  size_t soft_count;              ///< Invalid things carried on past (a tolerant run).
+  GFNT_HintFault soft;            ///< The first of them.
+  size_t at;                      ///< The offset of the instruction being executed...
+  uint8_t at_op;                  ///< ...its opcode...
+  GFNT_HintProgram at_program;    ///< ...and the program it is in.
 };
 
 /**
@@ -163,6 +169,12 @@ bool gfnt_hint_is_point_op(uint8_t op);
  */
 GFNT_HintFailure gfnt_hint_point_op(GFNT_HintRun * run, uint8_t op,
     GFNT_HintProgram program);
+
+/**
+ * Note that a tolerant run carried on past @p failure at the current instruction.
+ * Only the first is kept; all are counted.
+ */
+void gfnt_hint_soft(GFNT_HintRun * run, GFNT_HintFailure failure);
 
 /** Mark the offsets of @p code that begin an instruction; NULL on no memory. */
 uint8_t * gfnt_hint_boundaries(const GFNT_Allocator * allocator,

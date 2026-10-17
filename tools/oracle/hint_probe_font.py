@@ -49,10 +49,16 @@ class Maker:
         self.upem = upem
         self.oblique = oblique
 
+    wild = 0.0       # the chance an index is out of range, and that a step is a bare instruction
+
     def point(self):
+        if self.wild and self.rng.random() < self.wild:
+            return self.rng.choice([POINTS, POINTS + 1, POINTS + 4, POINTS + 9, 200, 30000, -1, -7])
         return self.rng.randrange(POINTS)
 
     def cvt(self):
+        if self.wild and self.rng.random() < self.wild:
+            return self.rng.choice([CVT, CVT + 3, 500, 30000, -1, -9])
         return self.rng.randrange(CVT)
 
     empty = False
@@ -78,8 +84,23 @@ class Maker:
                 asm.append(tail)
         return asm
 
+    BARE = ["ADD[ ]", "POP[ ]", "MDAP[1]", "MDRP[00000]", "MIAP[0]", "SRP0[ ]", "RCVT[ ]", "IP[ ]",
+            "SHP[0]", "MIRP[00000]", "ALIGNRP[ ]", "GC[0]", "MD[0]", "SWAP[ ]", "DUP[ ]", "SCFS[ ]",
+            "MSIRP[0]", "ISECT[ ]", "SHPIX[ ]", "WCVTP[ ]", "RS[ ]", "WS[ ]", "UTP[ ]", "SHC[0]",
+            "DELTAP1[ ]", "ALIGNPTS[ ]", "SCVTCI[ ]", "SSW[ ]", "SLOOP[ ]", "FLIPPT[ ]", "SDB[ ]"]
+
     def step(self):
         r = self.rng
+        if self.wild and r.random() < self.wild:
+            kind = r.randrange(5)
+            if kind == 0:
+                return [r.choice(self.BARE)]
+            if kind == 1:
+                return [push([r.randrange(-2, 40)]), r.choice(["RS[ ]", "POP[ ]", "CALL[ ]", "SLOOP[ ]", "SHC[0]", "SHZ[1]", "SRP1[ ]"])]
+            if kind == 2:
+                return [push([r.randrange(-2, 40), r.randrange(-50, 50)]), r.choice(["WS[ ]", "WCVTP[ ]"])]
+            if kind == 3:
+                return [push([r.randrange(-1, 8)]), "SHC[%d]" % r.randrange(2)]
         k = r.randrange(40)
         if not self.oblique and k in (38, 39):
             k = 0
@@ -106,7 +127,13 @@ class Maker:
         if k in (7, 8, 9):
             return [push([p()]), "MDAP[%d]" % r.randrange(2)]
         if k in (10, 11):
-            return [push([p(), c()]), "MIAP[%d]" % r.randrange(2)]
+            # Not on a phantom point: the reference interpreter lets a MIAP there leak into
+            # the next glyph it hints (state this library keeps per glyph), which a comparison
+            # of glyphs hinted one after another cannot tell from a defect.
+            point = p()
+            if POINTS <= point < POINTS + 4:
+                point -= 6
+            return [push([point, c()]), "MIAP[%d]" % r.randrange(2)]
         if k in (12, 13, 14, 15):
             return [push([p()]), "MDRP[%s]" % "".join(r.choice("01") for _ in range(5))]
         if k in (16, 17, 18, 19):
@@ -154,6 +181,7 @@ class Maker:
 
 
 HVAR = [False]
+WILD = [0.0]
 
 
 def add_variation(rng, fb, order, glyphs, glyph_count, cvt, hvar=False):
@@ -213,9 +241,10 @@ def add_hvar(rng, fb, order):
     fb.font["HVAR"] = table
 
 
-def make_font(rng, path, glyph_count, steps, oblique=True, composites=0, variable=False):
+def make_font(rng, path, glyph_count, steps, oblique=True, composites=0, variable=False, wild=0.0):
     upem = rng.choice([1000, 2048])
     maker = Maker(rng, upem, oblique)
+    maker.wild = wild
     order = [".notdef"] + ["g%d" % i for i in range(1, glyph_count + composites)]
     glyphs = {}
     listing = {}
@@ -313,12 +342,13 @@ def main(argv):
     oblique = not (len(argv) > 6 and argv[6] == "axis")
     composites = int(argv[7]) if len(argv) > 7 else 0
     variable = len(argv) > 8 and argv[8].startswith("variable")
+    WILD[0] = float(argv[9]) if len(argv) > 9 else 0.0
     HVAR[0] = len(argv) > 8 and argv[8].endswith("-hvar")
     Maker.empty = len(argv) > 8 and argv[8] == "variable-empty"
     os.makedirs(out, exist_ok=True)
     for n in range(fonts):
         rng = random.Random(seed * 100003 + n)
-        make_font(rng, os.path.join(out, "probe-%d-%d.ttf" % (seed, n)), glyphs, steps, oblique, composites, variable)
+        make_font(rng, os.path.join(out, "probe-%d-%d.ttf" % (seed, n)), glyphs, steps, oblique, composites, variable, WILD[0])
     return 0
 
 

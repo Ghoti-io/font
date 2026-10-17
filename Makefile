@@ -1277,6 +1277,10 @@ check-oracle-hint-probe: $(EXAMPLES)
 		python3 $(ORACLE)/hint_probe_diff.py --seed 52 --fonts 4 --glyphs 100 --steps 8 --vectors axis --version 35 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
 		python3 $(ORACLE)/hint_probe_diff.py --seed 53 --fonts 4 --glyphs 60 --composites 30 --steps 4 --vectors axis --version 40 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
+		python3 $(ORACLE)/hint_probe_diff.py --seed 73 --fonts 4 --glyphs 100 --steps 6 --vectors axis --version 40 --wild 0.3 --ppem 12,17 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
+		python3 $(ORACLE)/hint_probe_diff.py --seed 74 --fonts 4 --glyphs 100 --steps 6 --vectors axis --version 35 --wild 0.3 --ppem 12,17 --show 0
 
 check-oracle-hint-variable: ## Hint variable fonts at several locations and compare with FreeType's, within one 26.6 unit
 check-oracle-hint-variable: $(EXAMPLES)
@@ -1302,9 +1306,9 @@ check-hint-mutations: $(APP_DIR)/testHint$(EXE_EXTENSION) $(EXAMPLES)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/tt_decode_mutation_check.py
 
 check-hint: ## Every TrueType hinting gate: the unit tests, the fontTools comparison and its mutation check
-check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) $(APP_DIR)/testHint_vm$(EXE_EXTENSION) $(APP_DIR)/testHint_point$(EXE_EXTENSION) $(APP_DIR)/testHint_glyph$(EXE_EXTENSION) $(APP_DIR)/testHint_api$(EXE_EXTENSION) $(APP_DIR)/testHint_variation$(EXE_EXTENSION)
+check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) $(APP_DIR)/testHint_vm$(EXE_EXTENSION) $(APP_DIR)/testHint_point$(EXE_EXTENSION) $(APP_DIR)/testHint_glyph$(EXE_EXTENSION) $(APP_DIR)/testHint_api$(EXE_EXTENSION) $(APP_DIR)/testHint_variation$(EXE_EXTENSION) $(APP_DIR)/testHint_tolerance$(EXE_EXTENSION)
 check-hint: check-oracle-tt-decode check-hint-mutations check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries check-oracle-hint-variable check-hint-point-mutations
-	@for t in testHint testHint_vm testHint_point testHint_glyph testHint_api testHint_variation; do \
+	@for t in testHint testHint_vm testHint_point testHint_glyph testHint_api testHint_variation testHint_tolerance; do \
 		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
 	done
 

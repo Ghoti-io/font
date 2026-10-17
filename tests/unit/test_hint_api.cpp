@@ -139,13 +139,13 @@ TEST(HintApi, AContextRefusesWhatCannotBeHintedFor) {
   GFNT_HintContext * context = nullptr;
   GFNT_Error error{};
 
-  EXPECT_EQ(gfnt_hint_context_create(f.face, 0, GFNT_HINT_VERSION_AUTO, nullptr, &context, &error),
+  EXPECT_EQ(gfnt_hint_context_create(f.face, 0, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, nullptr, &context, &error),
       GFNT_ERR_INVALID);
-  EXPECT_EQ(gfnt_hint_context_create(nullptr, 10, GFNT_HINT_VERSION_AUTO, nullptr, &context, &error),
+  EXPECT_EQ(gfnt_hint_context_create(nullptr, 10, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, nullptr, &context, &error),
       GFNT_ERR_INVALID);
-  EXPECT_EQ(gfnt_hint_context_create(f.face, 10, static_cast<GFNT_HintVersion>(7), nullptr, &context,
+  EXPECT_EQ(gfnt_hint_context_create(f.face, 10, static_cast<GFNT_HintVersion>(7), GFNT_HINT_MODE_FONT, nullptr, &context,
       &error), GFNT_ERR_INVALID);
-  EXPECT_EQ(gfnt_hint_context_create(f.face, 1000000, GFNT_HINT_VERSION_AUTO, nullptr, &context, &error),
+  EXPECT_EQ(gfnt_hint_context_create(f.face, 1000000, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, nullptr, &context, &error),
       GFNT_ERR_LIMIT);
   EXPECT_EQ(context, nullptr);
   gfnt_hint_context_destroy(nullptr);
@@ -161,7 +161,8 @@ TEST(HintApi, AHintedOutlineSaysWhatBecameOfTheGlyph) {
   const GFNT_HintStatus expected[3] = {GFNT_HINT_STATUS_HINTED,
       GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM, GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED};
 
-  ASSERT_EQ(gfnt_hint_context_create(f.face, 10, GFNT_HINT_VERSION_35, nullptr, &context, &error),
+  ASSERT_EQ(gfnt_hint_context_create(f.face, 10, GFNT_HINT_VERSION_35, GFNT_HINT_MODE_FONT_STRICT,
+      nullptr, &context, &error),
       GFNT_OK);
   for (uint32_t g = 0; g < 3; ++g) {
     GFNT_Outline * outline = nullptr;
@@ -196,7 +197,7 @@ TEST(HintApi, AFaceWithoutTrueTypeOutlinesRendersAsItAlwaysDid) {
 
   ASSERT_EQ(gfnt_blob_create_file(path.c_str(), nullptr, nullptr, &blob, &error), GFNT_OK);
   ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
-  EXPECT_EQ(gfnt_hint_context_create(face, 16, GFNT_HINT_VERSION_AUTO, nullptr, &context, &error),
+  EXPECT_EQ(gfnt_hint_context_create(face, 16, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, nullptr, &context, &error),
       GFNT_ERR_UNSUPPORTED);
   none.hint_mode = GFNT_HINT_MODE_NONE;
   ASSERT_EQ(gfnt_face_render_glyph(face, 1, 16, &hinted, nullptr, &a, &error), GFNT_OK);

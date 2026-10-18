@@ -50,6 +50,7 @@
 #include "../core/fixed.h"
 #include "../outline/outline.h"
 #include "../sfnt/sfnt.h"
+#include "flatten.h"
 
 /** Sub-pixel bits: 26.6, the same everywhere in this library. */
 #define GFNT_PIXEL_BITS 6
@@ -68,9 +69,6 @@
 
 /** Default flattening tolerance: a sixteenth of a pixel. */
 #define GFNT_RASTER_TOLERANCE (GFNT_ONE_PIXEL / 16)
-
-/** How deep a curve may be subdivided before its chord is used as it is. */
-#define GFNT_RASTER_DEPTH 16
 
 /** Smallest cell allocation. */
 #define GFNT_RASTER_MIN_CELLS 64u
@@ -432,75 +430,17 @@ static void gfnt_raster_line(GFNT_Raster * raster, GFNT_Point to) {
 
 // --- flattening ------------------------------------------------------------
 
-/** The midpoint of two points, floored, as the outline walk uses. */
-static GFNT_Point gfnt_raster_mid(GFNT_Point a, GFNT_Point b) {
-  GFNT_Point mid;
-
-  mid.x = (GFNT_F26Dot6)gfnt_floor_div((int64_t)a.x + b.x, 2);
-  mid.y = (GFNT_F26Dot6)gfnt_floor_div((int64_t)a.y + b.y, 2);
-  return mid;
-}
-
-static int32_t gfnt_abs32(int32_t value) {
-  return value < 0 ? -value : value;
-}
-
 /**
- * Flatten a quadratic, splitting at its midpoint until it is flat enough.
+ * Take one vertex of a flattened curve into the edge list.
  *
- * The deviation of a quadratic from its chord is
- * `|2*p1 - p0 - p2| / 4` at its midpoint, so the test is that sum against four
- * tolerances. Every split is an exact halving of integers, and the depth cap
- * is what a hostile curve runs into rather than the stack.
+ * The flattener itself is flatten.c, and its guarantee is proved there: the
+ * polyline stays within the tolerance of the curve.
  */
-static void gfnt_raster_quad(GFNT_Raster * raster, GFNT_Point p0,
-    GFNT_Point p1, GFNT_Point p2, int depth) {
-  const int32_t dx = gfnt_abs32(2 * p1.x - p0.x - p2.x);
-  const int32_t dy = gfnt_abs32(2 * p1.y - p0.y - p2.y);
-
-  if (depth <= 0 || dx + dy <= 4 * raster->tolerance) {
-    gfnt_raster_line(raster, p2);
-    return;
-  }
-  {
-    const GFNT_Point a = gfnt_raster_mid(p0, p1);
-    const GFNT_Point b = gfnt_raster_mid(p1, p2);
-    const GFNT_Point m = gfnt_raster_mid(a, b);
-
-    gfnt_raster_quad(raster, p0, a, m, depth - 1);
-    gfnt_raster_quad(raster, m, b, p2, depth - 1);
-  }
-}
-
-/**
- * Flatten a cubic the same way.
- *
- * A cubic's deviation from its chord is bounded by three quarters of the larger
- * of its two control-point deviations, so both are measured.
- */
-static void gfnt_raster_cubic(GFNT_Raster * raster, GFNT_Point p0,
-    GFNT_Point p1, GFNT_Point p2, GFNT_Point p3, int depth) {
-  const int32_t d1 = gfnt_abs32(3 * p1.x - 2 * p0.x - p3.x)
-      + gfnt_abs32(3 * p1.y - 2 * p0.y - p3.y);
-  const int32_t d2 = gfnt_abs32(3 * p2.x - p0.x - 2 * p3.x)
-      + gfnt_abs32(3 * p2.y - p0.y - 2 * p3.y);
-
-  if (depth <= 0 || (d1 <= 4 * raster->tolerance
-          && d2 <= 4 * raster->tolerance)) {
-    gfnt_raster_line(raster, p3);
-    return;
-  }
-  {
-    const GFNT_Point a = gfnt_raster_mid(p0, p1);
-    const GFNT_Point b = gfnt_raster_mid(p1, p2);
-    const GFNT_Point c = gfnt_raster_mid(p2, p3);
-    const GFNT_Point d = gfnt_raster_mid(a, b);
-    const GFNT_Point e = gfnt_raster_mid(b, c);
-    const GFNT_Point m = gfnt_raster_mid(d, e);
-
-    gfnt_raster_cubic(raster, p0, a, d, m, depth - 1);
-    gfnt_raster_cubic(raster, m, e, c, p3, depth - 1);
-  }
+static void gfnt_raster_emit(void * user, GFNT_Point to, uint32_t leaf,
+    int level) {
+  (void)leaf;
+  (void)level;
+  gfnt_raster_line((GFNT_Raster *)user, to);
 }
 
 // --- the sink the outline walk feeds ---------------------------------------
@@ -550,9 +490,11 @@ static GFNT_Result gfnt_raster_quad_to(void * user, GFNT_Point control,
     GFNT_Point to) {
   GFNT_Raster * raster = user;
 
-  gfnt_raster_quad(raster, raster->current,
+  // The cap cannot force a piece (flatten.c proves it for every tolerance this
+  // file accepts), so the count it returns is not a failure to report.
+  (void)gfnt_flatten_quad(raster->tolerance, raster->current,
       gfnt_raster_place(raster, control), gfnt_raster_place(raster, to),
-      GFNT_RASTER_DEPTH);
+      gfnt_raster_emit, raster);
   return raster->result;
 }
 
@@ -560,9 +502,9 @@ static GFNT_Result gfnt_raster_cubic_to(void * user, GFNT_Point c1,
     GFNT_Point c2, GFNT_Point to) {
   GFNT_Raster * raster = user;
 
-  gfnt_raster_cubic(raster, raster->current, gfnt_raster_place(raster, c1),
-      gfnt_raster_place(raster, c2), gfnt_raster_place(raster, to),
-      GFNT_RASTER_DEPTH);
+  (void)gfnt_flatten_cubic(raster->tolerance, raster->current,
+      gfnt_raster_place(raster, c1), gfnt_raster_place(raster, c2),
+      gfnt_raster_place(raster, to), gfnt_raster_emit, raster);
   return raster->result;
 }
 
@@ -868,9 +810,19 @@ GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
   if (!options) {
     options = &defaults;
   }
-  if (options->fill >= GFNT_FILL_RULE_COUNT || options->tolerance < 0) {
+  if (options->fill >= GFNT_FILL_RULE_COUNT) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
-        "the raster options name a fill rule or tolerance that does not exist");
+        "the raster options name a fill rule that does not exist");
+  }
+  if (options->tolerance < 0
+      || (options->tolerance != 0
+          && options->tolerance < GFNT_RASTER_MIN_TOLERANCE)) {
+    // The flattener's bound is the tolerance only from GFNT_RASTER_MIN_TOLERANCE
+    // up (flatten.c), and a tolerance asked for is a promise, so a smaller one
+    // is refused rather than rounded up to something else.
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "the raster options name a tolerance below the smallest the flattener "
+        "can honour (GFNT_RASTER_MIN_TOLERANCE)");
   }
   if (gfnt_outline_space(outline) != GFNT_OUTLINE_PIXELS) {
     // An outline in font units would render a thousand pixels tall. Refused

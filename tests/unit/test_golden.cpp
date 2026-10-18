@@ -172,6 +172,37 @@ TEST(Golden, TheCommittedFileIsThereAndHasRenderingsInIt) {
   EXPECT_LT(refusals, expected.size() / 2u);
 }
 
+/**
+ * The file names the flattener it was made under, and it is the one running.
+ *
+ * Bumping ::GFNT_RASTER_FLATTEN_REVISION without regenerating the file - or
+ * regenerating it from a different build - leaves a file whose curves belong to
+ * another rule, and the next test would report hundreds of differing hashes with
+ * no hint why. This says why, first. The revision is not in any hash.
+ */
+TEST(Golden, TheFileWasMadeUnderTheFlattenerRevisionThatIsRunning) {
+  const std::string path = gfnttest::data("golden/coverage.txt");
+  FILE * handle = fopen(path.c_str(), "r");
+  char line[512];
+  int found = 0;
+  int revision = -1;
+
+  ASSERT_NE(handle, nullptr) << path;
+  while (fgets(line, sizeof line, handle)) {
+    int value = 0;
+
+    if (sscanf(line, "# flattener revision %d", &value) == 1) {
+      found += 1;
+      revision = value;
+    }
+  }
+  fclose(handle);
+  EXPECT_EQ(found, 1) << "the header must name the revision exactly once";
+  EXPECT_EQ(revision, GFNT_RASTER_FLATTEN_REVISION)
+      << "tests/data/golden/coverage.txt was made under another flattener "
+         "revision; run `make golden`";
+}
+
 TEST(Golden, EveryCommittedRenderingIsReproduced) {
   const std::vector<Expected> expected = golden();
   ASSERT_FALSE(expected.empty());

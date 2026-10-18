@@ -1283,6 +1283,65 @@ All of it in 26.6. Quadratics (from `glyf`) and cubics (from charstrings and
 No `float` anywhere in the path from outline to pixel, which is §1's
 determinism promise, and §14.4 is the gate that keeps it.
 
+#### 8.1.1 The flattener, and its guarantee
+
+`src/raster/flatten.c`; its header comment carries the full proof, and this is the
+same proof at the length a reader of the design wants.
+
+**The guarantee.** For every quadratic or cubic whose control points are 26.6
+values anywhere in the int32 range, and every tolerance `t` the rasteriser
+accepts (`t` is zero, meaning the default 4 units = 1/16 px, or any value from
+`GFNT_RASTER_MIN_TOLERANCE` = 2 up), every point of the curve is within `t - 0.12`
+units of the emitted polyline, before the polyline becomes coverage, and the
+polyline is the same on every target. A tolerance of 1 or less than zero is
+`GFNT_ERR_INVALID`: the option is a promise, and the rounding of the vertices
+alone costs 0.87 units, so a promise of one unit is not one the arithmetic can
+keep.
+
+**The rule (revision 2, `GFNT_RASTER_FLATTEN_REVISION`).** The curve is halved at
+its midpoint until its control polygon is flat. All of the halving, and both
+flatness tests, run on points widened by eight fractional bits (an `int64`
+multiplication by 256 on entry; no shift of a negative value anywhere); a midpoint
+is `floor((u + v + 1) / 2)`; a piece is flat when `|2 p1 - p0 - p2|_1` (a
+quadratic) or both of `|3 p1 - 2 p0 - p3|_1` and `|3 p2 - p0 - 2 p3|_1` (a
+cubic) are at most `4 * 256 * (t - 1)`; and a vertex is rounded to 26.6 **once**,
+to nearest with ties upward, when it is emitted. The depth cap is 20 halvings.
+Revision 1 (floor midpoints in 26.6, flat at `4 t`, cap 16) rounded the control
+points of every later level, so its error grew with the depth: measured against
+the exact curve it was 3 units on a tiny curve, 8 below 2^16 and 11 to 13 on large
+ones, where 4 was promised.
+
+**The proof.** Widened units are 1/256 of a unit. (1) *Ranges*: every point the
+recursion makes lies between the input points on each axis (a half-up midpoint of
+two integers in `[lo, hi]` is in `[lo, hi]`), so is below 2^39 in magnitude, every
+sum the tests form is below 2^43, and the narrowing of such a point is an int32.
+(2) *Midpoint noise*: a point produced by `k` halvings is within `1.5 k` widened
+of the exact de Casteljau point of the same piece, per axis (an average does not
+magnify an error; each rounding adds at most 1/2; a cubic's `m` is three roundings
+deep), so within 30 at the cap. (3) *Flat means near the chord*: a quadratic
+differs from its chord by `s(1-s)(2 Q1 - Q0 - Q2)`, at most a quarter of the test's
+sum; a cubic by `3s(1-s)((1-s) e1 + s e2)`, at most a quarter of the larger test
+sum. With the threshold `4 * 256 * (t - 1)` that is `t - 1` units. (4) The piece
+built on the noisy points is within `sqrt(2) * 30 / 256 = 0.166` units of the
+exact curve over the same interval, at the same parameter. (5) Narrowing a vertex
+moves it by at most `sqrt(2)/2 = 0.7072` units, and so moves a point of the chord
+by no more. (6) Total: `0.166 + (t - 1) + 0.7072 = t - 0.127`. (7) *The cap never
+binds*: after 20 halvings a quadratic piece's test sum is at most 4 widened
+(exact) plus 160 (noise), a cubic's at most 12 plus 360, against a smallest
+threshold of 1024 at `t = 2`. At cap 16 it would not hold for the whole int32
+range, which is why the cap moved from 16 to 20.
+
+**What checks it.** `tests/unit/test_flatten.cpp` evaluates the curve exactly (at
+dyadic parameters, in `long double`) at 33 points in every piece the flattener
+made, over fifteen size classes up to the whole int32 range, tolerances 2 to 1000
+and the extreme corners of the int32 square, and asserts the distance to the
+piece's segment is at most `t - 0.12` and that no piece was forced by the cap;
+and it pins vertex lists produced by an independent big-integer model, which is
+what notices a rounding rule that is wrong but still inside the bound. The
+revision is recorded in the header of `tests/data/golden/coverage.txt` and
+`testGolden` requires it to equal the library's; it is not part of any hash, and
+there is no way to ask for an earlier revision.
+
 ### 8.2 `GFNT_Coverage`
 
 Rows of 8-bit linear coverage with a stride, a width and height, the integer

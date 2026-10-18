@@ -24,6 +24,7 @@
  * Rasterise every glyph at every size and sub-pixel offset, and print a hash.
  *
  * Usage: font-render <label> <font> [--hint] [--art <glyph> <ppem>]
+ *        font-render --flatten-revision
  *
  * **This is the golden-bitmap gate's driver** (documentation/design.md section
  * 14.4). One line per rendering, carrying the shape, the origin, the coverage
@@ -43,6 +44,11 @@
  *
  * `--art` prints one rendering as characters instead, for a person looking at a
  * glyph that came out wrong.
+ *
+ * `--flatten-revision` prints the flattener revision the library was built with
+ * (::GFNT_RASTER_FLATTEN_REVISION) and nothing else. The generator writes it into
+ * the committed file's header, so that a golden file says which flattener made it
+ * and `testGolden` can require that to be the revision it is running.
  *
  * `label` rather than the path, because the committed file has to be
  * independent of where anyone's checkout lives.
@@ -122,14 +128,19 @@ int main(int argc, char ** argv) {
   GFNT_Error error;
   size_t glyphs = 0;
 
+  if (argc == 2 && strcmp(argv[1], "--flatten-revision") == 0) {
+    printf("%d\n", GFNT_RASTER_FLATTEN_REVISION);
+    return 0;
+  }
   if (argc >= 4 && strcmp(argv[3], "--hint") == 0) {
     hint_mode = GFNT_HINT_MODE_FONT;
     memmove(argv + 3, argv + 4, (size_t)(argc - 3) * sizeof *argv);
     --argc;
   }
   if (argc < 3) {
-    fprintf(stderr, "usage: %s <label> <font> [--hint] [--art <glyph> <ppem>]\n",
-        argv[0]);
+    fprintf(stderr, "usage: %s <label> <font> [--hint] [--art <glyph> <ppem>]\n"
+        "       %s --flatten-revision\n",
+        argv[0], argv[0]);
     return 2;
   }
   label = argv[1];

@@ -121,7 +121,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
                                          : GFNT_FILL_NONZERO;
     raster.origin_x = (options & 0x10u) != 0 ? (shape & 0x3F) : 0;
     raster.origin_y = (options & 0x20u) != 0 ? (shape >> 2) : 0;
-    raster.tolerance = (options & 0x40u) != 0 ? 1 + (shape & 0x0F) : 0;
+    raster.tolerance = (options & 0x40u) != 0
+        ? GFNT_RASTER_MIN_TOLERANCE + (shape & 0x0F) : 0;
 
     if (gfnt_raster_outline(outline, &raster, &limits, nullptr, &coverage,
             &error)

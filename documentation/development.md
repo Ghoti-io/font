@@ -278,6 +278,23 @@ first now and requires the committed file to be what the generator emits, the wa
 `check-fixtures` and `check-vectors` do for theirs. A gate with three readers and
 no writer is a gate whose writer nobody is checking.
 
+**It had stopped again, and the probe now names what it cannot cover.** The subset
+probe (every excluded fixture must draw nothing the committed set lacks) had been
+false for twenty-nine fixtures - the CFF2, variable, COLR, math and layout ones -
+and for three MANIFEST entries that are shaping scripts, not fonts. The generator
+refused at the first, so nobody saw the rest. `UNCOMMITTED_SHAPES` in
+`tools/golden/make_golden.py` now lists each with the number of renderings no
+committed fixture makes, 12,534 in all, and fails if a number moves. That is an
+acknowledged gap in this gate, not a closed one: those shapes are not reproduced
+on the big-endian targets.
+
+**The file names the flattener it was made under.** Its header carries
+`# flattener revision N`, written from `font-render --flatten-revision`, and
+`testGolden` requires N to be `GFNT_RASTER_FLATTEN_REVISION`. A change to how a
+curve becomes a polyline (design.md section 8.1.1) is a new revision and a
+rewrite of every golden line it touches, in one change; the revision is not in
+any hash. Revision 2 changed 1,500 of 6,429 rows (see the commit that made it).
+
 Phase 2 put the charstrings in it, which is where the rasteriser meets a **cubic**
 producer: `glyf` sends quadratics, a charstring sends cubics, and the flattener's
 other arm is now under the gate that reproduces every rendering on three

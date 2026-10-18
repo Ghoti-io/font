@@ -126,6 +126,31 @@ typedef struct GFNT_Coverage {
 } GFNT_Coverage;
 
 /**
+ * The revision of the flattener: the rule that turns a curve into the polyline
+ * the scan converter fills, and so what every rendering's pixels depend on.
+ *
+ * - Revision 1: midpoints floored to 26.6 at every level, flat at four
+ *   tolerances. Its deviation from the curve grew with the depth, to 13 units on
+ *   a curve spanning the int32 range, though the tolerance said 4.
+ * - Revision 2: subdivision carried at eight more fractional bits, a vertex
+ *   rounded to 26.6 once when it is emitted, flat at `4 * (tolerance - 1)`
+ *   units. Within the tolerance for every curve and every accepted tolerance.
+ *
+ * A change to the rule is a new revision, and every committed golden rendering
+ * is rebaselined in the same change: the golden file's header names the revision
+ * it was made under, and a test requires it to equal this. The revision is not
+ * part of ::gfnt_coverage_hash(), which hashes pixels. There is no way to ask
+ * for an earlier revision.
+ */
+#define GFNT_RASTER_FLATTEN_REVISION 2
+
+/**
+ * The smallest tolerance ::GFNT_RasterOptions::tolerance accepts, in 26.6 units
+ * (two units, a 32nd of a pixel). See that field.
+ */
+#define GFNT_RASTER_MIN_TOLERANCE 2
+
+/**
  * @brief How to rasterise.
  *
  * All-zero is the sensible default: non-zero winding, no sub-pixel offset, the
@@ -143,9 +168,22 @@ typedef struct GFNT_RasterOptions {
   GFNT_F26Dot6 origin_x;
   GFNT_F26Dot6 origin_y;   ///< The vertical offset, in 26.6 pixels; see origin_x.
   /**
-   * How far a flattened curve may stray from the curve, in 26.6 pixels. Zero
-   * means the default, a sixteenth of a pixel, which is below what 8-bit
-   * coverage can express.
+   * How far the flattened path may stray from the curve, in 26.6 units. Zero
+   * means the default, 4 units, a sixteenth of a pixel, which is below what
+   * 8-bit coverage can express.
+   *
+   * **This is a guarantee.** For any outline, whatever its size, every point of
+   * every quadratic and cubic lies within `tolerance` units of the polyline the
+   * scan converter is given (measured before the polyline is turned into
+   * coverage), and it is the same polyline on every target. The proof is in
+   * src/raster/flatten.c and design.md section 8.1; the first revision of the
+   * flattener (before ::GFNT_RASTER_FLATTEN_REVISION 2) did not keep it, and
+   * strayed by up to 13 units on large curves.
+   *
+   * It holds for every value this field accepts: ::GFNT_RASTER_MIN_TOLERANCE or
+   * more. Below that (1, a 64th of a pixel) the guarantee cannot be kept, so
+   * the call is ::GFNT_ERR_INVALID rather than a rasterisation that quietly
+   * promises less than it was asked for. A negative value is refused as well.
    */
   GFNT_F26Dot6 tolerance;
   /**

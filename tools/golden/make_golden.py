@@ -256,12 +256,20 @@ HEADER = """\
 # A line reading `refused <reason>` is a glyph this library declines at that
 # size, which is a fact worth committing rather than a gap to leave out.
 #
-# Only the fixtures carrying outlines of their own are here; the rest draw
-# basic.ttf's five and the generator checks that they still do. See
-# tools/golden/make_golden.py.
+# Only the fixtures carrying outlines of their own are here, bar the ones named
+# in UNCOMMITTED_SHAPES in tools/golden/make_golden.py; the rest draw
+# basic.ttf's five and the generator checks that they still do.
+#
+# The outline renderings below were made under the flattener revision stated by
+# the first line after this header, which the driver reports
+# (`font-render --flatten-revision`) and testGolden requires to equal the
+# revision it runs. A change of flattener is a new revision and a rewrite of every
+# line it touches, in one change; the revision is not part of any hash.
 #
 # documentation/design.md section 14.4.
 """
+
+REVISION_LINE = "# flattener revision %s\n"
 
 
 STRIKE_HEADER = """\
@@ -285,6 +293,17 @@ def fixtures():
                 continue
             names.append(line.split("\t")[0])
     return names
+
+
+def flatten_revision():
+    """The flattener revision the driver was built with, as the library says it."""
+    finished = subprocess.run([DRIVER, "--flatten-revision"],
+        capture_output=True, text=True)
+    revision = finished.stdout.strip()
+    if finished.returncode != 0 or not revision.isdigit():
+        raise SystemExit("font-render --flatten-revision did not answer with a "
+                         "number:\n%s%s" % (finished.stdout, finished.stderr))
+    return revision
 
 
 def render(name, label=None):
@@ -404,7 +423,7 @@ def build():
     rendered = {name: render(name) for name in WITH_OUTLINES}
     probed = probe_shared(rendered)
     strikes = {name: render_strike(name) for name in WITH_STRIKES}
-    out = [HEADER]
+    out = [HEADER, REVISION_LINE % flatten_revision()]
     for name in listed:
         if name in WITH_OUTLINES:
             out.append(rendered[name])

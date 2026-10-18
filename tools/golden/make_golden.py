@@ -175,6 +175,67 @@ WITH_STRIKES = STANDALONE_STRIKES + (
 # `test_bitmap.cpp`'s to say, as `bare.cff`'s equivalence is `test_cff.cpp`'s.
 NO_OUTLINES = ("bare-matrix.cff", "bitmap-gz.pcf.gz") + STANDALONE_STRIKES
 
+# MANIFEST lists three files that are not fonts: the shaping scripts the layout
+# and variation tests feed to `font-shape`. The driver refuses them, correctly,
+# and the generator used to stop on the first one it met.
+NOT_FONTS = (".shape",)
+
+# Fixtures that draw outlines of their own and are **deliberately not committed**,
+# each with the number of renderings it makes that no committed fixture makes.
+#
+# The probe below was written when every excluded fixture drew `basic.ttf`'s five
+# outlines, and "this fixture introduces no new shape" was a true thing to assert.
+# It stopped being true fixture by fixture - the CFF2 and variable fixtures, the
+# COLR ones, the math and layout ones, an Arabic one whose glyphs are rectangles -
+# and nothing noticed, because `check-golden` regenerates the file first and
+# nothing ran the generator: when it was run (for the flattener change) it refused
+# at the first of these and the rest were behind it. Twenty-nine fixtures, 12,534
+# renderings.
+#
+# So the probe now says what is true instead of what used to be. A name here is
+# an acknowledged gap in the golden gate - these shapes reach the scan converter
+# in the unit tests of their own formats and not in the big-endian reproduction -
+# and the number is pinned: a fixture that is edited, or that starts drawing
+# something committed, changes it and fails the generator, which is the point of
+# the probe (an exclusion nobody checks). When one changes on purpose, put the
+# new number here; when it reaches zero, delete the line.
+#
+# The count is of distinct renderings (size, position, total and hash), so it
+# also moves when the renderer changes what a curve looks like: two outlines whose
+# pixels coincided under one flattener may not under the next. A change of that
+# kind re-pins; it does not mean a fixture drifted.
+UNCOMMITTED_SHAPES = {
+    "arabic-join.ttf": 1500,
+    "cff-cid-names.otf": 25,
+    "cff-cid3.otf": 50,
+    "cff-names.otf": 25,
+    "cff-repeats.otf": 500,
+    "cff-subset.otf": 25,
+    "cff2-fds.otf": 4759,
+    "color-cbdt-sizes.ttf": 50,
+    "color-v0-edges.ttf": 25,
+    "color-v1-var.ttf": 150,
+    "color-v1-varmap.ttf": 150,
+    "color-v1-varnone.ttf": 150,
+    "layout-gpos.ttf": 200,
+    "layout-gsub.ttf": 850,
+    "math-variable.ttf": 625,
+    "math.ttf": 625,
+    "variable-avar2.ttf": 150,
+    "variable-cff2-hvar.otf": 175,
+    "variable-cff2-implicit.otf": 175,
+    "variable-cff2.otf": 125,
+    "variable-cvar.ttf": 150,
+    "variable-featurevars-nested.ttf": 150,
+    "variable-featurevars.ttf": 150,
+    "variable-gvar.ttf": 150,
+    "variable-hvar.ttf": 150,
+    "variable-stat.ttf": 150,
+    "vertical-text.ttf": 850,
+    "woff2-triplets-source.ttf": 225,
+    "woff2-triplets.woff2": 225,
+}
+
 HEADER = """\
 # Every committed fixture's glyphs, rasterised.
 #
@@ -294,6 +355,9 @@ def probe_shared(committed):
     for name in fixtures():
         if name in WITH_OUTLINES:
             continue
+        if name.endswith(NOT_FONTS):
+            probed += 1
+            continue
         text = render(name)
         if name in NO_OUTLINES:
             # A fixture with no `glyf` must refuse every glyph. If it ever
@@ -308,11 +372,19 @@ def probe_shared(committed):
             probed += 1
             continue
         extra = shapes(text) - reference
-        if extra:
+        if name in UNCOMMITTED_SHAPES:
+            if len(extra) != UNCOMMITTED_SHAPES[name]:
+                raise SystemExit(
+                    "%s draws %d rendering(s) the committed set does not; "
+                    "UNCOMMITTED_SHAPES pins %d. The fixture, or the renderer, "
+                    "changed: re-measure and update the pin (or delete it at "
+                    "zero)." % (name, len(extra), UNCOMMITTED_SHAPES[name]))
+        elif extra:
             raise SystemExit(
-                "%s draws %d rendering(s) basic.ttf does not, so the golden set "
-                "is missing a shape. Either add it to WITH_OUTLINES or find out "
-                "what changed. First: %s"
+                "%s draws %d rendering(s) the committed set does not, so the "
+                "golden set is missing a shape. Either add it to WITH_OUTLINES, "
+                "or - as the fixtures in UNCOMMITTED_SHAPES were - acknowledge "
+                "the gap there with its count. First: %s"
                 % (name, len(extra), sorted(extra)[0]))
         probed += 1
     return probed
@@ -323,7 +395,8 @@ def build():
     if not os.path.exists(DRIVER):
         raise SystemExit("%s is not built; run `make examples`" % DRIVER)
     listed = fixtures()
-    for name in WITH_OUTLINES + NO_OUTLINES + WITH_STRIKES:
+    for name in WITH_OUTLINES + NO_OUTLINES + WITH_STRIKES \
+            + tuple(UNCOMMITTED_SHAPES):
         if name not in listed:
             raise SystemExit(
                 "%s is named here but is not in MANIFEST; the fixture list and "
@@ -353,8 +426,9 @@ def main(argv):
     lines = sum(1 for line in text.splitlines() if not line.startswith("#"))
     print("golden: %d rendering(s) over %d fixture(s) with outlines of their own "
           "and %d strike(s), %d bytes; %d other fixture(s) checked to draw "
-          "nothing new" % (lines, len(WITH_OUTLINES), len(WITH_STRIKES),
-              len(text), probed))
+          "nothing new, bar the %d acknowledged in UNCOMMITTED_SHAPES"
+          % (lines, len(WITH_OUTLINES), len(WITH_STRIKES), len(text), probed,
+              len(UNCOMMITTED_SHAPES)))
     return 0
 
 

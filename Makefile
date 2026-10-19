@@ -626,10 +626,21 @@ $(OBJ_DIR)/%.o: src/%.c $(FLAGS_STAMP) | $(LIBVER_GEN)
 # Shared Library
 ####################################################################
 
+# The shared object records only the libraries it uses. Nothing in the library
+# references a libm symbol (AD-22), so it does not link `-lm` (the tests and the
+# examples keep it, through LDFLAGS: they are not the library), and as-needed,
+# which has to come before the libraries it applies to, also stops the C++ driver's
+# own `-lstdc++ -lm` from being recorded for code that calls neither.
+ifeq ($(OS_NAME), Linux)
+LIB_AS_NEEDED := -Wl,--as-needed
+else
+LIB_AS_NEEDED :=
+endif
+
 $(APP_DIR)/$(TARGET): $(LIBOBJECTS)
 	@printf "\n### Compiling Font Library ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) $(DEP_LIBS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
+	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LIB_AS_NEEDED) $(filter-out -lm,$(LDFLAGS)) $(DEP_LIBS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
 
 ifeq ($(OS_NAME), Linux)
 	@ln -f -s $(TARGET) $(APP_DIR)/$(SO_NAME)
@@ -2414,7 +2425,7 @@ help: ## Display this help
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(TEST_DATA) $(FONTLIBRARY) $(DEP_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(TEST_DATA) $(FONTLIBRARY) $(DEP_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(LIB_AS_NEEDED) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(ASAN_FLAGS_STAMP): force-flags

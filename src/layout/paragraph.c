@@ -36,7 +36,6 @@
 #include <ghoti.io/unicode/norm.h>
 #include <ghoti.io/unicode/script.h>
 #include <ghoti.io/unicode/utf.h>
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "kashida.h"

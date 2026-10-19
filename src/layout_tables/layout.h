@@ -429,6 +429,13 @@ bool gfnt_trak_present(const GFNT_Face * face);
 GFNT_Result gfnt_trak_apply(const GFNT_Face * face, GFNT_LBuffer * b,
     float ptem, bool vertical, GFNT_Error * error);
 
+/**
+ * floor(@p value) as an int32, with no libm (AD-22): what floorf() gives, for
+ * every value that fits; the end of the range for one that does not, and 0 for
+ * a NaN. Internal, and here so that a test can reach every branch.
+ */
+int32_t gfnt_trak_floor(float value);
+
 void gfnt_gpos_position_start(GFNT_LBuffer * b);
 void gfnt_gpos_position_finish_offsets(GFNT_LBuffer * b, bool rtl,
     bool vertical);

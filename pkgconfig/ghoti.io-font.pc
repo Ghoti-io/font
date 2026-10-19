@@ -3,6 +3,5 @@ Description: Fonts: every file family, shaping, rasterisation and paragraph layo
 Version: (VERSION)
 URL: https://github.com/Ghoti-io/font
 Libs: -L(PC_LIB_DIR) -l(SUITE)-(PROJECT)(BRANCH)
-Libs.private: -lm
 CFlags: -I(PC_INCLUDE_DIR)
 Requires: (REQUIRES)

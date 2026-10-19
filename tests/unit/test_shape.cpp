@@ -6126,9 +6126,11 @@ TEST(ShapeKerx, AnAttachmentCanNameAnchorsOfTheAnkrTable) {
   EXPECT_EQ(g[1].y_offset, 34);
 }
 
-TEST(ShapeTrak, AdvancesGrowByTheTrackingForThePointSizeAndMoveHalfAsFar) {
-  // Version 1.0, a horizontal table at 12 with one track, zero, for sizes 10, 20
-  // and 40 whose values are 0, 100 and 300.
+/**
+ * A `trak` table, version 1.0, with a horizontal table at 12 and one track,
+ * zero, for sizes 10, 20 and 40 whose values are 0, 100 and 300.
+ */
+static Bytes trak_table_10_20_40() {
   Bytes trak;
   gfnttest::put_u32(trak, 0x00010000);
   gfnttest::put_u16(trak, 0);
@@ -6147,6 +6149,11 @@ TEST(ShapeTrak, AdvancesGrowByTheTrackingForThePointSizeAndMoveHalfAsFar) {
   for (int16_t v : {0, 100, 300}) {
     gfnttest::put_u16(trak, static_cast<uint16_t>(v));
   }
+  return trak;
+}
+
+TEST(ShapeTrak, AdvancesGrowByTheTrackingForThePointSizeAndMoveHalfAsFar) {
+  const Bytes trak = trak_table_10_20_40();
   Font font(small_font({{GFNT_TAG('t', 'r', 'a', 'k'), trak}}));
   Glyphs g;
   Request request;
@@ -6164,6 +6171,41 @@ TEST(ShapeTrak, AdvancesGrowByTheTrackingForThePointSizeAndMoveHalfAsFar) {
   request.features = "-trak";
   ASSERT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
   EXPECT_EQ(g[0].x_advance, plain);
+}
+
+/**
+ * The advance is the floor of the tracking plus a half, in single precision,
+ * and the offset is half of it toward zero. The answers are worked out outside
+ * the library: the interpolation done in 32-bit floats operation by operation
+ * (Python, each result rounded to a float), then the mathematical floor, so
+ * they are what floorf() gave before the library stopped calling it (AD-22).
+ * A tie (4.95 gives -50.5) and a value a hair either side of one (10.05 and
+ * 10.049999 give 0.50000191 and 0.49999234) are where a floor that rounds or
+ * truncates would differ.
+ */
+TEST(ShapeTrak, TheAdvanceIsTheFloorOfTheTrackingPlusAHalf) {
+  struct Known {
+    float point_size;
+    int32_t advance;
+    int32_t offset;
+  };
+  const Known known[] = {
+      {10.05f, 1, 0}, {10.049999f, 0, 0}, {11.234f, 12, 6}, {17.77f, 78, 39},
+      {19.995f, 100, 50}, {100.0f, 900, 450}, {4.93f, -51, -25}, {4.95f, -50, -25},
+      {0.1f, -99, -49}, {3.3f, -67, -33},
+  };
+  Font font(small_font({{GFNT_TAG('t', 'r', 'a', 'k'), trak_table_10_20_40()}}));
+  Glyphs g;
+  Request request;
+
+  EXPECT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+  const int32_t plain = g[0].x_advance;
+  for (const Known & k : known) {
+    request.point_size = k.point_size;
+    ASSERT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+    EXPECT_EQ(g[0].x_advance, plain + k.advance) << "point size " << k.point_size;
+    EXPECT_EQ(g[0].x_offset, k.offset) << "point size " << k.point_size;
+  }
 }
 
 TEST(ShapeKerx, WithTuplesAValueIsTheOffsetOfTheFirstOfAListOfThem) {

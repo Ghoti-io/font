@@ -33,7 +33,7 @@
  * for horizontal text and the vertical one for vertical.
  */
 
-#include <math.h>
+#include <stdint.h>
 #include <string.h>
 #include "layout.h"
 #include "../sfnt/sfnt.h"
@@ -50,6 +50,30 @@ bool gfnt_trak_present(const GFNT_Face * face) {
   }
   table.error = NULL;
   return gfnt_lr_u32(&table, 0, &bad) == 0x00010000u && !bad;
+}
+
+/**
+ * floor(@p value) as an int32, without libm (AD-22): the answer of floorf()
+ * for any value it can be converted from, and the end of the range for one it
+ * cannot (a NaN is 0). The conversion truncates toward zero, which is exact
+ * here because a float of 2^23 or more is already an integer and a smaller one
+ * converts without rounding; a negative value that was not whole is then one
+ * too high.
+ */
+int32_t gfnt_trak_floor(float value) {
+  int32_t whole;
+
+  if (!(value == value)) {
+    return 0;
+  }
+  if (value >= 2147483648.0f) {
+    return INT32_MAX;
+  }
+  if (value < -2147483648.0f) {
+    return INT32_MIN;
+  }
+  whole = (int32_t)value;
+  return (float)whole > value ? whole - 1 : whole;
 }
 
 static float trak_size(const GFNT_Reader * r, size_t at, bool * bad) {
@@ -130,7 +154,7 @@ GFNT_Result gfnt_trak_apply(const GFNT_Face * face, GFNT_LBuffer * b,
   if (bad) {
     return GFNT_OK;
   }
-  advance = (int32_t)floorf(tracking + 0.5f);
+  advance = gfnt_trak_floor(tracking + 0.5f);
   offset = advance / 2;
   for (i = 0; i < b->len; i++) {
     if (vertical) {

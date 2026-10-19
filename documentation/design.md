@@ -1918,12 +1918,21 @@ coordinates, nonnegative margins and whether text stays to the left or right;
 polygon points and the array must remain alive during layout. The band is the
 intersection across the complete line height, and `next_top` moves an
 unbreakable line past the active exclusions. Polygon margins conservatively
-expand the clipped horizontal extent.
+expand the clipped horizontal extent. The arithmetic is exact integer arithmetic,
+the same on every target and with nothing from libm (the shape family's AD-22): a
+circle's edge at a line is the ceiling of an integer square root (computed with
+no division and no float), and a polygon edge's crossing of a scan line is the
+floor and the ceiling of a rational whose numerator is under 2^64, taken by an
+unsigned division. Until the change that made it so, the code used `long double`
+(a 64-bit mantissa on x87, 113 bits on aarch64 Linux, 53 on MSVC) and `sqrtl`,
+`floorl` and `ceill`; every answer on x86-64 was unchanged by the move (the 59
+boundary cases of `tests/exclusion_cases.h` and 400,000 random ones were
+compared), and a boundary that a `long double` of 53 bits could round the other
+way is now exact.
 
 When several active exclusions narrow a band, `next_top` is the nearest block
 edge at which the returned band can change; layout asks again there and can
-continue clearing until the line fits. Static consumers obtain the font
-library's math dependency through `Libs.private` in its pkg-config metadata.
+continue clearing until the line fits.
 
 `gfnt_paragraph_layout_columns()` lays out one multicol row. It uses complete
 line boxes as break points, applies the CSS initial `orphans` and `widows`

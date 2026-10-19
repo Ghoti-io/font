@@ -32,13 +32,16 @@
  * byte for byte. What stays here is what only a font can say.
  *
  * **The flip.** An outline is y-up (design.md section 5.5); device space and
- * `shape-cpu`'s coverage are y-down. The flip lives in this file's frame
- * functions - ::gfnt_raster_place() turns a glyph-space point into a bitmap-space
- * one and ::gfnt_raster_view() turns `shape-cpu`'s y-down `left` and `top` back
- * into the y-up ones of a ::GFNT_Coverage - and it happens **before** the
- * curves are flattened, because the flattener's half-up midpoint is not
- * symmetric under negation: flattening first and flipping after would change
- * vertices, and with them pixels.
+ * `shape-cpu`'s coverage are y-down. The flip is one function,
+ * gfnt_raster_flip(), a subtraction from the bitmap's top edge, and nothing else
+ * in this file turns a y over. Its two callers are the two frame functions:
+ * ::gfnt_raster_place() turns a glyph-space point into a bitmap-space one (the
+ * edge in 26.6, before flattening) and ::gfnt_raster_view() turns `shape-cpu`'s
+ * y-down `top` back into the y-up one of a ::GFNT_Coverage (the edge in pixels,
+ * after). The flip of a point happens **before** the curves are flattened,
+ * because the flattener's half-up midpoint is not symmetric under negation:
+ * flattening first and flipping after would change vertices, and with them
+ * pixels.
  *
  * **The flattener** is `shape-geometry`'s (AD-12): the curve functions
  * ::gshgeom_flatten_quadratic() and ::gshgeom_flatten_cubic(), called here, one
@@ -256,12 +259,23 @@ GFNT_Result gfnt_coverage_dump_art(const GFNT_Coverage * coverage,
 // --- the frame -------------------------------------------------------------
 
 /**
+ * Flip a y: its distance below @p edge, where @p edge is the y-up coordinate of
+ * the bitmap's top edge and @p value a y-up coordinate in the same unit.
+ *
+ * The one place a y is turned over: the outline is y-up (design.md section 5.5)
+ * and row 0 of the coverage is its top. Written as a subtraction from the top
+ * edge rather than as a negation plus an offset, because the two differ by a
+ * pixel and only one of them puts the top row at row zero. The flip is its own
+ * inverse about the same edge, which is how ::gfnt_raster_view() uses it.
+ */
+static int32_t gfnt_raster_flip(int32_t edge, int32_t value) {
+  return edge - value;
+}
+
+/**
  * Turn a glyph-space point into a bitmap-space one.
  *
- * The one place a point's y is flipped: the outline is y-up (design.md section
- * 5.5) and row 0 of the coverage is its top. Written as a subtraction from the
- * top edge rather than as a negation plus an offset, because the two differ by
- * a pixel and only one of them puts the top row at row zero.
+ * The y is flipped by gfnt_raster_flip() about the bitmap's top edge.
  */
 static GFNT_Point gfnt_raster_place(const GFNT_Raster * raster,
     GFNT_Point point) {
@@ -272,7 +286,8 @@ static GFNT_Point gfnt_raster_place(const GFNT_Raster * raster,
   // moves the bitmap and leaves the glyph where it was - which the trim then
   // hides, because the column the shift added has nothing in it.
   out.x = point.x + raster->origin_x - raster->left * GFNT_ONE_PIXEL;
-  out.y = (raster->top * GFNT_ONE_PIXEL) - (point.y + raster->origin_y);
+  out.y = gfnt_raster_flip(raster->top * GFNT_ONE_PIXEL,
+      point.y + raster->origin_y);
   return out;
 }
 
@@ -283,7 +298,8 @@ static GFNT_Point gfnt_raster_place(const GFNT_Raster * raster,
  * The inverse of ::gfnt_raster_place() for the corner: `shape-cpu`'s `left` and
  * `top` are in the bitmap's frame (the rectangle it was asked for starts at
  * 0,0, y down), so the glyph-space column is `raster->left + left` and the
- * glyph-space upper edge of the top row, y-up, is `raster->top - top`. A
+ * glyph-space upper edge of the top row, y-up, is `top` flipped about the
+ * bitmap's top edge, `raster->top`, by gfnt_raster_flip() (here in pixels). A
  * coverage with no pixel left is 0 by 0 with `left` and `top` zero, whatever
  * the rectangle was. @p from is left zeroed: its pixels are @p out's now.
  */
@@ -295,7 +311,7 @@ static void gfnt_raster_view(const GFNT_Raster * raster, GSHCPU_Coverage * from,
   out->height = from->height;
   if (from->data) {
     out->left = raster->left + from->left;
-    out->top = raster->top - from->top;
+    out->top = gfnt_raster_flip(raster->top, from->top);
   }
   else {
     out->left = 0;

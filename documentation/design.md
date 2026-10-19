@@ -1275,9 +1275,10 @@ moved out of this library without changing a pixel: the committed renderings in
 `tests/data/golden/coverage.txt` are reproduced byte for byte, and
 `gfnt_coverage_hash` is the same number for every rendering it was before. What
 stays here is what only a font can say: `src/raster/raster.c` walks the outline,
-flips y (an outline is y-up, a device path y-down) *before* flattening (the
-flattener's half-up midpoint is not symmetric under negation, so flattening
-first would move vertices), builds a `shape-geometry` device path of lines in
+flips y (an outline is y-up, a device path y-down; one function does the
+flipping, `gfnt_raster_flip`, for a point and for the coverage's `top`) *before*
+flattening (the flattener's half-up midpoint is not symmetric under negation, so
+flattening first would move vertices), builds a `shape-geometry` device path of lines in
 the bitmap's frame, asks `shape-cpu` to fill it into the bitmap's rectangle,
 and derives a `GFNT_Coverage` from the result (`left` and `top` mapped back to
 y-up; the pixels are taken, not copied). `GFNT_FillRule` is `shape-geometry`'s

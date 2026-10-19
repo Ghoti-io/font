@@ -22,7 +22,8 @@ goldens and the unit tests must say so.
 A gate that has only ever passed has not been shown to be able to fail (the
 standing rule for every gate here). Each mutant below is one literal replacement
 in src/raster/raster.c; it must match exactly once, and must be refused by the
-unit tests (testRaster) or by the golden test (testGolden). The file is restored
+unit tests (testRaster), the golden test (testGolden) or the flattener-glue test
+(testFlatten). The file is restored
 and the artifacts rebuilt after every mutant, whatever happened.
 
 What is NOT planted, and why:
@@ -36,9 +37,18 @@ What is NOT planted, and why:
     to the ones this function has just checked, so neither can be reached
   - the `memset` that empties `from` at the end of `gfnt_raster_view`: the
     caller never looks at it again (it is a local that is not destroyed)
+  - the `options->tolerance < 0` clause of the tolerance check: the next clause
+    (`!= 0 && < GFNT_RASTER_MIN_TOLERANCE`) refuses every negative value as well,
+    so removing it changes nothing
   - the `default` arm of `gfnt_raster_check` and of the shape-cpu result: an
     error the device path or shape-cpu cannot return for an outline that has
     passed the bounds
+  - the `gfnt_raster_check` of the flattener's own result: its one refusal of its
+    own, a tolerance under the minimum, has been turned away by
+    `gfnt_raster_outline` before any curve is walked
+  - that the vertex sink stops the flattener at the first refusal (it returns
+    the device path's result): the first failure is recorded either way and a
+    later one is ignored, so the only difference is work not done
 
 Usage: raster_mutation_check.py   (PREFIX and BUILD as for make)
 """
@@ -54,7 +64,7 @@ PREFIX = os.environ.get("PREFIX", "/home/corey/Documents/ghoti.io/.local")
 BUILD = os.environ.get("BUILD", "linux/release")
 MAKE_BUILD = BUILD.removeprefix("linux/")
 APPS = ROOT / "build" / BUILD / "apps"
-UNITS = [APPS / "testRaster", APPS / "testGolden"]
+UNITS = [APPS / "testRaster", APPS / "testGolden", APPS / "testFlatten"]
 OBJECT = ROOT / "build" / BUILD / "objects" / "raster" / "raster.o"
 SOURCE = "src/raster/raster.c"
 LD_PATH = f"{PREFIX}/lib/ghoti.io:{PREFIX}/lib"
@@ -105,14 +115,36 @@ MUTANTS = [
     ("  raster->contour_start = placed;\n  raster->current = placed;\n",
      "  raster->contour_start = placed;\n", "the pen at a move"),
     ("  point.y = to.y;\n  raster->current = to;\n", "  point.y = to.y;\n", "the pen at a vertex"),
-    ("  gfnt_raster_emit(raster, placed, 0, 0);\n  return raster->result;\n}\n\nstatic GFNT_Result gfnt_raster_quad_to",
+    ("  (void)gfnt_raster_line(raster, placed);\n  return raster->result;\n}\n\nstatic GFNT_Result gfnt_raster_quad_to",
      "  (void)placed;\n  return raster->result;\n}\n\nstatic GFNT_Result gfnt_raster_quad_to", "a line"),
-    ("  (void)gfnt_flatten_quad(raster->tolerance, raster->current,\n      gfnt_raster_place(raster, control), gfnt_raster_place(raster, to),",
-     "  (void)gfnt_flatten_quad(raster->tolerance, raster->current,\n      gfnt_raster_place(raster, to), gfnt_raster_place(raster, control),",
+    ("      gfnt_raster_device(gfnt_raster_place(raster, control)),\n      gfnt_raster_device(gfnt_raster_place(raster, to)),",
+     "      gfnt_raster_device(gfnt_raster_place(raster, to)),\n      gfnt_raster_device(gfnt_raster_place(raster, control)),",
      "a quadratic's control and end swapped"),
-    ("      gfnt_raster_place(raster, c1), gfnt_raster_place(raster, c2),\n      gfnt_raster_place(raster, to), gfnt_raster_emit, raster);",
-     "      gfnt_raster_place(raster, c2), gfnt_raster_place(raster, c1),\n      gfnt_raster_place(raster, to), gfnt_raster_emit, raster);",
+    ("      gfnt_raster_device(gfnt_raster_place(raster, c1)),\n      gfnt_raster_device(gfnt_raster_place(raster, c2)),",
+     "      gfnt_raster_device(gfnt_raster_place(raster, c2)),\n      gfnt_raster_device(gfnt_raster_place(raster, c1)),",
      "a cubic's controls swapped"),
+    ("  gfnt_raster_check(raster, gshgeom_flatten_quadratic(raster->tolerance,",
+     "  gfnt_raster_check(raster, gshgeom_flatten_quadratic(GSHGEOM_FLATTEN_TOLERANCE,",
+     "the tolerance reaches the quadratic flattener"),
+    ("  gfnt_raster_check(raster, gshgeom_flatten_cubic(raster->tolerance,",
+     "  gfnt_raster_check(raster, gshgeom_flatten_cubic(GSHGEOM_FLATTEN_TOLERANCE,",
+     "the tolerance reaches the cubic flattener"),
+    ("      gfnt_raster_device(raster->current),\n      gfnt_raster_device(gfnt_raster_place(raster, control)),",
+     "      gfnt_raster_device(raster->contour_start),\n      gfnt_raster_device(gfnt_raster_place(raster, control)),",
+     "a quadratic starts where the contour did"),
+    ("  raster.tolerance = options->tolerance ? options->tolerance\n                                        : GFNT_RASTER_TOLERANCE;",
+     "  raster.tolerance = GFNT_RASTER_TOLERANCE;", "the tolerance option is read"),
+    ("#define GFNT_RASTER_TOLERANCE (GFNT_ONE_PIXEL / 16)", "#define GFNT_RASTER_TOLERANCE (GFNT_ONE_PIXEL / 8)",
+     "the default tolerance"),
+    ("  if (options->tolerance < 0\n      || (options->tolerance != 0\n          && options->tolerance < GFNT_RASTER_MIN_TOLERANCE)) {",
+     "  if (options->tolerance < 0\n      || (options->tolerance != 0\n          && options->tolerance <= GFNT_RASTER_MIN_TOLERANCE)) {",
+     "the smallest tolerance is refused"),
+    ("  if (options->tolerance < 0\n      || (options->tolerance != 0\n          && options->tolerance < GFNT_RASTER_MIN_TOLERANCE)) {",
+     "  if (options->tolerance < 0\n      || (options->tolerance != 0\n          && options->tolerance < GFNT_RASTER_MIN_TOLERANCE - 1)) {",
+     "a tolerance of one is accepted"),
+    ("  if (options->tolerance < 0\n      || (options->tolerance != 0\n          && options->tolerance < GFNT_RASTER_MIN_TOLERANCE)) {",
+     "  if (options->tolerance < GFNT_RASTER_MIN_TOLERANCE) {",
+     "the default tolerance (zero) is refused"),
     ("      case GSHCPU_ERR_OOM:\n        result = gfnt_error_set(error, GFNT_ERR_OOM,",
      "      case GSHCPU_ERR_OOM:\n        result = gfnt_error_set(error, GFNT_ERR_INTERNAL,", "shape-cpu's out of memory"),
     ("    case GSHGEOM_ERR_OOM:\n      raster->result = gfnt_error_set(raster->error, GFNT_ERR_OOM,",

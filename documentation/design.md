@@ -1282,9 +1282,13 @@ the bitmap's frame, asks `shape-cpu` to fill it into the bitmap's rectangle,
 and derives a `GFNT_Coverage` from the result (`left` and `top` mapped back to
 y-up; the pixels are taken, not copied). `GFNT_FillRule` is `shape-geometry`'s
 fill rule under its old name (the same type; the values 0 and 1 are pinned).
-The flattener stays in `flatten.c`, because `GFNT_RasterOptions` takes a
-tolerance and `shape-geometry`'s flattener has one value (AD-12); it makes the
-polyline `shape-geometry`'s does at the default tolerance, bit for bit.
+The flattener is `shape-geometry`'s (AD-12): `raster.c` calls its curve functions,
+`gshgeom_flatten_quadratic` and `gshgeom_flatten_cubic`, one curve at a time with
+the tolerance `GFNT_RasterOptions` asks for, and the polyline is the one the
+library's own flattener makes. This library kept a copy of it until the cleanup
+after the shape family's story 9; the copy, its proof and its tests moved to
+`shape-geometry`, which now has the tolerance as a parameter. The renderings did
+not change by a pixel.
 
 A cell-based exact-area coverage rasteriser in the lineage of libart and
 FreeType's `smooth` module: each edge, after flattening, deposits signed
@@ -1302,8 +1306,8 @@ determinism promise, and §14.4 is the gate that keeps it.
 
 #### 8.1.1 The flattener, and its guarantee
 
-`src/raster/flatten.c`; its header comment carries the full proof, and this is the
-same proof at the length a reader of the design wants.
+`shape-geometry`'s `src/flatten/flatten.c`; its header comment carries the full
+proof, and this is the same proof at the length a reader of the design wants.
 
 **The guarantee.** For every quadratic or cubic whose control points are 26.6
 values anywhere in the int32 range, and every tolerance `t` the rasteriser
@@ -1348,16 +1352,20 @@ binds*: after 20 halvings a quadratic piece's test sum is at most 4 widened
 threshold of 1024 at `t = 2`. At cap 16 it would not hold for the whole int32
 range, which is why the cap moved from 16 to 20.
 
-**What checks it.** `tests/unit/test_flatten.cpp` evaluates the curve exactly (at
-dyadic parameters, in `long double`) at 33 points in every piece the flattener
-made, over fifteen size classes up to the whole int32 range, tolerances 2 to 1000
-and the extreme corners of the int32 square, and asserts the distance to the
-piece's segment is at most `t - 0.12` and that no piece was forced by the cap;
-and it pins vertex lists produced by an independent big-integer model, which is
-what notices a rounding rule that is wrong but still inside the bound. The
-revision is recorded in the header of `tests/data/golden/coverage.txt` and
-`testGolden` requires it to equal the library's; it is not part of any hash, and
-there is no way to ask for an earlier revision.
+**What checks it.** `shape-geometry`'s `tests/unit/test_tolerance.cpp` evaluates
+the curve exactly (at dyadic parameters, in `long double`) at 33 points in every
+piece the flattener made, over fifteen size classes up to the whole int32 range,
+tolerances 2 to 1000 and the extreme corners of the int32 square, and asserts the
+distance to the piece's segment is at most `t - 0.12` and that no piece was
+forced by the cap; and it pins vertex lists produced by an independent
+big-integer model, which is what notices a rounding rule that is wrong but still
+inside the bound. Here, `tests/unit/test_flatten.cpp` checks the glue: that the
+option reaches the flattener (the renderings at ten tolerances, pinned from before
+the flattener moved), that the refusal is this library's, and that the revision
+and the minimum named in `raster.h` are the flattener's. The revision is recorded
+in the header of `tests/data/golden/coverage.txt` and `testGolden` requires it to
+equal the library's; it is not part of any hash, and there is no way to ask for an
+earlier revision.
 
 ### 8.2 `GFNT_Coverage`
 

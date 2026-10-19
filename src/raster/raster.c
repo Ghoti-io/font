@@ -40,10 +40,14 @@
  * symmetric under negation: flattening first and flipping after would change
  * vertices, and with them pixels.
  *
- * **The flattener** is still `flatten.c` here, because ::GFNT_RasterOptions
- * takes a tolerance and `shape-geometry`'s flattener has one value (AD-12). It
- * produces the polyline `shape-geometry`'s does at the default tolerance, bit
- * for bit (story 7a's vectors), and the device path handed on holds lines.
+ * **The flattener** is `shape-geometry`'s (AD-12): the curve functions
+ * ::gshgeom_flatten_quadratic() and ::gshgeom_flatten_cubic(), called here, one
+ * curve at a time, with the tolerance ::GFNT_RasterOptions asks for (the
+ * default is `shape-geometry`'s). The copy of the flattener this library kept
+ * until the shape family's cleanup after story 9 is gone, and so is its proof:
+ * the guarantee that the polyline stays within the tolerance of the curve is
+ * proved beside the code, in `shape-geometry`'s `src/flatten/flatten.c`, for
+ * every tolerance this file accepts. The device path handed on holds lines.
  *
  * Nothing here is floating point, and nothing here reads the host's byte order.
  */
@@ -54,13 +58,22 @@
 #include <ghoti.io/font/raster.h>
 #include <ghoti.io/shape-cpu/coverage.h>
 #include <ghoti.io/shape-geometry/device.h>
+#include <ghoti.io/shape-geometry/flatten.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include "../core/fixed.h"
 #include "../outline/outline.h"
 #include "../sfnt/sfnt.h"
-#include "flatten.h"
+
+// The two numbers this library's public header states about the flattener are
+// shape-geometry's, and one change of either is one change of both: a new
+// revision rebaselines the committed renderings, and a new minimum is what the
+// tolerance option below refuses under.
+_Static_assert(GFNT_RASTER_FLATTEN_REVISION == GSHGEOM_FLATTEN_REVISION,
+    "the flattener revision named in raster.h is not shape-geometry's");
+_Static_assert(GFNT_RASTER_MIN_TOLERANCE == GSHGEOM_FLATTEN_MIN_TOLERANCE,
+    "the smallest tolerance named in raster.h is not shape-geometry's");
 
 /** One pixel in 26.6. */
 #define GFNT_ONE_PIXEL 64
@@ -315,22 +328,46 @@ static void gfnt_raster_check(GFNT_Raster * raster, GSHGEOM_Result result) {
 }
 
 /**
+ * Take one point into the device path as the end of a line, and move the pen
+ * to it. Returns what the device path said, so that a flattener stops at the
+ * first point it refuses.
+ */
+static GSHGEOM_Result gfnt_raster_line(GFNT_Raster * raster, GFNT_Point to) {
+  GSHGEOM_Device_Point point;
+  GSHGEOM_Result result;
+
+  point.x = to.x;
+  point.y = to.y;
+  raster->current = to;
+  result = gshgeom_device_path_line_to(raster->path, point);
+  gfnt_raster_check(raster, result);
+  return result;
+}
+
+/**
  * Take one vertex of a flattened curve into the device path.
  *
- * The flattener itself is flatten.c, and its guarantee is proved there: the
+ * The flattener is shape-geometry's, and its guarantee is proved there: the
  * polyline stays within the tolerance of the curve.
  */
-static void gfnt_raster_emit(void * user, GFNT_Point to, uint32_t leaf,
-    int level) {
-  GFNT_Raster * raster = user;
-  GSHGEOM_Device_Point point;
+static GSHGEOM_Result gfnt_raster_vertex(void * user, GSHGEOM_Device_Point to,
+    uint32_t leaf, int level) {
+  GFNT_Point point;
 
   (void)leaf;
   (void)level;
   point.x = to.x;
   point.y = to.y;
-  raster->current = to;
-  gfnt_raster_check(raster, gshgeom_device_path_line_to(raster->path, point));
+  return gfnt_raster_line(user, point);
+}
+
+/** The pen as a device point, for the flattener. */
+static GSHGEOM_Device_Point gfnt_raster_device(GFNT_Point point) {
+  GSHGEOM_Device_Point out;
+
+  out.x = point.x;
+  out.y = point.y;
+  return out;
 }
 
 static GFNT_Result gfnt_raster_move(void * user, GFNT_Point to) {
@@ -354,7 +391,7 @@ static GFNT_Result gfnt_raster_line_to(void * user, GFNT_Point to) {
   GFNT_Raster * raster = user;
   const GFNT_Point placed = gfnt_raster_place(raster, to);
 
-  gfnt_raster_emit(raster, placed, 0, 0);
+  (void)gfnt_raster_line(raster, placed);
   return raster->result;
 }
 
@@ -362,11 +399,14 @@ static GFNT_Result gfnt_raster_quad_to(void * user, GFNT_Point control,
     GFNT_Point to) {
   GFNT_Raster * raster = user;
 
-  // The cap cannot force a piece (flatten.c proves it for every tolerance this
-  // file accepts), so the count it returns is not a failure to report.
-  (void)gfnt_flatten_quad(raster->tolerance, raster->current,
-      gfnt_raster_place(raster, control), gfnt_raster_place(raster, to),
-      gfnt_raster_emit, raster);
+  // A refusal of a vertex is recorded in raster->result where it happens, and
+  // the flattener stopped there; the only refusal of its own is a tolerance
+  // below the minimum, which gfnt_raster_outline() has already turned away.
+  gfnt_raster_check(raster, gshgeom_flatten_quadratic(raster->tolerance,
+      gfnt_raster_device(raster->current),
+      gfnt_raster_device(gfnt_raster_place(raster, control)),
+      gfnt_raster_device(gfnt_raster_place(raster, to)),
+      gfnt_raster_vertex, raster));
   return raster->result;
 }
 
@@ -374,9 +414,12 @@ static GFNT_Result gfnt_raster_cubic_to(void * user, GFNT_Point c1,
     GFNT_Point c2, GFNT_Point to) {
   GFNT_Raster * raster = user;
 
-  (void)gfnt_flatten_cubic(raster->tolerance, raster->current,
-      gfnt_raster_place(raster, c1), gfnt_raster_place(raster, c2),
-      gfnt_raster_place(raster, to), gfnt_raster_emit, raster);
+  gfnt_raster_check(raster, gshgeom_flatten_cubic(raster->tolerance,
+      gfnt_raster_device(raster->current),
+      gfnt_raster_device(gfnt_raster_place(raster, c1)),
+      gfnt_raster_device(gfnt_raster_place(raster, c2)),
+      gfnt_raster_device(gfnt_raster_place(raster, to)),
+      gfnt_raster_vertex, raster));
   return raster->result;
 }
 
@@ -431,8 +474,8 @@ GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
       || (options->tolerance != 0
           && options->tolerance < GFNT_RASTER_MIN_TOLERANCE)) {
     // The flattener's bound is the tolerance only from GFNT_RASTER_MIN_TOLERANCE
-    // up (flatten.c), and a tolerance asked for is a promise, so a smaller one
-    // is refused rather than rounded up to something else.
+    // up (shape-geometry's flatten.c), and a tolerance asked for is a promise,
+    // so a smaller one is refused rather than rounded up to something else.
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
         "the raster options name a tolerance below the smallest the flattener "
         "can honour (GFNT_RASTER_MIN_TOLERANCE)");

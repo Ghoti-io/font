@@ -148,13 +148,15 @@ typedef struct GFNT_Coverage {
  * is rebaselined in the same change: the golden file's header names the revision
  * it was made under, and a test requires it to equal this. The revision is not
  * part of ::gfnt_coverage_hash(), which hashes pixels. There is no way to ask
- * for an earlier revision.
+ * for an earlier revision. The rule is `shape-geometry`'s, and this is its
+ * `GSHGEOM_FLATTEN_REVISION`: raster.c does not compile if the two differ.
  */
 #define GFNT_RASTER_FLATTEN_REVISION 2
 
 /**
  * The smallest tolerance ::GFNT_RasterOptions::tolerance accepts, in 26.6 units
- * (two units, a 32nd of a pixel). See that field.
+ * (two units, a 32nd of a pixel). See that field. It is `shape-geometry`'s
+ * `GSHGEOM_FLATTEN_MIN_TOLERANCE`; raster.c does not compile if the two differ.
  */
 #define GFNT_RASTER_MIN_TOLERANCE 2
 
@@ -183,8 +185,10 @@ typedef struct GFNT_RasterOptions {
    * **This is a guarantee.** For any outline, whatever its size, every point of
    * every quadratic and cubic lies within `tolerance` units of the polyline the
    * scan converter is given (measured before the polyline is turned into
-   * coverage), and it is the same polyline on every target. The proof is in
-   * src/raster/flatten.c and design.md section 8.1; the first revision of the
+   * coverage), and it is the same polyline on every target. The flattener is
+   * `shape-geometry`'s (gshgeom_flatten_quadratic(), gshgeom_flatten_cubic()),
+   * and the proof is beside it, in that library's src/flatten/flatten.c, and in
+   * design.md section 8.1; the first revision of the
    * flattener (before ::GFNT_RASTER_FLATTEN_REVISION 2) did not keep it, and
    * strayed by up to 13 units on large curves.
    *

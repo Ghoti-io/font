@@ -34,7 +34,7 @@ Each word is a mechanism:
 | **Secure** | The file is the attacker (§1.2). Every read of file data passes through one bounds-checked reader (§6); every recursion has a limit the Standard sets and the library enforces regardless of what the file claims; every unbounded quantity is capped by `GFNT_Limits`; and there is no bytecode interpreter (§2 M3). Fuzzers cover each format that is implemented, because the reads are offset arithmetic over hostile input. |
 | **Deterministic** | Outlines, shaping and rasterisation are integer arithmetic in fixed point (§5.2, §8). The same font, size and text produce **byte-identical coverage on every platform and architecture**, and a golden-bitmap gate proves it on x86-64 and on the big-endian 32-bit cross container (§14.4). No platform rasteriser, no platform shaper, no `float` in a core type. |
 | **Cross-platform** | Reading, outlines, shaping and layout touch no operating-system API and behave identically everywhere by construction. Font discovery is the only code that does, one file per platform, with the Windows and macOS branches marked per `CONVENTIONS.md` §11. |
-| **Dependency-light** | `cutil`, `unicode`, and `compress` (gzip for `.pcf.gz`/`.psf.gz`, zlib for WOFF 1). `image` is optional, for PNG-bearing colour strikes and as a raster surface. Nothing else: not FreeType, not HarfBuzz, not fontconfig, not ICU. Each is an oracle in the tests and none is linked (§14). |
+| **Dependency-light** | `cutil`, `unicode`, and `compress` (gzip for `.pcf.gz`/`.psf.gz`, zlib for WOFF 1). `image` is optional, for PNG-bearing colour strikes and as a raster surface. `shape-geometry` and `shape-cpu` are the family's path type and scan converter, the one place a front end calls a sink (AD-1). Nothing else: not FreeType, not HarfBuzz, not fontconfig, not ICU. Each is an oracle in the tests and none is linked (§14). |
 | **Enterprise-ready** | No global state: no process-wide font cache, no default face, no environment read outside font discovery (§15.3). A face is immutable after load and shareable across threads; caches are objects the caller owns. Embedding permissions are reported and never enforced (§17.9). "Which face answered this glyph" and "which strike answered this size" are queryable, because fallback that cannot be audited is a bug report waiting to happen (§2 M8). |
 | **Useful** | Three consumers are enumerated in §13 with their exact needs, and the library is designed against all three, not the first one. It draws *something* for any glyph it cannot find - glyph 0 is synthesised (§5.4) - and bundles no font of its own (§14.6): the application's fonts and the system's, once discovery exists, are the only fonts there are. |
 
@@ -1268,6 +1268,23 @@ diagnostic is recorded either way.
 ## 8. Rasterisation
 
 ### 8.1 The scan converter
+
+**Where it lives.** The scan converter - the cells, the sweep, the fill rule, the
+trim - is `shape-cpu`'s (`src/coverage/`; the shape family's AD-1 and AD-12),
+moved out of this library without changing a pixel: the committed renderings in
+`tests/data/golden/coverage.txt` are reproduced byte for byte, and
+`gfnt_coverage_hash` is the same number for every rendering it was before. What
+stays here is what only a font can say: `src/raster/raster.c` walks the outline,
+flips y (an outline is y-up, a device path y-down) *before* flattening (the
+flattener's half-up midpoint is not symmetric under negation, so flattening
+first would move vertices), builds a `shape-geometry` device path of lines in
+the bitmap's frame, asks `shape-cpu` to fill it into the bitmap's rectangle,
+and derives a `GFNT_Coverage` from the result (`left` and `top` mapped back to
+y-up; the pixels are taken, not copied). `GFNT_FillRule` is `shape-geometry`'s
+fill rule under its old name (the same type; the values 0 and 1 are pinned).
+The flattener stays in `flatten.c`, because `GFNT_RasterOptions` takes a
+tolerance and `shape-geometry`'s flattener has one value (AD-12); it makes the
+polyline `shape-geometry`'s does at the default tolerance, bit for bit.
 
 A cell-based exact-area coverage rasteriser in the lineage of libart and
 FreeType's `smooth` module: each edge, after flattening, deposits signed

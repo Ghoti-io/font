@@ -21,16 +21,19 @@
 /**
  * @file
  *
- * The scan converter, and @ref GFNT_Coverage "GFNT_Coverage": an outline turned
- * into 8-bit coverage.
+ * Rasterisation, and @ref GFNT_Coverage "GFNT_Coverage": an outline turned into
+ * 8-bit coverage.
  *
- * documentation/design.md section 8. A cell-based exact-area rasteriser in the
- * lineage of libart and FreeType's `smooth` module: each edge deposits signed
- * `cover` and `area` into the cells it crosses, and a sweep per scanline
- * accumulates winding coverage across cells and applies the fill rule. That
- * handles a self-overlapping contour - a CJK composite, a badly drawn font -
- * the way every reference implementation does, and it computes area rather than
- * sampling it.
+ * documentation/design.md section 8. The coverage is computed by `shape-cpu`, the
+ * family's reference rasteriser, to which this library's scan converter moved
+ * (AD-1, AD-12): a cell-based exact-area rasteriser in the lineage of libart and
+ * FreeType's `smooth` module, where each edge deposits signed `cover` and `area`
+ * into the cells it crosses and a sweep per scanline accumulates winding coverage
+ * across cells and applies the fill rule. That handles a self-overlapping contour
+ * - a CJK composite, a badly drawn font - the way every reference implementation
+ * does, and it computes area rather than sampling it. This library builds the
+ * device path from the outline (flipping y, since an outline is y-up and a
+ * device is y-down) and derives a ::GFNT_Coverage from what `shape-cpu` returns.
  *
  * **Coverage is linear alpha.** Blending it in the right colour space is the
  * compositor's business (section 8.2); ::gfnt_coverage_apply_table() will apply
@@ -65,6 +68,7 @@
 #include <ghoti.io/font/hint.h>
 #include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/outline.h>
+#include <ghoti.io/shape-geometry/fill.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -76,15 +80,19 @@ extern "C" {
 
 /**
  * @brief Which points a path encloses.
+ *
+ * This is `shape-geometry`'s fill rule under its old name (AD-4): the type is
+ * the same, the values are pinned (0 nonzero, the default; 1 even-odd; a
+ * further rule is appended after them), and a caller that moves between this
+ * library and `shape-cpu` converts nothing. `GFNT_FILL_NONZERO` is a point
+ * inside where the winding number is not zero - the default, and what every
+ * font format means; `GFNT_FILL_EVEN_ODD`, where it is odd;
+ * `GFNT_FILL_RULE_COUNT` closes the enumeration.
  */
-typedef enum {
-  /** A point is inside where the winding number is not zero. The default,
-   * and what every font format means. */
-  GFNT_FILL_NONZERO = 0,
-  /** A point is inside where the winding number is odd. */
-  GFNT_FILL_EVEN_ODD,
-  GFNT_FILL_RULE_COUNT ///< Closes the enum.
-} GFNT_FillRule;
+typedef GSHGEOM_Fill_Rule GFNT_FillRule;
+#define GFNT_FILL_NONZERO GSHGEOM_FILL_NONZERO
+#define GFNT_FILL_EVEN_ODD GSHGEOM_FILL_EVEN_ODD
+#define GFNT_FILL_RULE_COUNT GSHGEOM_FILL_RULE_COUNT
 
 /**
  * @brief Name a fill rule.

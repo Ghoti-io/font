@@ -445,6 +445,32 @@ endif
 endif
 INCLUDE += $(IMAGE_CFLAGS)
 
+# ghoti.io-shape-geometry and ghoti.io-shape-cpu, for the scan converter that
+# lives in shape-cpu (story 9 of the shape family's first milestone; AD-1 is the
+# one place a front end calls a sink): raster.c builds a shape-geometry device
+# path from an outline and fills it with shape-cpu. Neither depends on font
+# (suite/libraries.txt lists font after both), and the fill rule type is
+# shape-geometry's. Resolved exactly as the others are.
+SHAPE_GEOMETRY_PC ?= ghoti.io-shape-geometry-0
+SHAPE_GEOMETRY_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(SHAPE_GEOMETRY_PC) 2>/dev/null)
+SHAPE_GEOMETRY_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(SHAPE_GEOMETRY_PC) 2>/dev/null)
+ifeq ($(strip $(SHAPE_GEOMETRY_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-shape-geometry was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+endif
+endif
+INCLUDE += $(SHAPE_GEOMETRY_CFLAGS)
+
+SHAPE_CPU_PC ?= ghoti.io-shape-cpu-0
+SHAPE_CPU_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(SHAPE_CPU_PC) 2>/dev/null)
+SHAPE_CPU_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(SHAPE_CPU_PC) 2>/dev/null)
+ifeq ($(strip $(SHAPE_CPU_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-shape-cpu was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+endif
+endif
+INCLUDE += $(SHAPE_CPU_CFLAGS)
+
 # Every dependency's link flags, in one variable, so that a link line names one
 # thing and a third dependency is one edit rather than nine. The flag stamps
 # record `$(DEP_LIBS)` for the same reason: `make check-stamps` requires every
@@ -452,7 +478,7 @@ INCLUDE += $(IMAGE_CFLAGS)
 # reached the recipes and not the stamps would leave objects scoring the previous
 # build's flags.
 
-DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS) $(IMAGE_LIBS)
+DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS) $(IMAGE_LIBS) $(SHAPE_CPU_LIBS) $(SHAPE_GEOMETRY_LIBS)
 
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
@@ -713,7 +739,7 @@ check-phrase-model: ## Check that the first-party Japanese phrase model is repro
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
 .PHONY: gen-vectors check-vectors
-.PHONY: golden check-golden
+.PHONY: golden check-golden check-raster-mutations
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -1528,6 +1554,10 @@ check-golden: ## The committed renderings, reproduced on three big-endian target
 check-golden: $(APP_DIR)/$(TARGET) $(EXAMPLES)
 	@python3 $(GOLDEN)/check_golden.py
 
+check-raster-mutations: ## Plant defects in the rasteriser's glue (the frame, the view); the unit and golden tests must refuse each
+check-raster-mutations: $(APP_DIR)/testRaster$(EXE_EXTENSION) $(APP_DIR)/testGolden$(EXE_EXTENSION)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 tools/raster_mutation_check.py
+
 gen-vectors: ## Regenerate the committed vectors from the pinned image
 	@python3 $(VECTORS)/check_vectors.py --update
 
@@ -2175,7 +2205,7 @@ LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 # What goes in the .pc Requires: field. Built from the same variables the
 # compile uses, so a dependency on another branch cannot be named one way for
 # the build and another way for consumers.
-PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC) $(IMAGE_PC)
+PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC) $(IMAGE_PC) $(SHAPE_GEOMETRY_PC) $(SHAPE_CPU_PC)
 
 # Where this project's own .pc file is installed.
 PKGCONFIG_INSTALL_PATH ?= $(PC_INSTALL_PATH)

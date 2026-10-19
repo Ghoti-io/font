@@ -21,21 +21,29 @@
 /**
  * @file
  *
- * The scan converter: cells, the sweep, and the fill rule.
+ * The rasteriser's glue: an outline becomes a `shape-geometry` device path, the
+ * path becomes coverage in `shape-cpu`, and the coverage becomes a
+ * ::GFNT_Coverage.
  *
- * documentation/design.md section 8.1. Every edge of the flattened path
- * deposits two signed numbers into each cell it crosses:
+ * documentation/design.md section 8.1. The scan converter itself - cells, the
+ * sweep, the fill rule, the trim - was this file's until story 9 of the shape
+ * family's first milestone and now lives in `shape-cpu` (AD-1, AD-12), moved
+ * without changing a pixel: `make golden` reproduces the committed renderings
+ * byte for byte. What stays here is what only a font can say.
  *
- * - `cover`, the signed height of the crossing in 26.6 units, and
- * - `area`, that height times the sum of the crossing's two x positions
- *   within the cell.
+ * **The flip.** An outline is y-up (design.md section 5.5); device space and
+ * `shape-cpu`'s coverage are y-down. The flip lives in this file's frame
+ * functions - ::gfnt_raster_place() turns a glyph-space point into a bitmap-space
+ * one and ::gfnt_raster_view() turns `shape-cpu`'s y-down `left` and `top` back
+ * into the y-up ones of a ::GFNT_Coverage - and it happens **before** the
+ * curves are flattened, because the flattener's half-up midpoint is not
+ * symmetric under negation: flattening first and flipping after would change
+ * vertices, and with them pixels.
  *
- * A sweep along each row then accumulates `cover` from left to right, which is
- * the winding number times a pixel's height, and `area` corrects the cell the
- * edge actually passes through. This is FreeType's `ftgrays` arithmetic with
- * `PIXEL_BITS` of 6 rather than 8, because 26.6 is this library's pixel space
- * everywhere else and a second sub-pixel resolution would be a second rounding
- * rule.
+ * **The flattener** is still `flatten.c` here, because ::GFNT_RasterOptions
+ * takes a tolerance and `shape-geometry`'s flattener has one value (AD-12). It
+ * produces the polyline `shape-geometry`'s does at the default tolerance, bit
+ * for bit (story 7a's vectors), and the device path handed on holds lines.
  *
  * Nothing here is floating point, and nothing here reads the host's byte order.
  */
@@ -44,6 +52,8 @@
 #include <ghoti.io/cutil/safemath.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/raster.h>
+#include <ghoti.io/shape-cpu/coverage.h>
+#include <ghoti.io/shape-geometry/device.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -52,56 +62,23 @@
 #include "../sfnt/sfnt.h"
 #include "flatten.h"
 
-/** Sub-pixel bits: 26.6, the same everywhere in this library. */
-#define GFNT_PIXEL_BITS 6
 /** One pixel in 26.6. */
 #define GFNT_ONE_PIXEL 64
-
-/**
- * The shift that turns an accumulated area into 0..256.
- *
- * A fully covered pixel accumulates `2 * ONE_PIXEL * ONE_PIXEL`, and 256 is
- * full coverage, so the shift is `2 * PIXEL_BITS + 1 - 8`. Spelled from
- * ::GFNT_PIXEL_BITS rather than as 5, so that changing the sub-pixel
- * resolution cannot leave this behind.
- */
-#define GFNT_AREA_SHIFT (2 * GFNT_PIXEL_BITS + 1 - 8)
 
 /** Default flattening tolerance: a sixteenth of a pixel. */
 #define GFNT_RASTER_TOLERANCE (GFNT_ONE_PIXEL / 16)
 
-/** Smallest cell allocation. */
-#define GFNT_RASTER_MIN_CELLS 64u
-
 /**
- * One pixel's accumulated crossings.
- *
- * `cover` and `area` are 64-bit because they are sums over every edge crossing
- * one pixel: an outline with `max_outline_points` points could cross one cell
- * that many times, and a 32-bit sum of `65536 * 64 * 128` would be within a
- * factor of eight of overflowing rather than comfortably clear of it.
- */
-typedef struct GFNT_Cell {
-  int32_t x;     ///< Column, from the raster's left edge.
-  int32_t y;     ///< Row, from the raster's top.
-  int64_t cover; ///< Signed height of the crossings, 26.6.
-  int64_t area;  ///< Sum of height times the two x positions in the cell.
-} GFNT_Cell;
-
-/**
- * The rasteriser's working state.
+ * The rasteriser's working state while an outline is walked into a device path.
  */
 typedef struct GFNT_Raster {
   const GFNT_Allocator * allocator;
   GFNT_Error * error;
   GFNT_Result result;        ///< The first failure, if any.
-
-  GFNT_Cell * cells;
-  size_t cell_count;
-  size_t cell_capacity;
+  GSHGEOM_Device_Path * path;///< The device path being built; lines and closes.
 
   int32_t left;              ///< Pixel column the bitmap starts at.
-  int32_t top;               ///< Pixel row the bitmap starts at, y-down.
+  int32_t top;               ///< Pixel row the bitmap starts at, y-up.
   uint32_t width;
   uint32_t height;
 
@@ -110,19 +87,10 @@ typedef struct GFNT_Raster {
   GFNT_F26Dot6 origin_y;
   GFNT_Point current;        ///< Where the pen is, 26.6, bitmap-relative.
   GFNT_Point contour_start;  ///< Where this contour began.
-  bool dropped;              ///< A cell fell outside the bitmap.
 } GFNT_Raster;
 
 const char * gfnt_fill_rule_string(GFNT_FillRule rule) {
-  switch (rule) {
-    case GFNT_FILL_NONZERO:
-      return "non-zero";
-    case GFNT_FILL_EVEN_ODD:
-      return "even-odd";
-    case GFNT_FILL_RULE_COUNT:
-      break;
-  }
-  return "unknown fill rule";
+  return gshgeom_fill_rule_string(rule);
 }
 
 void gfnt_coverage_destroy(GFNT_Coverage * coverage) {
@@ -272,186 +240,15 @@ GFNT_Result gfnt_coverage_dump_art(const GFNT_Coverage * coverage,
   return GFNT_OK;
 }
 
-// --- cells -----------------------------------------------------------------
-
-/**
- * Add a crossing to the cell at (@p ex, @p ey).
- *
- * @param dy The signed height crossed, 26.6.
- * @param fx1 Where the crossing entered, within the cell, 0..ONE_PIXEL.
- * @param fx2 Where it left.
- */
-static void gfnt_raster_cell(GFNT_Raster * raster, int32_t ex, int32_t ey,
-    int32_t dy, int32_t fx1, int32_t fx2) {
-  GFNT_Cell * cell = NULL;
-
-  if (dy == 0) {
-    // A horizontal crossing contributes no winding and no area. Skipped rather
-    // than recorded, because a cell of zeroes changes the sweep's cell list
-    // without changing its answer.
-    return;
-  }
-  if (ex < 0 || ey < 0 || (uint32_t)ex >= raster->width
-      || (uint32_t)ey >= raster->height) {
-    // Cannot happen with correct bounds: the bitmap is the outline's own box
-    // grown by a pixel on every side, and the flattener strays by at most the
-    // tolerance. Recorded rather than ignored so that a bounds bug is a
-    // reported failure and not a missing span.
-    raster->dropped = true;
-    return;
-  }
-  if (raster->cell_count > 0) {
-    GFNT_Cell * last = &raster->cells[raster->cell_count - 1];
-
-    if (last->x == ex && last->y == ey) {
-      // The common case by far: a walk along one edge stays in a cell for
-      // several steps. Merging here keeps the array small enough that the
-      // sort afterwards is cheap.
-      last->cover += dy;
-      last->area += (int64_t)dy * (fx1 + fx2);
-      return;
-    }
-  }
-  if (raster->cell_count == raster->cell_capacity) {
-    size_t capacity = raster->cell_capacity ? raster->cell_capacity * 2
-                                            : GFNT_RASTER_MIN_CELLS;
-    size_t bytes = 0;
-    void * grown = NULL;
-
-    if (!gcu_safe_mul_size(capacity, sizeof *raster->cells, &bytes)) {
-      raster->result = gfnt_error_set(raster->error, GFNT_ERR_OOM, 0, 0,
-          GFNT_GLYPH_NONE, "the rasteriser's cell array overflowed");
-      return;
-    }
-    grown = raster->allocator->realloc_fn(raster->allocator->ctx,
-        raster->cells, bytes);
-    if (!grown) {
-      raster->result = gfnt_error_set(raster->error, GFNT_ERR_OOM, 0, 0,
-          GFNT_GLYPH_NONE, "no memory for the rasteriser's cells");
-      return;
-    }
-    raster->cells = grown;
-    raster->cell_capacity = capacity;
-  }
-  cell = &raster->cells[raster->cell_count++];
-  cell->x = ex;
-  cell->y = ey;
-  cell->cover = dy;
-  cell->area = (int64_t)dy * (fx1 + fx2);
-}
-
-/**
- * Accumulate one piece of an edge that lies within a single row.
- *
- * Both endpoints are bitmap-relative 26.6 and share a row.
- */
-static void gfnt_raster_scanline(GFNT_Raster * raster, int32_t ey,
-    GFNT_Point from, GFNT_Point to) {
-  int32_t ex1 = (int32_t)gfnt_floor_div(from.x, GFNT_ONE_PIXEL);
-  int32_t ex2 = (int32_t)gfnt_floor_div(to.x, GFNT_ONE_PIXEL);
-  int32_t dx = to.x - from.x;
-  int32_t dy = to.y - from.y;
-  int32_t step;
-  int32_t ex;
-  GFNT_Point cursor = from;
-
-  if (ex1 == ex2) {
-    gfnt_raster_cell(raster, ex1, ey, dy,
-        from.x - ex1 * GFNT_ONE_PIXEL, to.x - ex1 * GFNT_ONE_PIXEL);
-    return;
-  }
-  // The edge crosses at least one column boundary. Each boundary's y is found
-  // once and shared by the pieces either side of it, so the walk stays closed:
-  // rounding a boundary twice is how a seam appears between two columns.
-  step = dx > 0 ? 1 : -1;
-  for (ex = ex1; ex != ex2; ex += step) {
-    const int32_t boundary = (step > 0 ? ex + 1 : ex) * GFNT_ONE_PIXEL;
-    const int32_t at_y = (int32_t)(from.y
-        + gfnt_round_div((int64_t)(boundary - from.x) * dy, dx));
-    GFNT_Point split;
-
-    split.x = boundary;
-    split.y = at_y;
-    gfnt_raster_cell(raster, ex, ey, split.y - cursor.y,
-        cursor.x - ex * GFNT_ONE_PIXEL, split.x - ex * GFNT_ONE_PIXEL);
-    cursor = split;
-  }
-  gfnt_raster_cell(raster, ex2, ey, to.y - cursor.y,
-      cursor.x - ex2 * GFNT_ONE_PIXEL, to.x - ex2 * GFNT_ONE_PIXEL);
-}
-
-/**
- * Accumulate one edge of the flattened path.
- *
- * Rows are y-down here: the outline was flipped on the way in, so that the
- * sweep writes row 0 first and the flip lives in one place.
- */
-static void gfnt_raster_line(GFNT_Raster * raster, GFNT_Point to) {
-  GFNT_Point from = raster->current;
-  int32_t ey1;
-  int32_t ey2;
-  int32_t dy;
-  int32_t dx;
-  int32_t step;
-  int32_t ey;
-  GFNT_Point cursor;
-
-  raster->current = to;
-  if (from.y == to.y) {
-    // A horizontal edge crosses no scanline and so contributes nothing. This
-    // is not an optimisation: giving it a row to belong to would require
-    // choosing one, and either choice puts area in a cell the edge does not
-    // bound.
-    return;
-  }
-  ey1 = (int32_t)gfnt_floor_div(from.y, GFNT_ONE_PIXEL);
-  ey2 = (int32_t)gfnt_floor_div(to.y, GFNT_ONE_PIXEL);
-  if (ey1 == ey2) {
-    gfnt_raster_scanline(raster, ey1, from, to);
-    return;
-  }
-  dy = to.y - from.y;
-  dx = to.x - from.x;
-  step = dy > 0 ? 1 : -1;
-  cursor = from;
-  for (ey = ey1; ey != ey2; ey += step) {
-    const int32_t boundary = (step > 0 ? ey + 1 : ey) * GFNT_ONE_PIXEL;
-    const int32_t at_x = (int32_t)(from.x
-        + gfnt_round_div((int64_t)(boundary - from.y) * dx, dy));
-    GFNT_Point split;
-
-    split.x = at_x;
-    split.y = boundary;
-    gfnt_raster_scanline(raster, ey, cursor, split);
-    cursor = split;
-  }
-  gfnt_raster_scanline(raster, ey2, cursor, to);
-}
-
-// --- flattening ------------------------------------------------------------
-
-/**
- * Take one vertex of a flattened curve into the edge list.
- *
- * The flattener itself is flatten.c, and its guarantee is proved there: the
- * polyline stays within the tolerance of the curve.
- */
-static void gfnt_raster_emit(void * user, GFNT_Point to, uint32_t leaf,
-    int level) {
-  (void)leaf;
-  (void)level;
-  gfnt_raster_line((GFNT_Raster *)user, to);
-}
-
-// --- the sink the outline walk feeds ---------------------------------------
+// --- the frame -------------------------------------------------------------
 
 /**
  * Turn a glyph-space point into a bitmap-space one.
  *
- * The one place y is flipped: the outline is y-up (design.md section 5.5) and
- * row 0 of the coverage is its top. Written as a subtraction from the top edge
- * rather than as a negation plus an offset, because the two differ by a pixel
- * and only one of them puts the top row at row zero.
+ * The one place a point's y is flipped: the outline is y-up (design.md section
+ * 5.5) and row 0 of the coverage is its top. Written as a subtraction from the
+ * top edge rather than as a negation plus an offset, because the two differ by
+ * a pixel and only one of them puts the top row at row zero.
  */
 static GFNT_Point gfnt_raster_place(const GFNT_Raster * raster,
     GFNT_Point point) {
@@ -466,9 +263,80 @@ static GFNT_Point gfnt_raster_place(const GFNT_Raster * raster,
   return out;
 }
 
+/**
+ * Make a ::GFNT_Coverage of the coverage `shape-cpu` computed, taking its
+ * pixels.
+ *
+ * The inverse of ::gfnt_raster_place() for the corner: `shape-cpu`'s `left` and
+ * `top` are in the bitmap's frame (the rectangle it was asked for starts at
+ * 0,0, y down), so the glyph-space column is `raster->left + left` and the
+ * glyph-space upper edge of the top row, y-up, is `raster->top - top`. A
+ * coverage with no pixel left is 0 by 0 with `left` and `top` zero, whatever
+ * the rectangle was. @p from is left zeroed: its pixels are @p out's now.
+ */
+static void gfnt_raster_view(const GFNT_Raster * raster, GSHCPU_Coverage * from,
+    GFNT_Coverage * out) {
+  out->data = from->data;
+  out->stride = from->stride;
+  out->width = from->width;
+  out->height = from->height;
+  if (from->data) {
+    out->left = raster->left + from->left;
+    out->top = raster->top - from->top;
+  }
+  else {
+    out->left = 0;
+    out->top = 0;
+  }
+  memset(from, 0, sizeof *from);
+}
+
+// --- the sink the outline walk feeds ---------------------------------------
+
+/** Remember the first failure of a device path call. */
+static void gfnt_raster_check(GFNT_Raster * raster, GSHGEOM_Result result) {
+  if (result == GSHGEOM_OK || raster->result != GFNT_OK) {
+    return;
+  }
+  switch (result) {
+    case GSHGEOM_ERR_LIMIT:
+      raster->result = gfnt_error_set(raster->error, GFNT_ERR_LIMIT, 0, 0,
+          GFNT_GLYPH_NONE, "this glyph's path is larger than a limit allows");
+      break;
+    case GSHGEOM_ERR_OOM:
+      raster->result = gfnt_error_set(raster->error, GFNT_ERR_OOM, 0, 0,
+          GFNT_GLYPH_NONE, "no memory for a glyph's device path");
+      break;
+    default:
+      raster->result = gfnt_error_set(raster->error, GFNT_ERR_INTERNAL, 0, 0,
+          GFNT_GLYPH_NONE, "the device path refused a segment of the outline");
+      break;
+  }
+}
+
+/**
+ * Take one vertex of a flattened curve into the device path.
+ *
+ * The flattener itself is flatten.c, and its guarantee is proved there: the
+ * polyline stays within the tolerance of the curve.
+ */
+static void gfnt_raster_emit(void * user, GFNT_Point to, uint32_t leaf,
+    int level) {
+  GFNT_Raster * raster = user;
+  GSHGEOM_Device_Point point;
+
+  (void)leaf;
+  (void)level;
+  point.x = to.x;
+  point.y = to.y;
+  raster->current = to;
+  gfnt_raster_check(raster, gshgeom_device_path_line_to(raster->path, point));
+}
+
 static GFNT_Result gfnt_raster_move(void * user, GFNT_Point to) {
   GFNT_Raster * raster = user;
   const GFNT_Point placed = gfnt_raster_place(raster, to);
+  GSHGEOM_Device_Point point;
 
   // A contour that has not been closed by the walk cannot happen -
   // gfnt_outline_decompose() closes every one - but the close is what makes
@@ -476,13 +344,17 @@ static GFNT_Result gfnt_raster_move(void * user, GFNT_Point to) {
   // there rather than assumed.
   raster->contour_start = placed;
   raster->current = placed;
+  point.x = placed.x;
+  point.y = placed.y;
+  gfnt_raster_check(raster, gshgeom_device_path_move_to(raster->path, point));
   return raster->result;
 }
 
 static GFNT_Result gfnt_raster_line_to(void * user, GFNT_Point to) {
   GFNT_Raster * raster = user;
+  const GFNT_Point placed = gfnt_raster_place(raster, to);
 
-  gfnt_raster_line(raster, gfnt_raster_place(raster, to));
+  gfnt_raster_emit(raster, placed, 0, 0);
   return raster->result;
 }
 
@@ -511,273 +383,11 @@ static GFNT_Result gfnt_raster_cubic_to(void * user, GFNT_Point c1,
 static GFNT_Result gfnt_raster_close(void * user) {
   GFNT_Raster * raster = user;
 
-  gfnt_raster_line(raster, raster->contour_start);
+  // The closing line is shape-cpu's: a closed subpath of the device path ends
+  // with a line back to its start.
+  raster->current = raster->contour_start;
+  gfnt_raster_check(raster, gshgeom_device_path_close(raster->path));
   return raster->result;
-}
-
-// --- the sweep -------------------------------------------------------------
-
-/**
- * Sort the cells by row and then by column, merging the duplicates.
- *
- * A counting sort by row and an insertion sort within each row, both written
- * here rather than handed to `qsort`: the comparison order of equal keys is
- * unspecified for `qsort`, and while adding integers is commutative - so the
- * merged totals would be the same either way - the determinism claim is easier
- * to hold when the sort is not a platform's.
- */
-static GFNT_Result gfnt_raster_sort(GFNT_Raster * raster, size_t ** out_rows) {
-  size_t * rows = NULL;
-  GFNT_Cell * sorted = NULL;
-  size_t bytes = 0;
-
-  // rows[y] is where row y starts, and rows[height] closes the last one.
-  if (!gcu_safe_mul_size((size_t)raster->height + 2u, sizeof *rows, &bytes)) {
-    return gfnt_error_set(raster->error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-        "the rasteriser's row index overflowed");
-  }
-  rows = raster->allocator->calloc_fn(raster->allocator->ctx,
-      (size_t)raster->height + 2u, sizeof *rows);
-  if (!rows) {
-    return gfnt_error_set(raster->error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-        "no memory for the rasteriser's row index");
-  }
-  if (raster->cell_count == 0) {
-    *out_rows = rows;
-    return GFNT_OK;
-  }
-  if (!gcu_safe_mul_size(raster->cell_count, sizeof *sorted, &bytes)) {
-    raster->allocator->free_fn(raster->allocator->ctx, rows);
-    return gfnt_error_set(raster->error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-        "the rasteriser's cell array overflowed");
-  }
-  sorted = raster->allocator->malloc_fn(raster->allocator->ctx, bytes);
-  if (!sorted) {
-    raster->allocator->free_fn(raster->allocator->ctx, rows);
-    return gfnt_error_set(raster->error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-        "no memory to sort the rasteriser's cells");
-  }
-
-  for (size_t i = 0; i < raster->cell_count; ++i) {
-    rows[(size_t)raster->cells[i].y + 1u] += 1;
-  }
-  for (uint32_t y = 0; y < raster->height + 1u; ++y) {
-    rows[y + 1u] += rows[y];
-  }
-  {
-    // A second copy of the starts, consumed while filling; rows[] itself has
-    // to survive as the index the sweep reads.
-    size_t * cursor = raster->allocator->calloc_fn(raster->allocator->ctx,
-        (size_t)raster->height + 2u, sizeof *cursor);
-
-    if (!cursor) {
-      raster->allocator->free_fn(raster->allocator->ctx, sorted);
-      raster->allocator->free_fn(raster->allocator->ctx, rows);
-      return gfnt_error_set(raster->error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-          "no memory to sort the rasteriser's cells");
-    }
-    memcpy(cursor, rows, ((size_t)raster->height + 2u) * sizeof *cursor);
-    for (size_t i = 0; i < raster->cell_count; ++i) {
-      sorted[cursor[(size_t)raster->cells[i].y]++] = raster->cells[i];
-    }
-    raster->allocator->free_fn(raster->allocator->ctx, cursor);
-  }
-  memcpy(raster->cells, sorted, raster->cell_count * sizeof *sorted);
-  raster->allocator->free_fn(raster->allocator->ctx, sorted);
-
-  // Within each row: insertion sort by column, merging equal columns as they
-  // meet. Rows are short - a cell per column crossed - so this is linear in
-  // practice and needs no scratch.
-  for (uint32_t y = 0; y < raster->height; ++y) {
-    size_t first = rows[y];
-    size_t last = rows[y + 1u];
-
-    for (size_t i = first + 1; i < last; ++i) {
-      GFNT_Cell held = raster->cells[i];
-      size_t j = i;
-
-      while (j > first && raster->cells[j - 1].x > held.x) {
-        raster->cells[j] = raster->cells[j - 1];
-        j -= 1;
-      }
-      raster->cells[j] = held;
-    }
-    // Merge equal columns, compacting the row in place. The slots the merge
-    // frees stay in the row's span, so they are filled with a sentinel column
-    // that sorts after every real one and carries no cover: the sweep stops at
-    // the first of them. Shrinking the span instead would mean a second array
-    // of per-row counts for no gain.
-    {
-      size_t write = first;
-
-      for (size_t read = first; read < last; ++read) {
-        if (write > first
-            && raster->cells[write - 1].x == raster->cells[read].x) {
-          raster->cells[write - 1].cover += raster->cells[read].cover;
-          raster->cells[write - 1].area += raster->cells[read].area;
-          continue;
-        }
-        raster->cells[write++] = raster->cells[read];
-      }
-      for (size_t fill = write; fill < last; ++fill) {
-        raster->cells[fill].x = INT32_MAX;
-        raster->cells[fill].cover = 0;
-        raster->cells[fill].area = 0;
-      }
-    }
-  }
-  *out_rows = rows;
-  return GFNT_OK;
-}
-
-/**
- * Turn an accumulated area into 8-bit coverage under the fill rule.
- */
-static uint8_t gfnt_raster_coverage(int64_t area, GFNT_FillRule fill) {
-  int64_t value = area >> GFNT_AREA_SHIFT;
-
-  if (value < 0) {
-    value = -value;
-  }
-  if (fill == GFNT_FILL_EVEN_ODD) {
-    // Winding 2 is outside again, so the ramp folds every 512.
-    value &= 511;
-    if (value > 256) {
-      value = 512 - value;
-    }
-    else if (value == 256) {
-      value = 255;
-    }
-  }
-  else if (value >= 256) {
-    value = 255;
-  }
-  return (uint8_t)value;
-}
-
-/**
- * Write a run of pixels at one coverage.
- */
-static void gfnt_raster_span(GFNT_Coverage * coverage, uint32_t row,
-    int32_t from, int32_t count, int64_t area) {
-  const uint8_t value = gfnt_raster_coverage(area, coverage->fill);
-  uint8_t * line;
-
-  if (value == 0 || count <= 0 || from >= (int32_t)coverage->width) {
-    return;
-  }
-  if (from < 0) {
-    count += from;
-    from = 0;
-  }
-  if (from + count > (int32_t)coverage->width) {
-    count = (int32_t)coverage->width - from;
-  }
-  if (count <= 0) {
-    return;
-  }
-  line = coverage->data + (size_t)row * coverage->stride;
-  memset(line + from, value, (size_t)count);
-}
-
-/**
- * Walk each row's cells, accumulating winding and writing spans.
- */
-static void gfnt_raster_sweep(GFNT_Raster * raster, const size_t * rows,
-    GFNT_Coverage * coverage) {
-  for (uint32_t y = 0; y < raster->height; ++y) {
-    int64_t cover = 0;
-    int32_t x = 0;
-
-    for (size_t index = rows[y]; index < rows[y + 1u]; ++index) {
-      const GFNT_Cell * cell = &raster->cells[index];
-
-      if (cell->x == INT32_MAX) {
-        break;
-      }
-      if (cover != 0 && cell->x > x) {
-        gfnt_raster_span(coverage, y, x, cell->x - x, cover);
-      }
-      cover += cell->cover * (GFNT_ONE_PIXEL * 2);
-      gfnt_raster_span(coverage, y, cell->x, 1, cover - cell->area);
-      x = cell->x + 1;
-    }
-    // No fill after the last cell. FreeType's sweep has one, because it clips
-    // cells to the bitmap and so loses the closing edge of a shape that reaches
-    // the right margin; here the bitmap is the outline's own box grown by a
-    // pixel on every side, so every closing edge has a cell of its own inside
-    // it and the accumulated cover is back to zero by the end of every row. A
-    // planted defect proved the branch unreachable rather than untested: it was
-    // removed instead of being left as code nothing can run.
-  }
-}
-
-/**
- * Shrink the coverage to the pixels that actually have any.
- *
- * The bitmap is sized from the outline's box grown by a pixel on every side,
- * which is what makes a flattened curve straying by up to the tolerance land
- * inside it. That margin is scaffolding, not output: an atlas allocator that
- * was handed a two-pixel border on every glyph would pay for it in every
- * texture. So the rows are compacted in place - one buffer, one pass - and
- * `left` and `top` move to match, which is what makes them mean anything.
- *
- * A coverage with no non-zero pixel becomes 0x0 with its pixels released,
- * which is the same answer an empty glyph gives: there is nothing to composite,
- * and a caller should not have to tell the two apart.
- */
-static void gfnt_raster_trim(GFNT_Coverage * coverage) {
-  uint32_t first_row = coverage->height;
-  uint32_t last_row = 0;
-  uint32_t first_column = coverage->width;
-  uint32_t last_column = 0;
-  uint32_t width;
-  uint32_t height;
-
-  for (uint32_t row = 0; row < coverage->height; ++row) {
-    const uint8_t * line = coverage->data + (size_t)row * coverage->stride;
-
-    for (uint32_t column = 0; column < coverage->width; ++column) {
-      if (line[column] == 0) {
-        continue;
-      }
-      if (row < first_row) {
-        first_row = row;
-      }
-      last_row = row;
-      if (column < first_column) {
-        first_column = column;
-      }
-      if (column > last_column) {
-        last_column = column;
-      }
-    }
-  }
-  if (first_row > last_row || first_column > last_column) {
-    const GFNT_Allocator * allocator = coverage->allocator;
-
-    allocator->free_fn(allocator->ctx, coverage->data);
-    coverage->data = NULL;
-    coverage->width = 0;
-    coverage->height = 0;
-    coverage->stride = 0;
-    coverage->left = 0;
-    coverage->top = 0;
-    return;
-  }
-  width = last_column - first_column + 1u;
-  height = last_row - first_row + 1u;
-  for (uint32_t row = 0; row < height; ++row) {
-    memmove(coverage->data + (size_t)row * width,
-        coverage->data + (size_t)(row + first_row) * coverage->stride
-            + first_column,
-        width);
-  }
-  coverage->left += (int32_t)first_column;
-  coverage->top -= (int32_t)first_row;
-  coverage->width = width;
-  coverage->height = height;
-  coverage->stride = width;
 }
 
 // --- the entry points ------------------------------------------------------
@@ -797,11 +407,14 @@ GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
   };
   GFNT_Raster raster;
   GFNT_Coverage coverage;
+  GSHCPU_Coverage computed;
+  GSHCPU_Limits cpu_caps;
+  GSHGEOM_Limits path_caps;
   GFNT_Limits caps;
   GFNT_Box box;
-  size_t * rows = NULL;
   size_t bytes = 0;
   GFNT_Result result;
+  GSHCPU_Result cpu_result;
 
   gfnt_error_clear(error);
   if (!outline || !out_coverage) {
@@ -888,12 +501,13 @@ GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
     raster.height = (uint32_t)(top - bottom);
   }
 
-  coverage.width = raster.width;
-  coverage.height = raster.height;
-  coverage.stride = raster.width;
-  coverage.left = raster.left;
-  coverage.top = raster.top;
-  if (!gcu_safe_mul_size(coverage.stride, coverage.height, &bytes)) {
+  // The same bytes the caller's limits allow, checked here against the glyph's
+  // own box and with this library's messages, as it always was. shape-cpu checks
+  // the rectangle again, against the same numbers (so it cannot refuse what was
+  // just allowed); its cell and point caps are lifted, because the cells of one
+  // glyph are bounded by the bitmap and the points by the outline, which the
+  // outline's own limits (max_outline_points) already cap.
+  if (!gcu_safe_mul_size((size_t)raster.width, (size_t)raster.height, &bytes)) {
     return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
         "this glyph's coverage size overflowed");
   }
@@ -901,34 +515,56 @@ GFNT_Result gfnt_raster_outline(const GFNT_Outline * outline,
     return gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
         "this glyph's coverage is larger than max_raster_bytes allows");
   }
-  coverage.data = allocator->calloc_fn(allocator->ctx, bytes ? bytes : 1u, 1u);
-  if (!coverage.data) {
-    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
-        "no memory for a glyph's coverage");
-  }
+  gshgeom_limits_default(&path_caps);
+  path_caps.max_elements = SIZE_MAX;
+  path_caps.max_points = SIZE_MAX;
+  gshcpu_limits_default(&cpu_caps);
+  cpu_caps.max_dimension = caps.max_ppem;
+  cpu_caps.max_bytes = caps.max_raster_bytes;
+  cpu_caps.max_cells = SIZE_MAX;
+  cpu_caps.max_points = SIZE_MAX;
 
+  if (gshgeom_device_path_create(allocator, &path_caps, &raster.path)
+      != GSHGEOM_OK) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+        "no memory for a glyph's device path");
+  }
   result = gfnt_outline_decompose(outline, &sink, &raster, error);
   if (result == GFNT_OK) {
     result = raster.result;
   }
-  if (result == GFNT_OK && raster.dropped) {
-    // The bounds and the flattener disagreed, which is this library's bug and
-    // not the font's. Reported rather than rendered, because a dropped cell is
-    // a missing span and a missing span looks like a font with a gap in it.
-    result = gfnt_error_set(error, GFNT_ERR_INTERNAL, 0, 0, GFNT_GLYPH_NONE,
-        "a crossing fell outside the bitmap the bounds asked for");
-  }
   if (result == GFNT_OK) {
-    result = gfnt_raster_sort(&raster, &rows);
+    // The rectangle is the bitmap, in the bitmap's own frame: its corner is
+    // 0,0 and the path was placed in it above.
+    cpu_result = gshcpu_coverage_fill(raster.path,
+        options->fill, 0, 0, raster.width, raster.height,
+        &cpu_caps, allocator, &computed);
+    switch (cpu_result) {
+      case GSHCPU_OK:
+        gshcpu_coverage_trim(&computed);
+        gfnt_raster_view(&raster, &computed, &coverage);
+        break;
+      case GSHCPU_ERR_OOM:
+        result = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE,
+            "no memory for a glyph's coverage");
+        break;
+      case GSHCPU_ERR_LIMIT:
+        result = gfnt_error_set(error, GFNT_ERR_LIMIT, 0, 0, GFNT_GLYPH_NONE,
+            "this glyph's coverage is larger than a limit allows");
+        break;
+      default:
+        // The bounds and the path disagreed, which is this library's bug and
+        // not the font's. Reported rather than rendered, because a dropped
+        // cell is a missing span and a missing span looks like a font with a
+        // gap in it.
+        result = gfnt_error_set(error, GFNT_ERR_INTERNAL, 0, 0,
+            GFNT_GLYPH_NONE,
+            "a crossing fell outside the bitmap the bounds asked for");
+        break;
+    }
   }
-  if (result == GFNT_OK) {
-    gfnt_raster_sweep(&raster, rows, &coverage);
-    gfnt_raster_trim(&coverage);
-  }
-  allocator->free_fn(allocator->ctx, rows);
-  allocator->free_fn(allocator->ctx, raster.cells);
+  gshgeom_device_path_destroy(raster.path);
   if (result != GFNT_OK) {
-    gfnt_coverage_destroy(&coverage);
     return result;
   }
   *out_coverage = coverage;

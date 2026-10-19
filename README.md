@@ -191,6 +191,8 @@ program that links `ghoti.io-font-8` links this too.
 - [ghoti.io-compress](https://github.com/Ghoti-io/compress) — gzip, for the `.pcf.gz` and `.psf.gz` a bitmap font usually arrives in, and zlib for WOFF 1.
 - [ghoti.io-unicode](https://github.com/Ghoti-io/unicode) — what a shaper asks of a code point: its combining class, its decomposition and composition, its general category.
 - [ghoti.io-image](https://github.com/Ghoti-io/image) — the PNG decoder behind a color bitmap strike (`CBDT`): the font's picture becomes RGBA pixels.
+- [ghoti.io-shape-geometry](https://github.com/Ghoti-io/shape-geometry) — the device path an outline is turned into, and the fill rule (`GFNT_FillRule` is its type).
+- [ghoti.io-shape-cpu](https://github.com/Ghoti-io/shape-cpu) — the scan converter, which computes the 8-bit coverage a glyph is drawn with.
 
 ## Documentation
 

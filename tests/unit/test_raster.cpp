@@ -30,6 +30,9 @@
 
 #include <ghoti.io/font/outline.h>
 #include <ghoti.io/font/raster.h>
+#include <ghoti.io/shape-cpu/coverage.h>
+#include <ghoti.io/shape-geometry/device.h>
+#include <type_traits>
 
 namespace {
 
@@ -1018,6 +1021,181 @@ TEST(Raster, EveryAllocationTheSweepMakesIsReportedAndNothingLeaks) {
     gfnt_coverage_destroy(&coverage);
     gfnt_outline_destroy(outline);
     EXPECT_EQ(allocator.live(), 0u) << "at request " << fail_at;
+  }
+}
+
+
+// --- the move into shape-cpu (shape family, story 9) -----------------------
+
+TEST(Raster, TheFillRuleIsShapeGeometrysUnderItsOldName) {
+  static_assert(std::is_same<GFNT_FillRule, GSHGEOM_Fill_Rule>::value,
+      "AD-4: one fill rule type");
+  EXPECT_EQ(static_cast<int>(GFNT_FILL_NONZERO), 0);
+  EXPECT_EQ(static_cast<int>(GFNT_FILL_EVEN_ODD), 1);
+  EXPECT_EQ(static_cast<int>(GFNT_FILL_RULE_COUNT), 2);
+  EXPECT_EQ(static_cast<int>(GFNT_FILL_NONZERO),
+      static_cast<int>(GSHGEOM_FILL_NONZERO));
+  EXPECT_EQ(static_cast<int>(GFNT_FILL_EVEN_ODD),
+      static_cast<int>(GSHGEOM_FILL_EVEN_ODD));
+  EXPECT_STREQ(gfnt_fill_rule_string(GFNT_FILL_NONZERO), "non-zero");
+  EXPECT_STREQ(gfnt_fill_rule_string(GFNT_FILL_EVEN_ODD), "even-odd");
+  EXPECT_STREQ(gfnt_fill_rule_string(GFNT_FILL_EVEN_ODD),
+      gshgeom_fill_rule_string(GSHGEOM_FILL_EVEN_ODD));
+}
+
+namespace {
+
+/**
+ * The same outline as a shape-geometry device path, built the way the
+ * definition says a glyph reaches a sink: y flipped (device space is y-down),
+ * the sub-pixel origin applied, curves kept as curves. No bitmap frame: this
+ * is the absolute device path, and shape-cpu finds its own rectangle.
+ */
+struct DevicePathSink {
+  GSHGEOM_Device_Path * path = nullptr;
+  GFNT_F26Dot6 origin_x = 0;
+  GFNT_F26Dot6 origin_y = 0;
+
+  GSHGEOM_Device_Point flip(GFNT_Point p) const {
+    return {p.x + origin_x, -(p.y + origin_y)};
+  }
+  static GFNT_Result move(void * user, GFNT_Point to) {
+    auto * self = static_cast<DevicePathSink *>(user);
+    return gshgeom_device_path_move_to(self->path, self->flip(to)) == GSHGEOM_OK
+        ? GFNT_OK : GFNT_ERR_INTERNAL;
+  }
+  static GFNT_Result line(void * user, GFNT_Point to) {
+    auto * self = static_cast<DevicePathSink *>(user);
+    return gshgeom_device_path_line_to(self->path, self->flip(to)) == GSHGEOM_OK
+        ? GFNT_OK : GFNT_ERR_INTERNAL;
+  }
+  static GFNT_Result quad(void * user, GFNT_Point c, GFNT_Point to) {
+    auto * self = static_cast<DevicePathSink *>(user);
+    return gshgeom_device_path_quadratic_to(self->path, self->flip(c),
+               self->flip(to)) == GSHGEOM_OK ? GFNT_OK : GFNT_ERR_INTERNAL;
+  }
+  static GFNT_Result cubic(void * user, GFNT_Point c1, GFNT_Point c2,
+      GFNT_Point to) {
+    auto * self = static_cast<DevicePathSink *>(user);
+    return gshgeom_device_path_cubic_to(self->path, self->flip(c1),
+               self->flip(c2), self->flip(to)) == GSHGEOM_OK
+        ? GFNT_OK : GFNT_ERR_INTERNAL;
+  }
+  static GFNT_Result close(void * user) {
+    auto * self = static_cast<DevicePathSink *>(user);
+    return gshgeom_device_path_close(self->path) == GSHGEOM_OK
+        ? GFNT_OK : GFNT_ERR_INTERNAL;
+  }
+};
+
+/**
+ * Render @p shape through font and again straight through shape-cpu on the
+ * flipped path, and require the same pixels in the same place.
+ */
+void expect_font_is_shape_cpu_on_the_flipped_path(const Shape & shape,
+    GFNT_FillRule fill, GFNT_F26Dot6 origin_x, GFNT_F26Dot6 origin_y,
+    const char * what) {
+  GFNT_RasterOptions options{};
+  options.fill = fill;
+  options.origin_x = origin_x;
+  options.origin_y = origin_y;
+  Render font(shape, &options);
+  ASSERT_EQ(font.result, GFNT_OK) << what;
+
+  DevicePathSink collect;
+  collect.origin_x = origin_x;
+  collect.origin_y = origin_y;
+  ASSERT_EQ(gshgeom_device_path_create(nullptr, nullptr, &collect.path),
+      GSHGEOM_OK);
+  GFNT_OutlineSink sink{DevicePathSink::move, DevicePathSink::line,
+      DevicePathSink::quad, DevicePathSink::cubic, DevicePathSink::close};
+  GFNT_Error error{};
+  ASSERT_EQ(gfnt_outline_decompose(shape, &sink, &collect, &error), GFNT_OK)
+      << what;
+  GSHCPU_Coverage cpu{};
+  ASSERT_EQ(gshcpu_coverage_from_path(collect.path, fill, nullptr, nullptr,
+                &cpu), GSHCPU_OK) << what;
+  gshgeom_device_path_destroy(collect.path);
+
+  ASSERT_EQ(font.coverage.width, cpu.width) << what;
+  ASSERT_EQ(font.coverage.height, cpu.height) << what;
+  EXPECT_GT(cpu.width, 0u) << what << ": nothing was drawn";
+  EXPECT_EQ(font.coverage.left, cpu.left) << what;
+  // The y flip: the glyph-space upper edge of the top row, y-up, against the
+  // device row, y-down.
+  EXPECT_EQ(font.coverage.top, -cpu.top) << what;
+  for (uint32_t row = 0; row < cpu.height; ++row) {
+    for (uint32_t column = 0; column < cpu.width; ++column) {
+      ASSERT_EQ(gfnt_coverage_at(&font.coverage, column, row),
+          gshcpu_coverage_at(&cpu, column, row))
+          << what << " at " << column << "," << row;
+    }
+  }
+  EXPECT_EQ(gfnt_coverage_total(&font.coverage), gshcpu_coverage_total(&cpu))
+      << what;
+  gshcpu_coverage_destroy(&cpu);
+}
+
+}  // namespace
+
+TEST(Raster, EveryBlockOfARenderingComesFromTheCallersAllocator) {
+  // The device path and shape-cpu's cells, rows and pixels are all made with
+  // the allocator the caller gave. The outline is made with the default one, so
+  // everything this allocator sees belongs to the call.
+  Shape shape;
+  shape.contour({{u(1), u(1)}, {u(9), u(2)}, {u(4), u(8)}});
+  shape.ready();
+  gfnttest::FailingAllocator allocator(static_cast<size_t>(-1));
+  GFNT_Coverage coverage{};
+  GFNT_Error error{};
+
+  ASSERT_EQ(gfnt_raster_outline(shape, nullptr, nullptr, allocator.get(),
+                &coverage, &error), GFNT_OK);
+  EXPECT_EQ(allocator.live(), 1u) << "only the pixels outlive the call";
+  EXPECT_NE(coverage.data, nullptr);
+  // The count of requests is pinned: the path (its header, elements and
+  // points), the flattened path, the pixels, the cells, the row index, the
+  // sorted copy and the cursor. A block made with another allocator is a
+  // request that is not here.
+  EXPECT_GE(allocator.requests(), 11u);
+  gfnt_coverage_destroy(&coverage);
+  EXPECT_EQ(allocator.live(), 0u);
+}
+
+TEST(Raster, FontIsShapeCpuOnTheFlippedPathToTheByte) {
+  // Lines, a quadratic, a cubic, two contours under each rule, a sub-pixel
+  // origin that moves the shape across pixel boundaries both ways, and a shape
+  // that sits on both sides of the origin: each in the frame of the bitmap it
+  // is drawn in and of the device it is drawn on.
+  struct Origin { GFNT_F26Dot6 x, y; };
+  const Origin origins[] = {{0, 0}, {16, 0}, {0, 48}, {-23, 41}, {63, -63}};
+  for (const Origin & o : origins) {
+    {
+      Shape shape;
+      shape.contour({{u(1), u(2)}, {u(9) + 5, u(3) + 11}, {u(4) + 33, u(8) - 7}});
+      shape.ready();
+      expect_font_is_shape_cpu_on_the_flipped_path(shape, GFNT_FILL_NONZERO, o.x, o.y, "triangle");
+    }
+    {
+      Shape shape;
+      shape.contour({{u(1), u(1)}, {u(5), u(9), GFNT_POINT_QUAD}, {u(10), u(1)}});
+      shape.ready();
+      expect_font_is_shape_cpu_on_the_flipped_path(shape, GFNT_FILL_NONZERO, o.x, o.y, "quadratic");
+    }
+    {
+      Shape shape;
+      shape.contour({{u(1), u(1)}, {u(2), u(11), GFNT_POINT_CUBIC}, {u(11), u(10), GFNT_POINT_CUBIC}, {u(12), u(2)}});
+      shape.ready();
+      expect_font_is_shape_cpu_on_the_flipped_path(shape, GFNT_FILL_NONZERO, o.x, o.y, "cubic");
+    }
+    for (GFNT_FillRule fill : {GFNT_FILL_NONZERO, GFNT_FILL_EVEN_ODD}) {
+      Shape shape;
+      shape.contour({{u(-6), u(-5)}, {u(5), u(-5)}, {u(5), u(6)}, {u(-6), u(6)}});
+      shape.contour({{u(-3) - 9, u(-3)}, {u(3), u(-3)}, {u(3), u(3) + 17}, {u(-3) - 9, u(3) + 17}});
+      shape.ready();
+      expect_font_is_shape_cpu_on_the_flipped_path(shape, fill, o.x, o.y,
+          fill == GFNT_FILL_NONZERO ? "overlap, non-zero" : "overlap, even-odd");
+    }
   }
 }
 

@@ -222,7 +222,7 @@ def build_color_v1(mf, out):
 
 # Story 14c: a graph made of what the scene lowers (shape-scene's N14 and fixed.h),
 # and one glyph of each kind it refuses that color-v1.ttf does not already hold.
-SCENE_EXTRA = ["paint.d", "paint.e", "paint.f", "paint.g", "paint.h", "paint.i"]
+SCENE_EXTRA = ["paint.d", "paint.e", "paint.f", "paint.g", "paint.h", "paint.i", "paint.j"]
 
 
 def v1_scene_trees():
@@ -256,6 +256,11 @@ def v1_scene_trees():
         # Alphas past either end of [0, 1], which F2.14 can store and COLR clamps.
         "paint.i": {"Format": PF.PaintColrLayers, "Layers": [
             glyph("layer.a", solid(0, 1.5)), glyph("layer.b", solid(1, -0.5))]},
+        # A clip under a transform, and a sibling after it that the transform does not reach.
+        "paint.j": {"Format": PF.PaintColrLayers, "Layers": [
+            {"Format": PF.PaintTranslate, "dx": 50, "dy": -20, "Paint": glyph("layer.c", {
+                "Format": PF.PaintColrLayers, "Layers": [glyph("layer.a", solid(0)), glyph("layer.b", solid(1))]})},
+            glyph("layer.b", solid(2))]},
     }
 
 

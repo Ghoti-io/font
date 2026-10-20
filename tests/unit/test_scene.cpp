@@ -597,6 +597,22 @@ TEST(Scene, AFailingProgramUnderStrictRefusesItsGlyph) {
   ASSERT_EQ(t.entries.size(), 1u);
   EXPECT_EQ(t.entries[0].entry_class, GSHSCENE_ENTRY_HINT_STATUS);
   EXPECT_EQ(t.entries[0].second, 1u);
+  // The op itself says REFUSED (the seam's rule), not merely a status the sink turns into one.
+  const GSHSCENE_Glyph_Provider * ops = nullptr;
+  void * ctx = nullptr;
+  ASSERT_EQ(gshscene_face_binding(face, &ops, &ctx), GSHSCENE_OK);
+  GSHSCENE_Face content{};
+  ASSERT_EQ(gshscene_resource_face(face, &content), GSHSCENE_OK);
+  GSHSCENE_Glyph_Request rq{};
+  rq.glyph = 2;
+  rq.ppem = 13;
+  ASSERT_EQ(gshscene_glyph_scale(13, font.upem, &rq.scale), GSHSCENE_OK);
+  rq.hint_mode = GSHSCENE_HINT_FONT_STRICT;
+  GSHGEOM_Device_Path * path = nullptr;
+  ASSERT_EQ(gshgeom_device_path_create(nullptr, nullptr, &path), GSHGEOM_OK);
+  GSHSCENE_Glyph_Answer answer{};
+  EXPECT_EQ(ops->glyph_device_path(ctx, &content, &rq, path, &answer), GSHSCENE_ERR_REFUSED);
+  gshgeom_device_path_destroy(path);
   // A glyph with no program in a face with one: a glyph-level NO_PROGRAM entry, drawn unhinted.
   const GSHSCENE_Resource * bare = s.run(face, 13.0, GSHSCENE_HINT_FONT, {{3, 2.0, 20.0, nullptr}});
   const Rendered u = render(s.fill(bare, nullptr), 32, 24);

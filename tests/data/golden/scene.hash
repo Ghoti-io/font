@@ -1,0 +1,11 @@
+# tools/scene-hash.c over tests/data/fonts: AD-5's and AD-1's fixtures through shape-cpu
+# (story 14b). Written by `make scene-hash`; every target must print it.
+fixture basic.ttf a4be21098160f684
+fixture outline-composite.ttf e99c96d48a0cfd79
+fixture outline-simple.ttf faf6322bc65054a1
+fixture cff-curves.otf 6b432dfb2bc151fc
+fixture cff-seac.otf 1242495a749dcf68
+fixture type1-big.pfb 554f5715b28d5531
+fixture variable-gvar.ttf d42d290081a6491c
+hash 2c58c8f77cfe23ad
+count 253

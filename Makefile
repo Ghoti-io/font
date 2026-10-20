@@ -509,7 +509,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
 	check-reader check-seeds check-layout-unit-snapshot check-phrase-model \
-	check-float-free
+	check-float-free check-scene-hash
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -765,7 +765,7 @@ check-phrase-model: ## Check that the first-party Japanese phrase model is repro
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
 .PHONY: gen-vectors check-vectors
-.PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations
+.PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations check-scene-hash scene-hash
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -1597,6 +1597,23 @@ check-float-free: $(LIBVER_GEN) ## Fail if a GFNT_ header, or the outline-to-pix
 check-scene-mutations: ## Plant defects in the provider and the one rounding; the tests must refuse each
 check-scene-mutations: $(APP_DIR)/testScene$(EXE_EXTENSION) $(APP_DIR)/testUnhinted$(EXE_EXTENSION)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 tools/scene_mutation_check.py
+
+# The cross-target probe (tools/scene-hash.c): AD-5's and AD-1's fixtures drawn
+# through shape-cpu, both equalities checked, and a hash of the pixels, which
+# tests/data/golden/scene.hash commits and suite/tools/xarch/shape.sh and
+# xwin/shape.sh require on every target. check-scene-hash, in TEST_GATES,
+# requires it here and sees its plant refused; scene-hash rewrites it.
+SCENE_HASH := $(APP_DIR)/tools/scene-hash$(EXE_EXTENSION)
+$(SCENE_HASH): tools/scene-hash.c $(APP_DIR)/$(STATIC_TARGET) \
+		$(FLAGS_STAMP) | $(APP_DIR)/$(TARGET)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(FONTLIBRARY) $(DEP_LIBS) -lm
+
+check-scene-hash: $(SCENE_HASH) ## The provider's cross-target probe prints the committed hash here
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/check-scene-hash.py $(SCENE_HASH) tests/data/fonts
+
+scene-hash: $(SCENE_HASH) ## Rewrite tests/data/golden/scene.hash (deliberate)
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/check-scene-hash.py $(SCENE_HASH) tests/data/fonts --update
 
 gen-vectors: ## Regenerate the committed vectors from the pinned image
 	@python3 $(VECTORS)/check_vectors.py --update

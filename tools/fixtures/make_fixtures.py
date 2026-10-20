@@ -5240,7 +5240,8 @@ FIXTURES = {
         "COLR version 1 as story 14c lowers it to a scene: layers of solids with "
         "the foreground, a glyph over transforms over a solid, a Porter-Duff "
         "composite, a glyph over layers (a clip), another base glyph's graph moved, "
-        "and the two refusals color-v1.ttf lacks (a blend mode, an unbounded solid)"),
+        "the two refusals color-v1.ttf lacks (a blend mode, an unbounded solid), "
+        "and a color glyph that names itself"),
     "color-v1-var.ttf": (build_color_v1_var,
         "COLR version 1 in a variable font: the Var forms of every paint that has "
         "one, color lines whose stops vary, and a clip box that varies, over an "

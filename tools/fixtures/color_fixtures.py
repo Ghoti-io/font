@@ -222,7 +222,7 @@ def build_color_v1(mf, out):
 
 # Story 14c: a graph made of what the scene lowers (shape-scene's N14 and fixed.h),
 # and one glyph of each kind it refuses that color-v1.ttf does not already hold.
-SCENE_EXTRA = ["paint.d", "paint.e", "paint.f", "paint.g"]
+SCENE_EXTRA = ["paint.d", "paint.e", "paint.f", "paint.g", "paint.h"]
 
 
 def v1_scene_trees():
@@ -251,6 +251,8 @@ def v1_scene_trees():
                     "SourcePaint": glyph("layer.a", solid(0)),
                     "BackdropPaint": glyph("layer.b", solid(1))},
         "paint.g": solid(1),
+        # A graph that names itself: past every bound a walk has.
+        "paint.h": {"Format": PF.PaintColrGlyph, "Glyph": "paint.h"},
     }
 
 

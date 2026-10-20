@@ -49,6 +49,7 @@
 #include <ghoti.io/shape-scene/resource.h>
 #include <stdbool.h>
 #include <string.h>
+#include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
 #include "unhinted.h"
 
@@ -67,6 +68,8 @@ struct GFNT_SceneFont {
   uint32_t flags;      ///< GSHSCENE_FACE_*.
   uint32_t max_ppem;
   bool truetype;       ///< It has `glyf` outlines, the only ones the hinter runs.
+  const uint8_t * bytes; ///< The loaded bytes (the checked reader's view of the blob).
+  size_t size;
   char * family;       ///< Or NULL.
   char * postscript;   ///< Or NULL.
   GCU_Atomic_Size info_calls;
@@ -206,8 +209,7 @@ GFNT_Result gfnt_scene_font_create(const GFNT_Face * face,
   uint16_t upem = 0;
   size_t axes = 0;
   size_t glyphs = 0;
-  const uint8_t * bytes;
-  size_t size;
+  GFNT_Reader reader;
   uint64_t hash = GFNT_SCENE_FNV_BASIS;
   GFNT_Result r;
 
@@ -252,11 +254,19 @@ GFNT_Result gfnt_scene_font_create(const GFNT_Face * face,
   if (gfnt_face_has_color_layers(face)) {
     font->flags |= GSHSCENE_FACE_COLOR;
   }
-  // The key is the font's bytes, as loaded: equal keys are equal fonts.
-  bytes = gfnt_blob_data(face->blob);
-  size = gfnt_blob_size(face->blob);
-  for (size_t i = 0; i < size; ++i) {
-    hash = (hash ^ bytes[i]) * GFNT_SCENE_FNV_PRIME;
+  // The key is the font's bytes, as loaded: equal keys are equal fonts. They
+  // are reached through the checked reader, as every byte of a font is.
+  r = gfnt_reader_init_blob(&reader, face->blob, 0, NULL);
+  if (r == GFNT_OK) {
+    font->size = gfnt_reader_remaining(&reader);
+    r = gfnt_read_bytes(&reader, font->size, &font->bytes);
+  }
+  if (r != GFNT_OK) {
+    gfnt_scene_font_release(font);
+    return gfnt_error_set(error, r, 0, 0, GFNT_GLYPH_NONE, "the face's bytes cannot be read");
+  }
+  for (size_t i = 0; i < font->size; ++i) {
+    hash = (hash ^ font->bytes[i]) * GFNT_SCENE_FNV_PRIME;
   }
   font->key = hash ? hash : 1u;
   r = gfnt_scene_name(font, GFNT_NAME_TYPOGRAPHIC_FAMILY, &font->family);
@@ -781,8 +791,8 @@ static GSHSCENE_Result gfnt_scene_face_data(void * ctx,
   if (!data || !size) {
     return GSHSCENE_ERR_INVALID;
   }
-  *data = gfnt_blob_data(font->face->blob);
-  *size = gfnt_blob_size(font->face->blob);
+  *data = font->bytes;
+  *size = font->size;
   return GSHSCENE_OK;
 }
 

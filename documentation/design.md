@@ -1555,6 +1555,45 @@ a hinted glyph is the hinter's points. An unhinted outline now differs from Free
 `FT_LOAD_NO_HINTING` at ties and midpoints by one 26.6 unit; no oracle compares unhinted
 outlines exactly (`hint_diff.py` skips them).
 
+### 8.7 Glyphs through a scene
+
+This library is the glyph path provider of `shape-scene` (story 14b of the shape family; AD-5,
+CAP-10): `scene.h` binds a `GFNT_Face` to a scene's face resource, and a sink reaches the glyphs
+through the float-free seam (`<ghoti.io/shape-scene/glyph_provider.h>`), never through a header of
+this library (AD-2: `shape-scene` and `shape-cpu` do not depend on `font`).
+
+- **Two objects.** A `GFNT_SceneFont` per face: the key (FNV-1a 64 of the bytes the face was
+  loaded from, never zero), the names, the facts every instance shares and the provider's
+  counters. A **binding** per face resource, that is per instance in a store: its coordinates
+  and its hint contexts. The store retains the binding when it builds a face with it and releases
+  it at the face's last release, which frees the cache; an intern of a face the store already
+  holds keeps the first binding. Each binding holds a reference on its scene font, so the font
+  may be destroyed before the scene; the `GFNT_Face` must outlive both.
+- **The ops.** `face_info` is the upem, the axis count, the flags (`HINTING` for TrueType outlines
+  with an `fpgm`, a `prep` or glyph programs per `maxp`; `COLOR` for `COLR` layers), the face's
+  `max_ppem` (at most the seam's 4096), the glyph count and R1's identity: the family (name 16,
+  else 1) and PostScript (name 6) names. `glyph_outline` is the outline at the instance walked in
+  design units into `shape-geometry`'s fixed-point builder (6 fraction bits, y up): what a writer
+  and a GPU sink keeping signed-distance or MSDF atlases take (R2). `glyph_device_path` is the
+  fast tier: the hinter's points, moved by the origin's fraction and turned down, where the run
+  asks for hinting, `gasp` grid-fits and the glyph's program runs; section 8.6's one rounding
+  otherwise, which is the general route under the snapped map bit for bit (AD-5). Under
+  `FONT_STRICT` a failing program is `REFUSED`. `glyph_box` is the control box in 26.6 units;
+  `face_data` the loaded bytes. A request whose scale is not the seam's snapped scale for its
+  ppem and the face's upem, or whose fraction, mode or version is out of range, is refused.
+- **Hint contexts (D8).** A context runs `fpgm` and `prep` once per size; a binding keeps
+  `GFNT_SCENE_HINT_CONTEXTS` (8) of them in a least-recently-used cache keyed by `(ppem, mode,
+  version)`, under a cutil mutex. A context in use is never dropped; when all are in use a call
+  makes its own and frees it. Contexts are made outside the lock.
+- **AD-1.** `gfnt_face_render_glyph` uses the same rounding for every unhinted case and the
+  hinter's points for a hinted one, so its coverage is a one-glyph scene's alpha: `testScene`
+  checks it pixel for pixel in every mode, beside AD-5's gate over every committed outline
+  fixture at 8 to 72 ppem and the origin fractions {0, 1, 16, 33, 63}.
+- **Float-free (AD-5).** `make check-float-free` preprocesses every installed header and the code
+  from an outline to coverage or to a device path, and fails on a floating type; it is seen to
+  fail on a planted `double`. One exemption is stated there: `shape.h`'s `float point_size`
+  (tier 2, `trak`), which predates this and is recorded for a decision.
+
 ---
 
 ## 9. Shaping

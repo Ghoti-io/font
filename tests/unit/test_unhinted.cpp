@@ -35,6 +35,7 @@
 #include <ghoti.io/font/raster.h>
 #include <ghoti.io/shape-geometry/device.h>
 
+#include "../../src/outline/outline.h"
 #include "../../src/scene/unhinted.h"
 
 namespace {
@@ -269,6 +270,29 @@ TEST(Unhinted, TheWalkTakesDesignUnitsAndRefusesAPointPast26Dot6) {
   EXPECT_EQ(gfnt_unhinted_device_path(outline, 65536, 63, 0, path, nullptr), GFNT_ERR_INVALID)
       << "an outline in pixels is not the walk's";
   gshgeom_device_path_destroy(path);
+  gfnt_outline_destroy(outline);
+}
+
+// The walk makes each implied point explicit, so its copy holds more points than
+// the outline: the copy is not held to the outline's caps a second time.
+TEST(Unhinted, TheExplicitCopyIsNotHeldToTheOutlinesCapsTwice) {
+  GFNT_Outline * outline = nullptr;
+  ASSERT_EQ(gfnt_outline_create(nullptr, &outline, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_begin_contour(outline, nullptr), GFNT_OK);
+  // Four off-curve points: a circle of implied midpoints, eight points walked.
+  for (GFNT_Point p : {GFNT_Point{0, 6400}, GFNT_Point{6400, 6400}, GFNT_Point{6400, 0},
+           GFNT_Point{0, 0}}) {
+    ASSERT_EQ(gfnt_outline_add_point(outline, p, GFNT_POINT_QUAD, nullptr), GFNT_OK);
+  }
+  GFNT_Limits caps;
+  gfnt_limits_default(&caps);
+  caps.max_outline_points = 4;
+  caps.max_contours = 1;
+  gfnt_outline_set_limits(outline, &caps);
+  GFNT_Outline * pixels = nullptr;
+  ASSERT_EQ(gfnt_unhinted_pixels(outline, 65536, nullptr, &pixels, nullptr), GFNT_OK);
+  EXPECT_EQ(gfnt_outline_point_count(pixels), 9u) << "the start, then a control and an end for each of four";
+  gfnt_outline_destroy(pixels);
   gfnt_outline_destroy(outline);
 }
 

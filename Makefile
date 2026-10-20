@@ -471,6 +471,20 @@ endif
 endif
 INCLUDE += $(SHAPE_CPU_CFLAGS)
 
+# ghoti.io-shape-scene, for the glyph path provider (story 14b of the shape
+# family's first milestone; AD-5): src/scene/ binds a face to a scene's face
+# resource through shape-scene's float-free seam, glyph_provider.h. shape-scene
+# does not depend on font (AD-2), and suite/libraries.txt lists it before.
+SHAPE_SCENE_PC ?= ghoti.io-shape-scene-0
+SHAPE_SCENE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(SHAPE_SCENE_PC) 2>/dev/null)
+SHAPE_SCENE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(SHAPE_SCENE_PC) 2>/dev/null)
+ifeq ($(strip $(SHAPE_SCENE_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-shape-scene was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+endif
+endif
+INCLUDE += $(SHAPE_SCENE_CFLAGS)
+
 # Every dependency's link flags, in one variable, so that a link line names one
 # thing and a third dependency is one edit rather than nine. The flag stamps
 # record `$(DEP_LIBS)` for the same reason: `make check-stamps` requires every
@@ -478,7 +492,7 @@ INCLUDE += $(SHAPE_CPU_CFLAGS)
 # reached the recipes and not the stamps would leave objects scoring the previous
 # build's flags.
 
-DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS) $(IMAGE_LIBS) $(SHAPE_CPU_LIBS) $(SHAPE_GEOMETRY_LIBS)
+DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS) $(IMAGE_LIBS) $(SHAPE_CPU_LIBS) $(SHAPE_SCENE_LIBS) $(SHAPE_GEOMETRY_LIBS)
 
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
@@ -494,7 +508,8 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
-	check-reader check-seeds check-layout-unit-snapshot check-phrase-model
+	check-reader check-seeds check-layout-unit-snapshot check-phrase-model \
+	check-float-free
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -750,7 +765,7 @@ check-phrase-model: ## Check that the first-party Japanese phrase model is repro
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
 .PHONY: gen-vectors check-vectors
-.PHONY: golden check-golden check-raster-mutations
+.PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -1569,6 +1584,20 @@ check-raster-mutations: ## Plant defects in the rasteriser's glue (the frame, th
 check-raster-mutations: $(APP_DIR)/testRaster$(EXE_EXTENSION) $(APP_DIR)/testGolden$(EXE_EXTENSION)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 tools/raster_mutation_check.py
 
+# The glyph path provider (story 14b; design.md section 8.7). The first gate is in
+# TEST_GATES: every header this library installs is preprocessed and must name no
+# floating type (AD-5, CAP-10), and nor may the code from an outline to coverage
+# or to a device path; it plants a `double` and requires it refused. The second
+# plants defects in the provider, the one rounding and the renderer's use of it,
+# and the scene, unhinted, golden and raster tests must refuse each.
+check-float-free: $(LIBVER_GEN) ## Fail if a GFNT_ header, or the outline-to-pixels code, names a floating type
+	@python3 tools/check-float-free.py --cc '$(CC)' --flags '$(INCLUDE)' include/ghoti.io/font/*.h \
+		--sources src/scene/*.c src/raster/*.c src/outline/*.c
+
+check-scene-mutations: ## Plant defects in the provider and the one rounding; the tests must refuse each
+check-scene-mutations: $(APP_DIR)/testScene$(EXE_EXTENSION) $(APP_DIR)/testUnhinted$(EXE_EXTENSION)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 tools/scene_mutation_check.py
+
 gen-vectors: ## Regenerate the committed vectors from the pinned image
 	@python3 $(VECTORS)/check_vectors.py --update
 
@@ -1618,7 +1647,8 @@ TIER1_FILES := include/ghoti.io/font/outline.h include/ghoti.io/font/raster.h \
 	include/ghoti.io/font/charstring.h include/ghoti.io/font/hint.h \
 	src/hint/*.c src/hint/*.h src/outline/*.c src/outline/*.h src/raster/*.c src/raster/*.h \
 	src/glyf/*.c src/glyf/*.h src/cff/*.c src/cff/*.h \
-	src/type1/*.c src/type1/*.h src/charstring/*.c src/charstring/*.h
+	src/type1/*.c src/type1/*.h src/charstring/*.c src/charstring/*.h \
+	include/ghoti.io/font/scene.h src/scene/*.c src/scene/*.h
 TIER1_FORBIDDEN := font/(shape|layout|discover|write)\.h
 
 TIER2_FILES := include/ghoti.io/font/shape.h \
@@ -2216,7 +2246,7 @@ LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 # What goes in the .pc Requires: field. Built from the same variables the
 # compile uses, so a dependency on another branch cannot be named one way for
 # the build and another way for consumers.
-PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC) $(IMAGE_PC) $(SHAPE_GEOMETRY_PC) $(SHAPE_CPU_PC)
+PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC) $(IMAGE_PC) $(SHAPE_GEOMETRY_PC) $(SHAPE_SCENE_PC) $(SHAPE_CPU_PC)
 
 # Where this project's own .pc file is installed.
 PKGCONFIG_INSTALL_PATH ?= $(PC_INSTALL_PATH)

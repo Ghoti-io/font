@@ -703,7 +703,11 @@ TEST(Scene, TwoInstancesAreTwoFacesWithDifferentOutlines) {
       GFNT_ERR_UNSUPPORTED);
   coords[0] = -16385;
   rounding.delta_rounding = static_cast<GFNT_DeltaRounding>(0);
-  EXPECT_EQ(gfnt_scene_intern_face(font.scene, s.store, &rounding, &out, nullptr), GFNT_ERR_INVALID);
+  GFNT_Error error{};
+  EXPECT_EQ(gfnt_scene_intern_face(font.scene, s.store, &rounding, &out, &error), GFNT_ERR_INVALID);
+  // Refused here, before a binding is made, and said so; not left to the store's own check.
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_NE(std::string(error.message).find("coordinate"), std::string::npos) << error.message;
 }
 
 // The binding lives as long as its face resource: released once, its cache freed with it.

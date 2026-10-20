@@ -752,7 +752,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-hint-variable check-oracle-hint-batteries check-hint check-hint-mutations check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-hint-point-mutations check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-oracle-hint-variable check-oracle-hint-batteries check-hint check-hint-mutations check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-hint-point-mutations check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -765,7 +765,7 @@ check-phrase-model: ## Check that the first-party Japanese phrase model is repro
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
 .PHONY: gen-vectors check-vectors
-.PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations check-scene-hash scene-hash
+.PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations check-colr-mutations check-scene-hash scene-hash
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -1067,7 +1067,7 @@ check-oracle: ## Run every oracle differential there is
 check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries check-oracle-hint-variable
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
-check-oracle: check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-flow check-oracle-layout-l2 check-oracle-layout-l3b check-oracle-layout-l4 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-color check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+check-oracle: check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-flow check-oracle-layout-l2 check-oracle-layout-l3b check-oracle-layout-l4 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs check-oracle-uvs
 
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
@@ -1400,6 +1400,10 @@ check-oracle-color: ## Read every CPAL palette and COLR layer of the color fixtu
 check-oracle-color: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/color_diff.py --quiet
 
+check-oracle-colr-scene: ## Lower every COLR glyph of the color fonts into a scene and diff against a lowering from fontTools
+check-oracle-colr-scene: $(EXAMPLES)
+	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/colr_scene_diff.py --quiet
+
 check-oracle-color-extents: ## Measure every glyph of every color font and diff against HarfBuzz
 check-oracle-color-extents: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools,harfbuzz -- python3 $(ORACLE)/color_extents_diff.py --quiet
@@ -1593,6 +1597,10 @@ check-raster-mutations: $(APP_DIR)/testRaster$(EXE_EXTENSION) $(APP_DIR)/testGol
 check-float-free: $(LIBVER_GEN) ## Fail if a GFNT_ header, or the outline-to-pixels code, names a floating type
 	@python3 tools/check-float-free.py --cc '$(CC)' --flags '$(INCLUDE)' include/ghoti.io/font/*.h \
 		--sources src/scene/*.c src/raster/*.c src/outline/*.c
+
+check-colr-mutations: ## Plant defects in the COLR lowering; the tests or the fontTools differential must refuse each
+check-colr-mutations: $(APP_DIR)/testScene_color$(EXE_EXTENSION) $(EXAMPLES)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 tools/colr_mutation_check.py
 
 check-scene-mutations: ## Plant defects in the provider and the one rounding; the tests must refuse each
 check-scene-mutations: $(APP_DIR)/testScene$(EXE_EXTENSION) $(APP_DIR)/testUnhinted$(EXE_EXTENSION)

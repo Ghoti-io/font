@@ -1594,6 +1594,39 @@ this library (AD-2: `shape-scene` and `shape-cpu` do not depend on `font`).
   fail on a planted `double`. One exemption is stated there: `shape.h`'s `float point_size`
   (tier 2, `trak`), which predates this and is recorded for a decision.
 
+### 8.8 Color glyphs through a scene
+
+Story 14c of the shape family: `scene_color.h`, `src/scene/colr.c`. `shape-scene` has a palette resource
+(a table of straight colors), a palette parameter on each list and version, and a palette paint naming an
+entry (its N14); this library supplies the palette and lowers `COLR` onto them, through the float-free
+calls of `shape-scene`'s `fixed.h`, so the lowering names no floating type.
+
+- **The palette.** `gfnt_scene_intern_palette()` interns a `CPAL` palette by its 8-bit entries; the scene
+  turns each into `c / 255` in sRGB. A theme is another palette set on the list or the version, never another
+  lowering. An entry the palette in force lacks is refused by every sink when it draws.
+- **The lowering.** `gfnt_scene_record_color_glyph()` records a glyph's version 1 graph where it has one,
+  else its version 0 layers, into a list the caller supplies, every shape a one-glyph run of the face resource
+  at the caller's size and origin (so the provider draws it, hinted where the run asks and the route allows).
+  Layers are fills of their entries (`0xFFFF` the foreground). `PaintGlyph` over a solid, through any transforms
+  between them, is a fill; over anything else it is a clip around its child. Each transform paint is a
+  design-map op of the shapes beneath it (F2.14 scales at 14 fraction bits, angles in half turns at 15, `Fixed`
+  at 16, centers carried to the op's bits), which `shape-scene` turns into the item's map about the run's glyph.
+  `PaintComposite` with a Porter-Duff mode is a group of the backdrop with a group of that operator around the
+  source; the scene's operators are COLR's modes 0 to 12 renumbered (source-over is the scene's 0).
+- **Refused per glyph, with a reason, nothing recorded:** gradients (until the shape family's step 4), blend
+  modes (COLR's modes 13 to 27), the variable paints, a solid no glyph bounds, a `PaintColrGlyph` naming a glyph
+  with no record. The list is truncated back to its count before the call on any refusal or failure, so it holds
+  the whole glyph or none of it. A graph past the walk's depth (a glyph that names itself) is `ERR_LIMIT`.
+  `ClipList` boxes are not applied: everything lowered is glyph-bounded (a Deferred row of the shape spine).
+- **Checked against fontTools.** `make check-oracle-colr-scene` lowers every color glyph of the color fixtures
+  and the image's color fonts (17 real fonts: Google's COLR version 1 test glyphs, three producers' samples,
+  Twemoji, Noto Color Emoji, Bungee) and compares, glyph by glyph and item by item, against a second statement
+  of these rules over fontTools' decompilation with fontTools' own transforms (`getTransform()`): on story 14c's
+  tree, 10,096 color glyphs, 5,833 lowered, 3,924 refused for a gradient, 238 as variable, 62 for a blend mode,
+  30 as unbounded and 9 past the walk's bound, none differing.
+  `make check-colr-mutations` plants defects in the lowering, each refused by the unit tests or by that
+  comparison.
+
 ---
 
 ## 9. Shaping

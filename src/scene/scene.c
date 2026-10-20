@@ -51,6 +51,7 @@
 #include <string.h>
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
+#include "binding.h"
 #include "unhinted.h"
 
 /** FNV-1a 64's offset basis and prime. */
@@ -809,6 +810,19 @@ static const GSHSCENE_Glyph_Provider gfnt_scene_ops = {
 
 const GSHSCENE_Glyph_Provider * gfnt_scene_provider(void) {
   return &gfnt_scene_ops;
+}
+
+const GFNT_Face * gfnt_scene_face_of(const GSHSCENE_Resource * face) {
+  const GSHSCENE_Glyph_Provider * ops = NULL;
+  void * ctx = NULL;
+
+  // The resource holds a copy of the ops: a binding is this library's when its
+  // ops are this library's functions.
+  if (gshscene_face_binding(face, &ops, &ctx) != GSHSCENE_OK
+      || ops->glyph_outline != gfnt_scene_ops.glyph_outline || !ctx) {
+    return NULL;
+  }
+  return ((const GFNT_SceneBinding *)ctx)->font->face;
 }
 
 GFNT_Result gfnt_scene_intern_face(GFNT_SceneFont * font,

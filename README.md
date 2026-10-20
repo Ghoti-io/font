@@ -193,7 +193,7 @@ program that links `ghoti.io-font-0` links this too.
 - [ghoti.io-image](https://github.com/Ghoti-io/image) — the PNG decoder behind a color bitmap strike (`CBDT`): the font's picture becomes RGBA pixels.
 - [ghoti.io-shape-geometry](https://github.com/Ghoti-io/shape-geometry) — the device path an outline is turned into, and the fill rule (`GFNT_FillRule` is its type).
 - [ghoti.io-shape-cpu](https://github.com/Ghoti-io/shape-cpu) — the scan converter, which computes the 8-bit coverage a glyph is drawn with.
-- [ghoti.io-shape-scene](https://github.com/Ghoti-io/shape-scene) — the scene graph's glyph path provider seam, which **`scene.h`** implements: `gfnt_scene_intern_face()` binds a face, at an instance, to a scene's face resource, so that any sink of the shape family draws its glyphs by both routes, its writers and atlases take the unhinted outline in design units, and `gfnt_face_render_glyph()` draws the same pixels as a one-glyph scene (`documentation/design.md` §8.7).
+- [ghoti.io-shape-scene](https://github.com/Ghoti-io/shape-scene) — the scene graph's glyph path provider seam, which **`scene.h`** implements: `gfnt_scene_intern_face()` binds a face, at an instance, to a scene's face resource, so that any sink of the shape family draws its glyphs by both routes, its writers and atlases take the unhinted outline in design units, and `gfnt_face_render_glyph()` draws the same pixels as a one-glyph scene (`documentation/design.md` §8.7); and **`scene_color.h`** interns a `CPAL` palette as a scene palette and lowers a glyph's `COLR` (version 0 layers, version 1 graphs without gradients or blend modes) into a scene list, refusing what the scene cannot yet draw per glyph with a reason (§8.8).
 
 ## Documentation
 

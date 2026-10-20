@@ -509,7 +509,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
 	check-reader check-seeds check-layout-unit-snapshot check-phrase-model \
-	check-float-free check-scene-hash
+	check-float-free check-scene-hash check-scene-example
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -766,6 +766,7 @@ check-phrase-model: ## Check that the first-party Japanese phrase model is repro
 # Generated vectors
 .PHONY: gen-vectors check-vectors
 .PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations check-colr-mutations check-scene-hash scene-hash
+.PHONY: check-scene-example scene-example
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -1622,6 +1623,27 @@ check-scene-hash: $(SCENE_HASH) ## The provider's cross-target probe prints the 
 
 scene-hash: $(SCENE_HASH) ## Rewrite tests/data/golden/scene.hash (deliberate)
 	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/check-scene-hash.py $(SCENE_HASH) tests/data/fonts --update
+
+# The scene example (examples/font-scene.c; story 16 of the shape family's first milestone): text from a font in a
+# retained scene, rendered by shape-cpu and the test sink, a driver's edit and a damage-limited frame. An example that
+# is only compiled rots, so this runs it on a committed fixture and compares what it prints with
+# tests/data/golden/scene-example.txt; the comparison is first seen to fail, on other text. The same program on a
+# real hinted font is the suite's success scene (suite/tools/shape-success, xarch/shape.sh section 10).
+SCENE_EXAMPLE := $(APP_DIR)/examples/font-scene$(EXE_EXTENSION)
+
+check-scene-example: $(SCENE_EXAMPLE) ## Run the scene example on a fixture; its output must be the golden
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(SCENE_EXAMPLE) tests/data/fonts/basic.ttf BA > $(BUILD_DIR)/scene-example-control.out || \
+		{ printf 'check-scene-example: FAIL: the example exited non-zero on the control\n' >&2; exit 1; }
+	@if cmp -s $(BUILD_DIR)/scene-example-control.out tests/data/golden/scene-example.txt; then \
+		printf 'check-scene-example: FAIL: other text printed the golden; the comparison sees nothing\n' >&2; exit 1; fi
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(SCENE_EXAMPLE) tests/data/fonts/basic.ttf AB > $(BUILD_DIR)/scene-example.out || \
+		{ printf 'check-scene-example: FAIL: the example exited non-zero\n' >&2; cat $(BUILD_DIR)/scene-example.out >&2; exit 1; }
+	@diff -u tests/data/golden/scene-example.txt $(BUILD_DIR)/scene-example.out || \
+		{ printf 'check-scene-example: FAIL: the output moved (make scene-example rewrites the golden, deliberately)\n' >&2; exit 1; }
+	@printf 'check-scene-example: the example printed the golden, and other text did not\n'
+
+scene-example: $(SCENE_EXAMPLE) ## Rewrite tests/data/golden/scene-example.txt (deliberate)
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(SCENE_EXAMPLE) tests/data/fonts/basic.ttf AB > tests/data/golden/scene-example.txt
 
 gen-vectors: ## Regenerate the committed vectors from the pinned image
 	@python3 $(VECTORS)/check_vectors.py --update

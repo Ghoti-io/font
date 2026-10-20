@@ -1,0 +1,13 @@
+font-scene.version1 7170548dcb10e8a6
+font-scene.list1 4fd244d61593e557
+font-scene.route A fast ppem 24
+font-scene.route B general ppem 0
+font-scene.cpu1 0b4ec6e4e38b7d69
+font-scene.report1 d82b7a91f0ad59c1
+font-scene.entry hint-status hint-no-program node 7
+font-scene.entry hint-status hint-route node 8
+font-scene.test-sink-raster1 82af91766f887f12
+font-scene.test-sink-stream1 afaf759f92a553d6
+font-scene.damage x 100..123 y 54..81
+font-scene.cpu2 d20255fb5733779d
+font-scene.hash 5e075dced8f006b5

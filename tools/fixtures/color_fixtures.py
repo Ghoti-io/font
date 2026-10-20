@@ -220,6 +220,58 @@ def build_color_v1(mf, out):
     fb.save(out)
 
 
+# Story 14c: a graph made of what the scene lowers (shape-scene's N14 and fixed.h),
+# and one glyph of each kind it refuses that color-v1.ttf does not already hold.
+SCENE_EXTRA = ["paint.d", "paint.e", "paint.f", "paint.g"]
+
+
+def v1_scene_trees():
+    return {
+        # Layers of solids, one the foreground (0xFFFF) at half alpha.
+        "A": {"Format": PF.PaintColrLayers, "Layers": [
+            glyph("layer.a", solid(0, 1.0)), glyph("layer.b", solid(0xFFFF, 0.5)),
+            glyph("layer.c", solid(2, 0.25))]},
+        # A glyph over a transform over a solid (a fill), under two transforms.
+        "B": {"Format": PF.PaintTranslate, "dx": -30, "dy": 40, "Paint": {
+            "Format": PF.PaintRotateAroundCenter, "angle": 45.0, "centerX": 50, "centerY": -50,
+            "Paint": glyph("layer.a", {"Format": PF.PaintScale, "scaleX": 1.5, "scaleY": 0.5,
+                                       "Paint": solid(1, 0.75)})}},
+        # A Porter-Duff composite.
+        "ghoti.alt": {"Format": PF.PaintComposite, "CompositeMode": "src_in",
+                      "SourcePaint": glyph("layer.b", solid(1)),
+                      "BackdropPaint": glyph("layer.a", solid(0))},
+        # A glyph over layers: a clip around them.
+        "paint.d": glyph("layer.c", {"Format": PF.PaintColrLayers, "Layers": [
+            glyph("layer.a", solid(2)), glyph("layer.b", solid(0, 0.5))]}),
+        # Another base glyph's graph, moved.
+        "paint.e": {"Format": PF.PaintTranslate, "dx": 100, "dy": 0, "Paint": {
+            "Format": PF.PaintColrGlyph, "Glyph": "A"}},
+        # Refused: a blend mode, and a solid no glyph bounds.
+        "paint.f": {"Format": PF.PaintComposite, "CompositeMode": "multiply",
+                    "SourcePaint": glyph("layer.a", solid(0)),
+                    "BackdropPaint": glyph("layer.b", solid(1))},
+        "paint.g": solid(1),
+    }
+
+
+def build_color_v1_scene(mf, out):
+    order = ORDER + SCENE_EXTRA
+    shapes = _glyphs_for(mf, ORDER)
+    for name in SCENE_EXTRA:
+        pen = TTGlyphPen(None)
+        mf.OUTLINES["A"](pen)
+        shapes[name] = pen.glyph()
+    advances = dict(mf.ADVANCES)
+    for name in LAYERS + SCENE_EXTRA:
+        advances[name] = 600
+    fb = mf.truetype("Color v1 scene", mf.unicode_cmap(), order=order, glyphs=shapes,
+                     advances=advances)
+    glyph_map = fb.font.getReverseGlyphMap()
+    fb.font["COLR"] = buildCOLR(v1_scene_trees(), version=1, glyphMap=glyph_map)
+    fb.font["CPAL"] = buildCPAL(_floats(PALETTES), nameTable=fb.font["name"])
+    mf.pin(fb)
+    fb.save(out)
+
 # The variable graph: the same shapes in their Var forms, each with a
 # VarIndexBase into a store of fifty rows over the weight and width regions.
 VAR_ROWS = [((i * 7) % 23 - 11, (i * 5) % 17 - 8) for i in range(64)]

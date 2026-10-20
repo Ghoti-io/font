@@ -2202,6 +2202,11 @@ def build_color_v1_var(out):
     color_fixtures.build_color_v1_var(sys.modules[__name__], out)
 
 
+def build_color_v1_scene(out):
+    import color_fixtures
+    color_fixtures.build_color_v1_scene(sys.modules[__name__], out)
+
+
 def build_color_v1_varmap(out):
     import color_fixtures
     color_fixtures.build_color_v1_var(sys.modules[__name__], out, mapped=True)
@@ -5231,6 +5236,11 @@ FIXTURES = {
         "repeat and reflect color lines, glyph, color glyph, transform, "
         "translate, scale in four forms, rotate in two, skew in two, and a "
         "composite - with a clip list sharing one box across three glyphs"),
+    "color-v1-scene.ttf": (build_color_v1_scene,
+        "COLR version 1 as story 14c lowers it to a scene: layers of solids with "
+        "the foreground, a glyph over transforms over a solid, a Porter-Duff "
+        "composite, a glyph over layers (a clip), another base glyph's graph moved, "
+        "and the two refusals color-v1.ttf lacks (a blend mode, an unbounded solid)"),
     "color-v1-var.ttf": (build_color_v1_var,
         "COLR version 1 in a variable font: the Var forms of every paint that has "
         "one, color lines whose stops vary, and a clip box that varies, over an "

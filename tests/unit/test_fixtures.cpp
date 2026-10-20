@@ -218,6 +218,7 @@ const std::vector<Entry> & every_fixture() {
       {"color-cpal0.ttf", 8},
       {"color-v0-edges.ttf", 10},
       {"color-v0.ttf", 8},
+      {"color-v1-scene.ttf", 12},
       {"color-v1-var.ttf", 9},
       {"color-v1-varmap.ttf", 9},
       {"color-v1-varnone.ttf", 9},

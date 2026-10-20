@@ -67,6 +67,7 @@
 #include <string.h>
 #include "../core/fixed.h"
 #include "../outline/outline.h"
+#include "../scene/unhinted.h"
 #include "../sfnt/sfnt.h"
 
 // The two numbers this library's public header states about the flattener are
@@ -683,9 +684,16 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
             "a hinting program failed and the mode does not allow falling back");
       }
       gfnt_hint_context_destroy(context);
-      if (result == GFNT_OK) {
+      if (result == GFNT_OK && (status == GFNT_HINT_STATUS_HINTED
+          || status == GFNT_HINT_STATUS_HINTED_WITH_ERRORS)) {
         result = gfnt_raster_outline(outline, options, &face->limits, allocator,
             out_coverage, error);
+      }
+      else if (result == GFNT_OK) {
+        // A glyph the hinter returns unhinted is drawn by the one rounding, as a
+        // scene's provider draws it (story 14b, D1; src/scene/unhinted.c).
+        result = gfnt_unhinted_render(face, glyph, upem, ppem, options,
+            allocator, out_coverage, error);
       }
       gfnt_outline_destroy(outline);
       return result;
@@ -695,20 +703,10 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
     }
     gfnt_error_clear(error);   /* a face with no TrueType outlines has nothing to hint */
   }
-  result = gfnt_face_glyph_outline(face, glyph, options ? options->variation : NULL,
-      allocator, &outline, error);
-  if (result != GFNT_OK) {
-    return result;
-  }
-  result = gfnt_outline_scale(outline, gfnt_scale_for_ppem(upem, ppem), error);
-  if (result == GFNT_OK) {
-    // The face's caps, not the defaults: a face loaded under a tight
-    // max_raster_bytes must not have it ignored at the point it matters.
-    result = gfnt_raster_outline(outline, options, &face->limits, allocator,
-        out_coverage, error);
-  }
-  gfnt_outline_destroy(outline);
-  return result;
+  // Unhinted: decomposed in design units and each point rounded once (D1), so
+  // that these pixels are a one-glyph scene's (AD-1).
+  return gfnt_unhinted_render(face, glyph, upem, ppem, options, allocator,
+      out_coverage, error);
 }
 
 GFNT_Result gfnt_coverage_from_bitmap(const GFNT_BitmapGlyph * glyph,

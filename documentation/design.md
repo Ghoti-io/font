@@ -1530,6 +1530,31 @@ predictor does not. A compiler for the bytecode would add a code generator to th
 untrusted-input surface for a cost nobody pays: a context is made once per size and its glyphs
 are hinted once, and a page of text hints each distinct glyph a single time.
 
+### 8.6 The one unhinted rounding
+
+An unhinted glyph - mode `NONE`, a face with no TrueType outlines, a size `gasp` does not
+grid-fit, and every glyph the hinter returns unhinted (`UNHINTED_NO_PROGRAM`,
+`UNHINTED_PROGRAM_FAILED`) - is **decomposed in design units and each emitted point rounded
+once** (story 14b of the shape family, D1; `src/scene/unhinted.c`): a point `(x, y)` in 26.6
+of units becomes `(gshgeom_scale_26_6(x, S, 0), gshgeom_scale_26_6(y, S, 1))` in y-down
+26.6 pixels for the 16.16 scale `S = gfnt_scale_for_ppem(upem, ppem)`, which is
+`floor((s p S + 2^15) / 2^16)`: AD-6's `floor(x * 64 + 0.5)` in integers, half up in y down.
+So `glyf`'s implied midpoints are taken exactly in design units and rounded once, and a tie
+above the baseline or left of the origin goes towards the origin.
+
+Until then the outline was scaled first (`gfnt_outline_scale`, ties away from zero in y up)
+and decomposed after, its midpoints floored in pixels: the opposite order to a scene's general
+route, which decomposes in design units, maps and rounds once. The two disagreed at every tie
+and every implied midpoint, so a scene's fast tier could not equal its general route (AD-5),
+and `gfnt_face_render_glyph` could not equal a one-glyph scene (AD-1). The committed
+renderings moved where they met one (234 of 6,431, all at `glyf` implied midpoints: the
+fixtures are 1,000-unit faces, which have no ties at the committed sizes), and
+`tests/unit/test_unhinted.cpp` pins the rule at a 2,048-unit face's ties. The hinter's own
+scaling (`gfnt_hint_mul_fix`, FreeType's) and `gfnt_outline_scale`'s meaning are unchanged:
+a hinted glyph is the hinter's points. An unhinted outline now differs from FreeType's
+`FT_LOAD_NO_HINTING` at ties and midpoints by one 26.6 unit; no oracle compares unhinted
+outlines exactly (`hint_diff.py` skips them).
+
 ---
 
 ## 9. Shaping

@@ -16,7 +16,7 @@ build our own text shaper and font manager over time"*); because `image` has
 no way to put text into a raster; and because a PDF library, should one come,
 needs to read four font formats and write two of them.
 
-The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-8`, the include
+The prefix is `GFNT_` / `gfnt_`. The package is `ghoti.io-font-0`, the include
 path `<ghoti.io/font/...>`.
 
 ---
@@ -1417,7 +1417,7 @@ may hint from it), then takes each glyph's pixel outline from
 call reports a status per glyph, `HINTED`, `UNHINTED_NO_PROGRAM` or
 `UNHINTED_PROGRAM_FAILED`: a glyph that could not be hinted is returned unhinted
 and says so, never silently (M8). Hinting changed what the default rendering is,
-so it is a deliberate break and the ABI major moved.
+so it is a deliberate change of behaviour.
 
 Font bytecode is untrusted input and keeps the bounds and resource limits of
 §§1-2. The version 40 default means advances stay fractional in shaping and layout,
@@ -2308,7 +2308,7 @@ and a fixture font can expose the spacing behavior.
 
 Adding `text_spacing_trim` changes the public `GFNT_ParagraphOptions` layout.
 The package, SONAME and symbol namespace therefore move to ABI major 7; callers
-must rebuild against the matching `ghoti.io-font-8` headers and library.
+must rebuild against the matching `ghoti.io-font-0` headers and library.
 
 Resolved decoration geometry is implemented for underline, overline and
 line-through, including byte-range selection and glyph-ink gaps. The caller

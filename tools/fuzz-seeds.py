@@ -869,6 +869,21 @@ def main():
                               (0x80, "renamed"), (0x81, "retain-renamed")):
             write(corpus / ("subset/%s-%s.seed" % (label, kind)), options, data)
 
+    # The glyph path provider and the COLR lowering, which read a font's bytes on the way to a scene
+    # (tests/fuzz/fuzz_scene.cpp, story 16 of the shape family's first milestone). Four option bytes - the
+    # hint mode and the route (0x04 turns the run onto the general route, 0x08 lowers the color glyph too),
+    # the ppem less 6, the first glyph, the count less 1 - then a fixture whole.
+    for fixture, label, options, ppem in (("basic.ttf", "basic-fast", 0x00, 16),
+                                          ("basic.ttf", "basic-turned", 0x04, 16),
+                                          ("outline-composite.ttf", "composite-unhinted", 0x01, 24),
+                                          ("cff-curves.otf", "cff", 0x00, 20),
+                                          ("variable-gvar.ttf", "gvar-strict", 0x02, 12),
+                                          ("color-v0.ttf", "colr-v0", 0x08, 24),
+                                          ("color-v1-scene.ttf", "colr-v1", 0x0C, 24),
+                                          ("color-v1.ttf", "colr-v1-refusals", 0x08, 24)):
+        data = (root / "tests/data/fonts" / fixture).read_bytes()
+        write(corpus / ("scene/%s.seed" % label), options, bytes([ppem - 6, 0, 7]) + data)
+
     # A kept font set: two faces and an alias. The harness takes the body after its options
     # byte and adds the magic and the checksum itself.
     def lstr(text):

@@ -509,7 +509,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
 	check-reader check-seeds check-layout-unit-snapshot check-phrase-model \
-	check-float-free check-scene-hash check-scene-example
+	check-float-free check-scene-hash check-scene-example fuzz-replay
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -766,7 +766,7 @@ check-phrase-model: ## Check that the first-party Japanese phrase model is repro
 # Generated vectors
 .PHONY: gen-vectors check-vectors
 .PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations check-colr-mutations check-scene-hash scene-hash
-.PHONY: check-scene-example scene-example
+.PHONY: check-scene-example scene-example fuzz-replay fuzz-scene fuzz-run-scene
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -1645,6 +1645,42 @@ check-scene-example: $(SCENE_EXAMPLE) ## Run the scene example on a fixture; its
 scene-example: $(SCENE_EXAMPLE) ## Rewrite tests/data/golden/scene-example.txt (deliberate)
 	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(SCENE_EXAMPLE) tests/data/fonts/basic.ttf AB > tests/data/golden/scene-example.txt
 
+# Every harness's committed seeds, replayed in an ordinary build with the build's own compiler (story 16 of the
+# shape family's first milestone; CAP-15): a seed a campaign kept is a test, not a campaign to repeat, and needs no
+# clang. tests/fuzz/replay_main.cpp feeds each file once. A harness whose corpus directory holds no committed seed
+# fails the gate unless it is named in FUZZ_REPLAY_UNSEEDED, so a lost corpus cannot pass as an empty one. The gate
+# is seen to fail first: the replay built with GFNT_REPLAY_PLANT aborts after its first input.
+FUZZ_REPLAY_DIR := $(APP_DIR)/fuzz-replay
+FUZZ_REPLAY_HARNESSES := $(sort $(patsubst tests/fuzz/%.cpp,%,$(wildcard tests/fuzz/fuzz_*.cpp)))
+FUZZ_REPLAY_UNSEEDED := cff charstring
+
+$(FUZZ_REPLAY_DIR)/%$(EXE_EXTENSION): tests/fuzz/%.cpp tests/fuzz/replay_main.cpp $(APP_DIR)/$(STATIC_TARGET) \
+		$(FLAGS_STAMP) | $(APP_DIR)/$(TARGET)
+	@mkdir -p $(@D)
+	@$(CXX) -std=c++20 -O1 -g -w -DGFNT_STATIC $(INCLUDE) -o $@ $< tests/fuzz/replay_main.cpp $(LDFLAGS) $(FONTLIBRARY) $(DEP_LIBS) -lm
+
+$(FUZZ_REPLAY_DIR)/planted$(EXE_EXTENSION): tests/fuzz/fuzz_raster.cpp tests/fuzz/replay_main.cpp \
+		$(APP_DIR)/$(STATIC_TARGET) $(FLAGS_STAMP) | $(APP_DIR)/$(TARGET)
+	@mkdir -p $(@D)
+	@$(CXX) -std=c++20 -O1 -g -w -DGFNT_STATIC -DGFNT_REPLAY_PLANT $(INCLUDE) -o $@ $< tests/fuzz/replay_main.cpp $(LDFLAGS) $(FONTLIBRARY) $(DEP_LIBS) -lm
+
+fuzz-replay: $(addprefix $(FUZZ_REPLAY_DIR)/,$(addsuffix $(EXE_EXTENSION),$(FUZZ_REPLAY_HARNESSES) planted)) ## Replay every harness's committed seeds
+	@seeds=$$(ls tests/fuzz/corpus/raster/*.seed); \
+	if LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZ_REPLAY_DIR)/planted$(EXE_EXTENSION) $$seeds > $(BUILD_DIR)/fuzz-replay.log 2>&1; then \
+		printf 'fuzz-replay: FAIL: the planted replay exited 0; this gate cannot see a crash\n' >&2; exit 1; fi
+	@status=0; total=0; for h in $(FUZZ_REPLAY_HARNESSES); do \
+		name=$${h#fuzz_}; seeds=$$(ls tests/fuzz/corpus/$$name/*.seed 2>/dev/null); \
+		if [ -z "$$seeds" ]; then \
+			case " $(FUZZ_REPLAY_UNSEEDED) " in *" $$name "*) printf 'fuzz-replay: %s has no committed seeds (FUZZ_REPLAY_UNSEEDED)\n' "$$name"; continue;; esac; \
+			printf 'fuzz-replay: FAIL: %s has no committed seeds\n' "$$name" >&2; status=1; continue; fi; \
+		n=$$(echo "$$seeds" | wc -l); total=$$((total + n)); \
+		if ! LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZ_REPLAY_DIR)/$$h$(EXE_EXTENSION) $$seeds > $(BUILD_DIR)/fuzz-replay.log 2>&1; then \
+			printf 'fuzz-replay: FAIL: %s crashed on %s\n' "$$name" "$$(grep '^replay: ' $(BUILD_DIR)/fuzz-replay.log | tail -1 | cut -c9-)" >&2; \
+			tail -20 $(BUILD_DIR)/fuzz-replay.log >&2; status=1; fi; \
+	done; \
+	[ $$status -eq 0 ] && printf 'fuzz-replay: %d committed seeds replayed without a crash; the planted replay was seen to fail\n' $$total; \
+	exit $$status
+
 gen-vectors: ## Regenerate the committed vectors from the pinned image
 	@python3 $(VECTORS)/check_vectors.py --update
 
@@ -2273,8 +2309,9 @@ $(eval $(call fuzz-rule,fuzz_type1,type1))
 # within a scan unit - so the bytes the normaliser walks are not a subrange of the
 # input either.
 $(eval $(call fuzz-rule,fuzz_bitmap,bitmap))
+$(eval $(call fuzz-rule,fuzz_scene,scene))
 
-FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables shape subset fontset svg layout
+FUZZERS := sfnt cmap glyf raster cff cff2 charstring type1 bitmap gvar variation metvar vartables shape subset fontset svg layout scene
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: $(addprefix fuzz-run-,$(FUZZERS))

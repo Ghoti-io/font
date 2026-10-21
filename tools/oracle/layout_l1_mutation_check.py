@@ -13,7 +13,7 @@ from layout_sources import object_of, source_with
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src/layout/layout.c"   # replaced by the file holding each site
-PREFIX = os.environ.get("PREFIX", "/home/corey/Documents/ghoti.io/.local")
+PREFIX = os.environ.get("PREFIX", str(ROOT.parents[1] / ".local"))
 BUILD = os.environ.get("BUILD", "linux/release")
 MAKE_BUILD = BUILD.removeprefix("linux/")
 APP = ROOT / "build" / BUILD / "apps" / "testLayout"

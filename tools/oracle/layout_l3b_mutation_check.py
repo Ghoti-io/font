@@ -15,7 +15,7 @@ from layout_sources import source_with
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src/layout/layout.c"   # replaced by the file holding the site
-PREFIX = os.environ.get("PREFIX", "/home/corey/Documents/ghoti.io/.local")
+PREFIX = os.environ.get("PREFIX", str(ROOT.parents[1] / ".local"))
 REQUESTED_BUILD = Path(os.environ.get("BUILD", "linux/release"))
 BUILD_PARENT = REQUESTED_BUILD.parent if len(REQUESTED_BUILD.parts) > 1 else Path("linux")
 # Keep the mutant and restore builds isolated from the caller's ordinary build.

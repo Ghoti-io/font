@@ -47,7 +47,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PREFIX = os.environ.get("PREFIX", "/home/corey/Documents/ghoti.io/.local")
+PREFIX = os.environ.get("PREFIX", str(ROOT.parents[1] / ".local"))
 BUILD = os.environ.get("BUILD", "linux/release")
 MAKE_BUILD = BUILD.removeprefix("linux/")
 APPS = ROOT / "build" / BUILD / "apps"

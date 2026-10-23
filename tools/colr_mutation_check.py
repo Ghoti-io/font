@@ -221,6 +221,15 @@ MUTANTS = [
     (COLR, "        return gfnt_colr_refuse(l, GFNT_COLOR_REFUSED_UNBOUNDED, (uint32_t)p.format,",
      "        return gfnt_colr_refuse(l, GFNT_COLOR_REFUSED_NO_RECORD, (uint32_t)p.format,", "an unbounded paint's reason", None),
     (COLR, "  l->out->paint_format = format;", "  (void)format;\n  l->out->paint_format = 0;", "a refusal's format", None),
+    # L5: a referenced glyph's own box.
+    (COLR, "      if (r == GFNT_OK && found) {\n        r = gfnt_colr_scene(l, gshscene_list_clip_push_design_rect_fixed(l->list, l->frame,\n            l->op_count ? l->ops : NULL, l->op_count,",
+     "      if (0) {\n        r = gfnt_colr_scene(l, gshscene_list_clip_push_design_rect_fixed(l->list, l->frame,\n            l->op_count ? l->ops : NULL, l->op_count,", "a referenced glyph's box ignored", None),
+    (COLR, "            l->op_count ? l->ops : NULL, l->op_count, box.x_min, box.y_min, box.x_max, box.y_max, 0u,",
+     "            NULL, 0, box.x_min, box.y_min, box.x_max, box.y_max, 0u,", "a referenced glyph's box without the transforms at the reference", None),
+    (COLR, "        if (found) {\n          l->bounded = true;\n          l->bound_ops = l->op_count;\n        }\n        r = gfnt_colr_node(l, root, depth + 1);",
+     "        r = gfnt_colr_node(l, root, depth + 1);", "a referenced glyph's box not a bound", None),
+    (COLR, "      r = gfnt_face_color_base_paint(l->face, p.glyph, &root, l->error);\n      if (r == GFNT_OK && root == 0) {",
+     "      r = gfnt_face_color_base_paint(l->face, p.glyph, &root, l->error);\n      if (0) {", "a color glyph with no record (the reference)", None),
     # The call.
     (COLR, "  out->source = root ? GFNT_COLOR_SOURCE_V1 : GFNT_COLOR_SOURCE_V0;",
      "  out->source = GFNT_COLOR_SOURCE_V1;", "the source", None),

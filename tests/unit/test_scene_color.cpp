@@ -615,6 +615,41 @@ TEST(SceneColor, ColrV1sTransformsFromTheTableReachTheMap) {
   EXPECT_TRUE(item_of(l, 2)->map.kind & GSHGEOM_MAP_SKEWS);
 }
 
+TEST(SceneColor, TranslucentLayersCompositeInLinearLightByDefaultAndInEncodedValuesOnRequest) {
+  // Glyph A of the scene fixture: an opaque red triangle, the foreground (black) at half alpha over part of it, a
+  // third layer on top elsewhere. Where the black half-alpha layer lies over the red alone, the encoded result is
+  // red halved (127 or 128) and the standard's (the compositing done on linear-light values, then encoded again) is
+  // the sRGB encoding of one half, 188: the amount that OpenType's linear-light sentence makes of the difference.
+  auto render_in = [](Color & c, uint32_t space) {
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    EXPECT_EQ(c.lower(l, kA, &out, 40 * 64, 4 * 64, 44 * 64, 3, nullptr, space), GFNT_OK);
+    EXPECT_EQ(gshscene_list_set_palette(l, c.palette(0)), GSHSCENE_OK);
+    GSHSCENE_Color fg = {{0.0, 0.0, 0.0, 1.0}, {GCOL_PRIMARIES_SRGB, GCOL_TRANSFER_SRGB, 0.0}};
+    EXPECT_EQ(gshscene_list_set_foreground(l, &fg), GSHSCENE_OK);
+    EXPECT_EQ(gshscene_list_close(l), GSHSCENE_OK);
+    return render(l, 64, 64);
+  };
+  Color c("color-v1-scene.ttf");
+  const std::string standard = render_in(c, GFNT_COLOR_SPACE_STANDARD);
+  const std::string encoded = render_in(c, GFNT_COLOR_SPACE_ENCODED);
+  auto srgb = [](double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1.0 / 2.4) - 0.055; };
+  const int linear_half = (int)std::lround(255.0 * srgb(0.5));
+  EXPECT_EQ(linear_half, 188);
+  size_t overlapped = 0;
+  for (size_t i = 0; i + 3 < encoded.size(); i += 4) {
+    const int r = (uint8_t)encoded[i];
+    if (r >= 127 && r <= 128 && encoded[i + 1] == 0 && encoded[i + 2] == 0 && (uint8_t)encoded[i + 3] == 255) {
+      overlapped++;
+      EXPECT_NEAR((int)(uint8_t)standard[i], linear_half, 1) << "pixel " << i / 4;
+      EXPECT_EQ(standard[i + 1], 0);
+      EXPECT_EQ((uint8_t)standard[i + 3], 255);
+    }
+  }
+  EXPECT_GT(overlapped, 20u) << "the half-alpha layer over the red is on screen";
+  EXPECT_NE(standard, encoded);
+}
+
 // --- gradients, planes, boxes, blend modes (L2 to L8) -----------------------------------------------------------------
 
 namespace {

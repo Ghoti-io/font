@@ -61,6 +61,26 @@ void draw(GSHSCENE_Sink * sink, GSHSCENE_Report * report, GIMG_Raster * raster, 
   gshscene_sink_render(sink, &request);
 }
 
+/**
+ * The face resource the lowering and the runs use: the default instance, or (options bit 6) the instance whose
+ * normalised coordinates come from two header bytes, tried with two axes and then one (a face with fewer axes refuses
+ * the longer variation), so that the variable paints are read at a location the fuzzer picks (L1 of color-paint story P4).
+ */
+bool intern_instance(GFNT_SceneFont * font, GSHSCENE_Store * store, uint8_t options, uint8_t a, uint8_t b,
+    const GSHSCENE_Resource ** out) {
+  if (!(options & 0x40u)) {
+    return gfnt_scene_intern_face(font, store, nullptr, out, nullptr) == GFNT_OK;
+  }
+  GFNT_F2Dot14 coords[2] = {(GFNT_F2Dot14)((int)a * 128 - 16384), (GFNT_F2Dot14)((int)b * 128 - 16384)};
+  for (size_t count = 2; count >= 1; count--) {
+    GFNT_Variation v = {coords, count, GFNT_DELTA_ROUND_HALF_UP};
+    if (gfnt_scene_intern_face(font, store, &v, out, nullptr) == GFNT_OK) {
+      return true;
+    }
+  }
+  return gfnt_scene_intern_face(font, store, nullptr, out, nullptr) == GFNT_OK;
+}
+
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
@@ -88,7 +108,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
       gfnt_face_num_glyphs(face, &glyphs, nullptr) != GFNT_OK ||
       gfnt_scene_font_create(face, &font, nullptr) != GFNT_OK ||
       gshscene_store_create(nullptr, nullptr, &store) != GSHSCENE_OK ||
-      gfnt_scene_intern_face(font, store, nullptr, &face_resource, nullptr) != GFNT_OK ||
+      !intern_instance(font, store, options, data[2], data[3], &face_resource) ||
       gshcpu_sink_create(nullptr, nullptr, nullptr, &sink) != GSHCPU_OK ||
       gshscene_report_create(nullptr, nullptr, &report) != GSHSCENE_OK ||
       gimg_raster_create(kSide, kSide, &GIMG_PIXEL_RGBA8, GIMG_RASTER_OWNED, nullptr, 0, &raster) != GIMG_OK) {
@@ -136,6 +156,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         crun.x = 8;
         crun.y = 36;
         crun.hint_mode = run.hint_mode;
+        crun.space = (options & 0x80u) ? GFNT_COLOR_SPACE_ENCODED : GFNT_COLOR_SPACE_STANDARD;
         GFNT_ColorLowering out;
         if (gfnt_scene_record_color_glyph(face_resource, store, colored, g, &crun, &out, nullptr) == GFNT_OK &&
             gshscene_list_close(colored) == GSHSCENE_OK) {

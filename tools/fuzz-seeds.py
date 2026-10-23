@@ -883,6 +883,16 @@ def main():
                                           ("color-v1.ttf", "colr-v1-refusals", 0x08, 24)):
         data = (root / "tests/data/fonts" / fixture).read_bytes()
         write(corpus / ("scene/%s.seed" % label), options, bytes([ppem - 6, 0, 7]) + data)
+    # Color-paint story P4: the glyphs the harness's default range (the first eight) misses, drawn and not refused:
+    # the scene fixture's gradients, plane fills, clip boxes and blend modes (glyphs 15 to 22, in the standard's
+    # space and, with 0x80, the encoded one), and the variable fixture's Var paints at a location (0x40: header
+    # bytes 2 and 3 are the coordinates, 128 per step from -1) over its two base glyphs.
+    data = (root / "tests/data/fonts" / "color-v1-scene.ttf").read_bytes()
+    write(corpus / "scene/colr-v1-gradients.seed", 0x08, bytes([24 - 6, 15, 7]) + data)
+    write(corpus / "scene/colr-v1-gradients-encoded.seed", 0x88, bytes([24 - 6, 15, 7]) + data)
+    data = (root / "tests/data/fonts" / "color-v1-var.ttf").read_bytes()
+    write(corpus / "scene/colr-v1-var-default.seed", 0x08, bytes([24 - 6, 0, 15]) + data)
+    write(corpus / "scene/colr-v1-var-moved.seed", 0x48, bytes([24 - 6, 1, 7]) + data)
 
     # A kept font set: two faces and an alias. The harness takes the body after its options
     # byte and adds the magic and the checksum itself.

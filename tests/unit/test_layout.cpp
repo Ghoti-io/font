@@ -2877,6 +2877,7 @@ TEST(LayoutContent, TextWrapAddedPoliciesKeepShortAndUnboundedParagraphsValid) {
     ASSERT_EQ(gfnt_paragraph_layout(wrapped.p, 6 * kLetter + 2 * kSpace,
         &wrapped.layout, nullptr), GFNT_OK);
     EXPECT_EQ(wrapped.layout.line_count, 4u);
+    gfnt_layout_free(&wrapped.layout); /* an out layout is written, not released: the first one is the caller's */
     ASSERT_EQ(gfnt_paragraph_layout(wrapped.p, GFNT_LAYOUT_UNBOUNDED,
         &wrapped.layout, nullptr), GFNT_OK);
     EXPECT_EQ(wrapped.layout.line_count, 2u);

@@ -85,7 +85,7 @@ MUTANTS = [
      "the hinter given moved points"),
     # Only the outline this call appended is moved.
     (GLYF, "  for (size_t i = first; i < outline->point_count; ++i) {",
-     "  for (size_t i = 0; i < outline->point_count; ++i) {",
+     "  (void)first;\n  for (size_t i = 0; i < outline->point_count; ++i) {",
      "points an outline already held moved again"),
     # A composite: whose point.
     (GLYF, "    if (want_pp1 && (component.flags & GFNT_GLYF_USE_MY_METRICS)) {",
@@ -114,7 +114,7 @@ MUTANTS = [
      "    if (result == GFNT_OK && variation\n        && 0) {\n      *out_pp1 += gfnt_glyf_delta_to_26dot6(delta);",
      "gvar's delta to the origin dropped"),
     (GLYF, "  return gfnt_hvar_delta(face, glyph, GFNT_HVAR_ADVANCE, variation->coords,\n      variation->count, &advance, &scratch) == GFNT_OK;",
-     "  return false;",
+     "  (void)advance;\n  (void)scratch;\n  (void)glyph;\n  return false;",
      "an HVAR never owns the metrics"),
     (GLYF, "  if (!variation || !gfnt_face_has_table(face, GFNT_TAG_HVAR)) {\n    return false;\n  }",
      "  if (!variation) {\n    return false;\n  }\n  if (!gfnt_face_has_table(face, GFNT_TAG_HVAR)) {\n    return true;\n  }",

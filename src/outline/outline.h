@@ -70,6 +70,18 @@ struct GFNT_Outline {
 };
 
 /**
+ * ::gfnt_face_glyph_outline() with a `glyf` glyph's points where the file puts
+ * them, not moved to put the glyph's origin at x = 0.
+ *
+ * For the hinter, which places the phantom points itself. A face that is not
+ * `glyf` has no such distinction and gets what ::gfnt_face_glyph_outline() gives.
+ */
+GFNT_Result gfnt_face_glyph_outline_unplaced(const GFNT_Face * face,
+    uint32_t glyph, const GFNT_Variation * variation,
+    const GFNT_Allocator * allocator, GFNT_Outline ** out_outline,
+    GFNT_Error * error);
+
+/**
  * Make room for at least @p points more points and @p contours more contours.
  *
  * Growth is doubling with a floor, and the limits are checked against the

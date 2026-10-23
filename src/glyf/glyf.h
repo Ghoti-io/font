@@ -117,6 +117,15 @@ GFNT_Result gfnt_loca_range(const GFNT_Face * face, uint32_t glyph,
  * walk both use. There is no depth parameter because every call from outside is
  * the top of a walk: see the note on ::gfnt_glyf_load() itself.
  *
+ * **The outline is placed.** The points a glyph stores are in its own design
+ * coordinates, whose origin is the first phantom point, `xMin` less the left side
+ * bearing; the outline returned is moved by the left side bearing less `xMin` so
+ * that the origin is at x = 0, as FreeType does and as a renderer drawing the
+ * glyph at the pen needs. A composite is moved by its own phantom point, or by
+ * that of the component flagged USE_MY_METRICS. At a location, `gvar`'s delta to
+ * the first phantom point moves it too, unless the face has an `HVAR`, which then
+ * owns the metrics and the stored point stands.
+ *
  * @param face The face.
  * @param glyph The glyph index.
  * @param variation Normalised coordinates `gvar` moves the points by, or NULL for
@@ -130,6 +139,18 @@ GFNT_Result gfnt_loca_range(const GFNT_Face * face, uint32_t glyph,
  *   ::GFNT_ERR_CORRUPT, ::GFNT_ERR_LIMIT or ::GFNT_ERR_OOM.
  */
 GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_Error * error);
+
+/**
+ * ::gfnt_glyf_load() with the points where the file and `gvar` put them.
+ *
+ * ::gfnt_glyf_load() moves the assembled outline so that the glyph's origin, the
+ * first phantom point, is at x = 0 (design.md section 7.3). This does not: the
+ * hinter places the phantom points itself and moves the hinted outline by its own
+ * rounded one, so it needs the points before any of that.
+ */
+GFNT_Result gfnt_glyf_load_unplaced(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Outline * outline,
     GFNT_Error * error);
 

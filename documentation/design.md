@@ -30,10 +30,10 @@ Each word is a mechanism:
 
 | Property | Mechanism |
 | --- | --- |
-| **Correct** | Every format is parsed byte by byte from its specification with explicit shifts (`CONVENTIONS.md` §8), and every parse is checked against an outside reader - fontTools, FreeType, HarfBuzz - never against this library's own opinion (§14). Every quantity that is a policy (which ascent, which strike, which line-break strictness) is a named enum with a documented default (§2 M4, M9). Measurement and painting are one code path (§10.2). |
+| **Correct** | Every format is parsed byte by byte from its specification with explicit shifts, and every parse is checked against an outside reader - fontTools, FreeType, HarfBuzz - never against this library's own opinion (§14). Every quantity that is a policy (which ascent, which strike, which line-break strictness) is a named enum with a documented default (§2 M4, M9). Measurement and painting are one code path (§10.2). |
 | **Secure** | The file is the attacker (§1.2). Every read of file data passes through one bounds-checked reader (§6); every recursion has a limit the Standard sets and the library enforces regardless of what the file claims; every unbounded quantity is capped by `GFNT_Limits`; and there is no bytecode interpreter (§2 M3). Fuzzers cover each format that is implemented, because the reads are offset arithmetic over hostile input. |
 | **Deterministic** | Outlines, shaping and rasterisation are integer arithmetic in fixed point (§5.2, §8). The same font, size and text produce **byte-identical coverage on every platform and architecture**, and a golden-bitmap gate proves it on x86-64 and on the big-endian 32-bit cross container (§14.4). No platform rasteriser, no platform shaper, no `float` in a core type. |
-| **Cross-platform** | Reading, outlines, shaping and layout touch no operating-system API and behave identically everywhere by construction. Font discovery is the only code that does, one file per platform, with the Windows and macOS branches marked per `CONVENTIONS.md` §11. |
+| **Cross-platform** | Reading, outlines, shaping and layout touch no operating-system API and behave identically everywhere by construction. Font discovery is the only code that does, one file per platform, with the Windows and macOS branches marked `TODO(windows)` and `TODO(macos)` until they are run there. |
 | **Dependency-light** | `cutil`, `unicode`, and `compress` (gzip for `.pcf.gz`/`.psf.gz`, zlib for WOFF 1). `image` is optional, for PNG-bearing colour strikes and as a raster surface. `shape-geometry` and `shape-cpu` are the family's path type and scan converter, the one place a front end calls a sink (AD-1). Nothing else: not FreeType, not HarfBuzz, not fontconfig, not ICU. Each is an oracle in the tests and none is linked (§14). |
 | **Enterprise-ready** | No global state: no process-wide font cache, no default face, no environment read outside font discovery (§15.3). A face is immutable after load and shareable across threads; caches are objects the caller owns. Embedding permissions are reported and never enforced (§17.9). "Which face answered this glyph" and "which strike answered this size" are queryable, because fallback that cannot be audited is a bug report waiting to happen (§2 M8). |
 | **Useful** | Three consumers are enumerated in §13 with their exact needs, and the library is designed against all three, not the first one. It draws *something* for any glyph it cannot find - glyph 0 is synthesised (§5.4) - and bundles no font of its own (§14.6): the application's fonts and the system's, once discovery exists, are the only fonts there are. |
@@ -197,7 +197,7 @@ the next access and C has no way to recover (M23). `gfnt_blob_create_mmap()`
 exists for trusted, large fonts (a 30 MB CJK collection) and its documentation
 says the word `SIGBUS`.
 
-There is no `GFNT_Stream`. `CONVENTIONS.md` §5 says a library that reads
+There is no `GFNT_Stream`. The suite's convention is that a library that reads
 input reads it through its own stream, and `regex` records the departure for a
 related reason; here the reason is that a font is random-access by
 construction - the table directory is a list of offsets - so a sequential
@@ -288,7 +288,7 @@ convention on the way out (M18).
 
 ### 5.6 Results and diagnostics
 
-`GFNT_Result` is the fixed vocabulary of `CONVENTIONS.md` §5, unchanged:
+`GFNT_Result` is the suite's fixed result vocabulary, unchanged:
 
 | Result | Here means |
 | --- | --- |
@@ -551,9 +551,95 @@ off-curve points, contours that begin off-curve. Composites: every flag -
 `X_AND_Y_SCALE`, `TWO_BY_TWO`, `SCALED_COMPONENT_OFFSET` versus
 `UNSCALED_COMPONENT_OFFSET` (the Apple/Microsoft difference, defaulting to
 unscaled), `USE_MY_METRICS`, `ROUND_XY_TO_GRID` (ignored, no hinting) - to the
-depth of §6.2. Phantom points are numbered for `gvar`'s sake (§7.7) and nothing else here uses them. Instructions
-are skipped by length. A `loca` entry running backwards or past `glyf` makes
+depth of §6.2. The first phantom point places the glyph (below); the others are numbered for `gvar`'s sake (§7.7).
+Instructions are skipped by length. A `loca` entry running backwards or past `glyf` makes
 *that glyph* `ERR_CORRUPT` (M11).
+
+**Where a glyph's outline sits.** The points a `glyf` glyph stores are in its own
+design coordinates, and the origin of those coordinates is the glyph's first phantom
+point, `xMin - lsb` (the header's `xMin`, less the `hmtx` left side bearing). A renderer
+draws the glyph at the pen with that point on it, so `gfnt_face_glyph_outline()` returns
+the outline moved by `lsb - xMin`: zero in every font whose bearings are its glyphs'
+`xMin`, which is every font anyone ships and what `head.flags` bit 1 asks for, and
+visible in a font that states a bearing its outline does not have (most of this
+repository's synthetic fixtures state zero). The rules:
+
+1. **A simple glyph** is moved by the negative of its first phantom point, `lsb - xMin`.
+2. **A composite** is moved by *its own* first phantom point (its header's `xMin` less
+   its own `hmtx` bearing), once, after its components are assembled. A component is
+   not moved by its own: a component's point matters only for rule 3.
+3. **USE_MY_METRICS.** If a component is flagged, the composite takes that component's
+   final phantom point in place of its own (the last flagged component, in file order,
+   and through nesting: a flagged component that is itself a composite lending its
+   metrics lends the point it ended with). A flagged component with no description
+   lends a point of `0 - lsb`.
+4. **At a location, without an `HVAR`**, `gvar`'s delta to the first phantom point moves
+   it, so the outline is moved by that much less. A composite that lends its metrics
+   has no delta of its own to add: the lent point is final.
+5. **At a location, with an `HVAR`** (one whose advance mapping answers for the glyph),
+   the stored point stands: `gvar`'s delta to the first phantom point is not applied, and
+   neither is `HVAR`'s left-bearing mapping. The `HVAR` owns the glyph's horizontal
+   metrics.
+6. **A charstring outline** (`CFF `, `CFF2`, Type 1) is not moved. Its origin is where
+   its charstring draws it, and the bearing in `hmtx` is metadata (`cff.otf` states a
+   bearing of zero for glyphs that start at 40, 80 and 60 and every reference draws
+   them there).
+7. A face with no `hmtx` states no bearing and its outlines are not moved; an `hmtx`
+   that is there and cannot be read refuses the glyph, as any damaged table does,
+   so that a cut table can only take a glyph away and never hand one back in
+   another place. The hinter takes the points unmoved (`gfnt_glyf_load_unplaced()`):
+   it places the phantom points itself and moves its hinted outline by its own rounded
+   one.
+
+**What the specification says and what it leaves to the renderers.** OpenType defines
+the first phantom point (`xMin - lsb`, in the instructing-glyphs text on phantom points,
+and as a point `gvar` may move), and says of USE_MY_METRICS that the compound glyph
+uses the metrics of the flagged component. Those are rules 1's *point* and 3's *source*.
+It does not say that an outline is translated so that the point is at zero, so the
+translation (rules 1 and 2), the composite's own translation, the effect of a `gvar`
+delta to the point on the drawn outline (4) and the `HVAR` case (5) are the behaviour
+of the renderers, and where the renderers differ the specification cannot settle it.
+This library follows FreeType, the reference renderer, for all of them. Measured, with
+`tests/data/fonts/outline-placement.ttf`, `variable-placement.ttf` (`wght` +1) and
+`variable-placement-hvar.ttf` (the same with an `HVAR` carrying an advance and a
+left-bearing mapping) - the left edge of each glyph's outline in font units, as
+FreeType 2.14.3 (unhinted, one pixel per unit), HarfBuzz 10.2.0 (`hb-view`) and
+fontTools 4.66.0 (the glyph set drawn through a decomposing pen) draw it; this library
+equals the FreeType column everywhere:
+
+| glyph (header `xMin`, `lsb`) | static: FreeType = HarfBuzz | fontTools | `wght` +1, no `HVAR`: FreeType = HarfBuzz | fontTools | `wght` +1, `HVAR`: FreeType | HarfBuzz | fontTools |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `box` (100, 100): the control | 100 | 100 | 80 | 80 | 100 | 80 | 80 |
+| `moved` (100, 160) | 160 | 160 | 140 | 140 | 170 | 140 | 140 |
+| `back` (200, 50) | 50 | 50 | 50 | 50 | 50 | 50 | 50 |
+| `comp` (150, 20) | 20 | **150** | 35 | **150** | 20 | 35 | **150** |
+| `comp-umm` (140, 7): flagged `moved` | 200 | **140** | 185 | **155** | 215 | 185 | **155** |
+| `comp-umm-first` (100, 9): flagged, then unflagged | 160 | **100** | 140 | **110** | 170 | 140 | **110** |
+| `comp-umm-last` (100, 11): both flagged | 100 | 100 | 90 | **110** | 110 | 90 | **110** |
+| `comp-umm-nested` (150, 13) | 210 | **150** | 195 | **165** | 225 | 195 | **165** |
+| `comp-eq` (150, 150): the composite control | 150 | 150 | 150 | 150 | 150 | 150 | 150 |
+| `comp-umm-empty` (100, 17): flagged, empty | 125 | **100** | 113 | **100** | 125 | 113 | **100** |
+
+Three findings, for a reader who wants to revisit them. **fontTools does not move a
+composite at all** (its glyph set passes the offset to `Glyph.draw()`, which for a
+composite only adds components, and a component is drawn at depth one, where the offset
+is zero), and does not implement USE_MY_METRICS in that path; it is right for simple
+glyphs, which is where this library's fontTools comparison holds it, and for composites
+the explicit rule (`tools/oracle/fonttools_placement.py`, computed from fontTools' own
+tables) stands in for it and FreeType is the witness. **HarfBuzz agrees with FreeType
+at the default instance** in every case. **With an `HVAR`, FreeType and
+HarfBuzz/fontTools part:** FreeType keeps the stored point (rule 5), HarfBuzz and
+fontTools apply `gvar`'s delta to it whatever the `HVAR` says; neither applies `HVAR`'s
+bearing mapping to the outline. Rule 5 is FreeType's, chosen as the reference renderer
+(and because it is the one that agrees with a font whose `HVAR` is the authority for its
+metrics), and is the case to revisit if the others converge. (The hinter's phantom points
+apply `HVAR`'s bearing mapping, a branch no gate reaches: the corpus has no `HVAR` with
+one, and FreeType's *outline* does not apply it, as the table shows.)
+
+`tools/oracle/glyf_diff.py` and `var_diff.py` hold the library to FreeType's outline
+point by point on these fixtures and on the corpus, and to fontTools' with the move
+computed explicitly; `tools/placement_mutation_check.py` plants a defect in each part of
+the rule above.
 
 **A `loca` too short to name one glyph is a face with no outlines, and not a
 face whose every glyph is corrupt.** One glyph needs a start and an end - four
@@ -2543,8 +2629,7 @@ configuration is XML, the suite has no XML parser, and `cjelly`'s stated intent
 is to avoid external libraries. The directories fontconfig would scan are
 scanned; its aliases and substitution rules are not applied. On Windows, the
 registry's font list and DirectWrite's system collection are the sources, and
-on macOS CoreText's; each is `TODO(windows)` / `TODO(macos)` per
-`CONVENTIONS.md` §11 until run there.
+on macOS CoreText's; each is `TODO(windows)` / `TODO(macos)` until run there.
 
 **Matching** (`match.h`, `src/discover/match.c`) follows CSS Fonts level 4 section 5.2 as written: a
 family list is walked in order; within the first family that has a face, width, then style, then
@@ -3408,7 +3493,7 @@ points are in `paragraph.c` (`gfnt_paragraph_create`), `layout.c` (the layout ca
 
 Everything the library allocates goes through `GFNT_Allocator`, a typedef of
 `GCU_Allocator`. Faces, outlines, coverage, shaped runs and paragraphs are
-`_create`/`_destroy` or `_load`/`_free` per `CONVENTIONS.md` §3. Property-like
+`_create`/`_destroy` or `_load`/`_free`, the suite's naming for an object that is made and released. Property-like
 queries - a glyph's advance, a name record - allocate nothing.
 
 ### 15.2 Limits
@@ -4562,7 +4647,7 @@ renderings on three big-endian targets.
   descriptors, embedded font programs, `ToUnicode`).
 - SIL Open Font License 1.1, in particular the Reserved Font Name clause; the
   Bitstream Vera licence; Apache-2.0.
-- `CONVENTIONS.md` §4, §5, §7, §8, §11, §12; `libs/chron/documentation/design.md`
+- `libs/chron/documentation/design.md`
   §8.5, §8.6, §12; `libs/unicode/documentation/design.md`;
   `libs/cjelly/docs/Overview.md` §8 and §18, `docs/semantics.md`, and
   `docs/CurrentTask.md` Task 3.2.

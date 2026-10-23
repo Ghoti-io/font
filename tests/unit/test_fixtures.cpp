@@ -238,6 +238,11 @@ const std::vector<Entry> & every_fixture() {
       {"outline-cubic.ttf", kOutlineGlyphs},
       {"outline-loca-long.ttf", kOutlineGlyphs},
       {"outline-simple.ttf", kOutlineGlyphs},
+      // Twelve glyphs whose left side bearings are not their xMin; the same
+      // twelve with fvar and gvar, and with an HVAR as well.
+      {"outline-placement.ttf", 12},
+      {"variable-placement.ttf", 12},
+      {"variable-placement-hvar.ttf", 12},
       {"post-v1.ttf", 258},
       // One strike whose composites each have a non-composite twin. Ten glyphs:
       // three leaves, two direct twins, four composites, and .notdef, which no

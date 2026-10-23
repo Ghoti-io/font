@@ -71,6 +71,9 @@
 static const char * const kFixtures[] = {
   "basic.ttf", "outline-composite.ttf", "outline-simple.ttf", "cff-curves.otf", "cff-seac.otf",
   "type1-big.pfb", "variable-gvar.ttf",
+  // Bearings that are not the glyphs' xMin, simple and composite: where a glyph's origin is,
+  // on every target.
+  "outline-placement.ttf",
 };
 static const uint32_t kPpems[] = {8, 12, 16, 21, 33, 48, 72};
 static const uint32_t kFractions[5] = {0, 1, 16, 33, 63};

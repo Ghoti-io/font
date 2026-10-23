@@ -1,4 +1,4 @@
-# Copied from model's Makefile per CONVENTIONS.md section 12 item 2, with
+# Copied from the model library's Makefile, with
 # SUITE, PROJECT, the dependency block and the gates changed and nothing else.
 # Where a comment below says something was measured "here" - an object count,
 # a test count, a flag's effect on codegen - the measurement was model's. The
@@ -12,7 +12,7 @@ PROJECT := font
 BUILD ?= release
 # The version of this library. MINOR_VERSION carries the minor and the patch as
 # one dotted string; the two are split out below for the places that need three
-# separate integers. See CONVENTIONS.md section 4.
+# separate integers.
 MAJOR_VERSION := 0
 MINOR_VERSION := 0.0
 VERSION_MINOR_ONLY := $(word 1,$(subst ., ,$(MINOR_VERSION)))
@@ -72,7 +72,7 @@ endif
 BASE_NAME := lib$(SUITE)-$(PROJECT)$(BRANCH).so
 # The symbol namespace token, from BRANCH, so that the token inside every
 # exported symbol is the same one that names the .pc file, the install directory
-# and the shared library. See CONVENTIONS.md section 4.
+# and the shared library.
 LIBVER_SYMBOL := $(shell echo "ghotiio_$(PROJECT)$(BRANCH)" | sed 's/[.-]/_/g')
 
 BASE_NAME_PREFIX := lib$(SUITE)-$(PROJECT)$(BRANCH)
@@ -180,7 +180,7 @@ endif
 # somewhere else - the suite's bootstrap installs every library into a local
 # prefix so that each build resolves its dependencies through pkg-config,
 # exactly as a consumer would, rather than through a second code path that
-# only in-tree builds exercise. See CONVENTIONS.md section 1.
+# only in-tree builds exercise.
 #
 #     make install PREFIX=/path/to/prefix
 # ---------------------------------------------------------------------------
@@ -390,7 +390,7 @@ CUTIL_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --lib
 # resolution path to fall back to, so this is a hard error naming the fix.
 ifeq ($(strip $(CUTIL_CFLAGS)),)
 ifndef SKIP_DEP_CHECK
-$(error ghoti.io-cutil was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
+$(error ghoti.io-cutil was not found by pkg-config. Build and install the suite into a local prefix (the suite repository's install.sh does it, in dependency order), then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback: a second resolution path that only in-tree builds exercise is one that silently rots.)
 endif
 endif
 INCLUDE += $(CUTIL_CFLAGS)
@@ -410,7 +410,7 @@ COMPRESS_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config 
 COMPRESS_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(COMPRESS_PC) 2>/dev/null)
 ifeq ($(strip $(COMPRESS_CFLAGS)),)
 ifndef SKIP_DEP_CHECK
-$(error ghoti.io-compress was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+$(error ghoti.io-compress was not found by pkg-config. Build and install the suite into a local prefix (the suite repository's install.sh does it, in dependency order), then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
 endif
 endif
 INCLUDE += $(COMPRESS_CFLAGS)
@@ -424,7 +424,7 @@ UNICODE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config -
 UNICODE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(UNICODE_PC) 2>/dev/null)
 ifeq ($(strip $(UNICODE_CFLAGS)),)
 ifndef SKIP_DEP_CHECK
-$(error ghoti.io-unicode was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+$(error ghoti.io-unicode was not found by pkg-config. Build and install the suite into a local prefix (the suite repository's install.sh does it, in dependency order), then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
 endif
 endif
 INCLUDE += $(UNICODE_CFLAGS)
@@ -440,7 +440,7 @@ IMAGE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --c
 IMAGE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(IMAGE_PC) 2>/dev/null)
 ifeq ($(strip $(IMAGE_CFLAGS)),)
 ifndef SKIP_DEP_CHECK
-$(error ghoti.io-image was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+$(error ghoti.io-image was not found by pkg-config. Build and install the suite into a local prefix (the suite repository's install.sh does it, in dependency order), then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
 endif
 endif
 INCLUDE += $(IMAGE_CFLAGS)
@@ -456,7 +456,7 @@ SHAPE_GEOMETRY_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-c
 SHAPE_GEOMETRY_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(SHAPE_GEOMETRY_PC) 2>/dev/null)
 ifeq ($(strip $(SHAPE_GEOMETRY_CFLAGS)),)
 ifndef SKIP_DEP_CHECK
-$(error ghoti.io-shape-geometry was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+$(error ghoti.io-shape-geometry was not found by pkg-config. Build and install the suite into a local prefix (the suite repository's install.sh does it, in dependency order), then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
 endif
 endif
 INCLUDE += $(SHAPE_GEOMETRY_CFLAGS)
@@ -466,7 +466,7 @@ SHAPE_CPU_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config
 SHAPE_CPU_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(SHAPE_CPU_PC) 2>/dev/null)
 ifeq ($(strip $(SHAPE_CPU_CFLAGS)),)
 ifndef SKIP_DEP_CHECK
-$(error ghoti.io-shape-cpu was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+$(error ghoti.io-shape-cpu was not found by pkg-config. Build and install the suite into a local prefix (the suite repository's install.sh does it, in dependency order), then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
 endif
 endif
 INCLUDE += $(SHAPE_CPU_CFLAGS)
@@ -480,7 +480,7 @@ SHAPE_SCENE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-conf
 SHAPE_SCENE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(SHAPE_SCENE_PC) 2>/dev/null)
 ifeq ($(strip $(SHAPE_SCENE_CFLAGS)),)
 ifndef SKIP_DEP_CHECK
-$(error ghoti.io-shape-scene was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
+$(error ghoti.io-shape-scene was not found by pkg-config. Build and install the suite into a local prefix (the suite repository's install.sh does it, in dependency order), then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback, for the reason the cutil error above gives.)
 endif
 endif
 INCLUDE += $(SHAPE_SCENE_CFLAGS)
@@ -593,8 +593,7 @@ LIBVER_GEN := $(GEN_DIR)/ghoti.io/$(PROJECT)/libver_gen.h
 # for everyone who has built before and fails for everyone who has not, and
 # under -j it is a race rather than a clean failure.
 #
-# CONVENTIONS.md section 6 states the rule and section 12 warns that copying
-# a Makefile copies its defects. This is that: the release rule had it and
+# Copying a Makefile copies its defects, and this is one: the release rule had it and
 # the ASan, fuzz and test rules did not, so `make test` passed on any warm
 # tree while `make clean && make test-asan` failed on all of them.
 
@@ -614,7 +613,7 @@ $(LIBVER_GEN): force-libver
 	fi
 	@mkdir -p $(@D)
 	@printf '%s\n' \
-		'// Generated by the Makefile. Do not edit; see CONVENTIONS.md section 4.' \
+		'// Generated by the Makefile. Do not edit.' \
 		'#ifndef GHOTI_IO_GFNT_LIBVER_GEN_H' \
 		'#define GHOTI_IO_GFNT_LIBVER_GEN_H' \
 		'' \
@@ -753,6 +752,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
 .PHONY: check-oracle-hint-variable check-oracle-hint-batteries check-hint check-hint-mutations check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-hint-point-mutations check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-oracle-placement
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
 .PHONY: check-oracle-cff check-oracle-cff-exhaustive
@@ -765,7 +765,7 @@ check-phrase-model: ## Check that the first-party Japanese phrase model is repro
 .PHONY: fixtures fixtures-list check-fixtures
 # Generated vectors
 .PHONY: gen-vectors check-vectors
-.PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations check-colr-mutations check-scene-hash scene-hash
+.PHONY: golden check-golden check-raster-mutations check-float-free check-scene-mutations check-colr-mutations check-placement-mutations check-scene-hash scene-hash
 .PHONY: check-scene-example scene-example fuzz-replay fuzz-scene fuzz-run-scene
 
 watch: ## Watch the file directory for changes and compile the target
@@ -1065,7 +1065,7 @@ check-oracle-ttx: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/ttx_diff.py --quiet
 
 check-oracle: ## Run every oracle differential there is
-check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries check-oracle-hint-variable
+check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf check-oracle-placement check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries check-oracle-hint-variable
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
 check-oracle: check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-flow check-oracle-layout-l2 check-oracle-layout-l3b check-oracle-layout-l4 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
@@ -1075,10 +1075,15 @@ check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTool
 check-oracle-cmap: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/cmap_diff.py --quiet
 
-check-oracle-glyf: ## Diff every glyph's outline and path against fontTools
+check-oracle-glyf: ## Diff every glyph's outline and path against fontTools, and its points and placement against FreeType
 check-oracle-glyf: $(EXAMPLES)
-	@python3 $(ORACLE)/oracle_run.py fonttools -- \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- \
 		python3 $(ORACLE)/glyf_diff.py --quiet
+
+check-oracle-placement: ## Where each glyph of the placement fixtures sits: this library against FreeType, with HarfBuzz and fontTools printed
+check-oracle-placement: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype,harfbuzz -- \
+		python3 $(ORACLE)/placement_diff.py
 
 # Both references, and for different reasons: fontTools holds this library to a
 # 64th of a font unit on every point of every glyph, and FreeType is the only other
@@ -1578,8 +1583,8 @@ VECTORS := tools/vectors
 # to the rasteriser; `check-golden` builds the library for three big-endian
 # targets and requires the same renderings, which is the only thing here that can
 # see a host-dependent read or a `float` in the path from a font's bytes to a
-# pixel. Neither is in TEST_GATES: the first is a test, and the second needs the
-# workspace's cross container.
+# pixel. Neither is in TEST_GATES: the first is a test, and the second needs a
+# container with the cross compilers.
 GOLDEN := tools/golden
 
 golden: ## Rewrite the committed renderings (deliberate)
@@ -1607,6 +1612,11 @@ check-float-free: $(LIBVER_GEN) ## Fail if a GFNT_ header, or the outline-to-pix
 check-colr-mutations: ## Plant defects in the COLR lowering; the tests or the fontTools differential must refuse each
 check-colr-mutations: $(APP_DIR)/testScene_color$(EXE_EXTENSION) $(EXAMPLES)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 tools/colr_mutation_check.py
+
+check-placement-mutations: ## Plant defects in where a glyf glyph's origin is; the unit tests must refuse each
+check-placement-mutations: $(APP_DIR)/testPlacement$(EXE_EXTENSION) $(APP_DIR)/testGlyf$(EXE_EXTENSION) $(APP_DIR)/testVariation$(EXE_EXTENSION)
+check-placement-mutations: $(APP_DIR)/testHint_glyph$(EXE_EXTENSION) $(APP_DIR)/testHint_variation$(EXE_EXTENSION)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 tools/placement_mutation_check.py
 
 check-scene-mutations: ## Plant defects in the provider and the one rounding; the tests must refuse each
 check-scene-mutations: $(APP_DIR)/testScene$(EXE_EXTENSION) $(APP_DIR)/testUnhinted$(EXE_EXTENSION)
@@ -1800,7 +1810,7 @@ ifeq ($(OS_NAME), Linux)
 		printf "\033[0;31m\n### Exported symbols missing the $(LIBVER_SYMBOL)_ namespace ###\033[0m\n" >&2; \
 		printf "%s\n" "$$leaked" >&2; \
 		printf "\nEach needs a '#define <name> GHOTIIO_FONT(<name>)' line in namespace.h.\n" >&2; \
-		printf "See CONVENTIONS.md section 4.\n" >&2; \
+		printf "(Every exported symbol carries the library's namespace token.)\n" >&2; \
 		exit 1; \
 	fi
 	@unexported=$$(find include -name '*.h' -exec awk '/^#if DOXYGEN/{d=1} d==0 && /^[a-z_][A-Za-z0-9_ ]*\**[[:space:]]*gfnt_[a-z0-9_]+[[:space:]]*\(/{print FILENAME": "$$0} /^#endif/{d=0}' {} + \
@@ -1832,7 +1842,6 @@ ifeq ($(OS_NAME), Linux)
 		printf "anything, so that the renames in namespace.h are already in effect. A\n" >&2; \
 		printf "header that skips it can name a type before that type has been renamed,\n" >&2; \
 		printf "producing two different types under one spelling.\n" >&2; \
-		printf "See CONVENTIONS.md section 4.\n" >&2; \
 		exit 1; \
 	fi
 	@badguards=$$(find include src -name '*.h' -exec awk 'FNR==1{d=0} !d && /^#ifndef/{print $$2; d=1}' {} + \
@@ -2446,11 +2455,11 @@ coverage: ## Build instrumented, run the tests, and report line coverage
 # clean. Nothing looks wrong. The contamination is latent in the objects: a
 # later plain `make` finds them newer than their sources, does not rebuild
 # them, and the first time it has any reason to RELINK it produces a .so with
-# three undefined gcov symbols. bootstrap.sh installs that, and every
-# downstream library fails to link.
+# three undefined gcov symbols. Installing that breaks the link of every
+# downstream library.
 #
-# That happened. It broke the shared prefix for the whole workspace and was
-# found by a sibling project failing to link, not by anything here - measured
+# That happened. It broke a shared install prefix and was
+# found by a dependent project failing to link, not by anything here - measured
 # afterwards: instrumented object 3 gcov refs, the .so beside it 0, the same
 # .so after a relink 3.
 #

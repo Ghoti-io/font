@@ -252,8 +252,20 @@ GFNT_API void gfnt_outline_clear(GFNT_Outline * outline);
  *   it is the default instance's. The outline's own bounds are the ones at the
  *   location.
  * - The **phantom points** - the four after a glyph's own, which carry advance
- *   and bearing deltas - are not applied to anything here. Metrics at a location
- *   are a different accessor's business (design.md section 7.7).
+ *   and bearing deltas - are applied to nothing here but the glyph's origin,
+ *   below. Metrics at a location are a different accessor's business
+ *   (design.md section 7.7).
+ *
+ * **Where the glyph sits.** A `glyf` outline is returned with its origin at x = 0:
+ * the points the file stores are in the glyph's own design coordinates, whose
+ * origin is the first phantom point, `xMin` less the left side bearing, and the
+ * outline is moved by the left side bearing less `xMin` (zero in every font whose
+ * bearings equal their `xMin`, which is what the head table's bit 1 asks for). A
+ * composite is moved by its own point, or by that of its USE_MY_METRICS component;
+ * at a location `gvar`'s delta to the point moves it too unless the face has an
+ * `HVAR`. A CFF, CFF2 or Type 1 outline is not moved: its origin is where its
+ * charstring draws it. design.md section 7.3 has the rules and which of them the
+ * specification states.
  * @param allocator Allocator for the outline, or NULL for the default.
  * @param out_outline Receives a new outline the caller destroys. Written only
  *   on success.

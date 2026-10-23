@@ -132,9 +132,12 @@ static CBox box_union(CBox a, CBox b) {
 /* The box a version 0 layer's glyph contributes: its drawn outline, in float, with
  * composites carried through their transforms - not the header's box, which HarfBuzz
  * ignores (a header bumped by 50 units changes nothing) and which rounds a scaled
- * component. A glyph with no outline contributes the box from (-1, -1) to (0, 0), not
- * nothing: a glyph of two empty layers measures 1 by 1 below and left of the origin,
- * and an empty layer beside a drawn one stretches its box to (-1, -1). */
+ * component. The outline is the placed one, with its origin at zero (a `glyf` glyph
+ * whose left side bearing is not its xMin is drawn shifted by the difference, as
+ * HarfBuzz draws it), so nothing is added here for it. A glyph with no outline
+ * contributes the box from (-1, -1) to (0, 0), not nothing: a glyph of two empty
+ * layers measures 1 by 1 below and left of the origin, and an empty layer beside a
+ * drawn one stretches its box to (-1, -1). */
 static bool layer_box(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, CBox * out) {
   GFNT_Outline * outline = NULL;
@@ -158,22 +161,6 @@ static bool layer_box(const GFNT_Face * face, uint32_t glyph,
   }
   *out = (CBox){(float)box.x_min / 64.0f, (float)box.y_min / 64.0f,
       (float)box.x_max / 64.0f, (float)box.y_max / 64.0f};
-  // HarfBuzz places a `glyf` outline so that its left edge sits at the left side
-  // bearing `hmtx` states, whatever the header's xMin says: a glyph whose two
-  // disagree is drawn shifted by the difference.
-  if (gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'))
-      && !(variation && variation->count)) {
-    GFNT_Box stated;
-    int32_t lsb;
-
-    if (gfnt_face_glyph_stated_box(face, glyph, &stated, NULL) == GFNT_OK
-        && gfnt_face_glyph_side_bearing(face, glyph, NULL, &lsb, NULL) == GFNT_OK) {
-      float shift = (float)lsb - (float)stated.x_min / 64.0f;
-
-      out->x0 += shift;
-      out->x1 += shift;
-    }
-  }
   return true;
 }
 

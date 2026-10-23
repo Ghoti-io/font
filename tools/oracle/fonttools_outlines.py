@@ -54,6 +54,8 @@ from fontTools.ttLib import TTFont
 from fontTools.ttLib.tables import ttProgram
 from fontTools.ttLib.tables._g_l_y_f import Glyph, GlyphCoordinates
 
+import fonttools_placement
+
 
 # 26.6: one font unit is 64, and a half unit - which is where an implicit
 # midpoint lands - is 32.
@@ -117,15 +119,22 @@ class Path(BasePen):
         self.lines.append("close")
 
 
-def flattened(glyf, name):
+def flattened(glyf, name, shift=0):
     """The glyph with its components resolved, as a simple glyph.
 
     No `round=`: a composite's transformed coordinates are kept as they come out
     of the transform, because this library keeps them in 26.6 rather than
     rounding them to font units, and rounding here would make every scaled
     component a disagreement.
+
+    @p shift moves every point in x: the glyph's origin put at zero, which
+    `fonttools_placement.origin()` computes (the negative of the first phantom
+    point). Zero leaves the points where the file has them.
     """
     coordinates, ends, flags = glyf[name].getCoordinates(glyf)
+    if shift:
+        coordinates = coordinates.copy()
+        coordinates.translate((shift, 0))
     out = Glyph()
     out.numberOfContours = len(ends)
     out.coordinates = GlyphCoordinates(coordinates)
@@ -134,6 +143,21 @@ def flattened(glyf, name):
     out.program = ttProgram.Program()
     out.program.fromBytecode(b"")
     return out
+
+
+def check_native(font, name, glyph):
+    """Where fontTools speaks for itself, hold the explicit rule to it.
+
+    A simple glyph's offset in fontTools' glyph set is `lsb - xMin`, which is the
+    negative of `fonttools_placement.origin()`: if they differ, that function is
+    not fontTools' rule restated but something else, and every composite below it
+    inherits the error.
+    """
+    if glyph.isComposite() or not hasattr(glyph, "xMin"):
+        return
+    native = font["hmtx"][name][1] - glyph.xMin
+    if native != -fonttools_placement.origin(font, name):
+        raise AssertionError("placement rule disagrees with fontTools")
 
 
 def tag_of(flag):
@@ -179,7 +203,9 @@ def main(argv):
         name = order[index]
         source = glyf[name]
         try:
-            flat = flattened(glyf, name)
+            flat = flattened(glyf, name,
+                             -fonttools_placement.origin(font, name))
+            check_native(font, name, source)
         except Exception as why:  # noqa: BLE001 - the reason is the output
             print("glyph %d: reference refused %s" % (index, type(why).__name__))
             continue

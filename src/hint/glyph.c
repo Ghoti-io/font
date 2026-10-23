@@ -298,7 +298,7 @@ static GFNT_Result gfnt_hint_simple(GFNT_HintWalk * w, uint32_t glyph, bool top,
   bool hinted = false;
   GFNT_Result r;
 
-  r = gfnt_face_glyph_outline(w->face, glyph, NULL, NULL, &units, w->error);
+  r = gfnt_face_glyph_outline_unplaced(w->face, glyph, NULL, NULL, &units, w->error);
   if (r != GFNT_OK) return r;
   r = gfnt_glyf_program(w->face, glyph, &program, &program_length, w->error);
   if (r == GFNT_OK) r = gfnt_hint_metrics(w->face, glyph, &x_min, &bearing, &advance, w->error);

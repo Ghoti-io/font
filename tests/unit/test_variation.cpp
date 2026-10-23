@@ -736,6 +736,12 @@ Points whole(std::initializer_list<std::pair<int, int>> units) {
   return out;
 }
 
+// A tuple that names every point names the four phantom points too, and the first
+// of them is the glyph's origin: a delta to it moves the whole outline the other
+// way when the glyph is placed (design.md section 7.3). The tests below that watch
+// a point's own movement therefore give the four points of the square a delta and
+// the phantom points none: a run of four values (0x03), a run of four zeros (0x83)
+// for the phantoms, and the y deltas, a run of eight zeros (0x87).
 const std::vector<GFNT_F2Dot14> kFull = {16384};
 const std::vector<GFNT_F2Dot14> kHalf = {8192};
 
@@ -905,8 +911,7 @@ TEST(Gvar, AnIntermediateRegionRampsUpToItsPeakAndDownAgain) {
   tuple.peak = {8192};
   tuple.start = {4096};
   tuple.end = {16384};
-  tuple.data = {0x07, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,
-                0x87};
+  tuple.data = {0x03, 0x10, 0x10, 0x10, 0x10, 0x83, 0x87};
   GvarSpec spec;
   spec.glyphs = {glyph_variation_data({tuple})};
   Moving font({square()}, build_gvar(spec));
@@ -931,7 +936,7 @@ TEST(Gvar, TwoAxesMultiplyTheirScalars) {
   Tuple tuple;
 
   tuple.peak = {16384, 16384};
-  tuple.data = {0x07, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x87};
+  tuple.data = {0x03, 0x40, 0x40, 0x40, 0x40, 0x83, 0x87};
   GvarSpec spec;
   spec.axis_count = 2;
   spec.glyphs = {glyph_variation_data({tuple})};
@@ -954,7 +959,7 @@ TEST(Gvar, ADeltaTimesAScalarThatIsNotAWholeNumberKeepsItsFraction) {
   Tuple tuple;
 
   tuple.peak = {16384};
-  tuple.data = {0x07, 0x19, 0x19, 0x19, 0x19, 0x19, 0x19, 0x19, 0x19, 0x87};
+  tuple.data = {0x03, 0x19, 0x19, 0x19, 0x19, 0x83, 0x87};
   GvarSpec spec;
   spec.glyphs = {glyph_variation_data({tuple})};
   Moving font({square()}, build_gvar(spec));
@@ -1377,7 +1382,7 @@ TEST(Gvar, AnAxisATupleDoesNotConstrainDoesNotZeroIt) {
   Tuple tuple;
 
   tuple.peak = {16384, 0};
-  tuple.data = {0x07, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x87};
+  tuple.data = {0x03, 0x10, 0x10, 0x10, 0x10, 0x83, 0x87};
   GvarSpec spec;
   spec.axis_count = 2;
   spec.glyphs = {glyph_variation_data({tuple})};
@@ -1411,7 +1416,7 @@ TEST(Gvar, ARegionTheFormatCallsInvalidIsIgnoredForThatAxisNotRefused) {
     tuple.peak = {test.peak};
     tuple.start = {test.start};
     tuple.end = {test.end};
-    tuple.data = {0x07, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x87};
+    tuple.data = {0x03, 0x10, 0x10, 0x10, 0x10, 0x83, 0x87};
     GvarSpec spec;
     spec.glyphs = {glyph_variation_data({tuple})};
     Moving font({square()}, build_gvar(spec));
@@ -1480,10 +1485,12 @@ TEST(Gvar, InterpolationWorksWhenTheNamedPointsRunDownAnAxis) {
       whole({{2, 40}, {2, 120}, {106, 120}, {106, 40}}));
 }
 
-TEST(Gvar, PhantomPointNumbersAreCountedAndMoveNothingTheOutlineHas) {
+TEST(Gvar, PhantomPointNumbersAreCountedAndMoveTheGlyphsOriginNotItsPoints) {
   // A square has four points and a tuple may name numbers 4 to 7, which are the
   // phantom points: they carry advance and bearing deltas and are not part of the
-  // outline. Naming one is not an error and moves no point of the glyph.
+  // outline. Naming one is not an error and moves no point of the glyph. Number 4
+  // is the origin, though, and moving it moves where the glyph is placed: by 50
+  // here, so the outline sits 50 to the left of its points.
   Tuple tuple;
 
   tuple.peak = {16384};
@@ -1499,7 +1506,7 @@ TEST(Gvar, PhantomPointNumbersAreCountedAndMoveNothingTheOutlineHas) {
   GFNT_Result result = GFNT_ERR_INTERNAL;
 
   EXPECT_EQ(font.points(0, kFull, &result),
-      whole({{0, 0}, {0, 100}, {100, 100}, {100, 0}}));
+      whole({{-50, 0}, {-50, 100}, {50, 100}, {50, 0}}));
   EXPECT_EQ(result, GFNT_OK);
 }
 
@@ -1529,7 +1536,7 @@ TEST(Gvar, ATupleThatDoesNotApplyHereIsNotReadHere) {
   broken.peak = {16384};
   broken.data = {0xFF};                            // a run that never ends
   fine.peak = {-16384};
-  fine.data = {0x07, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x87};
+  fine.data = {0x03, 0x05, 0x05, 0x05, 0x05, 0x83, 0x87};
   GvarSpec spec;
   spec.glyphs = {glyph_variation_data({broken, fine})};
   Moving font({square()}, build_gvar(spec));
@@ -1718,7 +1725,7 @@ TEST(Gvar, ARegionWithNoWidthAtAnAxisIsNeverDividedBy) {
   tuple.peak = {8192};
   tuple.start = {8192};
   tuple.end = {8192};
-  tuple.data = {0x07, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x87};
+  tuple.data = {0x03, 0x10, 0x10, 0x10, 0x10, 0x83, 0x87};
   GvarSpec spec;
   spec.glyphs = {glyph_variation_data({tuple})};
   Moving font({square()}, build_gvar(spec));
@@ -1737,9 +1744,9 @@ TEST(Gvar, EveryTupleThatAppliesIsSummedNotJustTheLast) {
   Tuple second;
 
   first.peak = {16384};
-  first.data = {0x07, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x87};
+  first.data = {0x03, 0x0A, 0x0A, 0x0A, 0x0A, 0x83, 0x87};
   second.peak = {16384};
-  second.data = {0x07, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x87};
+  second.data = {0x03, 0x05, 0x05, 0x05, 0x05, 0x83, 0x87};
   GvarSpec spec;
   spec.glyphs = {glyph_variation_data({first, second})};
   Moving font({square()}, build_gvar(spec));
@@ -1752,11 +1759,11 @@ TEST(Gvar, EveryTupleThatAppliesIsSummedNotJustTheLast) {
   Tuple ramp;
 
   wide.peak = {16384};
-  wide.data = {0x07, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x87};
+  wide.data = {0x03, 0x10, 0x10, 0x10, 0x10, 0x83, 0x87};
   ramp.peak = {16384};
   ramp.start = {0};
   ramp.end = {16384};
-  ramp.data = {0x07, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x87};
+  ramp.data = {0x03, 0x20, 0x20, 0x20, 0x20, 0x83, 0x87};
   spec.glyphs = {glyph_variation_data({wide, ramp})};
   Moving overlapping({square()}, build_gvar(spec));
 
@@ -1773,9 +1780,9 @@ TEST(Gvar, AFractionalDeltaIsRoundedToTheNearestSixtyFourthNotTruncated) {
   Tuple down;
 
   up.peak = {16384};
-  up.data = {0x07, 0x1A, 0x1A, 0x1A, 0x1A, 0x1A, 0x1A, 0x1A, 0x1A, 0x87};
+  up.data = {0x03, 0x1A, 0x1A, 0x1A, 0x1A, 0x83, 0x87};
   down.peak = {16384};
-  down.data = {0x07, 0xE7, 0xE7, 0xE7, 0xE7, 0xE7, 0xE7, 0xE7, 0xE7, 0x87};
+  down.data = {0x03, 0xE7, 0xE7, 0xE7, 0xE7, 0x83, 0x87};
   GvarSpec spec;
   spec.glyphs = {glyph_variation_data({up}), glyph_variation_data({down})};
   Moving font({square(), square()}, build_gvar(spec));

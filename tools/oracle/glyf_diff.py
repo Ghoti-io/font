@@ -32,6 +32,19 @@ and a contour that begins off-curve - because neither of those is in the file.
 Only the path sees them. And a reader can produce a plausible path from points it
 read wrongly, which only the point comparison sees.
 
+**Where the glyph sits is compared too, and against both references.** The points a
+`glyf` glyph stores are in its own design coordinates, whose origin is the first
+phantom point (`xMin - lsb`); this library moves the outline so that the origin is at
+zero, as FreeType does (design.md section 7.3). fontTools' glyph set does that for a
+simple glyph and not for a composite, so `fonttools_outlines.py` computes the move
+explicitly from fontTools' own tables (and checks it against fontTools' offset for
+every simple glyph), and **FreeType's outline, unhinted at one pixel per font unit, is
+compared point for point with this library's** for every glyph both draw. The fixtures
+whose left side bearings are not their `xMin` (`outline-placement.ttf`, and most of
+the synthetic set, which state a bearing of zero) are in the population, so a
+placement that is wrong - a missing move, a composite moved by the wrong glyph's
+point - is a disagreement with both.
+
 **Paths are compared as cycles.** A closed contour has no starting vertex: where
 a walk begins is a choice, and the two defensible answers differ - this library
 and FreeType begin at the contour's last point, fontTools rotates to the first
@@ -45,6 +58,7 @@ Usage:
 """
 
 import os
+import struct
 import subprocess
 import sys
 
@@ -395,10 +409,119 @@ def rotate(contour):
     return min(rotations)
 
 
+# [coordinates compared against FreeType, fonts FreeType could not be asked
+# about, glyphs it refused that this library drew], and which fonts those were.
+FREETYPE = [0, 0, 0]
+FREETYPE_UNASKED = []
+
 # How many fonts both readers agree carry no indexable outline, counted rather
 # than left in the skip list: a *stated* skip and a reference crash print the same
 # "skipped" line, and the five fonts this counts arrived in the corpus as a crash.
 BITMAP_ONLY = [0]
+
+
+def units_per_em(path):
+    """The font's `unitsPerEm`, read from `head` without a library."""
+    with open(path, "rb") as handle:
+        header = handle.read(12)
+        if header[:4] == b"ttcf":
+            handle.seek(12)
+            offset = struct.unpack(">I", handle.read(4))[0]
+            handle.seek(offset)
+            header = handle.read(12)
+        count = struct.unpack(">H", header[4:6])[0]
+        for _ in range(count):
+            record = handle.read(16)
+            if record[:4] == b"head":
+                at = struct.unpack(">I", record[8:12])[0]
+                handle.seek(at + 18)
+                return struct.unpack(">H", handle.read(2))[0]
+    raise Skip("no head table, so no unitsPerEm to ask FreeType at")
+
+
+def freetype_points(path, face, stride, first):
+    """FreeType's unhinted outline of every sampled glyph: {glyph: [(x, y)]}, or None.
+
+    Drawn at one pixel per font unit, so that a coordinate comes out as font units
+    times 64 - the space this library's outlines are in - and nothing is rounded to
+    a pixel. `None` for a glyph FreeType refused.
+    """
+    em = units_per_em(path)
+    argv = oracle_env.command("freetype", ["freetype-hinted", path, str(face),
+        "0", str(em), str(stride), str(first)])
+    finished = subprocess.run(argv, capture_output=True, text=True)
+    if finished.returncode != 0:
+        return None
+    out = {}
+    glyph = None
+    for line in finished.stdout.splitlines():
+        if line.startswith("g"):
+            head, _, tail = line.partition(" ")
+            glyph = int(head[1:])
+            out[glyph] = None if tail.startswith("error") else []
+        elif line.startswith("p ") and glyph is not None and out[glyph] is not None:
+            parts = line.split()
+            out[glyph].append((int(parts[1]), int(parts[2])))
+    return out
+
+
+# How far a FreeType coordinate may be from this library's, in 64ths. A simple
+# glyph's points are integers times 64 and agree exactly; a composite's component
+# is carried through a 16.16 matrix, rounded once in each, so one 64th.
+FREETYPE_ALLOWANCE = 1
+
+
+def against_freetype(path, face, stride, mine, report):
+    """Every sampled glyph's points, this library's against FreeType's.
+
+    Returns (compared, disagreements, declined, known): coordinates compared,
+    those that differ, glyphs FreeType refused that this library drew, and whether
+    FreeType could be asked at all. This is the independent witness for where a
+    glyph is placed: fontTools holds simple glyphs to the same rule, and this
+    holds composites and `USE_MY_METRICS` to the reference renderer.
+    """
+    theirs = freetype_points(path, face, stride, 0)
+    if theirs is None:
+        return (0, 0, 0, False)
+    compared = 0
+    disagreements = 0
+    declined = 0
+    shown = 0
+    for glyph, points in sorted(theirs.items()):
+        if "glyph.%d.shape" % glyph not in mine:
+            continue
+        if str(mine["glyph.%d.shape" % glyph]).startswith("refused "):
+            continue
+        if points is None:
+            declined += 1
+            continue
+        count = len([key for key in mine
+                     if key.startswith("glyph.%d.point." % glyph)])
+        if count != len(points):
+            disagreements += 1
+            if shown < PER_FONT and report[0] < TOTAL:
+                sys.stderr.write("  %s: glyph %d: FreeType has %d points, "
+                    "this library %d\n" % (os.path.basename(path), glyph,
+                                          len(points), count))
+                shown += 1
+                report[0] += 1
+            continue
+        for at, (x, y) in enumerate(points):
+            ours_x, ours_y = [int(v) for v in
+                              str(mine["glyph.%d.point.%d" % (glyph, at)]).split()[:2]]
+            compared += 1
+            if (abs(ours_x - x) > FREETYPE_ALLOWANCE
+                    or abs(ours_y - y) > FREETYPE_ALLOWANCE):
+                disagreements += 1
+                if shown < PER_FONT and report[0] < TOTAL:
+                    sys.stderr.write("  %s: glyph %d point %d: FreeType (%d, %d)"
+                        ", this library (%d, %d)\n"
+                        % (os.path.basename(path), glyph, at, x, y,
+                           ours_x, ours_y))
+                    shown += 1
+                    report[0] += 1
+                break
+    return (compared, disagreements, declined, True)
 
 
 def compare(path, face, stride, report, allowance):
@@ -492,8 +615,15 @@ def compare(path, face, stride, report, allowance):
                 % (os.path.basename(path), key, want, got))
             shown += 1
             report[0] += 1
-    return (compared, disagreements + undocumented, len(glyphs),
-            theirs.get("inexact", 0), len(declined))
+    seen, differed, refused, known = against_freetype(path, face, stride, mine,
+                                                      report)
+    FREETYPE[0] += seen
+    FREETYPE[1] += 0 if known else 1
+    FREETYPE[2] += refused
+    if not known:
+        FREETYPE_UNASKED.append(os.path.basename(path))
+    return (compared + seen, disagreements + undocumented + differed,
+            len(glyphs), theirs.get("inexact", 0), len(declined))
 
 
 def main(argv):
@@ -587,6 +717,11 @@ def main(argv):
           "%d comparison(s) rested on the one-64th allowance, largest "
           "difference %d/64 of a font unit"
           % (inexact, allowance[0], allowance[1]))
+    print("glyf_diff: %d coordinate(s) compared with FreeType's own outline "
+          "(unhinted, one pixel per font unit; allowance %d/64); FreeType "
+          "refused %d glyph(s) this library drew, and could not be asked about "
+          "%d font(s)" % (FREETYPE[0], FREETYPE_ALLOWANCE, FREETYPE[2],
+                          FREETYPE[1]))
     if declined:
         print("glyf_diff: %d glyph(s) this library declined and is documented "
               "to decline" % declined)
@@ -610,6 +745,15 @@ def main(argv):
         return 1
     if not compared:
         sys.stderr.write("glyf_diff: nothing was compared\n")
+        return 1
+    # FreeType must have been asked about every synthetic fixture: they are small,
+    # well-formed, and the population the placement rule is held to it on.
+    unasked = [name for name in FREETYPE_UNASKED
+               if os.path.join(FIXTURES, name) in synthetic_paths
+               and name.endswith(".ttf")]
+    if unasked or not FREETYPE[0]:
+        sys.stderr.write("glyf_diff: FreeType could not be asked about %s, or "
+                         "about anything\n" % (", ".join(unasked) or "-"))
         return 1
     if glyphs < 100:
         sys.stderr.write(

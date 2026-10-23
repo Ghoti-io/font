@@ -98,10 +98,16 @@ struct Font {
     }
     segments.push_back({0xFFFF, 0xFFFF, 1, {}});
     const uint16_t glyphs = static_cast<uint16_t>(chars.size() + 1);
-    std::vector<std::pair<uint16_t, int16_t>> metrics(glyphs, {500, 0});
+    // The glyphs that have outlines are squares from x = 50, so their left side
+    // bearing is 50: a glyph is placed with its origin (xMin less the bearing) at
+    // zero, and a bearing that contradicts the outline would move the ink.
+    std::vector<std::pair<uint16_t, int16_t>> metrics(glyphs,
+        {500, static_cast<int16_t>(outlines ? 50 : 0)});
+    metrics[0].second = 0;
     for (size_t i = 0; i < chars.size(); ++i) {
       if (chars[i] == ' ') {
         metrics[i + 1].first = 250;
+        metrics[i + 1].second = 0;
       }
     }
     std::vector<gfnttest::Table> extra;

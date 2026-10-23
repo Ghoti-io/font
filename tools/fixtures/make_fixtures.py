@@ -2014,6 +2014,135 @@ def build_cff2_fds(out):
     fb.save(out)
 
 
+# Where a glyph's origin is: `lsb - xMin`, the TrueType rule that the left side
+# bearing point (the first phantom point, `xMin - lsb`) is the origin. Every other
+# fixture states a bearing of zero or of the glyph's own `xMin`, so none of them can
+# say whether a reader moves an outline by it; these do, and they say which glyph
+# is which by its name.
+#
+# `box` is the control: its bearing is its `xMin`, so it does not move. `moved` and
+# `back` move right and left. The composites move by their own bearing, or by that
+# of the component flagged USE_MY_METRICS (the last such one, and through a nested
+# composite). Nothing here is third-party: the numbers are small and each is meant
+# to be worked out by hand, and the design.md table says what FreeType, fontTools
+# and this library answer for each.
+PLACEMENT_BOX = [[(100, 0, True), (100, 400, True), (300, 400, True),
+                  (300, 0, True)]]
+PLACEMENT_BACK = [[(200, 0, True), (200, 300, True), (400, 300, True),
+                   (400, 0, True)]]
+
+PLACEMENT_GLYPHS = {
+    ".notdef": raw_glyph(OUTLINE_CONTOURS),
+    "space": raw_glyph([]),
+    "box": raw_glyph(PLACEMENT_BOX),
+    "moved": raw_glyph(PLACEMENT_BOX),
+    "back": raw_glyph(PLACEMENT_BACK),
+    # Its own bearing (20) is not its xMin (150).
+    "comp": composite_glyph([component("box", x=50, y=0)]),
+    # Borrows `moved`'s point, not its own (bearing 7, xMin 140).
+    "comp-umm": composite_glyph([
+        component("moved", x=40, y=0, flags=FLAG_USE_MY_METRICS)]),
+    # The flagged component is the first of two; the second must not take it back.
+    "comp-umm-first": composite_glyph([
+        component("moved", x=0, y=0, flags=FLAG_USE_MY_METRICS),
+        component("box", x=300, y=0)]),
+    # Both flagged: the last wins, and the last has no offset to its bearing.
+    "comp-umm-last": composite_glyph([
+        component("moved", x=0, y=0, flags=FLAG_USE_MY_METRICS),
+        component("box", x=300, y=0, flags=FLAG_USE_MY_METRICS)]),
+    # A flag through a composite that is itself flagged: the borrowed point is the
+    # innermost final one.
+    "comp-umm-nested": composite_glyph([
+        component("comp-umm", x=10, y=0, flags=FLAG_USE_MY_METRICS)]),
+    # The control for composites: its bearing is its xMin.
+    "comp-eq": composite_glyph([component("box", x=50, y=0)]),
+    # A composite whose component is flagged and is empty: the metrics lent are
+    # those of a glyph with no description (xMin counted as zero, as FreeType does).
+    "comp-umm-empty": composite_glyph([
+        component("space", x=0, y=0, flags=FLAG_USE_MY_METRICS),
+        component("box", x=0, y=0)]),
+}
+PLACEMENT_ORDER = list(PLACEMENT_GLYPHS)
+# The bearings the font states (`hmtx`), by glyph: the first column of the table
+# in design.md section 7.3 is these against each glyph's `xMin`.
+PLACEMENT_BEARINGS = {".notdef": 0, "space": 25, "box": 100, "moved": 160,
+                      "back": 50, "comp": 20, "comp-umm": 7,
+                      "comp-umm-first": 9, "comp-umm-last": 11,
+                      "comp-umm-nested": 13, "comp-eq": 150,
+                      "comp-umm-empty": 17}
+PLACEMENT_ADVANCES = {name: 600 for name in PLACEMENT_ORDER}
+
+
+def _placement_font(label, *, variable=False):
+    """The placement glyphs with their stated bearings, before it is saved."""
+    fb = truetype(label, outline_cmap(PLACEMENT_ORDER), order=PLACEMENT_ORDER,
+                  glyphs=PLACEMENT_GLYPHS, advances=PLACEMENT_ADVANCES,
+                  glyph_names=True)
+    hmtx = fb.font["hmtx"]
+    for name in PLACEMENT_ORDER:
+        hmtx.metrics[name] = (PLACEMENT_ADVANCES[name], PLACEMENT_BEARINGS[name])
+    if variable:
+        weight = AxisDescriptor(name="Weight", tag="wght", minimum=100,
+                                default=400, maximum=900)
+        fb.setupFvar([weight], [
+            {"location": {"wght": 400}, "stylename": "Regular"}])
+        up = {"wght": (0.0, 1.0, 1.0)}
+        fb.setupGvar({
+            # A phantom delta alone: the outline's points stay and its origin
+            # moves.
+            "box": [_tuple(up, [None] * 4 + _phantoms((20, 0)))],
+            # Points and origin both: the points move right by ten, the origin
+            # by thirty.
+            "moved": [_tuple(up, [(10, 0)] * 4 + _phantoms((30, 0)))],
+            "comp": [_tuple(up, [(0, 0)] + _phantoms((-15, 0)))],
+            # The composite's own delta, on top of the component's lent point.
+            "comp-umm": [_tuple(up, [(5, 0)] + _phantoms((7, 0)))],
+            # A glyph with no description and a delta to its origin, which a
+            # composite flagged USE_MY_METRICS on it lends.
+            "space": [_tuple(up, _phantoms((12, 0)))],
+        })
+    return fb
+
+
+def build_outline_placement(out):
+    """`glyf` glyphs whose left side bearing is not their `xMin`, simple and composite."""
+    fb = _placement_font("Outline Placement")
+    pin(fb)
+    fb.save(out)
+
+
+def build_variable_placement(out):
+    """The same glyphs with `fvar` and `gvar`, the phantom points moving."""
+    fb = _placement_font("Variable Placement", variable=True)
+    pin(fb)
+    fb.save(out)
+
+
+def build_variable_placement_hvar(out):
+    """`variable-placement.ttf` with an `HVAR` that has an advance and a bearing mapping."""
+    from fontTools.ttLib.tables import otTables as ot
+    from fontTools.varLib import builder
+
+    fb = _placement_font("Variable Placement Hvar", variable=True)
+    font = fb.font
+    regions = builder.buildVarRegionList([{"wght": (0.0, 1.0, 1.0)}], ["wght"])
+    advance = [[3 + i] for i in range(len(PLACEMENT_ORDER))]
+    bearing = [[40 + i] for i in range(len(PLACEMENT_ORDER))]
+    datas = [builder.buildVarData([0], advance, optimize=False),
+             builder.buildVarData([0], bearing, optimize=False)]
+    hvar = font["HVAR"] = newTable("HVAR")
+    table = hvar.table = ot.HVAR()
+    table.Version = 0x00010000
+    table.VarStore = builder.buildVarStore(regions, datas)
+    table.AdvWidthMap = builder.buildVarIdxMap(
+        [(0 << 16) | i for i in range(len(PLACEMENT_ORDER))], PLACEMENT_ORDER)
+    table.LsbMap = builder.buildVarIdxMap(
+        [(1 << 16) | i for i in range(len(PLACEMENT_ORDER))], PLACEMENT_ORDER)
+    table.RsbMap = None
+    pin(fb)
+    fb.save(out)
+
+
 def build_variable_hvar(out):
     """`variable-gvar.ttf` with `HVAR` (advance and bearing mappings) and `MVAR`."""
     from fontTools.ttLib.tables import otTables as ot
@@ -5157,6 +5286,19 @@ FIXTURES = {
     "outline-cubic-flag.ttf": (build_outline_cubic_flag,
         "glyf: flag bit 0x80 in a font declaring glyphDataFormat 0, so the "
         "per-glyph refusal is the only one that can fire"),
+    "outline-placement.ttf": (build_outline_placement,
+        "glyf glyphs whose left side bearing is not their xMin: a simple glyph "
+        "moved right and one moved left, a control whose bearing is its xMin, "
+        "and composites with their own bearing, with a USE_MY_METRICS component "
+        "(first, last of two, nested, and an empty one) and a composite control"),
+    "variable-placement.ttf": (build_variable_placement,
+        "outline-placement.ttf with fvar and a gvar that moves the first phantom "
+        "point of a simple glyph with and without its points, of a composite, of a "
+        "composite that borrows a component's metrics, and of a glyph with no "
+        "description, and no HVAR"),
+    "variable-placement-hvar.ttf": (build_variable_placement_hvar,
+        "variable-placement.ttf with an HVAR that has an advance mapping and a "
+        "left bearing mapping, so the stored point stands over gvar's"),
     "variable-hvar.ttf": (build_variable_hvar,
         "variable-gvar.ttf's glyphs with HVAR - an advance mapping and a left "
         "bearing mapping that shares three rows among nine glyphs, over two "

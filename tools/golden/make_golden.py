@@ -85,11 +85,23 @@ WITH_OUTLINES = (
     # refusal is committed beside the shapes, because a glyph that started
     # rendering would mean M11's check had stopped firing.
     "outline-broken-loca.ttf",
+    # Where a glyph's origin is: bearings that are not the glyphs' `xMin`, simple and
+    # composite, so the move (and the arithmetic of the composite's component
+    # offsets under it) is reproduced on a big-endian machine too.
+    "outline-placement.ttf",
     # Phase 2's charstrings, which reach the scan converter through a different
     # producer and - `cff-curves` and `cff-type1` above all - through **cubic**
     # segments, where `glyf` sends quadratics. The flattener's two arms are the
     # reason these are committed rather than probed: a cubic subdivided to a
     # different depth on a big-endian machine is exactly what this gate is for.
+    # `cff.otf` is basic.ttf's five outlines as charstrings. Until a `glyf` outline
+    # was placed by its bearing they rendered pixel for pixel alike, and the probe
+    # below asserted it; `basic.ttf` states a bearing of zero for glyphs whose
+    # outlines start at 40, 80 and 60, so its glyphs now sit that far left of
+    # `cff.otf`'s - which a charstring is not moved by, as in every other renderer
+    # - and the two are committed as the two things they now are. That the two
+    # containers still read the same outlines is testCff's to say.
+    "cff.otf",
     "cff-curves.otf",
     "cff-type1.otf",
     "cff-arith.otf",
@@ -109,11 +121,10 @@ WITH_OUTLINES = (
 # Fixtures that must render **nothing** through the rasteriser.
 #
 # `cff.otf` was here until phase 2, on the grounds that a font with no `glyf`
-# could not draw. It can, and what it draws is worth more than the refusals it
-# used to contribute: its charstrings are the same five outlines `basic.ttf`
-# holds as `glyf`, so the subset check below now asserts that **two containers
-# and one rasteriser produce identical pixels**. That is a cross-format
-# comparison this gate could not make before and gets for free.
+# could not draw. It can, and it is committed above: its charstrings are the same
+# five outlines `basic.ttf` holds as `glyf`, which until outlines were placed by
+# their bearing made the subset check below assert that **two containers and one
+# rasteriser produce identical pixels**. They differ now by the placement alone.
 #
 # The nine bitmap containers are here because they have no outlines at all, and
 # that is the assertion: `gfnt_face_render_glyph()` must refuse every glyph of
@@ -203,7 +214,11 @@ NOT_FONTS = (".shape",)
 # The count is of distinct renderings (size, position, total and hash), so it
 # also moves when the renderer changes what a curve looks like: two outlines whose
 # pixels coincided under one flattener may not under the next. A change of that
-# kind re-pins; it does not mean a fixture drifted.
+# kind re-pins; it does not mean a fixture drifted. (The ten 175s were 150 until a
+# glyph was placed by its bearing: their `.notdef` is the outline-*.ttf one, 80 to
+# 520, and sits where the font states it (bearing 80); outline-simple.ttf's, whose
+# bearing is zero, is now drawn at 0 and no longer shares its renderings: twenty-five
+# more, in every one.)
 UNCOMMITTED_SHAPES = {
     "arabic-join.ttf": 1500,
     "cff-cid-names.otf": 25,
@@ -214,23 +229,23 @@ UNCOMMITTED_SHAPES = {
     "cff2-fds.otf": 4759,
     "color-cbdt-sizes.ttf": 50,
     "color-v0-edges.ttf": 25,
-    "color-v1-var.ttf": 150,
-    "color-v1-varmap.ttf": 150,
-    "color-v1-varnone.ttf": 150,
+    "color-v1-var.ttf": 175,
+    "color-v1-varmap.ttf": 175,
+    "color-v1-varnone.ttf": 175,
     "layout-gpos.ttf": 200,
     "layout-gsub.ttf": 850,
     "math-variable.ttf": 625,
     "math.ttf": 625,
-    "variable-avar2.ttf": 150,
+    "variable-avar2.ttf": 175,
     "variable-cff2-hvar.otf": 175,
     "variable-cff2-implicit.otf": 175,
     "variable-cff2.otf": 125,
-    "variable-cvar.ttf": 150,
-    "variable-featurevars-nested.ttf": 150,
-    "variable-featurevars.ttf": 150,
-    "variable-gvar.ttf": 150,
-    "variable-hvar.ttf": 150,
-    "variable-stat.ttf": 150,
+    "variable-cvar.ttf": 175,
+    "variable-featurevars-nested.ttf": 175,
+    "variable-featurevars.ttf": 175,
+    "variable-gvar.ttf": 175,
+    "variable-hvar.ttf": 175,
+    "variable-stat.ttf": 175,
     "vertical-text.ttf": 850,
     "woff2-triplets-source.ttf": 225,
     "woff2-triplets.woff2": 225,

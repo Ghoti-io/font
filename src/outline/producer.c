@@ -128,9 +128,15 @@ static GFNT_Result gfnt_producer_variation(const GFNT_Face * face,
   return GFNT_OK;
 }
 
-GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
+/**
+ * ::gfnt_face_glyph_outline(), and its unplaced twin when @p place is false.
+ *
+ * One body for both, so that the choice between them is one flag at one call and
+ * not a second copy of the producer switch.
+ */
+static GFNT_Result gfnt_producer_outline(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, const GFNT_Allocator * allocator,
-    GFNT_Outline ** out_outline, GFNT_Error * error) {
+    bool place, GFNT_Outline ** out_outline, GFNT_Error * error) {
   GFNT_Outline * outline = NULL;
   const GFNT_Variation * active = NULL;
   GFNT_Result result;
@@ -154,7 +160,9 @@ GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
   gfnt_outline_set_limits(outline, &face->limits);
   switch (gfnt_sfnt_producer(face)) {
     case GFNT_PRODUCER_GLYF:
-      result = gfnt_glyf_load(face, glyph, active, outline, error);
+      result = place
+          ? gfnt_glyf_load(face, glyph, active, outline, error)
+          : gfnt_glyf_load_unplaced(face, glyph, active, outline, error);
       break;
     case GFNT_PRODUCER_CFF:
       result = gfnt_cff_load(face, glyph, outline, NULL, error);
@@ -179,6 +187,21 @@ GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
   }
   *out_outline = outline;
   return GFNT_OK;
+}
+
+GFNT_Result gfnt_face_glyph_outline(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, const GFNT_Allocator * allocator,
+    GFNT_Outline ** out_outline, GFNT_Error * error) {
+  return gfnt_producer_outline(face, glyph, variation, allocator, true,
+      out_outline, error);
+}
+
+GFNT_Result gfnt_face_glyph_outline_unplaced(const GFNT_Face * face,
+    uint32_t glyph, const GFNT_Variation * variation,
+    const GFNT_Allocator * allocator, GFNT_Outline ** out_outline,
+    GFNT_Error * error) {
+  return gfnt_producer_outline(face, glyph, variation, allocator, false,
+      out_outline, error);
 }
 
 GFNT_Result gfnt_face_glyph_is_composite(const GFNT_Face * face, uint32_t glyph,

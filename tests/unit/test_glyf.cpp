@@ -82,6 +82,16 @@ struct Loaded {
   Loaded & operator=(const Loaded &) = delete;
 };
 
+/**
+ * A note that applies to every path below. These fixtures state a left side
+ * bearing of zero, and a glyph is placed with its origin (the first phantom
+ * point, `xMin - lsb`) at x = 0, so each outline sits `xMin` to the left of
+ * where the file's points are: the paths are the file's, moved left by the
+ * glyph's `xMin` (a composite by its own, or by the component flagged
+ * USE_MY_METRICS). `Placement` below, on `outline-placement.ttf`, is where the
+ * rule is tested with bearings that differ; here it is what makes a number.
+ */
+
 /** The path as one string per segment, in whole font units. */
 std::vector<std::string> path_of(const GFNT_Outline * outline) {
   std::vector<std::string> lines;
@@ -246,9 +256,9 @@ TEST(Glyf, AnExplicitQuadraticIsReadAsTheReferenceDrawsIt) {
   EXPECT_EQ(gfnt_outline_point_count(loaded.outline), 4u);
   EXPECT_EQ(gfnt_outline_contour_count(loaded.outline), 1u);
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 100 0",
-      "quad 100 400 400 400",
-      "quad 400 0 100 0",
+      "move 0 0",
+      "quad 0 400 300 400",
+      "quad 300 0 0 0",
       "close",
   }));
 }
@@ -261,9 +271,9 @@ TEST(Glyf, AnImpliedMidpointIsSynthesisedWhereTheFontLeftItOut) {
   // Four points in the file, and a fifth on the path that is in no font.
   EXPECT_EQ(gfnt_outline_point_count(loaded.outline), 4u);
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 100 0",
-      "quad 200 500 300 500",
-      "quad 400 500 500 0",
+      "move 0 0",
+      "quad 100 500 200 500",
+      "quad 300 500 400 0",
       "close",
   }));
 }
@@ -274,10 +284,10 @@ TEST(Glyf, AContourStoredBeginningOffCurveIsReadAsTheReferenceDrawsIt) {
 
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 100 0",
-      "quad 100 400 250 400",
-      "quad 400 400 400 200",
-      "quad 400 0 100 0",
+      "move 0 0",
+      "quad 0 400 150 400",
+      "quad 300 400 300 200",
+      "quad 300 0 0 0",
       "close",
   }));
 }
@@ -288,11 +298,11 @@ TEST(Glyf, AnAllOffCurveContourIsReadAsTheReferenceDrawsIt) {
 
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 250 0",
-      "quad 100 0 100 200",
-      "quad 100 400 250 400",
-      "quad 400 400 400 200",
-      "quad 400 0 250 0",
+      "move 150 0",
+      "quad 0 0 0 200",
+      "quad 0 400 150 400",
+      "quad 300 400 300 200",
+      "quad 300 0 150 0",
       "close",
   }));
 }
@@ -324,8 +334,31 @@ TEST(Glyf, TheStatedBoxIsTheCoordinateBoxAndNotTheCurvesOwn) {
           GFNT_OK);
       ASSERT_EQ(gfnt_outline_control_box(loaded.outline, &control), GFNT_OK);
       ASSERT_EQ(gfnt_outline_bounds(loaded.outline, &drawn), GFNT_OK);
-      EXPECT_EQ(box_string(stated), box_string(control))
-          << name << " glyph " << glyph;
+      // The stated box is the file's, in the glyph's own design coordinates; the
+      // outline is placed with its origin at zero, which moves it in x and in
+      // nothing else. So the box keeps its size and its y, and for a simple
+      // glyph it starts at the left side bearing (its origin is `xMin - lsb`,
+      // and the box's left edge is `xMin`).
+      if (gfnt_box_is_empty(&stated) || gfnt_box_is_empty(&control)) {
+        EXPECT_EQ(box_string(stated), box_string(control))
+            << name << " glyph " << glyph;
+      }
+      else {
+        bool composite = false;
+        int32_t bearing = 0;
+
+        EXPECT_EQ(control.x_max - control.x_min, stated.x_max - stated.x_min)
+            << name << " glyph " << glyph;
+        EXPECT_EQ(control.y_min, stated.y_min) << name << " glyph " << glyph;
+        EXPECT_EQ(control.y_max, stated.y_max) << name << " glyph " << glyph;
+        ASSERT_EQ(gfnt_face_glyph_is_composite(font, glyph, &composite,
+            nullptr), GFNT_OK);
+        ASSERT_EQ(gfnt_face_glyph_side_bearing(font, glyph, nullptr, &bearing,
+            nullptr), GFNT_OK);
+        if (!composite) {
+          EXPECT_EQ(control.x_min, bearing * 64) << name << " glyph " << glyph;
+        }
+      }
       // And the curve is inside its control points, always.
       if (!gfnt_box_is_empty(&drawn)) {
         EXPECT_LE(control.x_min, drawn.x_min) << name << " glyph " << glyph;
@@ -431,7 +464,7 @@ TEST(Glyf, AOnePointContourLoadsAndDrawsNothing) {
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(gfnt_outline_point_count(loaded.outline), 1u);
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 300 300", "close"}));
+      "move 0 300", "close"}));
 }
 
 TEST(Glyf, TwoContoursKeepTheirSeparateRanges) {
@@ -468,7 +501,7 @@ TEST(Glyf, TheSameContourStoredTwoWaysDrawsTheSameBox) {
   ASSERT_EQ(gfnt_outline_bounds(plain.outline, &first), GFNT_OK);
   ASSERT_EQ(gfnt_outline_bounds(rotated.outline, &second), GFNT_OK);
   EXPECT_EQ(box_string(first), box_string(second));
-  EXPECT_EQ(box_string(first), "100 0 500 500");
+  EXPECT_EQ(box_string(first), "0 0 400 500");
 }
 
 // --- composites ------------------------------------------------------------
@@ -494,9 +527,9 @@ TEST(Glyf, AByteOffsetPlacesItsComponent) {
 
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 200 50",
-      "quad 200 450 500 450",
-      "quad 500 50 200 50",
+      "move 0 50",
+      "quad 0 450 300 450",
+      "quad 300 50 0 50",
       "close",
   }));
 }
@@ -509,9 +542,9 @@ TEST(Glyf, AWordOffsetIsReadAtItsOwnWidth) {
   // A reader that reads bytes here lands 200 units away and reports success.
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 400 -200",
-      "quad 400 200 700 200",
-      "quad 700 -200 400 -200",
+      "move 0 -200",
+      "quad 0 200 300 200",
+      "quad 300 -200 0 -200",
       "close",
   }));
 }
@@ -524,9 +557,9 @@ TEST(Glyf, ASingleScaleIsAppliedBeforeTheOffset) {
   // reading would put this at (100,50).
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 150 100",
-      "quad 150 300 300 300",
-      "quad 300 100 150 100",
+      "move 0 100",
+      "quad 0 300 150 300",
+      "quad 150 100 0 100",
       "close",
   }));
 }
@@ -543,9 +576,9 @@ TEST(Glyf, TheScaledOffsetFlagMovesTheComponentSomewhereElse) {
   // A minimal pair: one flag bit apart, and the offset is halved with the
   // component. A reader that ignores the bit puts all three in one place.
   EXPECT_EQ(path_of(scaled.outline), (std::vector<std::string>{
-      "move 100 50",
-      "quad 100 250 250 250",
-      "quad 250 50 100 50",
+      "move 0 50",
+      "quad 0 250 150 250",
+      "quad 150 50 0 50",
       "close",
   }));
   EXPECT_NE(path_of(scaled.outline), path_of(implied.outline));
@@ -559,9 +592,9 @@ TEST(Glyf, TwoScalesAreADifferentEncodingAndNotJustADifferentNumber) {
 
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 50 0",
-      "quad 50 100 200 100",
-      "quad 200 0 50 0",
+      "move 0 0",
+      "quad 0 100 150 100",
+      "quad 150 0 0 0",
       "close",
   }));
 }
@@ -577,9 +610,9 @@ TEST(Glyf, ATwoByTwoIsAppliedInTheFilesOwnOrderAndNotTransposed) {
   // way while reporting success. It did, until this fixture existed.
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 100 25",
-      "quad 100 225 400 300",
-      "quad 400 100 100 25",
+      "move 0 25",
+      "quad 0 225 300 300",
+      "quad 300 100 0 25",
       "close",
   }));
 }
@@ -590,13 +623,13 @@ TEST(Glyf, PointMatchingMovesAComponentOntoAPointAlreadyPlaced) {
 
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 100 0",
-      "quad 100 400 400 400",
-      "quad 400 0 100 0",
+      "move 0 0",
+      "quad 0 400 300 400",
+      "quad 300 0 0 0",
       "close",
-      "move 400 400",
-      "quad 500 900 600 900",
-      "quad 700 900 800 400",
+      "move 300 400",
+      "quad 400 900 500 900",
+      "quad 600 900 700 400",
       "close",
   }));
 }
@@ -610,13 +643,13 @@ TEST(Glyf, PointMatchingMeasuresTheComponentAfterItsOwnTransform) {
   // away from the first.
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 100 0",
-      "quad 100 400 400 400",
-      "quad 400 0 100 0",
+      "move 0 0",
+      "quad 0 400 300 400",
+      "quad 300 0 0 0",
       "close",
-      "move 400 400",
-      "quad 450 650 500 650",
-      "quad 550 650 600 400",
+      "move 300 400",
+      "quad 350 650 400 650",
+      "quad 450 650 500 400",
       "close",
   }));
 }
@@ -676,12 +709,21 @@ TEST(Glyf, TheFlagsThisLibraryIgnoresMoveNothing) {
   ASSERT_EQ(metrics.result, GFNT_OK) << metrics.error.message;
   ASSERT_EQ(rounded.result, GFNT_OK) << rounded.error.message;
   EXPECT_EQ(path_of(metrics.outline), (std::vector<std::string>{
-      "move 150 0",
-      "quad 150 400 450 400",
-      "quad 450 0 150 0",
+      "move 50 0",
+      "quad 50 400 350 400",
+      "quad 350 0 50 0",
       "close",
   }));
-  EXPECT_EQ(path_of(rounded.outline), path_of(metrics.outline));
+  // The two glyphs state the same offset and different flags, and the flag
+  // changes where the glyph's origin is and not where its component sits: the
+  // flagged one borrows `quad-explicit`'s origin (its xMin, 100) and the other
+  // keeps its own (its xMin, 150), so the same shape comes out 50 apart.
+  EXPECT_EQ(path_of(rounded.outline), (std::vector<std::string>{
+      "move 0 0",
+      "quad 0 400 300 400",
+      "quad 300 0 0 0",
+      "close",
+  }));
 }
 
 TEST(Glyf, ACompositesInstructionsComeAfterItsComponentsAndAreNotRead) {
@@ -694,13 +736,13 @@ TEST(Glyf, ACompositesInstructionsComeAfterItsComponentsAndAreNotRead) {
   ASSERT_EQ(loaded.result, GFNT_OK) << loaded.error.message;
   EXPECT_EQ(gfnt_outline_contour_count(loaded.outline), 2u);
   EXPECT_EQ(path_of(loaded.outline), (std::vector<std::string>{
-      "move 100 0",
-      "quad 100 400 400 400",
-      "quad 400 0 100 0",
+      "move 0 0",
+      "quad 0 400 300 400",
+      "quad 300 0 0 0",
       "close",
-      "move 500 0",
-      "quad 500 400 800 400",
-      "quad 800 0 500 0",
+      "move 400 0",
+      "quad 400 400 700 400",
+      "quad 700 0 400 0",
       "close",
   }));
 }

@@ -46,6 +46,7 @@
 #include "../reader/reader.h"
 #include "../sfnt/sfnt.h"
 #include "../var/gvar.h"
+#include "../var/metvar.h"
 #include "glyf.h"
 
 /** The tag of the table holding the glyph descriptions. */
@@ -314,6 +315,101 @@ static int64_t gfnt_glyf_delta_to_26dot6(int64_t delta) {
 }
 
 /**
+ * Whether `HVAR`, and not `gvar`'s phantom points, states how this glyph's
+ * horizontal metrics move at @p variation.
+ *
+ * A face with an `HVAR` whose advance mapping answers for the glyph is
+ * authoritative for the glyph's horizontal metrics, and then `gvar`'s deltas to
+ * the first two phantom points are not applied (design.md section 7.3, "Where a
+ * glyph's outline sits"). FreeType does this; it does not apply `HVAR`'s bearing
+ * mapping to the outline either, so with an `HVAR` the first phantom point stays
+ * where the stored metrics put it.
+ */
+static bool gfnt_glyf_hvar_owns_metrics(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation) {
+  int64_t advance = 0;
+  GFNT_Error scratch;
+
+  if (!variation || !gfnt_face_has_table(face, GFNT_TAG_HVAR)) {
+    return false;
+  }
+  return gfnt_hvar_delta(face, glyph, GFNT_HVAR_ADVANCE, variation->coords,
+      variation->count, &advance, &scratch) == GFNT_OK;
+}
+
+/**
+ * The x of a glyph's first phantom point as the font stores it: the glyph
+ * header's `xMin` less the `hmtx` left side bearing, in 26.6.
+ *
+ * `xMin` is the header's own and the bearing is the stored one, at the default
+ * instance. A glyph with no description has no `xMin` and counts as zero, as it
+ * does for FreeType. A face with no `hmtx` states no bearing, and a description
+ * too short to state a box states no `xMin`: neither has a placement, and the
+ * outline is left where its points are. An `hmtx` that is there and cannot be
+ * read is the glyph's to be refused for, as any damaged table is, so that a cut
+ * table can only refuse a glyph and never hand back one in another place.
+ */
+static GFNT_Result gfnt_glyf_stored_pp1(const GFNT_Face * face, uint32_t glyph,
+    int64_t * out, GFNT_Error * error) {
+  GFNT_Box box;
+  int32_t bearing = 0;
+  int32_t x_min;
+  GFNT_Result result;
+
+  *out = 0;
+  result = gfnt_glyf_stated_box(face, glyph, &box, NULL);
+  if (result == GFNT_ERR_OOM) {
+    return gfnt_error_set(error, GFNT_ERR_OOM, GFNT_TAG_GLYF, 0, glyph,
+        "no memory to place a glyph");
+  }
+  if (result != GFNT_OK) {
+    // A description too short to state a box, which a glyph that states zero
+    // contours and nothing else is: it has no origin to place, and is still an
+    // empty glyph and not an error.
+    return GFNT_OK;
+  }
+  x_min = gfnt_box_is_empty(&box) ? 0 : box.x_min / GFNT_F26DOT6_ONE;
+  result = gfnt_face_glyph_side_bearing(face, glyph, NULL, &bearing, error);
+  if (result == GFNT_ERR_UNSUPPORTED) {
+    // No `hmtx` (or no `hhea` to count it by): the face states no bearing, so
+    // there is no placement to apply. A table that is there and damaged is not
+    // that, and is the glyph's to refuse below, like any other damage.
+    gfnt_error_clear(error);
+    return GFNT_OK;
+  }
+  if (result != GFNT_OK) {
+    return result;
+  }
+  *out = ((int64_t)x_min - (int64_t)bearing) * GFNT_F26DOT6_ONE;
+  return GFNT_OK;
+}
+
+/**
+ * ::gfnt_glyf_stored_pp1() moved by @p variation, for a glyph that has no
+ * points of its own to carry the deltas (an empty glyph, or one that states
+ * zero contours) and so asks `gvar` for its phantom points alone.
+ */
+static GFNT_Result gfnt_glyf_varied_pp1_bare(const GFNT_Face * face,
+    uint32_t glyph, const GFNT_Variation * variation, int64_t * out,
+    GFNT_Error * error) {
+  GFNT_Result result = gfnt_glyf_stored_pp1(face, glyph, out, error);
+  int64_t left = 0;
+  int64_t right = 0;
+
+  if (result != GFNT_OK || !variation
+      || gfnt_glyf_hvar_owns_metrics(face, glyph, variation)) {
+    return result;
+  }
+  result = gfnt_glyf_phantom_deltas(face, glyph, variation, &left, &right,
+      error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  *out += gfnt_glyf_delta_to_26dot6(left);
+  return GFNT_OK;
+}
+
+/**
  * Move a simple glyph's points by what `gvar` says they do at @p variation.
  *
  * Done after the points are read and before anything else sees them, so that a
@@ -326,7 +422,7 @@ static int64_t gfnt_glyf_delta_to_26dot6(int64_t delta) {
 static GFNT_Result gfnt_glyf_vary_simple(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Outline * outline, size_t base,
     size_t point_count, size_t first_contour, size_t contour_count,
-    GFNT_Error * error) {
+    int64_t * out_pp1_delta, GFNT_Error * error) {
   const GFNT_Allocator * allocator = face->allocator;
   GFNT_GvarPoints points = {0};
   int32_t * original = NULL;
@@ -334,6 +430,7 @@ static GFNT_Result gfnt_glyf_vary_simple(const GFNT_Face * face, uint32_t glyph,
   size_t * ends = NULL;
   GFNT_Result result;
 
+  *out_pp1_delta = 0;
   if (point_count == 0) {
     return GFNT_OK;
   }
@@ -366,6 +463,9 @@ static GFNT_Result gfnt_glyf_vary_simple(const GFNT_Face * face, uint32_t glyph,
   if (result != GFNT_OK) {
     goto done;
   }
+  // The first phantom point's delta, which follows the glyph's own points in
+  // the x array.
+  *out_pp1_delta = delta[point_count];
   for (size_t i = 0; i < point_count; ++i) {
     outline->points[base + i].x = gfnt_saturate32((int64_t)outline->points[base
         + i].x + gfnt_glyf_delta_to_26dot6(delta[i]));
@@ -385,7 +485,7 @@ done:
  */
 static GFNT_Result gfnt_glyf_simple(const GFNT_Face * face, GFNT_Reader * reader,
     int16_t contours, uint32_t glyph, const GFNT_Variation * variation,
-    GFNT_Outline * outline, GFNT_Error * error) {
+    GFNT_Outline * outline, int64_t * out_pp1_delta, GFNT_Error * error) {
   size_t contour_count = (size_t)contours;
   size_t point_count = 0;
   size_t base = gfnt_outline_point_count(outline);
@@ -394,6 +494,7 @@ static GFNT_Result gfnt_glyf_simple(const GFNT_Face * face, GFNT_Reader * reader
   uint8_t * flags = NULL;
   GFNT_Result result;
 
+  *out_pp1_delta = 0;
   // The caps on points and contours are enforced in gfnt_outline_reserve(),
   // which every path here goes through with the total before reading a
   // coordinate. There were duplicate checks at the top of this function; they
@@ -485,7 +586,7 @@ static GFNT_Result gfnt_glyf_simple(const GFNT_Face * face, GFNT_Reader * reader
   face->allocator->free_fn(face->allocator->ctx, flags);
   if (result == GFNT_OK && variation) {
     result = gfnt_glyf_vary_simple(face, glyph, variation, outline, base,
-        point_count, first_contour, contour_count, error);
+        point_count, first_contour, contour_count, out_pp1_delta, error);
   }
   return result;
 }
@@ -729,8 +830,8 @@ static GFNT_Result gfnt_glyf_vary_composite(const GFNT_Face * face,
 
 static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
     uint32_t glyph, size_t depth, const GFNT_GlyphChain * chain,
-    const GFNT_Variation * variation, GFNT_Outline * outline,
-    GFNT_Error * error);
+    const GFNT_Variation * variation, GFNT_Outline * outline, bool want_pp1,
+    int64_t * out_pp1, GFNT_Error * error);
 
 /**
  * The components of a composite, each loaded, placed and appended.
@@ -743,19 +844,30 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
  *   points between, or NULL for the default instance.
  * @param component_count How many components the composite has, when @p deltas is
  *   not NULL.
+ * @param out_borrowed Receives the first phantom point's x, 26.6, of the last
+ *   component flagged USE_MY_METRICS, when there is one.
+ * @param out_has_borrowed Receives whether there was one.
+ * @param want_pp1 Whether the caller needs the point at all: only a composite whose
+ *   own point is wanted asks its components for theirs, and then only the flagged
+ *   ones are asked.
  */
 static GFNT_Result gfnt_glyf_composite(const GFNT_Face * face, uint32_t glyph,
     size_t depth, const GFNT_GlyphChain * here, const GFNT_Variation * variation,
     GFNT_Reader * reader_in, size_t composite_base, const int64_t * deltas,
-    size_t component_count, GFNT_Outline * outline, GFNT_Error * error) {
+    size_t component_count, GFNT_Outline * outline, bool want_pp1,
+    int64_t * out_borrowed, bool * out_has_borrowed, GFNT_Error * error) {
   GFNT_Reader reader = *reader_in;
   size_t component_index = 0;
   GFNT_Result result;
+
+  *out_has_borrowed = false;
+  *out_borrowed = 0;
 
   for (;;) {
     GFNT_Component component;
     GFNT_Outline * part = NULL;
     GFNT_Point offset;
+    int64_t part_pp1 = 0;
 
     result = gfnt_glyf_component(&reader, glyph, &component, error);
     if (result != GFNT_OK) {
@@ -781,10 +893,19 @@ static GFNT_Result gfnt_glyf_composite(const GFNT_Face * face, uint32_t glyph,
     }
     gfnt_outline_set_limits(part, &face->limits);
     result = gfnt_glyf_load_chained(face, component.glyph, depth + 1, here,
-        variation, part, error);
+        variation, part,
+        want_pp1 && (component.flags & GFNT_GLYF_USE_MY_METRICS), &part_pp1,
+        error);
     if (result != GFNT_OK) {
       gfnt_outline_destroy(part);
       return result;
+    }
+    if (want_pp1 && (component.flags & GFNT_GLYF_USE_MY_METRICS)) {
+      // The component's metrics stand for the composite's, the last flagged
+      // one winning: the phantom point is the component's own, in the
+      // component's space, before the component's transform and offset.
+      *out_has_borrowed = true;
+      *out_borrowed = part_pp1;
     }
 
     if (component.flags & GFNT_GLYF_ARGS_ARE_XY) {
@@ -850,11 +971,17 @@ static GFNT_Result gfnt_glyf_composite(const GFNT_Face * face, uint32_t glyph,
  *
  * @p variation is passed down unchanged, so that every component of a composite is
  * drawn at the same location as the glyph that places it.
+ *
+ * @p out_pp1 receives, when @p want_pp1, the x of the glyph's first phantom point,
+ * 26.6, which is where the glyph's own origin lies in the coordinates the points
+ * are in (and zero otherwise). The points are left as the file and `gvar` put
+ * them; whether the caller moves them by it is ::gfnt_glyf_load_placed()'s
+ * question, and a composite asks it of each component flagged USE_MY_METRICS.
  */
 static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
     uint32_t glyph, size_t depth, const GFNT_GlyphChain * chain,
-    const GFNT_Variation * variation, GFNT_Outline * outline,
-    GFNT_Error * error) {
+    const GFNT_Variation * variation, GFNT_Outline * outline, bool want_pp1,
+    int64_t * out_pp1, GFNT_Error * error) {
   GFNT_Reader reader;
   GFNT_GlyphChain here;
   bool empty = false;
@@ -862,8 +989,11 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
   size_t composite_base = 0;
   int64_t * component_deltas = NULL;
   size_t component_count = 0;
+  int64_t borrowed = 0;
+  bool has_borrowed = false;
   GFNT_Result result;
 
+  *out_pp1 = 0;
   if (depth > face->limits.max_composite_depth) {
     return gfnt_error_set(error, GFNT_ERR_LIMIT, GFNT_TAG_GLYF, 0, glyph,
         "composite glyphs nest deeper than max_composite_depth allows");
@@ -873,8 +1003,11 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
     return result;
   }
   if (empty) {
-    // A glyph with no description draws nothing, and that is an answer.
-    return GFNT_OK;
+    // A glyph with no description draws nothing, and that is an answer. Its
+    // phantom point is still a fact, for a composite that borrows its metrics.
+    return want_pp1
+        ? gfnt_glyf_varied_pp1_bare(face, glyph, variation, out_pp1, error)
+        : GFNT_OK;
   }
   result = gfnt_read_s16(&reader, &contours);
   if (result != GFNT_OK) {
@@ -882,11 +1015,24 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
   }
   if (contours == 0) {
     // A description that exists and states zero contours. Fonts do this.
-    return GFNT_OK;
+    return want_pp1
+        ? gfnt_glyf_varied_pp1_bare(face, glyph, variation, out_pp1, error)
+        : GFNT_OK;
   }
   if (contours > 0) {
-    return gfnt_glyf_simple(face, &reader, contours, glyph, variation, outline,
-        error);
+    int64_t delta = 0;
+
+    result = gfnt_glyf_simple(face, &reader, contours, glyph, variation,
+        outline, &delta, error);
+    if (result != GFNT_OK || !want_pp1) {
+      return result;
+    }
+    result = gfnt_glyf_stored_pp1(face, glyph, out_pp1, error);
+    if (result == GFNT_OK && variation
+        && !gfnt_glyf_hvar_owns_metrics(face, glyph, variation)) {
+      *out_pp1 += gfnt_glyf_delta_to_26dot6(delta);
+    }
+    return result;
   }
 
   // A composite: see gfnt_glyf_composite(). `composite_base` is where this call's
@@ -912,23 +1058,78 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
     }
   }
   result = gfnt_glyf_composite(face, glyph, depth, &here, variation, &reader,
-      composite_base, component_deltas, component_count, outline, error);
+      composite_base, component_deltas, component_count, outline, want_pp1,
+      &borrowed, &has_borrowed, error);
+  if (result == GFNT_OK && want_pp1) {
+    // The composite's phantom point: the metrics-lending component's, which is
+    // final (its own `gvar` delta is in it, and the composite's is not added: a
+    // composite that lends its metrics has none of its own), or else its own
+    // stored one moved by its own `gvar` delta unless `HVAR` owns the metrics.
+    // The delta follows the components' offsets in the array.
+    if (has_borrowed) {
+      *out_pp1 = borrowed;
+    }
+    else {
+      result = gfnt_glyf_stored_pp1(face, glyph, out_pp1, error);
+      if (result == GFNT_OK && component_deltas
+          && !gfnt_glyf_hvar_owns_metrics(face, glyph, variation)) {
+        *out_pp1 += gfnt_glyf_delta_to_26dot6(
+            component_deltas[component_count]);
+      }
+    }
+  }
   face->allocator->free_fn(face->allocator->ctx, component_deltas);
   return result;
 }
 
-GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
-    const GFNT_Variation * variation, GFNT_Outline * outline,
+/**
+ * Load a glyph and, when @p place is set, put its origin at x = 0.
+ *
+ * The points `glyf` stores are in the coordinates of the glyph's own design, in
+ * which the origin is the first phantom point, `xMin` less the left side
+ * bearing. A renderer draws the glyph at the pen with that point on it, so the
+ * outline is moved by the negative of it: the left side bearing less `xMin` for
+ * a glyph whose bearing is not its `xMin`, and nothing for one whose bearing is
+ * (design.md section 7.3). The hinter asks for the points unmoved, because it
+ * places the phantom points itself.
+ */
+static GFNT_Result gfnt_glyf_load_placed(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Outline * outline, bool place,
     GFNT_Error * error) {
+  size_t first;
+  int64_t pp1 = 0;
+  GFNT_Result result;
+
   if (!face || !outline) {
     return GFNT_ERR_INVALID;
   }
+  first = gfnt_outline_point_count(outline);
   // Depth zero and an empty chain: this is the top of a walk by construction,
   // which is why there is no parameter for either. A caller that could claim to
   // be partway down one could claim a depth without the chain that goes with it,
   // and the cycle check would then be missing exactly the frames that prove the
   // cycle.
-  return gfnt_glyf_load_chained(face, glyph, 0, NULL, variation, outline, error);
+  result = gfnt_glyf_load_chained(face, glyph, 0, NULL, variation, outline,
+      place, &pp1, error);
+  if (result != GFNT_OK || !place || pp1 == 0) {
+    return result;
+  }
+  for (size_t i = first; i < outline->point_count; ++i) {
+    outline->points[i].x = gfnt_saturate32((int64_t)outline->points[i].x - pp1);
+  }
+  return GFNT_OK;
+}
+
+GFNT_Result gfnt_glyf_load(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_Error * error) {
+  return gfnt_glyf_load_placed(face, glyph, variation, outline, true, error);
+}
+
+GFNT_Result gfnt_glyf_load_unplaced(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_Error * error) {
+  return gfnt_glyf_load_placed(face, glyph, variation, outline, false, error);
 }
 
 GFNT_Result gfnt_glyf_is_composite(const GFNT_Face * face, uint32_t glyph,

@@ -44,6 +44,7 @@ from fontTools.ttLib import TTFont
 from fontTools.varLib.models import normalizeValue
 
 from fonttools_outlines import flattened
+import fonttools_placement
 
 ONE_PIXEL = 64
 INEXACT = [0]
@@ -160,6 +161,28 @@ class Varied:
         return getattr(self.glyf, name)
 
 
+def check_native(font, name, glyph_set):
+    """Where fontTools speaks for itself, hold the explicit rule to it.
+
+    A simple glyph in a font with no `HVAR`: the glyph set's own offset is its
+    `lsb - xMin` after `gvar` has moved the phantom points, which is the negative
+    of `fonttools_placement.origin()` to within the whole-unit rounding fontTools
+    applies to the bearing. A font with an `HVAR` is exactly where fontTools and
+    FreeType part (design.md section 7.3), so there the rule is the library's
+    and FreeType's gate is the witness.
+    """
+    glyph = font["glyf"][name]
+    if (not glyph_set.location or "HVAR" in font or glyph.isComposite()
+            or not hasattr(glyph, "xMin")):
+        return
+    shown = glyph_set[name]
+    instance = shown._getGlyphInstance()
+    native = shown.lsb - instance.xMin
+    want = -fonttools_placement.origin(font, name, glyph_set.location)
+    if abs(native - want) > 1:
+        raise AssertionError("placement rule disagrees with fontTools")
+
+
 def draw(font, order, glyph_set, stride, first):
     """Every sampled glyph's path at the glyph set's location."""
     glyf = font["glyf"]
@@ -167,7 +190,9 @@ def draw(font, order, glyph_set, stride, first):
     for index in range(first, len(order), stride):
         name = order[index]
         try:
-            flat = flattened(varied, name)
+            flat = flattened(varied, name, -fonttools_placement.origin(
+                font, name, glyph_set.location))
+            check_native(font, name, glyph_set)
             pen = Path(None)
             flat.draw(pen, varied)
         except Exception as why:  # noqa: BLE001 - the reason is the output

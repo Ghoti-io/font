@@ -11,7 +11,9 @@
 """The glyph path provider's cross-target probe, on this machine (story 14b).
 
 tools/scene-hash.c renders AD-5's and AD-1's fixtures through shape-cpu, checks
-both equalities and prints a hash of what it drew. The committed hash is
+both equalities and prints a hash of what it drew, and the same fixtures' stroked
+text (a run stroked, and the path the waist defines for it stroked: equal rasters)
+in a hash of its own. The committed hash is
 tests/data/golden/scene.hash; suite/tools/xarch/shape.sh and
 suite/tools/xwin/shape.sh require the same number on every target. This gate
 requires it here, so that the committed number is the host's and moves only on
@@ -44,7 +46,11 @@ def run(probe, fonts, **env):
     c = fields.get("font-scene.count", [[None]])[-1][0]
     if not h or not c:
         sys.exit("check-scene-hash: the probe printed no hash")
-    return h, c, fields.get("font-scene.fixture", [])
+    sh = fields.get("font-scene.stroke-hash", [[None]])[-1][0]
+    sc = fields.get("font-scene.stroke-count", [[None]])[-1][0]
+    if not sh or not sc:
+        sys.exit("check-scene-hash: the probe printed no stroke hash")
+    return h, c, fields.get("font-scene.fixture", []), (sh, sc, fields.get("font-scene.stroke-fixture", []))
 
 
 def main():
@@ -52,7 +58,7 @@ def main():
     if len(args) != 2:
         sys.exit(__doc__)
     probe, fonts = args
-    h, c, fixtures = run(probe, fonts)
+    h, c, fixtures, stroke = run(probe, fonts)
     if "--update" in sys.argv:
         with open(COMMITTED, "w") as f:
             f.write("# tools/scene-hash.c over tests/data/fonts: AD-5's and AD-1's fixtures through shape-cpu\n")
@@ -60,22 +66,29 @@ def main():
             for name, value in fixtures:
                 f.write("fixture %s %s\n" % (name, value))
             f.write("hash %s\ncount %s\n" % (h, c))
+            f.write("# Stroked text (strokes story S5): a run and the path it defines, stroked, in a hash of their own.\n")
+            for name, value in stroke[2]:
+                f.write("stroke-fixture %s %s\n" % (name, value))
+            f.write("stroke-hash %s\nstroke-count %s\n" % (stroke[0], stroke[1]))
         print("check-scene-hash: wrote %s: %s over %s renders" % (COMMITTED, h, c))
         return
     want = {}
     with open(COMMITTED) as f:
         for line in f:
             parts = line.split()
-            if len(parts) == 2 and parts[0] in ("hash", "count"):
+            if len(parts) == 2 and parts[0] in ("hash", "count", "stroke-hash", "stroke-count"):
                 want[parts[0]] = parts[1]
     if (h, c) != (want.get("hash"), want.get("count")):
         sys.exit("check-scene-hash: the probe prints %s over %s renders; %s commits %s over %s"
                  % (h, c, COMMITTED, want.get("hash"), want.get("count")))
-    planted, _, _ = run(probe, fonts, FONT_SCENE_PLANT="1")
-    if planted == h:
+    if (stroke[0], stroke[1]) != (want.get("stroke-hash"), want.get("stroke-count")):
+        sys.exit("check-scene-hash: the probe prints the stroked text's %s over %s; %s commits %s over %s"
+                 % (stroke[0], stroke[1], COMMITTED, want.get("stroke-hash"), want.get("stroke-count")))
+    planted, _, _, planted_stroke = run(probe, fonts, FONT_SCENE_PLANT="1")
+    if planted == h or planted_stroke[0] == stroke[0]:
         sys.exit("check-scene-hash: the planted bit printed the committed hash: the comparison sees nothing")
-    print("check-scene-hash: %s over %s renders, as committed; AD-5 and AD-1 hold; the planted bit is refused"
-          % (h, c))
+    print("check-scene-hash: %s over %s renders and the stroked text's %s over %s, as committed; AD-5, AD-1 and the stroke "
+          "of a run being the stroke of its path hold; the planted bit is refused" % (h, c, stroke[0], stroke[1]))
 
 
 if __name__ == "__main__":

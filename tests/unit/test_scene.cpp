@@ -45,6 +45,7 @@
 #include <ghoti.io/shape-scene/report.h>
 #include <ghoti.io/shape-scene/resource.h>
 #include <ghoti.io/shape-scene/sink.h>
+#include <ghoti.io/shape-scene/stroke.h>
 
 namespace {
 
@@ -190,7 +191,7 @@ struct Rendered {
   }
 };
 
-Rendered render(const GSHSCENE_List * list, uint32_t w, uint32_t h, uint32_t flags = 0) {
+Rendered render(const GSHSCENE_List * list, uint32_t w, uint32_t h, uint32_t flags = 0, const GSHCPU_Limits * limits = nullptr) {
   Rendered out;
   out.width = w;
   GIMG_Pixel_Format f{};
@@ -213,7 +214,7 @@ Rendered render(const GSHSCENE_List * list, uint32_t w, uint32_t h, uint32_t fla
     std::memset(px + y * stride, 0, static_cast<size_t>(w) * 4u);
   }
   GSHSCENE_Sink * sink = nullptr;
-  EXPECT_EQ(gshcpu_sink_create(nullptr, nullptr, nullptr, &sink), GSHCPU_OK);
+  EXPECT_EQ(gshcpu_sink_create(nullptr, nullptr, limits, &sink), GSHCPU_OK);
   GSHSCENE_Report * report = nullptr;
   EXPECT_EQ(gshscene_report_create(nullptr, nullptr, &report), GSHSCENE_OK);
   GSHSCENE_Target t{};
@@ -976,6 +977,108 @@ TEST(Scene, HostileFontsThroughTheProvider) {
     }
   }
   EXPECT_GT(loaded, 100u) << "the mutations must leave most fonts loadable, or this tests the loader";
+}
+
+// --- stroked text (strokes story S5, ST1, ST3, ST11) ----------------------------------------------------------------------
+
+namespace {
+
+/** A closed list with one stroke of @p centerline (a path or a run), width 1.5 with round joins and caps, under @p map. */
+GSHSCENE_List * stroke_of(Store & s, const GSHSCENE_Resource * centerline, const GSHGEOM_Map * map) {
+  GSHSCENE_Stroke_Style st;
+  gshscene_stroke_style_init(&st);
+  st.width = 1.5;
+  st.join = GSHSCENE_STROKE_JOIN_ROUND;
+  st.cap = GSHSCENE_STROKE_CAP_ROUND;
+  const GSHSCENE_Resource * style = nullptr;
+  EXPECT_EQ(gshscene_store_intern_stroke_style(s.store, &st, &style), GSHSCENE_OK);
+  if (style) {
+    s.held.push_back(style);
+  }
+  GSHSCENE_List * l = nullptr;
+  EXPECT_EQ(gshscene_list_create(nullptr, nullptr, s.store, &l), GSHSCENE_OK);
+  s.lists.push_back(l);
+  GSHSCENE_Paint ink{};
+  ink.kind = GSHSCENE_PAINT_SOLID;
+  ink.rgba[0] = 0.2;
+  ink.rgba[1] = 0.1;
+  ink.rgba[2] = 0.6;
+  ink.rgba[3] = 0.75;
+  EXPECT_EQ(gshscene_list_stroke(l, centerline, style, map, &ink, 0, 0.0), GSHSCENE_OK);
+  EXPECT_EQ(gshscene_list_close(l), GSHSCENE_OK);
+  return l;
+}
+
+}  // namespace
+
+// A strict-hinted run at an integer ppem on a grid-aligned map is stroked on the general route alone: the provider's
+// outline is called once for each glyph, its fast tier and its hint contexts are not touched, and the pixels are those of
+// hint mode NONE and those of the stroke of the path the waist defines for the run (ST11), over every outline fixture.
+TEST(SceneStroke, AStrictRunIsStrokedOnTheGeneralRouteOnlyAndEqualsTheStrokeOfItsPath) {
+  size_t drawn = 0;
+  for (const char * name : kOutlineFixtures) {
+    Font font(file_bytes(name));
+    ASSERT_NE(font.scene, nullptr) << name;
+    Store s;
+    const GSHSCENE_Resource * face = s.face(font);
+    ASSERT_NE(face, nullptr) << name;
+    const size_t n = font.glyphs < 8u ? font.glyphs : 8u;
+    const uint32_t ppem = 16;
+    const uint32_t cell = 2u * ppem + 8u;
+    std::vector<GSHSCENE_Glyph> glyphs;
+    for (size_t i = 0; i < n; i++) {
+      // Two glyphs close enough to overlap, as kerned text does.
+      glyphs.push_back({static_cast<uint32_t>(i), static_cast<double>((i % 4) * cell) + (i == 5 ? -6.0 : 4.25),
+          static_cast<double>((i / 4) * cell) + 1.5 * ppem + 0.375, nullptr});
+    }
+    GSHGEOM_Map map;
+    gshgeom_map_translate(2, 1.0, 0.0, 0.0, &map);
+    const GSHSCENE_Resource * strict = s.run(face, ppem, GSHSCENE_HINT_FONT_STRICT, glyphs, 3);
+    const GSHSCENE_Resource * none = s.run(face, ppem, GSHSCENE_HINT_NONE, glyphs);
+    GSHGEOM_Path * path = nullptr;
+    ASSERT_EQ(gshscene_glyph_run_centerline(strict, nullptr, nullptr, &path, nullptr), GSHSCENE_OK) << name;
+    const GSHSCENE_Resource * as_path = nullptr;
+    ASSERT_EQ(gshscene_store_intern_path(s.store, path, &as_path), GSHSCENE_OK) << name;
+    gshgeom_path_destroy(path);
+    s.held.push_back(as_path);
+    GSHSCENE_List * ls = stroke_of(s, strict, &map);
+    GSHSCENE_List * ln = stroke_of(s, none, &map);
+    GSHSCENE_List * lp = stroke_of(s, as_path, &map);
+    const uint32_t w = 4u * cell;
+    const uint32_t h = static_cast<uint32_t>((n + 3) / 4) * cell;
+    const GFNT_SceneStats before = font.stats();
+    // A stroke of text is dense (the inner sides of its curves and counters overlap in a pixel), more pieces in one pixel than
+    // the sink's default allows (its resource limit refuses such a stroke whole), so the sink is given room.
+    GSHCPU_Limits room{};
+    room.max_exact_fragments = 1u << 16;
+    const Rendered a = render(ls, w, h, 0, &room);
+    const GFNT_SceneStats mid = font.stats();
+    const Rendered b = render(ln, w, h, 0, &room);
+    const Rendered c = render(lp, w, h, 0, &room);
+    const GFNT_SceneStats after = font.stats();
+    EXPECT_EQ(a.result, GSHSCENE_OK) << name;
+    for (const GSHSCENE_Report_Entry & e : a.entries) {
+      EXPECT_NE(e.reason, GSHSCENE_REASON_RESOURCE_LIMIT) << name << ": nothing is refused for its pieces";
+    }
+    EXPECT_EQ(mid.fast_calls, before.fast_calls) << name << ": a stroke never takes the fast tier";
+    EXPECT_EQ(mid.contexts_made, before.contexts_made) << name << ": and makes no hint context";
+    EXPECT_EQ(mid.general_calls - before.general_calls, n) << name << ": one outline for each glyph";
+    EXPECT_EQ(after.fast_calls, before.fast_calls) << name;
+    EXPECT_EQ(after.contexts_made, before.contexts_made) << name;
+    EXPECT_TRUE(a.pixels == b.pixels) << name << ": hint mode has no effect on a stroke";
+    EXPECT_TRUE(a.pixels == c.pixels) << name << ": a stroke of a run is the stroke of its path";
+    size_t refused = 0;
+    for (const GSHSCENE_Report_Entry & e : a.entries) {
+      refused += e.entry_class == GSHSCENE_ENTRY_REFUSED;
+      EXPECT_NE(e.entry_class, GSHSCENE_ENTRY_HINT_STATUS) << name << ": a stroke has no hint status";
+      EXPECT_NE(e.reason, GSHSCENE_REASON_HINT_STRICT_ROUTE) << name;
+    }
+    if (refused < n) {
+      EXPECT_FALSE(blank(a)) << name << ": the comparison is not of empty rasters";
+      drawn++;
+    }
+  }
+  EXPECT_GE(drawn, 10u) << "most fixtures have glyphs a stroke draws";
 }
 
 int main(int argc, char ** argv) {

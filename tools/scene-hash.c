@@ -37,10 +37,21 @@
  * `font-scene.FAIL` and exits 1, so a target is checked for the property
  * itself and not only for agreeing with the host.
  *
+ * Then, for the same fixtures, strokes of text (strokes story S5): at each size of
+ * kStrokePpems a run of up to kStrokeGlyphs glyphs is stroked, in a style that
+ * changes with the size (bevel joins inside the glyphs at the smallest; miter joins with
+ * square caps and dashes; round joins and caps at the largest), once as a run, which the sink strokes as
+ * the path `gshscene_glyph_run_centerline` defines for it, and once as that path
+ * interned on its own.  The two rasters must be equal (the waist's ST11) and the
+ * first is folded into a hash and count of its own, so that the hash above is
+ * unchanged.
+ *
  * Output: `font-scene.fixture NAME HASH` per fixture, then `font-scene.hash`
  * and `font-scene.count` (the fold over every fixture, and the renders), which
  * `tests/data/golden/scene.hash` commits and `make check-scene-hash`,
- * `suite/tools/xarch/shape.sh` and `suite/tools/xwin/shape.sh` compare.
+ * `suite/tools/xarch/shape.sh` and `suite/tools/xwin/shape.sh` compare; and
+ * `font-scene.stroke-fixture NAME HASH` per fixture, `font-scene.stroke-hash` and
+ * `font-scene.stroke-count`, the stroked text's own, which `check-scene-hash` compares too.
  *
  * Two switches, read from the environment so that one build serves: with
  * `FONT_SCENE_PLANT=1` the fold has one bit flipped (the gates' plant); with
@@ -62,6 +73,7 @@
 #include <ghoti.io/shape-scene/report.h>
 #include <ghoti.io/shape-scene/resource.h>
 #include <ghoti.io/shape-scene/sink.h>
+#include <ghoti.io/shape-scene/stroke.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -76,6 +88,8 @@ static const char * const kFixtures[] = {
   "outline-placement.ttf",
 };
 static const uint32_t kPpems[] = {8, 12, 16, 21, 33, 48, 72};
+static const uint32_t kStrokePpems[] = {9, 21, 48};
+#define kStrokeGlyphs 12u
 static const uint32_t kFractions[5] = {0, 1, 16, 33, 63};
 #define kMaxGlyphs 24u
 #define kAd1Glyphs 8u
@@ -83,9 +97,18 @@ static const uint32_t kFractions[5] = {0, 1, 16, 33, 63};
 static uint64_t g_hash = 0xCBF29CE484222325ull;
 static uint64_t g_fixture = 0xCBF29CE484222325ull;
 static unsigned long g_count = 0;
+static uint64_t g_stroke_hash = 0xCBF29CE484222325ull;
+static uint64_t g_stroke_fixture = 0xCBF29CE484222325ull;
+static unsigned long g_stroke_count = 0;
+static int g_into_stroke = 0;
 static int g_native = 0;
 
 static void fold_byte(uint8_t b) {
+  if (g_into_stroke) {
+    g_stroke_hash = (g_stroke_hash ^ b) * 0x00000100000001B3ull;
+    g_stroke_fixture = (g_stroke_fixture ^ b) * 0x00000100000001B3ull;
+    return;
+  }
   g_hash = (g_hash ^ b) * 0x00000100000001B3ull;
   g_fixture = (g_fixture ^ b) * 0x00000100000001B3ull;
 }
@@ -137,8 +160,8 @@ static uint8_t * read_file(const char * path, size_t * size) {
   return buf;
 }
 
-/** A render's pixels (RGBA8 straight, from transparent), rows without the stride; NULL on failure. */
-static uint8_t * render(const GSHSCENE_List * list, uint32_t w, uint32_t h) {
+/** A render's pixels (RGBA8 straight, from transparent), rows without the stride; NULL on failure.  @p limits: the sink's, or NULL. */
+static uint8_t * render_with(const GSHSCENE_List * list, uint32_t w, uint32_t h, const GSHCPU_Limits * limits) {
   GIMG_Pixel_Format fmt;
   memset(&fmt, 0, sizeof fmt);
   fmt.channel_model = GIMG_CHANNEL_RGBA;
@@ -154,7 +177,7 @@ static uint8_t * render(const GSHSCENE_List * list, uint32_t w, uint32_t h) {
   GSHSCENE_Report * report = NULL;
   uint8_t * out = malloc((size_t)w * h * 4u);
   int ok = out && gimg_raster_create(w, h, &fmt, GIMG_RASTER_OWNED, NULL, 0, &raster) == GIMG_OK
-      && gshcpu_sink_create(NULL, NULL, NULL, &sink) == GSHCPU_OK
+      && gshcpu_sink_create(NULL, NULL, limits, &sink) == GSHCPU_OK
       && gshscene_report_create(NULL, NULL, &report) == GSHSCENE_OK;
   if (ok) {
     uint8_t * px = gimg_raster_pixels(raster);
@@ -186,6 +209,10 @@ static uint8_t * render(const GSHSCENE_List * list, uint32_t w, uint32_t h) {
     return NULL;
   }
   return out;
+}
+
+static uint8_t * render(const GSHSCENE_List * list, uint32_t w, uint32_t h) {
+  return render_with(list, w, h, NULL);
 }
 
 static GSHSCENE_List * fill(GSHSCENE_Store * store, const GSHSCENE_Resource * run, const GSHGEOM_Map * map) {
@@ -358,6 +385,135 @@ done:
   return rc;
 }
 
+/** A closed list with one stroke of @p centerline (a run or a path) in the style @p style_index asks for, under @p map. */
+static GSHSCENE_List * stroke_list(GSHSCENE_Store * store, const GSHSCENE_Resource * centerline, uint32_t ppem,
+    size_t style_index, const GSHGEOM_Map * map) {
+  GSHSCENE_Stroke_Style st;
+  gshscene_stroke_style_init(&st);
+  double dashes[2];
+  st.width = ppem / 8.0 < 1.0 ? 1.0 : ppem / 8.0;
+  switch (style_index) {
+    case 0:
+      st.join = GSHSCENE_STROKE_JOIN_ROUND;
+      st.cap = GSHSCENE_STROKE_CAP_ROUND;
+      break;
+    case 1:
+      st.join = GSHSCENE_STROKE_JOIN_MITER;
+      st.cap = GSHSCENE_STROKE_CAP_SQUARE;
+      dashes[0] = ppem / 4.0;
+      dashes[1] = ppem / 8.0;
+      st.dash_count = 2;
+      st.dashes = dashes;
+      break;
+    default:
+      st.join = GSHSCENE_STROKE_JOIN_BEVEL;
+      st.cap = GSHSCENE_STROKE_CAP_BUTT;
+      st.alignment = GSHSCENE_STROKE_ALIGN_INSIDE;
+      break;
+  }
+  const GSHSCENE_Resource * style = NULL;
+  GSHSCENE_List * l = NULL;
+  GSHSCENE_Paint ink;
+  memset(&ink, 0, sizeof ink);
+  ink.kind = GSHSCENE_PAINT_SOLID;
+  ink.rgba[0] = 0.2;
+  ink.rgba[1] = 0.1;
+  ink.rgba[2] = 0.6;
+  ink.rgba[3] = 0.75;
+  if (gshscene_store_intern_stroke_style(store, &st, &style) != GSHSCENE_OK
+      || gshscene_list_create(NULL, NULL, store, &l) != GSHSCENE_OK
+      || gshscene_list_stroke(l, centerline, style, map, &ink, 0, 0.0) != GSHSCENE_OK
+      || gshscene_list_close(l) != GSHSCENE_OK) {
+    gshscene_list_destroy(l);
+    l = NULL;
+  }
+  gshscene_resource_release(style);  /* the list holds its own reference */
+  return l;
+}
+
+/**
+ * Stroked text at one size (the waist's ST1 and ST11): a run of @p n glyphs, some of them overlapping, stroked as a run
+ * and as the path ::gshscene_glyph_run_centerline gives for it; the rasters must be equal.  Folds the first into the
+ * stroke hash.  0 on success.
+ */
+static int stroked(const char * name, GFNT_SceneFont * font, size_t n, uint32_t ppem, size_t style_index) {
+  GSHSCENE_Store * store = NULL;
+  const GSHSCENE_Resource * face = NULL;
+  const GSHSCENE_Resource * run = NULL;
+  const GSHSCENE_Resource * as_path = NULL;
+  GSHGEOM_Path * path = NULL;
+  GSHSCENE_List * rl = NULL;
+  GSHSCENE_List * pl = NULL;
+  uint8_t * a = NULL;
+  uint8_t * b = NULL;
+  GSHSCENE_Glyph g[kStrokeGlyphs];
+  const uint32_t cell = 2u * ppem + 8u;
+  const uint32_t cols = 4u;
+  const uint32_t rows = (uint32_t)((n + cols - 1u) / cols);
+  int rc = 1;
+  int reported = 0;
+  /* Text stroked is dense (the inner sides of its curves and counters overlap in a pixel): more pieces in one pixel than the
+   * sink's default of 512 allows, which refuses such a stroke whole, so the sink is given room.  A raster that stayed blank
+   * would hash alike on every target and prove nothing, so the render is also required to have drawn. */
+  GSHCPU_Limits room;
+  gshcpu_limits_default(&room);
+  room.max_exact_fragments = 1u << 16;
+  if (gshscene_store_create(NULL, NULL, &store) != GSHSCENE_OK
+      || gfnt_scene_intern_face(font, store, NULL, &face, NULL) != GFNT_OK) {
+    goto done;
+  }
+  for (size_t i = 0; i < n; i++) {
+    g[i].id = (uint32_t)i;
+    /* Every fifth glyph a quarter em to the left of its place: glyphs that overlap, as kerned text does. */
+    g[i].x = (double)((i % cols) * cell) + ppem / 4.0 + kFractions[(i + ppem) % 5u] / 64.0 - (i % 5u == 4u ? ppem / 4.0 : 0.0);
+    g[i].y = (double)((i / cols) * cell) + 1.5 * ppem + kFractions[(i + 2u * ppem) % 5u] / 64.0;
+    g[i].outline = NULL;
+  }
+  GSHGEOM_Map map;
+  gshgeom_map_translate(2, 0.375, 0.625, 0.0, &map);
+  /* The mode asks for what a stroke does not do: it is the general route's outline all the same (ST3). */
+  run = run_of(store, face, (double)ppem, GSHSCENE_HINT_FONT_STRICT, n, g);
+  if (!run || gshscene_glyph_run_centerline(run, NULL, NULL, &path, NULL) != GSHSCENE_OK
+      || gshscene_store_intern_path(store, path, &as_path) != GSHSCENE_OK
+      || !(rl = stroke_list(store, run, ppem, style_index, &map)) || !(pl = stroke_list(store, as_path, ppem, style_index, &map))
+      || !(a = render_with(rl, cols * cell, rows * cell, &room)) || !(b = render_with(pl, cols * cell, rows * cell, &room))) {
+    goto done;
+  }
+  if (memcmp(a, b, (size_t)cols * cell * rows * cell * 4u) != 0) {
+    printf("font-scene.FAIL stroke %s %u\n", name, ppem);
+    reported = 1;
+    goto done;
+  }
+  {
+    /* How much was drawn, printed so that a fixture whose strokes stay blank is seen (it would hash alike everywhere). */
+    size_t ink = 0;
+    for (size_t k = 3; k < (size_t)cols * cell * rows * cell * 4u; k += 4) {
+      ink += a[k] != 0;
+    }
+    printf("font-scene.stroke-ink %s %u %lu\n", name, ppem, (unsigned long)ink);
+  }
+  g_into_stroke = 1;
+  fold_u64(ppem);
+  fold_bytes(a, (size_t)cols * cell * rows * cell * 4u);
+  g_into_stroke = 0;
+  g_stroke_count++;
+  rc = 0;
+done:
+  if (rc && !reported) {
+    printf("font-scene.FAIL stroke-setup %s %u\n", name, ppem);
+  }
+  free(a);
+  free(b);
+  gshgeom_path_destroy(path);
+  gshscene_list_destroy(rl);
+  gshscene_list_destroy(pl);
+  gshscene_resource_release(as_path);
+  gshscene_resource_release(run);
+  gshscene_resource_release(face);
+  gshscene_store_destroy(store);
+  return rc;
+}
+
 int main(int argc, char ** argv) {
   if (argc != 2) {
     fprintf(stderr, "usage: scene-hash FONTS_DIR\n");
@@ -400,6 +556,12 @@ int main(int argc, char ** argv) {
         }
       }
       printf("font-scene.fixture %s %016llx\n", kFixtures[f], (unsigned long long)g_fixture);
+      g_stroke_fixture = 0xCBF29CE484222325ull;
+      size_t k = glyphs < kStrokeGlyphs ? glyphs : kStrokeGlyphs;
+      for (size_t p = 0; p < sizeof kStrokePpems / sizeof kStrokePpems[0]; p++) {
+        failed |= stroked(kFixtures[f], font, k, kStrokePpems[p], 2u - p);
+      }
+      printf("font-scene.stroke-fixture %s %016llx\n", kFixtures[f], (unsigned long long)g_stroke_fixture);
     }
     gfnt_scene_font_destroy(font);
     gfnt_face_free(face);
@@ -411,5 +573,10 @@ int main(int argc, char ** argv) {
   }
   printf("font-scene.hash %016llx\n", (unsigned long long)g_hash);
   printf("font-scene.count %lu\n", g_count);
+  if (plant && plant[0] == '1') {
+    g_stroke_hash ^= 1u;
+  }
+  printf("font-scene.stroke-hash %016llx\n", (unsigned long long)g_stroke_hash);
+  printf("font-scene.stroke-count %lu\n", g_stroke_count);
   return failed ? 1 : 0;
 }

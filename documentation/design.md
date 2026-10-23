@@ -1676,6 +1676,22 @@ this library (AD-2: `shape-scene` and `shape-cpu` do not depend on `font`).
   hinter's points for a hinted one, so its coverage is a one-glyph scene's alpha: `testScene`
   checks it pixel for pixel in every mode, beside AD-5's gate over every committed outline
   fixture at 8 to 72 ppem and the origin fractions {0, 1, 16, 33, 63}.
+- **Stroked text.** A stroke of a run needs nothing of this library but `glyph_outline`: the scene strokes the path it
+  defines for the run (the glyphs' unhinted outlines, placed in the run's space, `gshscene_glyph_run_centerline`), so a
+  stroke never calls `glyph_device_path`, never makes a hint context and is never refused for hinting, whatever the run's
+  `hint_mode` says (`FONT_STRICT` included). The one visible consequence is that a hinted fill of the same run on a
+  grid-aligned map at an integer ppem is grid-fitted and its stroke is centered on the unhinted outline, so the pair can be
+  off by up to about half a pixel; hint mode `NONE` on the run asks for a registered pair. `COLR`, `CPAL` and the bitmap tables
+  are not read by a stroke, and the face's `COLOR` flag has no effect: a color glyph the lowering of section 8.8 records is
+  fills of one-glyph runs, and a stroke of one of those runs is a stroke of that layer's outline. `testScene` holds a
+  strict-hinted run to the general route alone over every outline fixture (`GFNT_SceneStats` shows `general_calls` rising by
+  the glyph count and `fast_calls` and `contexts_made` unchanged) and to the stroke of its path; `tools/scene-hash.c` folds
+  the same stroke, at three sizes in three styles, into a hash of its own; `fuzz_scene` strokes the fuzzed glyph and requires
+  the same pixels (option bit 5); `examples/font-stroke-text.c` outlines a line of text. Text is a dense stroke: the inner sides
+  of its curves and counters overlap, so a pixel can hold more pieces of the outline than `shape-cpu`'s default
+  `max_exact_fragments` (512), which refuses such a stroke whole (the TrueType fixtures at 16 ppem and width 1.5 do); these tests, the
+  probe, the fuzzer and the example give the sink room (`GSHCPU_Limits`), and a stroke that stays blank would prove nothing, so each
+  says how much it drew.
 - **Float-free (AD-5).** `make check-float-free` preprocesses every installed header and the code
   from an outline to coverage or to a device path, and fails on a floating type; it is seen to
   fail on a planted `double`. One exemption is stated there: `shape.h`'s `float point_size`

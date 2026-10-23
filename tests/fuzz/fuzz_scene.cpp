@@ -30,7 +30,11 @@
  * (the general route) or placed on whole pixels (the fast tier), the ppem, the
  * first glyph and how many.  Each glyph is drawn through `shape-cpu` from a
  * one-glyph run, and its color description is lowered into a list, which is
- * drawn too when the lowering succeeds.  A refusal is an answer; a crash, a hang
+ * drawn too when the lowering succeeds.  With options bit 5 the run is also
+ * stroked (strokes story S5), in a style the ppem byte chooses (width, join, cap,
+ * dashes, alignment), and the stroke of the path `gshscene_glyph_run_centerline`
+ * makes for it is drawn beside it: the two rasters must be equal (ST11), which
+ * aborts when they are not.  A refusal is an answer; a crash, a hang
  * or an abort is the failure.
  */
 
@@ -81,6 +85,48 @@ bool intern_instance(GFNT_SceneFont * font, GSHSCENE_Store * store, uint8_t opti
   return gfnt_scene_intern_face(font, store, nullptr, out, nullptr) == GFNT_OK;
 }
 
+/** A closed list with one stroke of @p centerline, in the style @p choice picks. */
+GSHSCENE_List * stroke_list(GSHSCENE_Store * store, const GSHSCENE_Resource * centerline, uint8_t choice,
+    const GSHGEOM_Map * map) {
+  GSHSCENE_Stroke_Style st;
+  gshscene_stroke_style_init(&st);
+  double dashes[2] = {2.0, 1.0};
+  st.width = 0.5 + (double)(choice & 7u) * 0.75;
+  st.join = (choice >> 3) % 5u;
+  st.cap = (choice >> 6) % 3u;
+  if (choice & 0x80u) {
+    st.dash_count = 2;
+    st.dashes = dashes;
+  } else {
+    st.alignment = (choice >> 1) % 3u;
+  }
+  const GSHSCENE_Resource * style = nullptr;
+  GSHSCENE_List * list = nullptr;
+  GSHSCENE_Paint ink;
+  std::memset(&ink, 0, sizeof ink);
+  ink.kind = GSHSCENE_PAINT_SOLID;
+  ink.rgba[0] = ink.rgba[1] = ink.rgba[2] = 0.5;
+  ink.rgba[3] = 0.8;
+  if (gshscene_store_intern_stroke_style(store, &st, &style) != GSHSCENE_OK ||
+      gshscene_list_create(nullptr, nullptr, store, &list) != GSHSCENE_OK ||
+      gshscene_list_stroke(list, centerline, style, map, &ink, 0, 0.0) != GSHSCENE_OK ||
+      gshscene_list_close(list) != GSHSCENE_OK) {
+    gshscene_list_destroy(list);
+    list = nullptr;
+  }
+  gshscene_resource_release(style);
+  return list;
+}
+
+/** Fill @p raster with transparent black. */
+void clear(GIMG_Raster * raster) {
+  uint8_t * px = static_cast<uint8_t *>(gimg_raster_pixels(raster));
+  const size_t stride = gimg_raster_stride_bytes(raster);
+  for (uint32_t y = 0; y < kSide; y++) {
+    std::memset(px + y * stride, 0, static_cast<size_t>(kSide) * 4u);
+  }
+}
+
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
@@ -94,6 +140,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
 
   GFNT_Limits limits;
   gfnt_limits_default(&limits);
+  // A stroke of text is dense: the sink is given room for the pieces of one pixel, or it refuses such a stroke whole.
+  GSHCPU_Limits room;
+  gshcpu_limits_default(&room);
+  room.max_exact_fragments = 4096;
   GFNT_Blob * blob = nullptr;
   GFNT_Face * face = nullptr;
   GFNT_SceneFont * font = nullptr;
@@ -109,7 +159,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
       gfnt_scene_font_create(face, &font, nullptr) != GFNT_OK ||
       gshscene_store_create(nullptr, nullptr, &store) != GSHSCENE_OK ||
       !intern_instance(font, store, options, data[2], data[3], &face_resource) ||
-      gshcpu_sink_create(nullptr, nullptr, nullptr, &sink) != GSHCPU_OK ||
+      gshcpu_sink_create(nullptr, nullptr, &room, &sink) != GSHCPU_OK ||
       gshscene_report_create(nullptr, nullptr, &report) != GSHSCENE_OK ||
       gimg_raster_create(kSide, kSide, &GIMG_PIXEL_RGBA8, GIMG_RASTER_OWNED, nullptr, 0, &raster) != GIMG_OK) {
     goto done;
@@ -141,6 +191,48 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
       if (gshscene_list_fill(list, text, &map, GSHGEOM_FILL_NONZERO, nullptr, 0, 0.0) == GSHSCENE_OK &&
           gshscene_list_close(list) == GSHSCENE_OK) {
         draw(sink, report, raster, list);
+      }
+      // ST11: the stroke of the run and the stroke of its path are the same pixels.
+      if (options & 0x20u) {
+        GSHGEOM_Path * path = nullptr;
+        const GSHSCENE_Resource * as_path = nullptr;
+        GSHSCENE_List * by_run = stroke_list(store, text, data[1], &map);
+        GSHSCENE_List * by_path = nullptr;
+        if (by_run && gshscene_glyph_run_centerline(text, nullptr, nullptr, &path, nullptr) == GSHSCENE_OK &&
+            gshscene_store_intern_path(store, path, &as_path) == GSHSCENE_OK) {
+          by_path = stroke_list(store, as_path, data[1], &map);
+        }
+        GIMG_Raster * other = nullptr;
+        if (by_run && by_path &&
+            gimg_raster_create(kSide, kSide, &GIMG_PIXEL_RGBA8, GIMG_RASTER_OWNED, nullptr, 0, &other) == GIMG_OK) {
+          clear(raster);
+          clear(other);
+          gshscene_report_reset(report);
+          GSHSCENE_Target target;
+          std::memset(&target, 0, sizeof target);
+          target.kind = GSHSCENE_TARGET_RASTER;
+          GSHSCENE_Render_Request request;
+          std::memset(&request, 0, sizeof request);
+          request.target = &target;
+          request.report = report;
+          target.surface = raster;
+          request.list = by_run;
+          const GSHSCENE_Result a = gshscene_sink_render(sink, &request);
+          target.surface = other;
+          request.list = by_path;
+          const GSHSCENE_Result b = gshscene_sink_render(sink, &request);
+          if (a == GSHSCENE_OK && b == GSHSCENE_OK) {
+            const size_t bytes = gimg_raster_stride_bytes(raster) * kSide;
+            if (std::memcmp(gimg_raster_pixels_const(raster), gimg_raster_pixels_const(other), bytes) != 0) {
+              __builtin_trap();
+            }
+          }
+        }
+        gimg_raster_destroy(other);
+        gshscene_list_destroy(by_run);
+        gshscene_list_destroy(by_path);
+        gshgeom_path_destroy(path);
+        gshscene_resource_release(as_path);
       }
     }
     gshscene_list_destroy(list);

@@ -10,3 +10,14 @@ fixture variable-gvar.ttf d42d290081a6491c
 fixture outline-placement.ttf 3217dc326ad0b277
 hash 374f6f1933fb3aa0
 count 292
+# Stroked text (strokes story S5): a run and the path it defines, stroked, in a hash of their own.
+stroke-fixture basic.ttf 66029b1ed128603c
+stroke-fixture outline-composite.ttf 43dae075decf3abf
+stroke-fixture outline-simple.ttf 43dae075decf3abf
+stroke-fixture cff-curves.otf 899f70db0327d0cf
+stroke-fixture cff-seac.otf e9ad711b064f4376
+stroke-fixture type1-big.pfb 3f40fc4edca263da
+stroke-fixture variable-gvar.ttf 819fb0d1aed8c2ac
+stroke-fixture outline-placement.ttf 19340950e9ed8b8a
+stroke-hash bdcfb526871c6660
+stroke-count 24

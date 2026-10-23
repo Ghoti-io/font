@@ -33,14 +33,17 @@
  * target is exactly the class of defect this gate is looking for - it would make
  * the gate's answer depend on the thing it is testing.
  *
- * So the gate cross-builds `font` alone and links these definitions. `nm` says
- * they are the whole of what it needs:
+ * So the gate cross-builds `font` and the libraries it renders through (the shape
+ * libraries and math, whose integers and exact doubles are part of what it
+ * measures), compiles cutil's allocator.c and atomic.c, and links these
+ * definitions for the rest of cutil and compress. `nm` says they are the whole of
+ * what font itself needs from those two beyond the allocator and the atomics:
  *
- *   gcu_allocator_default, gcu_file_read, gcu_file_free,
+ *   gcu_file_read, gcu_file_free,
  *   gcu_file_result_string, gcu_mmap_open, gcu_mmap_close,
  *   gcu_dir_open, gcu_dir_read, gcu_dir_close, gcu_file_stat,
- *   gcu_path_join, gcu_path_canonicalize, gcu_env_get
- *   gcomp_decode_alloc, gcomp_buffer_free, gcomp_options_create,
+ *   gcu_path_join, gcu_path_canonicalize, gcu_path_is_absolute, gcu_env_get
+ *   gcomp_decode_alloc, gcomp_encode_alloc, gcomp_buffer_free, gcomp_options_create,
  *   gcomp_options_destroy, gcomp_options_set_bool, gcomp_options_set_uint64,
  *   gcomp_status_to_string
  *
@@ -82,36 +85,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static void * shim_malloc(void * ctx, size_t size) {
-  (void)ctx;
-  return malloc(size ? size : 1u);
-}
-
-static void * shim_calloc(void * ctx, size_t nitems, size_t size) {
-  (void)ctx;
-  if (size != 0 && nitems > (size_t)-1 / size) {
-    return NULL;
-  }
-  return calloc(nitems ? nitems : 1u, size ? size : 1u);
-}
-
-static void * shim_realloc(void * ctx, void * ptr, size_t size) {
-  (void)ctx;
-  return realloc(ptr, size ? size : 1u);
-}
-
-static void shim_free(void * ctx, void * ptr) {
-  (void)ctx;
-  free(ptr);
-}
-
-const GCU_Allocator * gcu_allocator_default(void) {
-  static const GCU_Allocator allocator = {
-    NULL, shim_malloc, shim_calloc, shim_realloc, shim_free,
-  };
-  return &allocator;
-}
 
 const char * gcu_file_result_string(GCU_File_Result result) {
   switch (result) {
@@ -249,6 +222,14 @@ GCU_Path_Result gcu_path_join(GCU_Path_Flavor flavor, const char * base,
   return GCU_PATH_ERR_IO;
 }
 
+bool gcu_path_is_absolute(GCU_Path_Flavor flavor, const char * path) {
+  // Only the discovery of installed fonts asks, and the golden driver reads the
+  // fixtures it is given: no path is called absolute here.
+  (void)flavor;
+  (void)path;
+  return false;
+}
+
 GCU_Path_Result gcu_path_canonicalize(const char * path,
     const GCU_Allocator * allocator, char ** out) {
   (void)path;
@@ -302,6 +283,18 @@ gcomp_status_t gcomp_decode_alloc(GCOMP_MAYBE_UNUSED(gcomp_registry_t * r),
     GCOMP_MAYBE_UNUSED(size_t * size_out)) {
   // Refused, for the reason in the header: no committed rendering comes from a
   // compressed file, and a second inflater is not what this gate measures.
+  return GCOMP_ERR_UNSUPPORTED;
+}
+
+gcomp_status_t gcomp_encode_alloc(GCOMP_MAYBE_UNUSED(gcomp_registry_t * r),
+    GCOMP_MAYBE_UNUSED(const char * method_name),
+    GCOMP_MAYBE_UNUSED(gcomp_options_t * options),
+    GCOMP_MAYBE_UNUSED(const void * input_data),
+    GCOMP_MAYBE_UNUSED(size_t input_size),
+    GCOMP_MAYBE_UNUSED(void ** data_out),
+    GCOMP_MAYBE_UNUSED(size_t * size_out)) {
+  // Refused as the inflate is: the writers that deflate (gzip, zlib, brotli)
+  // are not in the committed renderings, which are drawn from fonts read.
   return GCOMP_ERR_UNSUPPORTED;
 }
 

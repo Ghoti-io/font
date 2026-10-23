@@ -31,8 +31,10 @@ rather than here. Verified by planting a `memcpy` of a `uint32_t`'s bytes into
 `gfnt_coverage_hash()` - which is identical to the explicit shifts on this
 machine, so the whole unit suite stayed green while this gate failed on s390x.
 
-**It cross-builds `font` alone.** cutil is supplied by
-`tools/golden/cross_shim.c`, six functions over stdio, and that file says why:
+**It cross-builds `font` and what it renders through.** The shape libraries, math
+and cutil's allocator and atomics are compiled for the target with it; the rest of
+cutil and compress are supplied by `tools/golden/cross_shim.c`, functions over
+stdio, and that file says why:
 cross-building cutil would need cutil's generated headers produced for the
 target, and a generated header produced for the wrong target is the very class of
 defect this gate exists to catch. The shim's list of six is **checked** against
@@ -75,13 +77,23 @@ TARGETS = {
 # What cross_shim.c provides. Checked against the library's undefined symbols,
 # so the shim cannot silently fall behind what the library needs.
 SHIMMED = {
-    "gcu_allocator_default", "gcu_file_read", "gcu_file_free",
+    "gcu_file_read", "gcu_file_free",
     "gcu_file_result_string", "gcu_mmap_open", "gcu_mmap_close",
     "gcu_dir_open", "gcu_dir_read", "gcu_dir_close", "gcu_file_stat",
-    "gcu_path_join", "gcu_path_canonicalize", "gcu_env_get",
-    "gcomp_decode_alloc", "gcomp_buffer_free", "gcomp_options_create",
+    "gcu_path_join", "gcu_path_canonicalize", "gcu_path_is_absolute",
+    "gcu_env_get",
+    "gcomp_decode_alloc", "gcomp_encode_alloc", "gcomp_buffer_free",
+    "gcomp_options_create",
     "gcomp_options_destroy", "gcomp_options_set_bool",
     "gcomp_options_set_uint64", "gcomp_status_to_string",
+}
+
+# What the cross build compiles from cutil's own sources instead (allocator.c and
+# atomic.c need no generated header and no operating-system call that differs by
+# target, and the shape libraries call more of them than font does).
+COMPILED = {
+    "gcu_allocator_default", "gcu_atomic_size_init", "gcu_atomic_size_load",
+    "gcu_atomic_size_fetch_add", "gcu_atomic_size_fetch_sub",
 }
 
 
@@ -97,7 +109,9 @@ def engine():
 
 
 def have_image(tool):
-    found = subprocess.run([tool, "image", "exists", IMAGE],
+    # `image exists` is podman's; docker answers the same question with `image inspect`.
+    probe = "inspect" if tool == "docker" else "exists"
+    found = subprocess.run([tool, "image", probe, IMAGE],
         capture_output=True)
     if found.returncode != 0:
         raise Unavailable(
@@ -153,18 +167,47 @@ def script(label, compiler, qemu, triple):
     # of them being trusted, which is the whole point of the gate.
     return r"""
 set -e
-mkdir -p %(out)s
+mkdir -p %(out)s/obj
 cd %(root)s
-%(cc)s -std=c17 -O2 -w -fno-strict-aliasing \
-    -I include -I build/linux/release/generated \
-    -I %(cutil)s -I %(compress)s \
-    -o %(out)s/font-render \
-    $(find src -name '*.c') examples/font-render.c %(shim)s
-%(cc)s -std=c17 -O2 -w -fno-strict-aliasing \
-    -I include -I build/linux/release/generated \
-    -I %(cutil)s -I %(compress)s \
-    -o %(out)s/font-bitmap \
-    $(find src -name '*.c') examples/font-bitmap.c %(shim)s
+FLAGS="-std=c17 -O2 -w -fno-strict-aliasing -ffp-contract=off -pthread \
+    -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections \
+    -DGFNT_BUILD -DGSHCPU_BUILD -DGSHSCENE_BUILD -DGSHGEOM_BUILD -DGMATH_BUILD \
+    -DGCOL_BUILD -DGIMG_BUILD -I include -I build/linux/release/generated %(incs)s"
+# One object per source, named by its path so two libraries' raster.c do not meet.
+# Everything the library links is compiled for the target: font's own sources, the
+# shape libraries it renders through (their integers and exact doubles are what
+# the gate measures), math, and cutil's allocator and atomics. Only the cutil and
+# compress functions in cross_shim.c are written by hand.
+{ find src -name '*.c'; find %(ws)s/libs/shape-cpu/src %(ws)s/libs/shape-scene/src \
+    %(ws)s/libs/shape-geometry/src -name '*.c'; ls %(ws)s/libs/math/src/elementary/*.c;
+  echo %(ws)s/libs/cutil/src/allocator.c; echo %(ws)s/libs/cutil/src/atomic.c;
+  echo %(ws)s/libs/color/src/gamut/gamut.c; echo %(ws)s/libs/image/src/raster/raster.c;
+  echo %(ws)s/libs/image/src/core/allocator.c; echo %(shim)s; } > %(out)s/sources
+xargs -P 8 -I{} sh -c 'o=$(echo "$1" | tr / _); exec %(cc)s '"$FLAGS"' -c "$1" -o %(out)s/obj/"$o".o' _ {} \
+    < %(out)s/sources
+# What a driver never reaches but the archive names is given a stub that aborts, so
+# a path that did reach one fails the run rather than linking the host's.
+link() {
+    drv=$1; bin=$2
+    if %(cc)s -pthread -Wl,--gc-sections %(out)s/obj/*.o "$drv" -o "$bin" 2> %(out)s/link.err; then
+        return 0
+    fi
+    sed -n "s/.*undefined reference to \`\([A-Za-z0-9_]*\)'.*/\1/p" %(out)s/link.err | sort -u > %(out)s/undef.txt
+    if [ ! -s %(out)s/undef.txt ]; then cat %(out)s/link.err >&2; return 1; fi
+    printf '#include <stdio.h>\n#include <stdlib.h>\n' > %(out)s/stubs.c
+    awk '{printf "void %%s(void);\nvoid %%s(void) { fputs(\"stub reached: %%s\\n\", stderr); abort(); }\n", $1, $1, $1}' \
+        %(out)s/undef.txt >> %(out)s/stubs.c
+    %(cc)s -w -c %(out)s/stubs.c -o %(out)s/stubs.o
+    %(cc)s -pthread -Wl,--gc-sections %(out)s/obj/*.o %(out)s/stubs.o "$drv" -o "$bin"
+}
+# Two drivers, because two kinds of glyph reach a coverage by different paths:
+# an outline through the scan converter and a strike through
+# gfnt_coverage_from_bitmap(). Both are compiled for the target rather than one
+# of them being trusted, which is the whole point of the gate.
+%(cc)s $FLAGS -c examples/font-render.c -o %(out)s/render.o
+%(cc)s $FLAGS -c examples/font-bitmap.c -o %(out)s/bitmap.o
+link %(out)s/render.o %(out)s/font-render
+link %(out)s/bitmap.o %(out)s/font-bitmap
 for name in %(outlines)s; do
     %(qemu)s -L /usr/%(triple)s %(out)s/font-render "$name" \
         tests/data/fonts/"$name"
@@ -177,12 +220,13 @@ done
         "out": out,
         "root": ROOT,
         "cc": compiler,
-        "cutil": os.path.join(WORKSPACE, ".local", "include", "ghoti.io",
-                              "cutil-0"),
-        # Headers only: the shim defines the functions, and cross-building the
-        # library itself is the trade cross_shim.c's own header explains.
-        "compress": os.path.join(WORKSPACE, ".local", "include", "ghoti.io",
-                                 "compress-0"),
+        "ws": WORKSPACE,
+        "incs": " ".join(
+            "-I " + os.path.join(WORKSPACE, ".local", "include", "ghoti.io",
+                                 lib + "-0")
+            for lib in ("cutil", "compress", "security", "unicode", "math",
+                        "color", "image", "shape-geometry", "shape-scene",
+                        "shape-cpu")),
         "shim": SHIM,
         "qemu": qemu,
         "triple": triple,
@@ -331,7 +375,7 @@ def main(argv):
     # The shim's list against what the library needs, before anything is built:
     # a seventh cutil dependency would otherwise be a confusing link error.
     needed = cutil_dependencies()
-    missing = needed - SHIMMED
+    missing = needed - SHIMMED - COMPILED
     if missing:
         sys.stderr.write(
             "check-golden: this library now needs its dependencies' %s, which "

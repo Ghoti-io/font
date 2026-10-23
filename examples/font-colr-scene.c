@@ -43,7 +43,15 @@
  * face is interned at; none is the default instance. A `--encoded` argument
  * lowers in the encoded space (GFNT_COLOR_SPACE_ENCODED).
  *
- *     font-colr-scene <font> [--encoded] [coordinate...]
+ * With `--summary` it prints lines instead, for the whole-font gate
+ * (tools/check_colr_lowered.py): `refused <glyph> <reason> <paint format>` for each
+ * refused glyph, `limit <glyph>` for each past the walk's bounds, and last
+ * `summary glyphs=<color glyphs> lowered=<lowered> hash=<16 hex digits>`, the hash
+ * a 64-bit FNV-1a fold of each color glyph's number, outcome and (when lowered)
+ * the list's own content hash and item count, each as little-endian bytes, so it
+ * is the same on every target the lowering is.
+ *
+ *     font-colr-scene <font> [--encoded] [--summary] [coordinate...]
  */
 
 #include <ghoti.io/font/font.h>
@@ -51,6 +59,8 @@
 #include <ghoti.io/font/scene_color.h>
 #include <ghoti.io/shape-scene/list.h>
 #include <ghoti.io/shape-scene/resource.h>
+#include <inttypes.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,6 +78,14 @@ static const char * error_name(GFNT_Result r) {
     default:
       return "other";
   }
+}
+
+static uint64_t fold(uint64_t h, uint64_t value) {
+  for (int i = 0; i < 8; i++) {
+    h ^= (value >> (8 * i)) & 0xFFu;
+    h *= UINT64_C(1099511628211);
+  }
+  return h;
 }
 
 static void print_map(const GSHGEOM_Map * m) {
@@ -115,14 +133,20 @@ int main(int argc, char ** argv) {
   GFNT_F2Dot14 coords[32];
   GFNT_Variation variation = {coords, 0, 0};
   uint32_t space = GFNT_COLOR_SPACE_STANDARD;
+  int summary = 0;
+  uint64_t hash = UINT64_C(14695981039346656037);
+  size_t color_glyphs = 0;
+  size_t lowered = 0;
 
   if (argc < 2) {
-    fprintf(stderr, "usage: font-colr-scene <font> [--encoded] [coordinate...]\n");
+    fprintf(stderr, "usage: font-colr-scene <font> [--encoded] [--summary] [coordinate...]\n");
     return 2;
   }
   for (int i = 2; i < argc; i++) {
     if (strcmp(argv[i], "--encoded") == 0) {
       space = GFNT_COLOR_SPACE_ENCODED;
+    } else if (strcmp(argv[i], "--summary") == 0) {
+      summary = 1;
     } else if (variation.count < 32) {
       coords[variation.count++] = (GFNT_F2Dot14)atoi(argv[i]);
     }
@@ -138,7 +162,9 @@ int main(int argc, char ** argv) {
     gfnt_error_dump(&error, stderr);
     return 1;
   }
-  printf("{\"glyphs\":{");
+  if (!summary) {
+    printf("{\"glyphs\":{");
+  }
   for (size_t g = 0; g < glyphs; g++) {
     GSHSCENE_List * list = NULL;
     GFNT_ColorLowering out;
@@ -151,6 +177,23 @@ int main(int argc, char ** argv) {
     run.space = space;
     GFNT_Result r = gfnt_scene_record_color_glyph(face_resource, store, list, (uint32_t)g, &run, &out, &error);
     if (r == GFNT_OK && out.source == GFNT_COLOR_SOURCE_NONE) {
+      gshscene_list_destroy(list);
+      continue;
+    }
+    if (summary) {
+      color_glyphs++;
+      uint32_t status = r == GFNT_OK ? 0u : r == GFNT_ERR_UNSUPPORTED ? out.refusal : 100u;
+      hash = fold(hash, (uint64_t)g);
+      hash = fold(hash, status);
+      if (r == GFNT_OK) {
+        lowered++;
+        hash = fold(hash, gshscene_list_hash(list));
+        hash = fold(hash, (uint64_t)out.items);
+      } else if (r == GFNT_ERR_UNSUPPORTED) {
+        printf("refused %zu %u %u\n", g, out.refusal, out.paint_format);
+      } else {
+        printf("limit %zu\n", g);
+      }
       gshscene_list_destroy(list);
       continue;
     }
@@ -198,7 +241,11 @@ int main(int argc, char ** argv) {
     printf("]}");
     gshscene_list_destroy(list);
   }
-  printf("}}\n");
+  if (summary) {
+    printf("summary glyphs=%zu lowered=%zu hash=%016" PRIx64 "\n", color_glyphs, lowered, hash);
+  } else {
+    printf("}}\n");
+  }
   gshscene_resource_release(face_resource);
   gshscene_store_destroy(store);
   gfnt_scene_font_destroy(scene);

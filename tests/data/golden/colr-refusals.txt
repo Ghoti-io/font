@@ -1,0 +1,18 @@
+# Every refusal the lowering is expected to make, one line a glyph:
+# <font> <instance> <glyph> <unbounded|no-record|limit> <paint format>
+# See tools/check_colr_lowered.py; regenerate with --update.
+color-v1-scene.ttf default 11 unbounded 2
+color-v1-scene.ttf default 12 limit 0
+color-v1-scene.ttf default 20 unbounded 6
+test_glyphs-glyf_colr_1.ttf default 178 limit 0
+test_glyphs-glyf_colr_1.ttf default 179 limit 0
+test_glyphs-glyf_colr_1_no_cliplist.ttf default 178 limit 0
+test_glyphs-glyf_colr_1_no_cliplist.ttf default 179 limit 0
+test_glyphs-glyf_colr_1_variable.ttf default 178 limit 0
+test_glyphs-glyf_colr_1_variable.ttf default 179 limit 0
+test_glyphs-glyf_colr_1_variable.ttf half 178 limit 0
+test_glyphs-glyf_colr_1_variable.ttf half 179 limit 0
+test_glyphs-glyf_colr_1_variable_no_cliplist.ttf default 178 limit 0
+test_glyphs-glyf_colr_1_variable_no_cliplist.ttf default 179 limit 0
+test_glyphs-glyf_colr_1_variable_no_cliplist.ttf half 178 limit 0
+test_glyphs-glyf_colr_1_variable_no_cliplist.ttf half 179 limit 0

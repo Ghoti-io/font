@@ -49,6 +49,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import colr_real_fonts
 import corpus
 import oracle_env
 
@@ -220,7 +221,11 @@ def main(argv):
         real = len(corpus_fonts)
         fixtures = [os.path.join(FIXTURES, n) for n in sorted(os.listdir(FIXTURES))
                     if n.endswith((".ttf", ".otf")) and has_colr(os.path.join(FIXTURES, n))]
-        fonts = fixtures + corpus_fonts
+        try:
+            pinned = colr_real_fonts.ensure()
+        except colr_real_fonts.FetchFailed as why:
+            raise oracle_env.OracleUnavailable("the pinned real color fonts: %s" % why)
+        fonts = fixtures + corpus_fonts + pinned
     passes = [("standard", False, None), ("encoded", True, None)]
     for name, coords in INSTANCES:
         passes.append((name, False, coords))
@@ -255,7 +260,7 @@ def main(argv):
                         print("DIFF [%s] %s glyph %s: %s" % (name, os.path.relpath(font, ROOT), gid, where))
                 elif ties.seen:
                     tie_glyphs += 1
-    print("fonts %d (%d from the image's corpus), %d color glyphs (%s), %d items (%d gradients, %d planes, %d clip boxes) "
+    print("fonts %d (%d from the image's corpus, plus the pinned real fonts), %d color glyphs (%s), %d items (%d gradients, %d planes, %d clip boxes) "
           "in %d passes, %d differing; the tie class (one unit at the non-binary instance): %d glyphs"
           % (len(fonts), real, glyphs, ", ".join("%s %d" % kv for kv in sorted(by_reason.items())), stats["items"],
              stats["gradients"], stats["planes"], stats["boxes"], len(passes), failed, tie_glyphs))

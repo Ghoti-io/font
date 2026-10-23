@@ -1,0 +1,36 @@
+# The whole-font hash of every real color font's lowered lists (x86-64):
+# <font> <instance> <color glyphs> <lowered> <hash>
+# See tools/check_colr_lowered.py; regenerate with --update.
+color-cpal0.ttf default 3 3 9c3ea47e464e8929
+color-v0-edges.ttf default 3 3 5ccfde6a368e3e4c
+color-v0.ttf default 3 3 587a110d366c6351
+color-v1-scene.ttf default 18 15 2de633261d613072
+color-v1-var.ttf default 2 2 1215615f7f2a1398
+color-v1-var.ttf half 2 2 6768eb13f0cadcc2
+color-v1-varmap.ttf default 2 2 010a011c197b230f
+color-v1-varmap.ttf half 2 2 94d4968fb71eaf2f
+color-v1-varnone.ttf default 2 2 42a079498a122973
+color-v1-varnone.ttf half 2 2 62d51c3e0af1cd10
+color-v1.ttf default 3 3 1db9d510a5243a14
+BungeeSpice-Regular.ttf default 1063 1063 57f53daa630f5e0d
+BungeeTint-Regular.ttf default 1063 1063 bad164534fb6fa0c
+noto-glyf_colr_1.ttf default 3688 3688 4b3a44eff14216bc
+noto_handwriting-cff2_colr_1.otf default 6 6 42481aa673436f6c
+noto_handwriting-cff_colr_1.otf default 6 6 12fa808328cad4c8
+noto_handwriting-glyf_colr_1.ttf default 6 6 a236e22e2f500bb7
+samples-cff2_colr_1.otf default 9 9 99b31361fa933fb1
+samples-cff_colr_1.otf default 9 9 05b5029527902253
+samples-glyf_colr_1.ttf default 9 9 90cd175e84a52136
+test_glyphs-glyf_colr_1.ttf default 201 199 2ca2d840445b17b2
+test_glyphs-glyf_colr_1_no_cliplist.ttf default 201 199 61bd7e56144de069
+test_glyphs-glyf_colr_1_variable.ttf default 201 199 8aad5564a33edebb
+test_glyphs-glyf_colr_1_variable.ttf half 201 199 c2560672c859d19d
+test_glyphs-glyf_colr_1_variable_no_cliplist.ttf default 201 199 2cd0427859a144de
+test_glyphs-glyf_colr_1_variable_no_cliplist.ttf half 201 199 ae63549abf082e03
+twemoji-glyf_colr_1.ttf default 3360 3360 4a6ae1a53451c074
+twemoji_smiley-cff2_colr_1.otf default 15 15 e8fae237da297e48
+twemoji_smiley-cff_colr_1.otf default 15 15 d916f3bd98a08ace
+twemoji_smiley-glyf_colr_1.ttf default 15 15 005783e67655aac8
+Noto-COLRv1.ttf default 4012 4012 d59e0e531a1243d8
+Nabla-EDPT-EHLT.ttf default 381 381 a9a95fad550845ad
+Nabla-EDPT-EHLT.ttf half 381 381 d1018c9ffd15b8db

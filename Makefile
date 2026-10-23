@@ -1405,6 +1405,11 @@ check-oracle-colr-scene: ## Lower every COLR glyph of the color fonts into a sce
 check-oracle-colr-scene: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/colr_scene_diff.py --quiet
 
+.PHONY: check-colr-lowered-hash
+check-colr-lowered-hash: ## Every color glyph of the real color fonts lowers except the committed refusals, and each font's lowered lists hash to the committed value
+check-colr-lowered-hash: $(EXAMPLES)
+	@python3 tools/check_colr_lowered.py
+
 check-oracle-color-extents: ## Measure every glyph of every color font and diff against HarfBuzz
 check-oracle-color-extents: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools,harfbuzz -- python3 $(ORACLE)/color_extents_diff.py --quiet

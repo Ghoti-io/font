@@ -37,37 +37,46 @@
  * description into a list: its `COLR` version 1 paint graph where the glyph has
  * one, else its version 0 layers. Every shape is a one-glyph run of the face
  * resource at the run's size and origin, so the provider draws it like any
- * glyph (hinted where the run asks and the route allows).
+ * glyph (hinted where the run asks and the route allows). The rules are
+ * numbered L1 to L11 here and in documentation/design.md section 8.8, which
+ * quotes the OpenType sentence beside each.
  *
  * - Version 0: each layer, bottom first, is a fill of its glyph with its
- *   palette entry; `0xFFFF` is the foreground.
- * - Version 1: `PaintColrLayers` lowers its layers in order; `PaintGlyph` over a
- *   solid (through any transforms between them, which do not move a solid) is a
- *   fill, and over anything else a clip push of the glyph around its child;
- *   `PaintSolid` is the palette paint, its alpha F2.14 clamped to `[0, 1]`;
- *   `PaintColrGlyph` is the other glyph's graph; the transforms (`PaintTransform`,
- *   `PaintTranslate`, the four scales, the two rotations, the two skews) are the
- *   design-map ops of the shapes beneath them; `PaintComposite` with a
- *   Porter-Duff mode (0 to 12, the scene's thirteen operators) is a group
- *   (isolated, source-over) of the backdrop, then a group of that operator around
- *   the source.
+ *   palette entry; `0xFFFF` is the foreground. No group: CPAL and `COLR`
+ *   version 0 state no space.
+ * - Version 1 is, in order, one isolated source-over group in the blend space
+ *   COLRv1 composites in (L8; ::GFNT_COLOR_SPACE_STANDARD, linear light, unless
+ *   ::GFNT_ColorRun::space asks for the encoded one), around one clip of the
+ *   base glyph's `ClipList` box where it has one (L5; a `PaintColrGlyph` does not
+ *   bring its target's box), around the graph: `PaintColrLayers` lowers its
+ *   layers in order; a `PaintGlyph` whose child reaches a solid or a gradient
+ *   through transforms is a fill of the glyph (the transforms above it its map,
+ *   the ones between it and a gradient the gradient's, L4), and over anything
+ *   else a clip of the glyph around its child; `PaintSolid` is the palette
+ *   paint, its alpha F2.14 clamped to `[0, 1]`; the three gradients are gradient
+ *   resources with their color lines (L2), interpolated premultiplied in linear
+ *   light unless the run asks for the encoded space (L3); a solid or gradient
+ *   no `PaintGlyph` bounds directly fills the plane under the clips in force
+ *   (L6); `PaintColrGlyph` is the other glyph's graph; the transforms are the
+ *   design-map ops of the shapes beneath them; `PaintComposite` is an isolated
+ *   group of the backdrop, then a group of the operator around the source:
+ *   modes 0 to 12 are the Porter-Duff operators, 13 to 27 the blend modes, any
+ *   other value clear (L7).
+ * - Every `Var*` number is read at the instance the face resource was interned
+ *   at (L1); there is no second location, so the outline and the paint cannot
+ *   disagree about where the font is.
  *
  * **What is refused, per glyph and with a reason** (::GFNT_ColorRefusal), and
- * nothing recorded: the gradients (linear, radial, sweep; the scene has none
- * until the shape family's step 4), the blend modes (`PaintComposite` modes 13 to
- * 27; the spine's row on blend modes), the variable forms (`PaintVar*`), a solid
- * no `PaintGlyph` bounds directly (it would fill the plane), and a
- * `PaintColrGlyph` naming a glyph with no version 1 record. The call returns
- * ::GFNT_ERR_UNSUPPORTED and the reason; the caller decides what to draw instead
- * (the glyph's own outline, for one). A lowering is not a render, so a refusal
- * is the call's answer and not a report entry.
+ * nothing recorded: a solid or gradient no `PaintGlyph` bounds in a glyph that
+ * states no clip box (the lowering never guesses an extent the font did not
+ * state), and a `PaintColrGlyph` naming a glyph with no version 1 record. The
+ * call returns ::GFNT_ERR_UNSUPPORTED and the reason; the caller decides what to
+ * draw instead (the glyph's own outline, for one). A graph past the walk's depth
+ * or node bound (a glyph that names itself) is ::GFNT_ERR_LIMIT. A lowering is
+ * not a render, so a refusal is the call's answer and not a report entry.
  *
  * **All or nothing.** The list is read for its count first and truncated back
  * to it on a refusal or any failure, so it holds the whole glyph or none of it.
- *
- * **Not applied:** the `ClipList`'s clip boxes. Everything lowered is bounded by
- * a glyph, so a box changes nothing a font that states a box covering its
- * glyphs draws; the spine's Deferred table has the row.
  *
  * No floating type appears in this header or in any header it includes (AD-5,
  * `make check-float-free`), nor in src/scene/colr.c.
@@ -95,16 +104,37 @@ typedef enum GFNT_ColorSource {
   GFNT_COLOR_SOURCE_V1 = 2    ///< A `COLR` version 1 paint graph.
 } GFNT_ColorSource;
 
-/** @brief Why a glyph's color description was not lowered. */
+/**
+ * @brief Why a glyph's color description was not lowered (L10 of color-paint story P4).
+ *
+ * After the story the lowering refuses only what no scene list can say: a paint no clip bounds and the font states no
+ * clip box for, and a `PaintColrGlyph` naming a glyph with no version 1 record. (A graph past the walk's depth or node
+ * bound, which OpenType forbids, is ::GFNT_ERR_LIMIT.) The values are numbered from 1 and are the registry's codes for
+ * `COLR`.
+ */
 typedef enum GFNT_ColorRefusal {
   GFNT_COLOR_LOWERED = 0,             ///< Not refused.
-  GFNT_COLOR_REFUSED_GRADIENT = 1,    ///< A linear, radial or sweep gradient.
-  GFNT_COLOR_REFUSED_BLEND_MODE = 2,  ///< A `PaintComposite` mode past `PLUS` (12): a blend mode.
-  GFNT_COLOR_REFUSED_VARIABLE = 3,    ///< A variable paint (`PaintVar*`).
-  GFNT_COLOR_REFUSED_UNBOUNDED = 4,   ///< A solid no `PaintGlyph` bounds directly.
-  GFNT_COLOR_REFUSED_NO_RECORD = 5,   ///< A `PaintColrGlyph` naming a glyph with no version 1 record.
+  GFNT_COLOR_REFUSED_UNBOUNDED = 1,   ///< A solid or gradient no glyph bounds, in a glyph with no clip box.
+  GFNT_COLOR_REFUSED_NO_RECORD = 2,   ///< A `PaintColrGlyph` naming a glyph with no version 1 record.
   GFNT_COLOR_REFUSAL_COUNT            ///< Closes the enum.
 } GFNT_ColorRefusal;
+
+/**
+ * @brief The space a version 1 glyph's gradients are interpolated in and its layers, composites and blends are
+ *   composited in (L3 and L8).
+ */
+typedef enum GFNT_ColorSpace {
+  /**
+   * The standard's: OpenType requires gradient colors interpolated premultiplied in linear light and compositing and
+   * blending done on linear-light values (CPAL, "Interpolation of colors"; COLR, "PaintComposite"). The default.
+   */
+  GFNT_COLOR_SPACE_STANDARD = 0,
+  /**
+   * The encoded values: sRGB with its transfer function, gradients interpolated unpremultiplied. This is what the
+   * shipping renderers (Skia, and the browsers on it) draw, and what the Skia comparison runs in.
+   */
+  GFNT_COLOR_SPACE_ENCODED = 1
+} GFNT_ColorSpace;
 
 /** @brief Where and how a color glyph is drawn: every number fixed point, `v / 2^bits`. */
 typedef struct GFNT_ColorRun {
@@ -115,6 +145,7 @@ typedef struct GFNT_ColorRun {
   uint32_t hint_mode;    ///< A `GSHSCENE_Hint_Mode` for every shape's run.
   uint32_t hint_version; ///< Passed to the provider unread.
   int32_t layer;         ///< The declared layer of every item recorded.
+  uint32_t space;        ///< A ::GFNT_ColorSpace (zero, the standard's, is the default).
 } GFNT_ColorRun;
 
 /** @brief What a lowering did. */

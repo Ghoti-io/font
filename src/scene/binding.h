@@ -30,6 +30,7 @@
 
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
+#include <stdbool.h>
 #include <ghoti.io/shape-scene/glyph_provider.h>
 
 /**
@@ -38,5 +39,13 @@
  *   or a face another provider binds.
  */
 const GFNT_Face * gfnt_scene_face_of(const GSHSCENE_Resource * face);
+
+/**
+ * @brief The variation instance a face resource was interned at (L1 of color-paint story P4): the normalised
+ *   coordinates of its binding and the default delta rounding. The coordinates are valid while the resource is held.
+ *
+ * @return false for NULL, a resource that is not a face, an unbound face, or a face another provider binds.
+ */
+bool gfnt_scene_instance_of(const GSHSCENE_Resource * face, GFNT_Variation * out);
 
 #endif // GHOTI_IO_GFNT_SCENE_BINDING_H

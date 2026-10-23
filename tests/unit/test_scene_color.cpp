@@ -36,6 +36,8 @@ using Bytes = std::vector<uint8_t>;
 // The color fixtures' glyphs (tools/fixtures/color_fixtures.py: ORDER, then SCENE_EXTRA).
 const uint32_t kSpace = 1, kA = 2, kB = 3, kAlt = 4, kLayerA = 5, kLayerB = 6, kLayerC = 7;
 const uint32_t kPaintD = 8, kPaintE = 9, kPaintF = 10, kPaintG = 11, kPaintH = 12, kPaintI = 13, kPaintJ = 14;
+const uint32_t kPaintK = 15, kPaintL = 16, kPaintM = 17, kPaintN = 18, kPaintO = 19, kPaintP = 20, kPaintQ = 21,
+    kPaintR = 22;
 
 Bytes file_bytes(const std::string & name) {
   const std::string path = gfnttest::data("fonts/" + name);
@@ -108,7 +110,8 @@ struct Color {
     return p;
   }
   GFNT_Result lower(GSHSCENE_List * l, uint32_t glyph, GFNT_ColorLowering * out, int32_t size = 20 * 64,
-      int32_t x = 10 * 64, int32_t y = 30 * 64, int32_t layer = 3) {
+      int32_t x = 10 * 64, int32_t y = 30 * 64, int32_t layer = 3, const GSHSCENE_Resource * at = nullptr,
+      uint32_t space = GFNT_COLOR_SPACE_STANDARD) {
     GFNT_ColorRun run{};
     run.size = size;
     run.x = x;
@@ -116,8 +119,20 @@ struct Color {
     run.bits = 6;
     run.hint_mode = GSHSCENE_HINT_NONE;
     run.layer = layer;
+    run.space = space;
     GFNT_Error error{};
-    return gfnt_scene_record_color_glyph(face_resource, store, l, glyph, &run, out, &error);
+    return gfnt_scene_record_color_glyph(at ? at : face_resource, store, l, glyph, &run, out, &error);
+  }
+  /** The face interned at the normalised coordinates @p coords (2.14), held until the end. */
+  const GSHSCENE_Resource * instance(std::vector<GFNT_F2Dot14> coords) {
+    GFNT_Variation v{coords.data(), coords.size(), GFNT_DELTA_ROUND_HALF_UP};
+    const GSHSCENE_Resource * r = nullptr;
+    GFNT_Error error{};
+    EXPECT_EQ(gfnt_scene_intern_face(scene, store, &v, &r, &error), GFNT_OK);
+    if (r) {
+      held.push_back(r);
+    }
+    return r;
   }
 };
 
@@ -227,6 +242,20 @@ Bytes with_colr(const Bytes & font, const Bytes & colr) {
     tables.push_back(t);
   }
   return gfnttest::build_sfnt(be32(font, 0), tables);
+}
+
+/** The bytes of @p font's `COLR` table. */
+Bytes colr_table(const Bytes & font) {
+  const size_t count = (size_t)font[4] << 8 | font[5];
+  for (size_t i = 0; i < count; i++) {
+    const size_t entry = 12 + 16 * i;
+    if (be32(font, entry) == GFNT_TAG('C', 'O', 'L', 'R')) {
+      const size_t offset = be32(font, entry + 8);
+      const size_t length = be32(font, entry + 12);
+      return Bytes(font.begin() + (long)offset, font.begin() + (long)(offset + length));
+    }
+  }
+  return Bytes();
 }
 
 void put24(Bytes & out, uint32_t v) {
@@ -393,16 +422,62 @@ TEST(SceneColor, VersionZeroLayersAreFillsOfTheirEntriesBottomFirst) {
 
 // --- version 1 -------------------------------------------------------------------------------------------------
 
+namespace {
+
+// The glyph group of L8: item 0 and the last item of a version 1 glyph's list (a standard-space lowering).
+void expect_group(const GSHSCENE_List * l, size_t count, GCOL_Transfer transfer = GCOL_TRANSFER_LINEAR) {
+  ASSERT_EQ(gshscene_list_count(l) >= count, true);
+  const GSHSCENE_Item * g = item_of(l, 0);
+  ASSERT_NE(g, nullptr);
+  EXPECT_EQ(g->kind, GSHSCENE_ITEM_GROUP_PUSH);
+  EXPECT_EQ(g->group.composite, (uint32_t)GSHSCENE_COMPOSITE_SRC_OVER);
+  EXPECT_EQ(g->group.opacity, 1.0);
+  EXPECT_EQ(g->group.isolation, (uint32_t)GSHSCENE_ISOLATION_ISOLATED);
+  EXPECT_EQ(g->group.blend_space.primaries, GCOL_PRIMARIES_SRGB);
+  EXPECT_EQ(g->group.blend_space.transfer, transfer) << "the glyph composites in the standard's space (L8)";
+  EXPECT_EQ(g->layer, 3);
+  EXPECT_EQ(item_of(l, count - 1)->kind, GSHSCENE_ITEM_GROUP_POP);
+}
+
+}  // namespace
+
 TEST(SceneColor, VersionOneLayersOfSolidsAreFillsWithTheirAlphas) {
   Color c("color-v1-scene.ttf");
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kA, &out), GFNT_OK);
   EXPECT_EQ(out.source, (uint32_t)GFNT_COLOR_SOURCE_V1);
-  EXPECT_EQ(out.items, 3u);
-  expect_fill(l, 0, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "solid 0");
-  expect_fill(l, 1, kLayerB, GSHSCENE_PAINT_FOREGROUND, 0, 0.5, "the foreground at half alpha");
-  expect_fill(l, 2, kLayerC, GSHSCENE_PAINT_PALETTE, 2, 0.25, "solid 2 at a quarter");
+  EXPECT_EQ(out.items, 5u);
+  expect_group(l, 5);
+  expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "solid 0");
+  expect_fill(l, 2, kLayerB, GSHSCENE_PAINT_FOREGROUND, 0, 0.5, "the foreground at half alpha");
+  expect_fill(l, 3, kLayerC, GSHSCENE_PAINT_PALETTE, 2, 0.25, "solid 2 at a quarter");
+}
+
+TEST(SceneColor, TheEncodedSpaceIsAFieldOfTheRunAndTheDefaultIsTheStandards) {
+  Color c("color-v1-scene.ttf");
+  GSHSCENE_List * standard = c.open();
+  GSHSCENE_List * encoded = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(standard, kPaintK, &out), GFNT_OK);
+  ASSERT_EQ(c.lower(encoded, kPaintK, &out, 20 * 64, 10 * 64, 30 * 64, 3, nullptr, GFNT_COLOR_SPACE_ENCODED), GFNT_OK);
+  expect_group(standard, 3, GCOL_TRANSFER_LINEAR);
+  expect_group(encoded, 3, GCOL_TRANSFER_SRGB);
+  GSHSCENE_Gradient a{}, b{};
+  ASSERT_EQ(gshscene_resource_gradient(item_of(standard, 1)->paint.gradient, &a), GSHSCENE_OK);
+  ASSERT_EQ(gshscene_resource_gradient(item_of(encoded, 1)->paint.gradient, &b), GSHSCENE_OK);
+  EXPECT_EQ(a.space.primaries, GCOL_PRIMARIES_SRGB);
+  EXPECT_EQ(a.space.transfer, GCOL_TRANSFER_LINEAR) << "L3: the standard interpolates in linear light";
+  EXPECT_EQ(a.premultiplied, 1u) << "premultiplied";
+  EXPECT_EQ(b.space.transfer, GCOL_TRANSFER_SRGB) << "the encoded setting is what Skia draws";
+  EXPECT_EQ(b.premultiplied, 0u);
+  EXPECT_NE(item_of(standard, 1)->paint.gradient, item_of(encoded, 1)->paint.gradient);
+  // Not a version 1 glyph's field: version 0 has no group and no space.
+  Color v0("color-v0.ttf");
+  GSHSCENE_List * l0 = v0.open();
+  ASSERT_EQ(v0.lower(l0, kA, &out, 20 * 64, 10 * 64, 30 * 64, 3, nullptr, GFNT_COLOR_SPACE_ENCODED), GFNT_OK);
+  EXPECT_EQ(gshscene_list_count(l0), 3u);
+  EXPECT_EQ(item_of(l0, 0)->kind, GSHSCENE_ITEM_FILL);
 }
 
 TEST(SceneColor, ASolidsAlphaIsClampedToZeroAndOne) {
@@ -411,9 +486,9 @@ TEST(SceneColor, ASolidsAlphaIsClampedToZeroAndOne) {
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kPaintI, &out), GFNT_OK);
-  ASSERT_EQ(gshscene_list_count(l), 2u);
-  expect_fill(l, 0, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "1.5 clamped to 1");
-  expect_fill(l, 1, kLayerB, GSHSCENE_PAINT_PALETTE, 1, 0.0, "-0.5 clamped to 0");
+  ASSERT_EQ(gshscene_list_count(l), 4u);
+  expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "1.5 clamped to 1");
+  expect_fill(l, 2, kLayerB, GSHSCENE_PAINT_PALETTE, 1, 0.0, "-0.5 clamped to 0");
 }
 
 TEST(SceneColor, AGlyphOverTransformsOverASolidIsOneFillUnderTheTransformsAboveIt) {
@@ -421,11 +496,11 @@ TEST(SceneColor, AGlyphOverTransformsOverASolidIsOneFillUnderTheTransformsAboveI
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kB, &out), GFNT_OK);
-  ASSERT_EQ(gshscene_list_count(l), 1u);
-  expect_fill(l, 0, kLayerA, GSHSCENE_PAINT_PALETTE, 1, 0.75, "B");
+  ASSERT_EQ(gshscene_list_count(l), 3u);
+  expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 1, 0.75, "B");
   // T = translate(-30, 40) . rotate 45 degrees about (50, -50), in design units, y up; the scale under the glyph
   // moves only its solid.  A design point p is drawn at g + s (T(p).x, -T(p).y), g = (10, 30), s = 20 / upem.
-  const GSHGEOM_Map & m = item_of(l, 0)->map;
+  const GSHGEOM_Map & m = item_of(l, 1)->map;
   const double s = 20.0 / c.upem;
   const double r = std::sqrt(0.5);
   const double points[3][2] = {{0.0, 0.0}, {100.0, 0.0}, {0.0, 100.0}};
@@ -447,19 +522,21 @@ TEST(SceneColor, APorterDuffCompositeIsAnIsolatedPairOfGroups) {
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kAlt, &out), GFNT_OK);
-  ASSERT_EQ(gshscene_list_count(l), 6u);
-  const GSHSCENE_Item * g = item_of(l, 0);
+  ASSERT_EQ(gshscene_list_count(l), 8u);
+  expect_group(l, 8);
+  const GSHSCENE_Item * g = item_of(l, 1);
   EXPECT_EQ(g->kind, GSHSCENE_ITEM_GROUP_PUSH);
   EXPECT_EQ(g->group.composite, (uint32_t)GSHSCENE_COMPOSITE_SRC_OVER);
   EXPECT_EQ(g->layer, 3);
-  expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "the backdrop");
-  g = item_of(l, 2);
+  EXPECT_EQ(g->group.blend_space.primaries, 0) << "the composite's groups inherit the glyph's space";
+  expect_fill(l, 2, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "the backdrop");
+  g = item_of(l, 3);
   EXPECT_EQ(g->kind, GSHSCENE_ITEM_GROUP_PUSH);
   EXPECT_EQ(g->group.composite, (uint32_t)GSHSCENE_COMPOSITE_SRC_IN) << "COLR's src_in (5) is the scene's";
   EXPECT_EQ(g->group.opacity, 1.0);
-  expect_fill(l, 3, kLayerB, GSHSCENE_PAINT_PALETTE, 1, 1.0, "the source");
-  EXPECT_EQ(item_of(l, 4)->kind, GSHSCENE_ITEM_GROUP_POP);
+  expect_fill(l, 4, kLayerB, GSHSCENE_PAINT_PALETTE, 1, 1.0, "the source");
   EXPECT_EQ(item_of(l, 5)->kind, GSHSCENE_ITEM_GROUP_POP);
+  EXPECT_EQ(item_of(l, 6)->kind, GSHSCENE_ITEM_GROUP_POP);
 }
 
 TEST(SceneColor, AGlyphOverLayersIsAClipAroundThem) {
@@ -467,14 +544,15 @@ TEST(SceneColor, AGlyphOverLayersIsAClipAroundThem) {
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kPaintD, &out), GFNT_OK);
-  ASSERT_EQ(gshscene_list_count(l), 4u);
-  const GSHSCENE_Item * clip = item_of(l, 0);
+  ASSERT_EQ(gshscene_list_count(l), 6u);
+  expect_group(l, 6);
+  const GSHSCENE_Item * clip = item_of(l, 1);
   EXPECT_EQ(clip->kind, GSHSCENE_ITEM_CLIP_PUSH);
   EXPECT_EQ(glyph_of(clip), kLayerC);
   EXPECT_EQ(clip->layer, 3);
-  expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 2, 1.0, "inside the clip");
-  expect_fill(l, 2, kLayerB, GSHSCENE_PAINT_PALETTE, 0, 0.5, "inside the clip");
-  EXPECT_EQ(item_of(l, 3)->kind, GSHSCENE_ITEM_CLIP_POP);
+  expect_fill(l, 2, kLayerA, GSHSCENE_PAINT_PALETTE, 2, 1.0, "inside the clip");
+  expect_fill(l, 3, kLayerB, GSHSCENE_PAINT_PALETTE, 0, 0.5, "inside the clip");
+  EXPECT_EQ(item_of(l, 4)->kind, GSHSCENE_ITEM_CLIP_POP);
 }
 
 TEST(SceneColor, AClipTakesTheTransformsAboveItAndASiblingDoesNot) {
@@ -482,22 +560,23 @@ TEST(SceneColor, AClipTakesTheTransformsAboveItAndASiblingDoesNot) {
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kPaintJ, &out), GFNT_OK);
-  ASSERT_EQ(gshscene_list_count(l), 5u);
-  const GSHSCENE_Item * clip = item_of(l, 0);
+  ASSERT_EQ(gshscene_list_count(l), 7u);
+  expect_group(l, 7);
+  const GSHSCENE_Item * clip = item_of(l, 1);
   EXPECT_EQ(clip->kind, GSHSCENE_ITEM_CLIP_PUSH);
   EXPECT_EQ(glyph_of(clip), kLayerC);
-  expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "inside the clip");
-  expect_fill(l, 2, kLayerB, GSHSCENE_PAINT_PALETTE, 1, 1.0, "inside the clip");
-  EXPECT_EQ(item_of(l, 3)->kind, GSHSCENE_ITEM_CLIP_POP);
-  expect_fill(l, 4, kLayerB, GSHSCENE_PAINT_PALETTE, 2, 1.0, "the sibling");
+  expect_fill(l, 2, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "inside the clip");
+  expect_fill(l, 3, kLayerB, GSHSCENE_PAINT_PALETTE, 1, 1.0, "inside the clip");
+  EXPECT_EQ(item_of(l, 4)->kind, GSHSCENE_ITEM_CLIP_POP);
+  expect_fill(l, 5, kLayerB, GSHSCENE_PAINT_PALETTE, 2, 1.0, "the sibling");
   // The translation (50, -20) in design units is (50 s, 20 s) in the list, s = 20 / upem.
   const double s = 20.0 / c.upem;
-  for (size_t i : {0u, 1u, 2u}) {
+  for (size_t i : {1u, 2u, 3u}) {
     const GSHGEOM_Map & m = item_of(l, i)->map;
     EXPECT_EQ(m.t[0], s * 50.0) << i;
     EXPECT_EQ(m.t[1], -(s * -20.0)) << i;
   }
-  EXPECT_TRUE(is_identity(item_of(l, 4)->map)) << "the transform does not reach the sibling";
+  EXPECT_TRUE(is_identity(item_of(l, 5)->map)) << "the transform does not reach the sibling";
 }
 
 TEST(SceneColor, AnotherGlyphsGraphIsLoweredUnderTheTransformsAboveIt) {
@@ -505,13 +584,14 @@ TEST(SceneColor, AnotherGlyphsGraphIsLoweredUnderTheTransformsAboveIt) {
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kPaintE, &out), GFNT_OK);
-  ASSERT_EQ(gshscene_list_count(l), 3u);
-  expect_fill(l, 0, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "A's layer 0");
-  expect_fill(l, 1, kLayerB, GSHSCENE_PAINT_FOREGROUND, 0, 0.5, "A's layer 1");
-  expect_fill(l, 2, kLayerC, GSHSCENE_PAINT_PALETTE, 2, 0.25, "A's layer 2");
+  ASSERT_EQ(gshscene_list_count(l), 5u);
+  expect_group(l, 5);
+  expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "A's layer 0");
+  expect_fill(l, 2, kLayerB, GSHSCENE_PAINT_FOREGROUND, 0, 0.5, "A's layer 1");
+  expect_fill(l, 3, kLayerC, GSHSCENE_PAINT_PALETTE, 2, 0.25, "A's layer 2");
   GSHGEOM_Map want;
   gshgeom_map_translate(2, 20.0 / c.upem * 100.0, -0.0, 0.0, &want);
-  for (size_t i = 0; i < 3; i++) {
+  for (size_t i = 1; i < 4; i++) {
     const GSHGEOM_Map & m = item_of(l, i)->map;
     EXPECT_EQ(m.kind, (uint32_t)GSHGEOM_MAP_TRANSLATES) << "a translation stays a translation";
     EXPECT_EQ(m.t[0], want.t[0]);
@@ -520,39 +600,444 @@ TEST(SceneColor, AnotherGlyphsGraphIsLoweredUnderTheTransformsAboveIt) {
 }
 
 TEST(SceneColor, ColrV1sTransformsFromTheTableReachTheMap) {
-  // color-v1.ttf's B: every transform paint, chained ten deep, over a glyph and a solid.
+  // color-v1.ttf's B: every transform paint, chained ten deep, over a glyph and a solid; the font states a clip box
+  // for it (the clip list shares one box across three glyphs), so a clip of that rectangle is inside the group.
   Color c("color-v1.ttf");
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kB, &out), GFNT_OK);
-  ASSERT_EQ(gshscene_list_count(l), 1u);
-  expect_fill(l, 0, kLayerA, GSHSCENE_PAINT_PALETTE, 1, 1.0, "B");
-  EXPECT_FALSE(is_identity(item_of(l, 0)->map));
-  EXPECT_TRUE(item_of(l, 0)->map.kind & GSHGEOM_MAP_SKEWS);
+  ASSERT_EQ(gshscene_list_count(l), 5u);
+  expect_group(l, 5);
+  EXPECT_EQ(item_of(l, 1)->kind, GSHSCENE_ITEM_CLIP_PUSH) << "the font's clip box for B (L5)";
+  EXPECT_EQ(item_of(l, 3)->kind, GSHSCENE_ITEM_CLIP_POP);
+  expect_fill(l, 2, kLayerA, GSHSCENE_PAINT_PALETTE, 1, 1.0, "B");
+  EXPECT_FALSE(is_identity(item_of(l, 2)->map));
+  EXPECT_TRUE(item_of(l, 2)->map.kind & GSHGEOM_MAP_SKEWS);
+}
+
+// --- gradients, planes, boxes, blend modes (L2 to L8) -----------------------------------------------------------------
+
+namespace {
+
+const GSHSCENE_Resource * plane_resource_of(const GSHSCENE_Item * item) {
+  return gshscene_resource_kind(item->resource) == GSHSCENE_RESOURCE_PLANE ? item->resource : nullptr;
+}
+
+GSHSCENE_Gradient gradient_of(const GSHSCENE_Item * item) {
+  GSHSCENE_Gradient g{};
+  EXPECT_EQ(item->kind, GSHSCENE_ITEM_FILL);
+  EXPECT_EQ(item->paint.kind, GSHSCENE_PAINT_GRADIENT);
+  EXPECT_EQ(gshscene_resource_gradient(item->paint.gradient, &g), GSHSCENE_OK);
+  EXPECT_EQ(item->paint.rgba[3], 1.0) << "the stops carry the alphas";
+  return g;
+}
+
+/** Where a design point lands under a gradient's map at a run of size 20 at (10, 30): g + s (T(p).x, -T(p).y). */
+GSHGEOM_Point mapped(const GSHGEOM_Map & m, double x, double y) {
+  GSHGEOM_Point out{};
+  EXPECT_EQ(gshgeom_map_apply_point(&m, GSHGEOM_Point{x, y, 0.0}, &out), GSHGEOM_OK);
+  return out;
+}
+
+void expect_stop(const GSHSCENE_Gradient_Stop & s, double offset, GSHSCENE_Paint_Kind kind, uint32_t entry, double alpha,
+    const char * what) {
+  EXPECT_EQ(s.offset, offset) << what;
+  EXPECT_EQ(s.color.kind, kind) << what;
+  EXPECT_EQ(s.color.entry, entry) << what;
+  EXPECT_EQ(s.color.rgba[3], alpha) << what;
+}
+
+}  // namespace
+
+TEST(SceneColor, ALinearGradientUnderAGlyphIsOneFillAndItsOwnTransformsAreTheGradients) {
+  Color c("color-v1-scene.ttf");
+  GSHSCENE_List * l = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(l, kPaintK, &out), GFNT_OK);
+  ASSERT_EQ(gshscene_list_count(l), 3u);
+  expect_group(l, 3);
+  const GSHSCENE_Item * fill = item_of(l, 1);
+  EXPECT_EQ(glyph_of(fill), kLayerA) << "the glyph's own outline is filled";
+  const double s = 20.0 / c.upem;
+  // The fill's map is the transform above the glyph (translate (20, -10)); the scale between the glyph and the
+  // gradient is not on the outline (L4).
+  EXPECT_EQ(fill->map.t[0], s * 20.0);
+  EXPECT_EQ(fill->map.t[1], -(s * -10.0));
+  EXPECT_EQ(fill->map.m[0][0], 1.0);
+  EXPECT_EQ(fill->map.m[1][1], 1.0);
+  GSHSCENE_Gradient g = gradient_of(fill);
+  EXPECT_EQ(g.kind, (uint32_t)GSHSCENE_GRADIENT_LINEAR);
+  EXPECT_EQ(g.extend, (uint32_t)GSHSCENE_EXTEND_PAD);
+  EXPECT_EQ(g.space.primaries, GCOL_PRIMARIES_SRGB);
+  EXPECT_EQ(g.space.transfer, GCOL_TRANSFER_LINEAR);
+  EXPECT_EQ(g.premultiplied, 1u);
+  EXPECT_EQ(g.p0[0], 0.0);
+  EXPECT_EQ(g.p1[0], 600.0);
+  EXPECT_EQ(g.d[0], 0.0) << "d = p2 - p0";
+  EXPECT_EQ(g.d[1], 600.0);
+  ASSERT_EQ(g.stop_count, 3u);
+  expect_stop(g.stops[0], 0.0, GSHSCENE_PAINT_PALETTE, 0, 1.0, "stop 0");
+  expect_stop(g.stops[1], 0.75, GSHSCENE_PAINT_FOREGROUND, 0, 0.5, "0xFFFF is the foreground");
+  expect_stop(g.stops[2], 1.25, GSHSCENE_PAINT_PALETTE, 2, 0.25, "an offset past 1 is kept");
+  // The gradient's map is design_to_model . T, T the scale (1.5, 0.5) between the glyph and the gradient.
+  GSHGEOM_Point q = mapped(g.map, 100.0, 200.0);
+  EXPECT_NEAR(q.x, 10.0 + s * 150.0, 1e-9);
+  EXPECT_NEAR(q.y, 30.0 - s * 100.0, 1e-9);
+}
+
+TEST(SceneColor, ARadialAndASweepGradientCarryTheirGeometryExtendsAndSortedStops) {
+  Color c("color-v1-scene.ttf");
+  GFNT_ColorLowering out{};
+  const double s = 20.0 / c.upem;
+  GSHSCENE_List * l = c.open();
+  ASSERT_EQ(c.lower(l, kPaintL, &out), GFNT_OK);
+  ASSERT_EQ(gshscene_list_count(l), 3u);
+  GSHSCENE_Gradient r = gradient_of(item_of(l, 1));
+  EXPECT_EQ(glyph_of(item_of(l, 1)), kLayerB);
+  EXPECT_EQ(r.kind, (uint32_t)GSHSCENE_GRADIENT_RADIAL);
+  EXPECT_EQ(r.extend, (uint32_t)GSHSCENE_EXTEND_REFLECT);
+  EXPECT_EQ(r.c0[0], 300.0);
+  EXPECT_EQ(r.c0[1], 300.0);
+  EXPECT_EQ(r.r0, 20.0);
+  EXPECT_EQ(r.c1[0], 350.0);
+  EXPECT_EQ(r.c1[1], 280.0);
+  EXPECT_EQ(r.r1, 400.0);
+  ASSERT_EQ(r.stop_count, 2u);
+  expect_stop(r.stops[0], 0.0, GSHSCENE_PAINT_PALETTE, 0, 0.75, "sorted: the stop given second");
+  expect_stop(r.stops[1], 0.5, GSHSCENE_PAINT_PALETTE, 1, 1.0, "sorted: the stop given first");
+  // The rotation about (100, 200) is between the glyph and the gradient, so it is the gradient's, not the outline's:
+  // the fill's map is the identity.
+  EXPECT_TRUE(is_identity(item_of(l, 1)->map));
+  GSHGEOM_Point q = mapped(r.map, 100.0, 200.0);
+  EXPECT_NEAR(q.x, 10.0 + s * 100.0, 1e-9) << "the center of the rotation is fixed";
+  EXPECT_NEAR(q.y, 30.0 - s * 200.0, 1e-9);
+
+  GSHSCENE_List * m = c.open();
+  ASSERT_EQ(c.lower(m, kPaintM, &out), GFNT_OK);
+  GSHSCENE_Gradient sw = gradient_of(item_of(m, 1));
+  EXPECT_EQ(sw.kind, (uint32_t)GSHSCENE_GRADIENT_SWEEP);
+  EXPECT_EQ(sw.extend, (uint32_t)GSHSCENE_EXTEND_REPEAT);
+  EXPECT_EQ(sw.center[0], 300.0);
+  EXPECT_EQ(sw.center[1], 300.0);
+  EXPECT_EQ(sw.angle_unit, (uint32_t)GSHGEOM_ANGLE_DEGREES);
+  // 10 and 200 degrees are 910/16384 and 18204/16384 half turns once stored in F2.14.
+  EXPECT_EQ(sw.a0, 910.0 * 180.0 / 16384.0);
+  EXPECT_EQ(sw.a1, 18204.0 * 180.0 / 16384.0);
+}
+
+TEST(SceneColor, APaintInALayersNodeUnderAGlyphFillsThePlaneUnderTheGlyphsClip) {
+  Color c("color-v1-scene.ttf");
+  GSHSCENE_List * l = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(l, kPaintN, &out), GFNT_OK);
+  ASSERT_EQ(gshscene_list_count(l), 7u);
+  expect_group(l, 7);
+  EXPECT_EQ(item_of(l, 1)->kind, GSHSCENE_ITEM_CLIP_PUSH);
+  EXPECT_EQ(glyph_of(item_of(l, 1)), kLayerC);
+  const double s = 20.0 / c.upem;
+  // 14c refused all three of these; each is a fill of the plane now.
+  const GSHSCENE_Item * first = item_of(l, 2);
+  ASSERT_NE(plane_resource_of(first), nullptr);
+  EXPECT_EQ(first->fill_rule, GSHGEOM_FILL_NONZERO);
+  EXPECT_TRUE(is_identity(first->map)) << "no transform above the glyph";
+  GSHSCENE_Gradient g1 = gradient_of(first);
+  EXPECT_EQ(g1.extend, (uint32_t)GSHSCENE_EXTEND_REPEAT);
+  GSHGEOM_Point q = mapped(g1.map, 0.0, 0.0);
+  EXPECT_NEAR(q.x, 10.0 + s * 40.0, 1e-9) << "the translation between the glyph and the paint is the gradient's";
+  EXPECT_NEAR(q.y, 30.0, 1e-9);
+  const GSHSCENE_Item * solid_fill = item_of(l, 3);
+  ASSERT_NE(plane_resource_of(solid_fill), nullptr);
+  EXPECT_EQ(solid_fill->paint.kind, GSHSCENE_PAINT_PALETTE);
+  EXPECT_EQ(solid_fill->paint.entry, 1u);
+  EXPECT_EQ(solid_fill->paint.rgba[3], 0.5);
+  const GSHSCENE_Item * third = item_of(l, 4);
+  ASSERT_NE(plane_resource_of(third), nullptr);
+  GSHSCENE_Gradient g3 = gradient_of(third);
+  EXPECT_EQ(g3.kind, (uint32_t)GSHSCENE_GRADIENT_RADIAL);
+  q = mapped(g3.map, 100.0, 0.0);
+  EXPECT_NEAR(q.x, 10.0 + s * 175.0, 1e-9) << "the scale between the glyph and the paint";
+  EXPECT_EQ(item_of(l, 5)->kind, GSHSCENE_ITEM_CLIP_POP);
+  EXPECT_EQ(plane_resource_of(first), plane_resource_of(third)) << "one plane";
+}
+
+TEST(SceneColor, ARootGradientFillsThePlaneInsideTheGlyphsClipBoxAndIsRefusedWithoutOne) {
+  Color c("color-v1-scene.ttf");
+  GSHSCENE_List * l = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(l, kPaintO, &out), GFNT_OK);
+  ASSERT_EQ(gshscene_list_count(l), 5u);
+  expect_group(l, 5);
+  const GSHSCENE_Item * clip = item_of(l, 1);
+  EXPECT_EQ(clip->kind, GSHSCENE_ITEM_CLIP_PUSH);
+  EXPECT_EQ(clip->layer, 3);
+  EXPECT_EQ(clip->fill_rule, GSHGEOM_FILL_NONZERO);
+  const GSHGEOM_Path * box = gshscene_resource_path(clip->resource);
+  ASSERT_NE(box, nullptr);
+  GSHGEOM_Bounds b{};
+  ASSERT_EQ(gshgeom_path_bounds(box, &b), GSHGEOM_OK);
+  EXPECT_EQ(b.min.x, 0.0);
+  EXPECT_EQ(b.min.y, 0.0);
+  EXPECT_EQ(b.max.x, 300.0);
+  EXPECT_EQ(b.max.y, 500.0);
+  // The rectangle is in the design space: the box's far corner is where the glyph outline puts that design point.
+  const double s = 20.0 / c.upem;
+  GSHGEOM_Point q = mapped(clip->map, 300.0, 500.0);
+  EXPECT_NEAR(q.x, 10.0 + s * 300.0, 1e-9);
+  EXPECT_NEAR(q.y, 30.0 - s * 500.0, 1e-9);
+  ASSERT_NE(plane_resource_of(item_of(l, 2)), nullptr);
+  EXPECT_EQ(gradient_of(item_of(l, 2)).kind, (uint32_t)GSHSCENE_GRADIENT_LINEAR);
+  EXPECT_EQ(item_of(l, 3)->kind, GSHSCENE_ITEM_CLIP_POP);
+  // The same graph without a box states no extent: refused, nothing recorded.
+  GSHSCENE_List * l2 = c.open();
+  size_t before = gshscene_list_count(l2);
+  std::memset(&out, 0xAB, sizeof out);
+  EXPECT_EQ(c.lower(l2, kPaintP, &out), GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_REFUSED_UNBOUNDED);
+  EXPECT_EQ(out.paint_format, (uint32_t)GFNT_PAINT_RADIAL_GRADIENT);
+  EXPECT_EQ(out.items, 0u);
+  EXPECT_EQ(gshscene_list_count(l2), before);
+}
+
+TEST(SceneColor, AColorGlyphNamedByAnotherIsDrawnUnderTheOuterBoxOnly) {
+  // paint.r is paint.o's graph moved by (100, 0), with a box of its own: the one clip is paint.r's. The referenced
+  // glyph's box (0, 0, 300, 500) belongs to paint.o when paint.o is drawn, not to a graph that names it.
+  Color c("color-v1-scene.ttf");
+  GSHSCENE_List * l = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(l, kPaintR, &out), GFNT_OK);
+  ASSERT_EQ(gshscene_list_count(l), 5u);
+  expect_group(l, 5);
+  const GSHSCENE_Item * clip = item_of(l, 1);
+  ASSERT_EQ(clip->kind, GSHSCENE_ITEM_CLIP_PUSH);
+  GSHGEOM_Bounds b{};
+  ASSERT_EQ(gshgeom_path_bounds(gshscene_resource_path(clip->resource), &b), GSHGEOM_OK);
+  EXPECT_EQ(b.min.x, -100.0);
+  EXPECT_EQ(b.max.x, 900.0);
+  const GSHSCENE_Item * fill = item_of(l, 2);
+  ASSERT_NE(plane_resource_of(fill), nullptr);
+  EXPECT_TRUE(is_identity(fill->map)) << "the translation is above no clip, so it is the gradient's";
+  const double s = 20.0 / c.upem;
+  GSHGEOM_Point q = mapped(gradient_of(fill).map, 0.0, 0.0);
+  EXPECT_NEAR(q.x, 10.0 + s * 100.0, 1e-9);
+}
+
+TEST(SceneColor, ABoxThatCutsChangesPixelsAndOneThatDoesNotChangesNone) {
+  const Bytes base = file_bytes("color-v1-scene.ttf");
+  // The clip list's box for paint.o is (0, 0, 300, 500) as four int16: find it and widen it.
+  const Bytes colr = colr_table(base);
+  const uint8_t cut[8] = {0, 0, 0, 0, 0x01, 0x2C, 0x01, 0xF4};
+  size_t at = colr.size();
+  for (size_t i = 0; i + 8 <= colr.size(); i++) {
+    if (std::memcmp(colr.data() + i, cut, 8) == 0) {
+      at = i;
+    }
+  }
+  ASSERT_LT(at, colr.size()) << "paint.o's box is in the table";
+  auto with_box = [&](int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
+    Bytes patched = colr;
+    const int16_t v[4] = {x0, y0, x1, y1};
+    for (int k = 0; k < 4; k++) {
+      patched[at + 2u * k] = (uint8_t)((uint16_t)v[k] >> 8);
+      patched[at + 2u * k + 1] = (uint8_t)v[k];
+    }
+    return with_colr(base, patched);
+  };
+  auto draw = [&](Bytes font) {
+    Color c(std::move(font));
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    EXPECT_EQ(c.lower(l, kPaintO, &out, 40 * 64, 4 * 64, 44 * 64), GFNT_OK);
+    const GSHSCENE_Resource * pal = c.palette(0);
+    EXPECT_EQ(gshscene_list_set_palette(l, pal), GSHSCENE_OK);
+    EXPECT_EQ(gshscene_list_close(l), GSHSCENE_OK);
+    return render(l, 64, 64);
+  };
+  const std::string cutting = draw(base);
+  const std::string wide = draw(with_box(-4000, -4000, 8000, 8000));
+  const std::string wider = draw(with_box(-8000, -8000, 12000, 12000));
+  EXPECT_TRUE(any_ink(cutting));
+  EXPECT_NE(cutting, wide) << "a box that cuts changes pixels";
+  EXPECT_EQ(wide, wider) << "a box that cuts nothing changes none";
+  // The wide box lets the gradient fill the whole 64 by 64 target: every pixel is ink.
+  for (size_t i = 3; i < wide.size(); i += 4) {
+    ASSERT_NE(wide[i], 0) << "pixel " << i / 4;
+  }
+}
+
+TEST(SceneColor, EveryBlendModeReachesTheSceneAsItsNumberAndUnknownOnesAreClear) {
+  const Bytes base = file_bytes("color-v1-scene.ttf");
+  const Bytes colr = colr_table(base);
+  // ghoti.alt's graph is a PaintComposite (format 32): format, source offset (24 bits), mode, backdrop offset.
+  Color probe(base);
+  GFNT_PaintRef root = 0;
+  ASSERT_EQ(gfnt_face_color_base_paint(probe.face, kAlt, &root, nullptr), GFNT_OK);
+  ASSERT_EQ(colr[root], 32u);
+  ASSERT_EQ(colr[root + 4], 5u) << "src_in";
+  for (unsigned mode : {0u, 3u, 12u, 13u, 20u, 23u, 26u, 27u, 28u, 29u, 100u, 255u}) {
+    Bytes patched = colr;
+    patched[root + 4] = (uint8_t)mode;
+    Color c(with_colr(base, patched));
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    ASSERT_EQ(c.lower(l, kAlt, &out), GFNT_OK) << mode;
+    ASSERT_EQ(gshscene_list_count(l), 8u);
+    // The table of 14c for the Porter-Duff modes, the identity for the blend modes, clear for the rest (L7).
+    static const uint32_t table[13] = {GSHSCENE_COMPOSITE_CLEAR, GSHSCENE_COMPOSITE_SRC, GSHSCENE_COMPOSITE_DEST,
+        GSHSCENE_COMPOSITE_SRC_OVER, GSHSCENE_COMPOSITE_DEST_OVER, GSHSCENE_COMPOSITE_SRC_IN,
+        GSHSCENE_COMPOSITE_DEST_IN, GSHSCENE_COMPOSITE_SRC_OUT, GSHSCENE_COMPOSITE_DEST_OUT,
+        GSHSCENE_COMPOSITE_SRC_ATOP, GSHSCENE_COMPOSITE_DEST_ATOP, GSHSCENE_COMPOSITE_XOR, GSHSCENE_COMPOSITE_PLUS};
+    const uint32_t want = mode <= 12 ? table[mode] : mode <= 27 ? mode : (uint32_t)GSHSCENE_COMPOSITE_CLEAR;
+    EXPECT_EQ(item_of(l, 3)->group.composite, want) << "COLR mode " << mode;
+    EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_LOWERED);
+  }
+}
+
+TEST(SceneColor, ABlendModeOverAGradientIsTheFixtureGlyph) {
+  Color c("color-v1-scene.ttf");
+  GFNT_ColorLowering out{};
+  GSHSCENE_List * multiply = c.open();
+  ASSERT_EQ(c.lower(multiply, kPaintF, &out), GFNT_OK);
+  ASSERT_EQ(gshscene_list_count(multiply), 8u);
+  EXPECT_EQ(item_of(multiply, 3)->group.composite, 23u) << "multiply (COLR numbers it 23)";
+  EXPECT_EQ(out.composite_mode, 0u);
+  GSHSCENE_List * hue = c.open();
+  ASSERT_EQ(c.lower(hue, kPaintQ, &out), GFNT_OK);
+  ASSERT_EQ(gshscene_list_count(hue), 8u);
+  EXPECT_EQ(item_of(hue, 3)->group.composite, 24u) << "hsl_hue (COLR numbers it 24)";
+  EXPECT_EQ(item_of(hue, 4)->kind, GSHSCENE_ITEM_FILL);
+  EXPECT_EQ(gradient_of(item_of(hue, 4)).kind, (uint32_t)GSHSCENE_GRADIENT_LINEAR);
+}
+
+// --- variation (L1) -----------------------------------------------------------------------------------------------
+
+TEST(SceneColor, EveryVarFormIsReadAtTheFaceResourcesInstance) {
+  // color-v1-var.ttf: its two base glyphs are made of Var forms (tools/fixtures/color_fixtures.py), over weight and
+  // width.  The face resource is the instance: at the default every number is the table's, at another it moves.
+  Color c("color-v1-var.ttf");
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(c.face, &glyphs, nullptr), GFNT_OK);
+  const GSHSCENE_Resource * moved = c.instance({16384, -8192});
+  const GSHSCENE_Resource * halfway = c.instance({8192, 0});
+  ASSERT_NE(moved, nullptr);
+  ASSERT_NE(halfway, nullptr);
+  int lowered = 0;
+  for (uint32_t g = 0; g < glyphs; g++) {
+    GSHSCENE_List * at_default = c.open();
+    GFNT_ColorLowering out{};
+    GFNT_Result r = c.lower(at_default, g, &out);
+    if (out.source == GFNT_COLOR_SOURCE_NONE) {
+      EXPECT_EQ(r, GFNT_OK) << g;
+      continue;
+    }
+    ASSERT_EQ(r, GFNT_OK) << "a variable paint is lowered, never refused (L1): glyph " << g;
+    lowered++;
+    GSHSCENE_List * at_moved = c.open();
+    ASSERT_EQ(c.lower(at_moved, g, &out, 20 * 64, 10 * 64, 30 * 64, 3, moved), GFNT_OK) << g;
+    GSHSCENE_List * at_half = c.open();
+    ASSERT_EQ(c.lower(at_half, g, &out, 20 * 64, 10 * 64, 30 * 64, 3, halfway), GFNT_OK) << g;
+    EXPECT_EQ(gshscene_list_count(at_moved), gshscene_list_count(at_default)) << "the same graph, other numbers";
+    EXPECT_NE(gshscene_list_hash(at_default), gshscene_list_hash(at_moved)) << "the instance moves the numbers: " << g;
+    EXPECT_NE(gshscene_list_hash(at_half), gshscene_list_hash(at_moved)) << g;
+    EXPECT_NE(gshscene_list_hash(at_half), gshscene_list_hash(at_default)) << g;
+    // The same face resource twice is the same lowering, and the default instance is a face with no coordinates.
+    GSHSCENE_List * again = c.open();
+    ASSERT_EQ(c.lower(again, g, &out, 20 * 64, 10 * 64, 30 * 64, 3, moved), GFNT_OK);
+    EXPECT_EQ(gshscene_list_hash(again), gshscene_list_hash(at_moved));
+    GSHSCENE_List * zero = c.open();
+    const GSHSCENE_Resource * zeros = c.instance({0, 0});
+    ASSERT_EQ(c.lower(zero, g, &out, 20 * 64, 10 * 64, 30 * 64, 3, zeros), GFNT_OK);
+    EXPECT_EQ(gshscene_list_hash(zero), gshscene_list_hash(at_default)) << "all zero is the default instance";
+  }
+  EXPECT_EQ(lowered, 2);
+}
+
+TEST(SceneColor, AVariablePaintsNumbersAreTheReadersAtTheInstanceAndNotAtTheDefault) {
+  Color c("color-v1-var.ttf");
+  // The linear gradient of the glyph "tri" (the first layer): x1 = 600 at the default, with a delta by the instance.
+  GFNT_Variation v{};
+  GFNT_F2Dot14 coords[2] = {16384, -8192};
+  v.coords = coords;
+  v.count = 2;
+  GFNT_PaintRef tri = 0;
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(c.face, &glyphs, nullptr), GFNT_OK);
+  uint32_t first = 0;
+  for (uint32_t g = 0; g < glyphs && !first; g++) {
+    size_t layers = 0;
+    GFNT_PaintRef root = 0;
+    if (gfnt_face_color_base_paint(c.face, g, &root, nullptr) == GFNT_OK && root) {
+      first = g;
+      tri = root;
+    }
+    (void)layers;
+  }
+  ASSERT_NE(tri, 0u);
+  // Walk to the first gradient leaf at both locations and compare to what the lowering recorded.
+  struct Find {
+    const GFNT_Face * face;
+    const GFNT_Variation * at;
+    int32_t x1 = 0;
+    bool found = false;
+  };
+  auto first_linear = [&](const GFNT_Variation * at) {
+    Find f{c.face, at};
+    struct W {
+      static bool enter(void * user, const GFNT_ColorPaint * p, size_t) {
+        Find * f = static_cast<Find *>(user);
+        if (!f->found && (p->format == GFNT_PAINT_LINEAR_GRADIENT || p->format == GFNT_PAINT_VAR_LINEAR_GRADIENT)) {
+          f->found = true;
+          f->x1 = p->v[2];
+        }
+        return true;
+      }
+    };
+    GFNT_PaintVisitor vis{W::enter, nullptr};
+    EXPECT_EQ(gfnt_face_color_paint_walk(c.face, first, at, &vis, &f, nullptr), GFNT_OK);
+    return f.x1;
+  };
+  const int32_t at_default = first_linear(nullptr);
+  const int32_t at_moved = first_linear(&v);
+  ASSERT_NE(at_default, at_moved) << "the fixture's gradient varies";
+  const GSHSCENE_Resource * moved = c.instance({16384, -8192});
+  for (const GSHSCENE_Resource * face : {static_cast<const GSHSCENE_Resource *>(nullptr), moved}) {
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    ASSERT_EQ(c.lower(l, first, &out, 20 * 64, 10 * 64, 30 * 64, 3, face), GFNT_OK);
+    double x1 = -1.0;
+    for (size_t i = 0; i < gshscene_list_count(l) && x1 < 0.0; i++) {
+      const GSHSCENE_Item * item = item_of(l, i);
+      if (item->kind == GSHSCENE_ITEM_FILL && item->paint.kind == GSHSCENE_PAINT_GRADIENT) {
+        GSHSCENE_Gradient g{};
+        ASSERT_EQ(gshscene_resource_gradient(item->paint.gradient, &g), GSHSCENE_OK);
+        if (g.kind == GSHSCENE_GRADIENT_LINEAR) {
+          x1 = g.p1[0];
+        }
+      }
+    }
+    EXPECT_EQ(x1, (double)(face ? at_moved : at_default)) << (face ? "at the instance" : "at the default");
+  }
 }
 
 // --- refusals ---------------------------------------------------------------------------------------------------
 
 TEST(SceneColor, EachRefusalNamesItsReasonAndLeavesTheListAsItWas) {
+  // After L10 two reasons are left: a paint no clip bounds in a glyph that states no box, and a color glyph naming a
+  // glyph with no version 1 record (the second is in the test of the depth bound).
   struct Case {
     const char * font;
     uint32_t glyph;
     GFNT_ColorRefusal refusal;
     uint32_t format;
   } cases[] = {
-      {"color-v1.ttf", kA, GFNT_COLOR_REFUSED_GRADIENT, GFNT_PAINT_LINEAR_GRADIENT},
-      {"color-v1.ttf", kAlt, GFNT_COLOR_REFUSED_BLEND_MODE, GFNT_PAINT_COMPOSITE},
-      {"color-v1-scene.ttf", kPaintF, GFNT_COLOR_REFUSED_BLEND_MODE, GFNT_PAINT_COMPOSITE},
       {"color-v1-scene.ttf", kPaintG, GFNT_COLOR_REFUSED_UNBOUNDED, GFNT_PAINT_SOLID},
+      {"color-v1-scene.ttf", kPaintP, GFNT_COLOR_REFUSED_UNBOUNDED, GFNT_PAINT_RADIAL_GRADIENT},
   };
   for (const Case & k : cases) {
     Color c(k.font);
     GSHSCENE_List * l = c.open();
     // Something recorded before, which must survive.
     GFNT_ColorLowering first{};
-    if (std::string(k.font) == "color-v1-scene.ttf") {
-      ASSERT_EQ(c.lower(l, kAlt, &first), GFNT_OK);
-    }
+    ASSERT_EQ(c.lower(l, kAlt, &first), GFNT_OK);
     size_t before = gshscene_list_count(l);
     uint64_t hash = gshscene_list_hash(l);
     GFNT_ColorLowering out{};
@@ -568,40 +1053,34 @@ TEST(SceneColor, EachRefusalNamesItsReasonAndLeavesTheListAsItWas) {
     EXPECT_NE(error.message, nullptr);
     EXPECT_EQ(out.refusal, (uint32_t)k.refusal) << k.font << " " << k.glyph;
     EXPECT_EQ(out.source, (uint32_t)GFNT_COLOR_SOURCE_V1);
-    if (k.format) {
-      EXPECT_EQ(out.paint_format, k.format) << k.font << " " << k.glyph;
-    } else {
-      EXPECT_NE(out.paint_format, 0u);
-    }
+    EXPECT_EQ(out.paint_format, k.format) << k.font << " " << k.glyph;
     EXPECT_EQ(out.items, 0u);
-    EXPECT_EQ(gshscene_list_count(l), before) << "all or nothing";
+    EXPECT_EQ(gshscene_list_count(l), before) << "all or nothing, the glyph's group and clip included";
     EXPECT_EQ(gshscene_list_hash(l), hash);
-    if (k.refusal == GFNT_COLOR_REFUSED_BLEND_MODE) {
-      EXPECT_EQ(out.composite_mode, 23u) << "multiply (COLR numbers it 23)";
-    }
   }
 }
 
-TEST(SceneColor, EveryColorGlyphOfAVariableGraphIsRefusedAsVariable) {
-  // color-v1-var.ttf: its two base glyphs are made of Var forms only (tools/fixtures/color_fixtures.py).
-  Color c("color-v1-var.ttf");
-  size_t glyphs = 0;
-  ASSERT_EQ(gfnt_face_num_glyphs(c.face, &glyphs, nullptr), GFNT_OK);
-  GSHSCENE_List * l = c.open();
-  int refused = 0;
-  for (uint32_t g = 0; g < glyphs; g++) {
-    GFNT_ColorLowering out{};
-    GFNT_Result r = c.lower(l, g, &out);
-    if (out.source == GFNT_COLOR_SOURCE_NONE) {
-      EXPECT_EQ(r, GFNT_OK) << g;
-      continue;
+TEST(SceneColor, WhatWas14csRefusalsIsNowLowered) {
+  // color-v1.ttf's A (a gradient of each kind, its own clip box) and ghoti.alt (a multiply composite) and the scene
+  // fixture's blend mode were refused as GRADIENT and BLEND_MODE.
+  Color c("color-v1.ttf");
+  Color s("color-v1-scene.ttf");
+  GFNT_ColorLowering out{};
+  GSHSCENE_List * a = c.open();
+  ASSERT_EQ(c.lower(a, kA, &out), GFNT_OK);
+  EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_LOWERED);
+  size_t gradients = 0;
+  for (size_t i = 0; i < gshscene_list_count(a); i++) {
+    if (item_of(a, i)->kind == GSHSCENE_ITEM_FILL && item_of(a, i)->paint.kind == GSHSCENE_PAINT_GRADIENT) {
+      gradients++;
     }
-    EXPECT_EQ(r, GFNT_ERR_UNSUPPORTED) << g;
-    EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_REFUSED_VARIABLE) << g;
-    refused++;
   }
-  EXPECT_EQ(refused, 2);
-  EXPECT_EQ(gshscene_list_count(l), 0u);
+  EXPECT_EQ(gradients, 3u) << "linear, radial and sweep";
+  GSHSCENE_List * alt = c.open();
+  ASSERT_EQ(c.lower(alt, kAlt, &out), GFNT_OK);
+  EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_LOWERED);
+  GSHSCENE_List * multiply = s.open();
+  ASSERT_EQ(s.lower(multiply, kPaintF, &out), GFNT_OK);
 }
 
 TEST(SceneColor, AGraphThatNamesItselfIsALimitAndLeavesTheListAsItWas) {
@@ -610,7 +1089,7 @@ TEST(SceneColor, AGraphThatNamesItselfIsALimitAndLeavesTheListAsItWas) {
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kA, &out), GFNT_OK);
   EXPECT_EQ(c.lower(l, kPaintH, &out), GFNT_ERR_LIMIT);
-  EXPECT_EQ(gshscene_list_count(l), 3u);
+  EXPECT_EQ(gshscene_list_count(l), 5u);
 }
 
 TEST(SceneColor, AGraphDeeperThanTheWalksBoundIsALimitAndAShallowerOneIsLowered) {
@@ -625,8 +1104,8 @@ TEST(SceneColor, AGraphDeeperThanTheWalksBoundIsALimitAndAShallowerOneIsLowered)
     GFNT_Result r = c.lower(l, kB, &out);
     if (levels + 1 <= 64) {
       ASSERT_EQ(r, GFNT_OK) << levels;
-      ASSERT_EQ(gshscene_list_count(l), 1u);
-      expect_fill(l, 0, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "the deepest layer");
+      ASSERT_EQ(gshscene_list_count(l), 3u);
+      expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "the deepest layer");
     } else {
       EXPECT_EQ(r, GFNT_ERR_LIMIT) << levels;
       EXPECT_EQ(gshscene_list_count(l), 0u);
@@ -648,8 +1127,8 @@ TEST(SceneColor, AGlyphWithBothRecordsIsLoweredFromVersionOne) {
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kB, &out), GFNT_OK);
   EXPECT_EQ(out.source, (uint32_t)GFNT_COLOR_SOURCE_V1);
-  ASSERT_EQ(gshscene_list_count(l), 1u);
-  expect_fill(l, 0, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "version 1's glyph and entry, not version 0's");
+  ASSERT_EQ(gshscene_list_count(l), 3u);
+  expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "version 1's glyph and entry, not version 0's");
 }
 
 namespace {
@@ -722,7 +1201,7 @@ TEST(SceneColor, BadArgumentsAndAListTheSceneRefuses) {
   ASSERT_EQ(gfnt_scene_record_color_glyph(c.face_resource, c.store, l, kAlt, &run, &out, &error), GFNT_OK);
   ASSERT_EQ(gshscene_list_close(l), GSHSCENE_OK);
   EXPECT_EQ(gfnt_scene_record_color_glyph(c.face_resource, c.store, l, kA, &run, &out, &error), GFNT_ERR_INVALID);
-  EXPECT_EQ(gshscene_list_count(l), 6u);
+  EXPECT_EQ(gshscene_list_count(l), 8u);
   // A list of another store.
   GSHSCENE_Store * other = nullptr;
   ASSERT_EQ(gshscene_store_create(nullptr, nullptr, &other), GSHSCENE_OK);
@@ -753,6 +1232,14 @@ TEST(SceneColor, ALoweredGlyphRendersAsItsSolidTwinAndAMissingEntryIsRefused) {
     GSHSCENE_List * twin = c.open();
     for (size_t i = 0; i < gshscene_list_count(l); i++) {
       const GSHSCENE_Item * item = item_of(l, i);
+      if (item->kind == GSHSCENE_ITEM_GROUP_PUSH) {
+        ASSERT_EQ(gshscene_list_group_push(twin, &item->group, item->layer, 0.0), GSHSCENE_OK);
+        continue;
+      }
+      if (item->kind == GSHSCENE_ITEM_GROUP_POP) {
+        ASSERT_EQ(gshscene_list_group_pop(twin), GSHSCENE_OK);
+        continue;
+      }
       GSHSCENE_Color color;
       ASSERT_EQ(gshscene_paint_resolve(&item->paint, &fg, pal, &color), GSHSCENE_OK);
       GSHSCENE_Paint solid{};

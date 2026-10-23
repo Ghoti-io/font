@@ -825,6 +825,18 @@ const GFNT_Face * gfnt_scene_face_of(const GSHSCENE_Resource * face) {
   return ((const GFNT_SceneBinding *)ctx)->font->face;
 }
 
+bool gfnt_scene_instance_of(const GSHSCENE_Resource * face, GFNT_Variation * out) {
+  const GSHSCENE_Glyph_Provider * ops = NULL;
+  void * ctx = NULL;
+
+  // gfnt_scene_face_of has checked that the binding is this library's.
+  if (!out || !gfnt_scene_face_of(face) || gshscene_face_binding(face, &ops, &ctx) != GSHSCENE_OK) {
+    return false;
+  }
+  *out = gfnt_scene_variation((const GFNT_SceneBinding *)ctx);
+  return true;
+}
+
 GFNT_Result gfnt_scene_intern_face(GFNT_SceneFont * font,
     GSHSCENE_Store * store, const GFNT_Variation * variation,
     const GSHSCENE_Resource ** out_face, GFNT_Error * error) {

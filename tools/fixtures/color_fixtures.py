@@ -222,7 +222,8 @@ def build_color_v1(mf, out):
 
 # Story 14c: a graph made of what the scene lowers (shape-scene's N14 and fixed.h),
 # and one glyph of each kind it refuses that color-v1.ttf does not already hold.
-SCENE_EXTRA = ["paint.d", "paint.e", "paint.f", "paint.g", "paint.h", "paint.i", "paint.j"]
+SCENE_EXTRA = ["paint.d", "paint.e", "paint.f", "paint.g", "paint.h", "paint.i", "paint.j",
+               "paint.k", "paint.l", "paint.m", "paint.n", "paint.o", "paint.p", "paint.q", "paint.r"]
 
 
 def v1_scene_trees():
@@ -261,7 +262,68 @@ def v1_scene_trees():
             {"Format": PF.PaintTranslate, "dx": 50, "dy": -20, "Paint": glyph("layer.c", {
                 "Format": PF.PaintColrLayers, "Layers": [glyph("layer.a", solid(0)), glyph("layer.b", solid(1))]})},
             glyph("layer.b", solid(2))]},
+        # Color-paint story P4 (L2 to L8): every gradient kind and extend under a glyph, transforms above the glyph
+        # (the fill's own) and between the glyph and the gradient (the gradient's), the stops with the foreground,
+        # an alpha, an offset outside [0, 1] and an unsorted pair.
+        "paint.k": {"Format": PF.PaintTranslate, "dx": 20, "dy": -10, "Paint": glyph("layer.a", {
+            "Format": PF.PaintScale, "scaleX": 1.5, "scaleY": 0.5, "Paint": {
+                "Format": PF.PaintLinearGradient, "ColorLine": {"Extend": "pad", "ColorStop": [
+                    {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 1.0},
+                    {"StopOffset": 0.75, "PaletteIndex": 0xFFFF, "Alpha": 0.5},
+                    {"StopOffset": 1.25, "PaletteIndex": 2, "Alpha": 0.25}]},
+                "x0": 0, "y0": 0, "x1": 600, "y1": 0, "x2": 0, "y2": 600}})},
+        "paint.l": glyph("layer.b", {"Format": PF.PaintRotateAroundCenter, "angle": 30.0, "centerX": 100,
+                                    "centerY": 200, "Paint": {
+            "Format": PF.PaintRadialGradient, "ColorLine": {"Extend": "reflect", "ColorStop": [
+                {"StopOffset": 0.5, "PaletteIndex": 1, "Alpha": 1.0},
+                {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 0.75}]},
+            "x0": 300, "y0": 300, "r0": 20, "x1": 350, "y1": 280, "r1": 400}}),
+        "paint.m": glyph("layer.c", {
+            "Format": PF.PaintSweepGradient, "ColorLine": {"Extend": "repeat", "ColorStop": [
+                {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 1.0},
+                {"StopOffset": 1.0, "PaletteIndex": 2, "Alpha": 1.0}]},
+            "centerX": 300, "centerY": 300, "startAngle": 10.0, "endAngle": 200.0}),
+        # A gradient and a solid in a layers node under a glyph: paints the glyph bounds without being directly under
+        # it (14c refused these), filling the plane under the glyph's clip, with the transform between them theirs.
+        "paint.n": glyph("layer.c", {"Format": PF.PaintColrLayers, "Layers": [
+            {"Format": PF.PaintTranslate, "dx": 40, "dy": 0, "Paint": {
+                "Format": PF.PaintLinearGradient, "ColorLine": {"Extend": "repeat", "ColorStop": [
+                    {"StopOffset": 0.0, "PaletteIndex": 1, "Alpha": 1.0},
+                    {"StopOffset": 0.5, "PaletteIndex": 2, "Alpha": 1.0}]},
+                "x0": 0, "y0": 0, "x1": 200, "y1": 0, "x2": 0, "y2": 200}},
+            solid(1, 0.5),
+            {"Format": PF.PaintScaleUniform, "scale": 1.75, "Paint": {
+                "Format": PF.PaintRadialGradient, "ColorLine": {"Extend": "pad", "ColorStop": [
+                    {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 0.5},
+                    {"StopOffset": 1.0, "PaletteIndex": 1, "Alpha": 0.5}]},
+                "x0": 100, "y0": 100, "r0": 0, "x1": 100, "y1": 100, "r1": 150}}]}),
+        # A gradient at the root: drawn where the glyph's clip box allows (the box cuts the glyph), refused where the
+        # font states no box (paint.p).
+        "paint.o": {"Format": PF.PaintLinearGradient, "ColorLine": {"Extend": "pad", "ColorStop": [
+            {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 1.0},
+            {"StopOffset": 1.0, "PaletteIndex": 1, "Alpha": 1.0}]},
+            "x0": 0, "y0": 0, "x1": 300, "y1": 500, "x2": 100, "y2": 0},
+        "paint.p": {"Format": PF.PaintRadialGradient, "ColorLine": {"Extend": "pad", "ColorStop": [
+            {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 1.0},
+            {"StopOffset": 1.0, "PaletteIndex": 1, "Alpha": 1.0}]},
+            "x0": 0, "y0": 0, "r0": 0, "x1": 0, "y1": 0, "r1": 300},
+        # A blend mode (hue, COLR's 24) whose source is a gradient.
+        "paint.q": {"Format": PF.PaintComposite, "CompositeMode": "hsl_hue",
+                    "SourcePaint": glyph("layer.a", {
+                        "Format": PF.PaintLinearGradient, "ColorLine": {"Extend": "pad", "ColorStop": [
+                            {"StopOffset": 0.0, "PaletteIndex": 0, "Alpha": 1.0},
+                            {"StopOffset": 1.0, "PaletteIndex": 2, "Alpha": 1.0}]},
+                        "x0": 0, "y0": 0, "x1": 600, "y1": 0, "x2": 0, "y2": 600}),
+                    "BackdropPaint": glyph("layer.b", solid(1))},
+        # Another glyph's graph, which has a clip box of its own, moved: the box belongs to the color glyph that is
+        # drawn (this one has the box that bounds the graph), not to a glyph it names.
+        "paint.r": {"Format": PF.PaintTranslate, "dx": 100, "dy": 0, "Paint": {
+            "Format": PF.PaintColrGlyph, "Glyph": "paint.o"}},
     }
+
+
+# The clip boxes of the scene fixture (xMin, yMin, xMax, yMax): paint.o's cuts its gradient; paint.r's is larger.
+SCENE_CLIPS = {"paint.o": (0, 0, 300, 500), "paint.r": (-100, -100, 900, 900)}
 
 
 def build_color_v1_scene(mf, out):
@@ -277,7 +339,7 @@ def build_color_v1_scene(mf, out):
     fb = mf.truetype("Color v1 scene", mf.unicode_cmap(), order=order, glyphs=shapes,
                      advances=advances)
     glyph_map = fb.font.getReverseGlyphMap()
-    fb.font["COLR"] = buildCOLR(v1_scene_trees(), version=1, glyphMap=glyph_map)
+    fb.font["COLR"] = buildCOLR(v1_scene_trees(), version=1, glyphMap=glyph_map, clipBoxes=SCENE_CLIPS)
     fb.font["CPAL"] = buildCPAL(_floats(PALETTES), nameTable=fb.font["name"])
     mf.pin(fb)
     fb.save(out)

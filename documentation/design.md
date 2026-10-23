@@ -1596,34 +1596,89 @@ this library (AD-2: `shape-scene` and `shape-cpu` do not depend on `font`).
 
 ### 8.8 Color glyphs through a scene
 
-Story 14c of the shape family: `scene_color.h`, `src/scene/colr.c`. `shape-scene` has a palette resource
-(a table of straight colors), a palette parameter on each list and version, and a palette paint naming an
-entry (its N14); this library supplies the palette and lowers `COLR` onto them, through the float-free
-calls of `shape-scene`'s `fixed.h`, so the lowering names no floating type.
+Story 14c and color-paint story P4 of the shape family: `scene_color.h`, `src/scene/colr.c`. `shape-scene` has a
+palette resource (a table of straight colors), a palette parameter on each list and version, a palette paint
+naming an entry (its N14), gradients (G1 to G14), the blend modes (B1 to B14), a plane to fill where no outline
+bounds a paint (PL1 to PL10), a clip of a rectangle in a run's design space and a group in a stated blend space;
+this library supplies the palette and lowers all of `COLR` version 1 onto them, through the float-free calls of
+`shape-scene`'s `fixed.h`, so the lowering names no floating type. The rules are numbered L1 to L11 and
+`scene_color.h` and the tests cite them.
 
 - **The palette.** `gfnt_scene_intern_palette()` interns a `CPAL` palette by its 8-bit entries; the scene
   turns each into `c / 255` in sRGB. A theme is another palette set on the list or the version, never another
   lowering. An entry the palette in force lacks is refused by every sink when it draws.
-- **The lowering.** `gfnt_scene_record_color_glyph()` records a glyph's version 1 graph where it has one,
-  else its version 0 layers, into a list the caller supplies, every shape a one-glyph run of the face resource
-  at the caller's size and origin (so the provider draws it, hinted where the run asks and the route allows).
-  Layers are fills of their entries (`0xFFFF` the foreground). `PaintGlyph` over a solid, through any transforms
-  between them, is a fill; over anything else it is a clip around its child. Each transform paint is a
-  design-map op of the shapes beneath it (F2.14 scales at 14 fraction bits, angles in half turns at 15, `Fixed`
-  at 16, centers carried to the op's bits), which `shape-scene` turns into the item's map about the run's glyph.
-  `PaintComposite` with a Porter-Duff mode is a group of the backdrop with a group of that operator around the
-  source; the scene's operators are COLR's modes 0 to 12 renumbered (source-over is the scene's 0).
-- **Refused per glyph, with a reason, nothing recorded:** gradients (until the shape family's step 4), blend
-  modes (COLR's modes 13 to 27), the variable paints, a solid no glyph bounds, a `PaintColrGlyph` naming a glyph
-  with no record. The list is truncated back to its count before the call on any refusal or failure, so it holds
-  the whole glyph or none of it. A graph past the walk's depth (a glyph that names itself) is `ERR_LIMIT`.
-  `ClipList` boxes are not applied: everything lowered is glyph-bounded (a Deferred row of the shape spine).
+- **L1 The instance.** Every `Var*` number, `VarColorStop` offset and alpha and `VarClipBox` is read through the
+  reader at the instance the face resource was interned at (`gfnt_scene_intern_face`'s coordinates; a face with
+  none is the default instance), so the outline and the paint cannot disagree about where the font is. The
+  lowering has no location argument of its own. The reader's numbers (font units, F2.14, `Fixed`) are passed on
+  exactly; a `Var*` delta can be any size, so every product the lowering forms is checked and a number past the
+  scene's fixed range is `ERR_LIMIT`, never a wrapped value.
+- **The lowering.** `gfnt_scene_record_color_glyph()` records a glyph's version 1 graph where it has one, else
+  its version 0 layers, into a list the caller supplies, every shape a one-glyph run of the face resource at the
+  caller's size and origin (so the provider draws it, hinted where the run asks and the route allows). Version 0
+  layers are fills of their entries (`0xFFFF` the foreground), as before, in the list's space (CPAL and COLRv0
+  state no space). A version 1 glyph is, in order:
+  - **L8 the glyph's group:** one isolated source-over group of opacity 1 whose blend space is sRGB primaries
+    with a linear transfer (the sentence under L3 below), so the layers, composites and blends are done in linear
+    light and the pop converts to the list's space; with the run's `space` field `GFNT_COLOR_SPACE_ENCODED`
+    the group's transfer is sRGB, which is what Skia, and the browsers on it, draw;
+  - **L5 the clip box:** where the base glyph has a `ClipList` box (read at L1's instance, font units), one clip of
+    that rectangle in the glyph's design space, built exactly by `shape-geometry`'s fixed builder; it is a bound
+    (L6). The box belongs to the color glyph that is drawn: a `PaintColrGlyph` is "a continuation of the graph of
+    which the PaintColrGlyph table is a part" (OpenType, "Re-use using PaintColrGlyph"), so the graph it names
+    is lowered under the outer glyph's box and the target's own box is not applied (the rendering pseudocode
+    there passes the referenced glyph's paint table, not its record; the unit tests hold this, the Skia gate
+    measures it);
+  - **the graph** (L2 to L7 below).
+
+  Layers (`PaintColrLayers`) lower their paints in order; the transforms (`PaintTransform`, `PaintTranslate`, the
+  four scales, the two rotations, the two skews, each in its `Var` form too) are design-map ops: F2.14 scales at
+  14 fraction bits, angles in half turns at 15, `Fixed` at 16, centers carried to the op's bits.
+- **L4 What fills a glyph.** A `PaintGlyph` whose child reaches a solid or a gradient through transforms only is
+  one fill of the glyph's run. The fill's design map is the transforms above and including the `PaintGlyph`; a
+  gradient's own map is the transforms between the `PaintGlyph` and the gradient (they move the paint, not the
+  outline: "both visible elements ... are affected by the rotation, but only the gradient is affected by the
+  mirroring"). Any other child puts a clip of the glyph around it (a bound).
+- **L2 Gradients.** `PaintLinearGradient`, `PaintRadialGradient` and `PaintSweepGradient` each become one gradient
+  resource of `shape-scene` (equal gradients one handle): kind and extend one to one with `COLR` (an unrecognised
+  extend is pad: "applications should use EXTEND_PAD by default"), linear `x0 y0 x1 y1 x2 y2` with the rotation
+  point `p2`, radial `x0 y0 r0 x1 y1 r1`, sweep `cx cy` and the angles. A sweep's stored angles are biased: "add
+  1.0 and multiply by 180° to retrieve counter-clockwise degrees", so the half turns passed on are the stored
+  F2.14 plus 16384. Each color stop is its offset (F2.14, not clamped, any order; the store sorts stably) and a
+  palette paint of its entry (`0xFFFF` the foreground) with the stop's alpha clamped to `[0, 1]`.
+- **L3 The space.** OpenType, `CPAL`, "Interpolation of colors": "For gradient color values in the COLR table,
+  interpolation must be computed using linear-light values (i.e., after applying the inverse sRGB transfer
+  function)." and "For both the COLR and SVG tables, interpolation must be done with alpha pre-multiplied into
+  each linearized R, G and B component." `COLR`, `PaintComposite`: "While color values obtained from the CPAL
+  table are represented in sRGB using the non-linear transfer function defined in the sRGB specification, the
+  compositing and blending calculations are done after applying the inverse transfer function to derive
+  linear-light RGB values." So a gradient is interpolated in sRGB primaries, linear transfer, premultiplied, and
+  the glyph composites in the same space (L8); `GFNT_COLOR_SPACE_ENCODED` selects the encoded values and
+  straight interpolation instead, which every shipping renderer draws and the Skia gate runs in.
+- **L6 A paint no glyph bounds.** A solid or gradient that is not directly under a `PaintGlyph` through transforms
+  is unbounded ("PaintSolid ... PaintSweepGradient ... are inherently unbounded"): it fills what the clips in
+  force allow, a fill of shape-scene's plane under them, with the transforms above the innermost bound (a
+  glyph's clip, or the box) as the fill's map and the ones below it as a gradient's own. With no bound in force
+  the glyph is refused `GFNT_COLOR_REFUSED_UNBOUNDED` ("If no clip box is defined for a color glyph, however,
+  applications must confirm that the color glyph definition is bounded, and must not render the color glyph if
+  the defining graph is not bounded"); the lowering never guesses an extent the font did not state.
+- **L7 Composites.** `PaintComposite` is a group of the backdrop with a group of the mode around the source,
+  as before; modes 0 to 12 map through the scene's operator numbering (source-over is the scene's 0), modes 13 to
+  27 are the scene's blend modes by identity, and anything else is clear: "If an unrecognized value is
+  encountered, COMPOSITE_CLEAR must be used."
+- **L10 Refused per glyph, with a reason, nothing recorded:** only `GFNT_COLOR_REFUSED_UNBOUNDED` and
+  `GFNT_COLOR_REFUSED_NO_RECORD` (a `PaintColrGlyph` naming a glyph with no record). A graph past the walk's depth
+  or node bound (a glyph that names itself, which OpenType forbids) is `ERR_LIMIT`. **L11:** the list is truncated
+  back to its count on any refusal or failure, so it holds the whole glyph or none of it, and the resources the
+  glyph interned are released with it.
 - **Checked against fontTools.** `make check-oracle-colr-scene` lowers every color glyph of the color fixtures
   and the image's color fonts (17 real fonts: Google's COLR version 1 test glyphs, three producers' samples,
   Twemoji, Noto Color Emoji, Bungee) and compares, glyph by glyph and item by item, against a second statement
-  of these rules over fontTools' decompilation with fontTools' own transforms (`getTransform()`): on story 14c's
-  tree, 10,096 color glyphs, 5,833 lowered, 3,924 refused for a gradient, 238 as variable, 62 for a blend mode,
-  30 as unbounded and 9 past the walk's bound, none differing.
+  of L1 to L11 over fontTools' decompilation with fontTools' own transforms (`getTransform()`) and its own
+  item variation store, in the standard's space and the encoded one at the default instance and at three
+  instances of every variable font (two binary fractions of the axis range and a corner, exact in integers) and
+  a fourth that is not a binary fraction, where a value may differ by one unit at a rounding tie (counted, not
+  failed). Every gradient is compared by kind, extend, space, premultiplied flag, geometry, map and every stop.
   `make check-colr-mutations` plants defects in the lowering, each refused by the unit tests or by that
   comparison.
 

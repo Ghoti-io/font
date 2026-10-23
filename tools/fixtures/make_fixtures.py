@@ -5240,9 +5240,13 @@ FIXTURES = {
         "COLR version 1 as story 14c lowers it to a scene: layers of solids with "
         "the foreground, a glyph over transforms over a solid, a Porter-Duff "
         "composite, a glyph over layers (a clip), another base glyph's graph moved, "
-        "the two refusals color-v1.ttf lacks (a blend mode, an unbounded solid), "
-        "a color glyph that names itself, alphas past either end of [0, 1], and a clip "
-        "under a transform with a sibling the transform does not reach"),
+        "the refusal color-v1.ttf lacks (an unbounded solid), "
+        "a color glyph that names itself, alphas past either end of [0, 1], a clip "
+        "under a transform with a sibling the transform does not reach, a blend mode, "
+        "and (story P4) gradients of every kind and extend under a glyph, under "
+        "transforms above and between, in a layers node under a glyph, at the root "
+        "with a clip box that cuts (and without one: refused), in a blend mode, and a "
+        "glyph naming another that has a box"),
     "color-v1-var.ttf": (build_color_v1_var,
         "COLR version 1 in a variable font: the Var forms of every paint that has "
         "one, color lines whose stops vary, and a clip box that varies, over an "

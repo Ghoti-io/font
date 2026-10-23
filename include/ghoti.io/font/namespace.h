@@ -415,6 +415,7 @@
 #define GFNT_SceneStats GHOTIIO_FONT(GFNT_SceneStats)
 #define GFNT_ColorSource GHOTIIO_FONT(GFNT_ColorSource)
 #define GFNT_ColorRefusal GHOTIIO_FONT(GFNT_ColorRefusal)
+#define GFNT_ColorSpace GHOTIIO_FONT(GFNT_ColorSpace)
 #define GFNT_ColorRun GHOTIIO_FONT(GFNT_ColorRun)
 #define GFNT_ColorLowering GHOTIIO_FONT(GFNT_ColorLowering)
 #define gfnt_scene_font_create GHOTIIO_FONT(gfnt_scene_font_create)

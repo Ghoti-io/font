@@ -153,9 +153,10 @@ def check_native(font, name, glyph):
     not fontTools' rule restated but something else, and every composite below it
     inherits the error.
     """
-    if glyph.isComposite() or not hasattr(glyph, "xMin"):
+    if (glyph.isComposite() or not hasattr(glyph, "xMin")
+            or "hmtx" not in font):
         return
-    native = font["hmtx"][name][1] - glyph.xMin
+    native = fonttools_placement.bearing(font, name) - glyph.xMin
     if native != -fonttools_placement.origin(font, name):
         raise AssertionError("placement rule disagrees with fontTools")
 

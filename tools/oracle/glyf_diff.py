@@ -451,6 +451,11 @@ def freetype_points(path, face, stride, first):
         "0", str(em), str(stride), str(first)])
     finished = subprocess.run(argv, capture_output=True, text=True)
     if finished.returncode != 0:
+        if "FT_Set_Pixel_Sizes failed" in finished.stderr:
+            # A font with bitmap strikes has fixed sizes and FreeType will not
+            # size it at the em: it has no outline for FreeType to be asked about,
+            # which is an answer and not a gap.
+            return {}
         return None
     out = {}
     glyph = None

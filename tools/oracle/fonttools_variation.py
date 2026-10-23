@@ -173,7 +173,7 @@ def check_native(font, name, glyph_set):
     """
     glyph = font["glyf"][name]
     if (not glyph_set.location or "HVAR" in font or glyph.isComposite()
-            or not hasattr(glyph, "xMin")):
+            or not hasattr(glyph, "xMin") or "hmtx" not in font):
         return
     shown = glyph_set[name]
     instance = shown._getGlyphInstance()

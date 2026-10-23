@@ -574,8 +574,8 @@ repository's synthetic fixtures state zero). The rules:
    metrics lends the point it ended with). A flagged component with no description
    lends a point of `0 - lsb`.
 4. **At a location, without an `HVAR`**, `gvar`'s delta to the first phantom point moves
-   it, so the outline is moved by that much less. A composite that lends its metrics
-   has no delta of its own to add: the lent point is final.
+   it, and the outline moves that much further to the left. A composite that lends its
+   metrics has no delta of its own to add: the lent point is final.
 5. **At a location, with an `HVAR`** (one whose advance mapping answers for the glyph),
    the stored point stands: `gvar`'s delta to the first phantom point is not applied, and
    neither is `HVAR`'s left-bearing mapping. The `HVAR` owns the glyph's horizontal

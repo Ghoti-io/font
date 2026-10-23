@@ -38,11 +38,40 @@ USE_MY_METRICS = 0x0200
 MAX_DEPTH = 64
 
 
+def bearing(font, name):
+    """The `hmtx` left side bearing of a glyph, read from the table's bytes if need be.
+
+    fontTools refuses to read a whole `hmtx` that is a couple of bytes short of
+    what `hhea` promises (mona.ttf's is), where this library reads each entry on
+    its own and refuses only a glyph whose entry is not there. So the bytes are read
+    the same way when fontTools will not: an entry that is there is the bearing, and
+    one that is not raises, as a glyph the library refuses does.
+    """
+    from fontTools.ttLib import TTLibError
+
+    try:
+        return font["hmtx"][name][1]
+    except (TTLibError, AttributeError):
+        # (AttributeError: the table that failed to decompile stays half-made.)
+        data = font.reader["hmtx"]
+        count = font["hhea"].numberOfHMetrics
+        index = font.getGlyphID(name)
+        at = 4 * index + 2 if index < count else 4 * count + 2 * (index - count)
+        if at + 2 > len(data):
+            raise
+        value = int.from_bytes(data[at:at + 2], "big")
+        return value - 65536 if value >= 32768 else value
+
+
 def stored(font, name):
     """`xMin - lsb` as the file states it (the default instance), in font units."""
+    if "hmtx" not in font:
+        # No bearing is stated, so there is no placement (the library does not
+        # move a face's outlines when it has no `hmtx` either).
+        return 0
     glyph = font["glyf"][name]
     x_min = glyph.xMin if hasattr(glyph, "xMin") else 0
-    return x_min - font["hmtx"][name][1]
+    return x_min - bearing(font, name)
 
 
 def phantom_delta(font, name, location):

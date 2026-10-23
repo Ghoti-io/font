@@ -986,7 +986,8 @@ F2Dot14 or Fixed stays the integer stored), by `GFNT_PaintRef` - the node's
 offset - so nothing is copied or allocated; `gfnt_face_color_paint_walk()`
 visits a glyph's graph depth first, entering a layers node's layers and a
 color-glyph node's target, bounded by `max_paint_depth` and a node budget so a
-graph that names itself or fans out is refused with `GFNT_ERR_LIMIT`. At a
+graph that names itself or fans out is refused with `GFNT_ERR_LIMIT` (the scene lowering of §8.8 answers that
+with a refusal of the glyph, `GFNT_COLOR_REFUSED_WALK_LIMIT`). At a
 location the variable forms have the item variation store's deltas added (through
 the delta-set index map when the table has one), rounded as the other variation
 tables round, and not clamped. This library does not composite gradients: that
@@ -1687,8 +1688,8 @@ palette resource (a table of straight colors), a palette parameter on each list 
 naming an entry (its N14), gradients (G1 to G14), the blend modes (B1 to B14), a plane to fill where no outline
 bounds a paint (PL1 to PL10), a clip of a rectangle in a run's design space and a group in a stated blend space;
 this library supplies the palette and lowers all of `COLR` version 1 onto them, through the float-free calls of
-`shape-scene`'s `fixed.h`, so the lowering names no floating type. The rules are numbered L1 to L11 and
-`scene_color.h` and the tests cite them.
+`shape-scene`'s `fixed.h`, so the lowering names no floating type. The rules are numbered L1 to L13 and
+`scene_color.h` and the tests cite them (L12 and L13, color-paint story P5, say what a refused glyph is given).
 
 - **The palette.** `gfnt_scene_intern_palette()` interns a `CPAL` palette by its 8-bit entries; the scene
   turns each into `c / 255` in sRGB. A theme is another palette set on the list or the version, never another
@@ -1754,11 +1755,34 @@ this library supplies the palette and lowers all of `COLR` version 1 onto them, 
   as before; modes 0 to 12 map through the scene's operator numbering (source-over is the scene's 0), modes 13 to
   27 are the scene's blend modes by identity, and anything else is clear: "If an unrecognized value is
   encountered, COMPOSITE_CLEAR must be used."
-- **L10 Refused per glyph, with a reason, nothing recorded:** only `GFNT_COLOR_REFUSED_UNBOUNDED` and
-  `GFNT_COLOR_REFUSED_NO_RECORD` (a `PaintColrGlyph` naming a glyph with no record). A graph past the walk's depth
-  or node bound (a glyph that names itself, which OpenType forbids) is `ERR_LIMIT`. **L11:** the list is truncated
+- **L10 Refused per glyph, with a reason:** `GFNT_COLOR_REFUSED_UNBOUNDED`, `GFNT_COLOR_REFUSED_NO_RECORD` (a
+  `PaintColrGlyph` naming a glyph with no record) and `GFNT_COLOR_REFUSED_WALK_LIMIT` (a graph past the walk's depth
+  or node bound: a glyph that names itself, which OpenType forbids; the bound itself, `max_paint_depth` and the node
+  budget, is unchanged, so a hostile font still cannot make the call allocate without bound). The three are the
+  codes `COLR` has in shape-scene's placeholder registry (source 1; `report.h`). **L11:** the list is truncated
   back to its count on any refusal or failure, so it holds the whole glyph or none of it, and the resources the
   glyph interned are released with it.
+- **L12 What a refusal is given (`GFNT_ColorRun::refusal_policy`).** A glyph the lowering cannot express was, until
+  now, reported in this library's result struct and nowhere else, so an application that rendered the list and read
+  only the render report never learned the glyph was missing. A refusal is therefore recorded, as shape-scene's
+  placeholder item (a unit that draws nothing, that the planning pass reports for every sink, and that fails a strict
+  render when it is `REFUSED`), under the run's policy. **`PLACEHOLDER` (0, the default):** one placeholder, source
+  `COLR`, code the refusal's, not approximated; the call returns `GFNT_OK`, `GFNT_ColorLowering::outcome` is
+  `GFNT_COLOR_OUTCOME_PLACEHOLDER` and `refusal` says why. **`FALLBACK` (1, opt in):** the placeholder marked
+  approximated and, right after it with the same layer and depth, one fill of the base glyph's own outline in the
+  foreground paint at alpha 1 and no design map, so the glyph draws as a monochrome one and the report says
+  `APPROXIMATED` (which never fails a render); the outcome is `GFNT_COLOR_OUTCOME_FALLBACK`. A base glyph with no
+  outline (an empty `glyf` entry, a charstring with no points, one the library cannot read) is given the `REFUSED`
+  placeholder alone: the report never says a glyph is drawn when nothing is. **`NONE` (2):** the refusal is the
+  call's answer as before, `GFNT_ERR_UNSUPPORTED` with the reason and nothing recorded, for an application that
+  supplies its own substitute, such as a bitmap strike. What stays an error, with the list as it was, is every
+  failure of the call and not of the glyph: `ERR_OOM`, a list or store limit, `ERR_CORRUPT` (a table that is
+  damaged is not turned into a quiet gap) and `ERR_INVALID`. **L13 The placeholder's box**, for an application that
+  draws its own stand-in, is in the font's design units under no design map, placed at the run's origin and size as the
+  design-space clip is, and is the first of: the glyph's `ClipList` box at the face resource's instance; the glyph's
+  color extents (`gfnt_glyph_extents`, the box layout places marks by, which is a version 1 glyph's clip box or what
+  its graph draws, and the outline's box for the rest); the base glyph's outline control box; none (a placeholder with
+  no box is reported all the same). A source that cannot say is passed over; only a failure to allocate fails the call.
 - **Checked against fontTools.** `make check-oracle-colr-scene` lowers every color glyph of the color fixtures
   and the image's color fonts (17 real fonts: Google's COLR version 1 test glyphs, three producers' samples,
   Twemoji, Noto Color Emoji, Bungee) and compares, glyph by glyph and item by item, against a second statement

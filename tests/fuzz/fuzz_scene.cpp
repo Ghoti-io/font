@@ -157,6 +157,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         crun.y = 36;
         crun.hint_mode = run.hint_mode;
         crun.space = (options & 0x80u) ? GFNT_COLOR_SPACE_ENCODED : GFNT_COLOR_SPACE_STANDARD;
+        crun.refusal_policy = (options >> 4) % 3u;   // a refused glyph is a placeholder, a fallback or an error: all drawn or refused
         GFNT_ColorLowering out;
         if (gfnt_scene_record_color_glyph(face_resource, store, colored, g, &crun, &out, nullptr) == GFNT_OK &&
             gshscene_list_close(colored) == GSHSCENE_OK) {

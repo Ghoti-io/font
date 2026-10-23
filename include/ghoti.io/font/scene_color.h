@@ -38,7 +38,7 @@
  * one, else its version 0 layers. Every shape is a one-glyph run of the face
  * resource at the run's size and origin, so the provider draws it like any
  * glyph (hinted where the run asks and the route allows). The rules are
- * numbered L1 to L11 here and in documentation/design.md section 8.8, which
+ * numbered L1 to L13 here and in documentation/design.md section 8.8, which
  * quotes the OpenType sentence beside each.
  *
  * - Version 0: each layer, bottom first, is a fill of its glyph with its
@@ -66,17 +66,46 @@
  *   at (L1); there is no second location, so the outline and the paint cannot
  *   disagree about where the font is.
  *
- * **What is refused, per glyph and with a reason** (::GFNT_ColorRefusal), and
- * nothing recorded: a solid or gradient no `PaintGlyph` bounds in a glyph that
- * states no clip box (the lowering never guesses an extent the font did not
- * state), and a `PaintColrGlyph` naming a glyph with no version 1 record. The
- * call returns ::GFNT_ERR_UNSUPPORTED and the reason; the caller decides what to
- * draw instead (the glyph's own outline, for one). A graph past the walk's depth
- * or node bound (a glyph that names itself) is ::GFNT_ERR_LIMIT. A lowering is
- * not a render, so a refusal is the call's answer and not a report entry.
+ * **What is refused, per glyph and with a reason** (::GFNT_ColorRefusal): a solid
+ * or gradient no `PaintGlyph` bounds in a glyph that states no clip box (the
+ * lowering never guesses an extent the font did not state), a `PaintColrGlyph`
+ * naming a glyph with no version 1 record, and a graph past the walk's depth or
+ * node bound (a glyph that names itself, which OpenType forbids; the bound
+ * itself is unchanged, so a hostile font still cannot make the call allocate
+ * without bound). A refusal is a property of the glyph, and it must reach the
+ * render report, where an application that draws the list will look for it
+ * (shape-scene's placeholder item, PH1 to PH6). What the call records for it (L12, L13) is
+ * ::GFNT_ColorRun::refusal_policy (P5):
+ *
+ * - ::GFNT_COLOR_ON_REFUSAL_PLACEHOLDER (0, the default): a placeholder item
+ *   (source `COLR`, the refusal as its code, ::GFNT_ColorRefusal, `approximated`
+ *   0) and nothing else. The call returns ::GFNT_OK; `GFNT_ColorLowering::outcome`
+ *   says a placeholder is in the list and `refusal` why. Every sink reports it
+ *   `REFUSED`, and a strict render fails on it.
+ * - ::GFNT_COLOR_ON_REFUSAL_FALLBACK (1, opt in): the placeholder marked
+ *   approximated and, right after it, one fill of the base glyph's own outline in
+ *   the foreground paint, so the glyph draws as a monochrome one and the report
+ *   says `APPROXIMATED` (which never fails a render). A base glyph with no
+ *   outline has nothing to draw in its place, so it gets a `REFUSED` placeholder
+ *   and no fill: the report never says a glyph is drawn when nothing is.
+ * - ::GFNT_COLOR_ON_REFUSAL_NONE (2): the call returns ::GFNT_ERR_UNSUPPORTED
+ *   and the reason, and records nothing, for an application that supplies its
+ *   own substitute (a bitmap strike, for one).
+ *
+ * The placeholder's box (PH11) is, in this order, the glyph's `ClipList` box at
+ * the face resource's instance; else the glyph's color extents (the box layout
+ * places marks by); else the base glyph's outline control box; else none. It is
+ * in the font's design units and placed at the run's origin and size, so an
+ * application that wants a missing-glyph box or a hatch draws it from the item.
+ *
+ * These are refusals of the glyph. The failures of the call stay errors, with
+ * the list as it was: ::GFNT_ERR_OOM, a list or store limit (::GFNT_ERR_LIMIT),
+ * ::GFNT_ERR_CORRUPT and ::GFNT_ERR_INVALID. A hostile font therefore cannot
+ * make a corrupt table a quiet gap.
  *
  * **All or nothing.** The list is read for its count first and truncated back
- * to it on a refusal or any failure, so it holds the whole glyph or none of it.
+ * to it on a refusal or any failure, so it holds the whole glyph, or the
+ * placeholder (and its stand-in) for it, never part of a graph.
  *
  * No floating type appears in this header or in any header it includes (AD-5,
  * `make check-float-free`), nor in src/scene/colr.c.
@@ -105,19 +134,37 @@ typedef enum GFNT_ColorSource {
 } GFNT_ColorSource;
 
 /**
- * @brief Why a glyph's color description was not lowered (L10 of color-paint story P4).
+ * @brief Why a glyph's color description was not lowered (L10 of color-paint story P4, R4 of P5).
  *
- * After the story the lowering refuses only what no scene list can say: a paint no clip bounds and the font states no
- * clip box for, and a `PaintColrGlyph` naming a glyph with no version 1 record. (A graph past the walk's depth or node
- * bound, which OpenType forbids, is ::GFNT_ERR_LIMIT.) The values are numbered from 1 and are the registry's codes for
- * `COLR`.
+ * The lowering refuses only what no scene list can say: a paint no clip bounds and the font states no clip box for, a
+ * `PaintColrGlyph` naming a glyph with no version 1 record, and a graph past the walk's depth or node bound (which
+ * OpenType forbids). The values are numbered from 1 and are the codes `COLR` has in shape-scene's placeholder registry
+ * (`GSHSCENE_PLACEHOLDER_COLR_*`, report.h).
  */
 typedef enum GFNT_ColorRefusal {
   GFNT_COLOR_LOWERED = 0,             ///< Not refused.
   GFNT_COLOR_REFUSED_UNBOUNDED = 1,   ///< A solid or gradient no glyph bounds, in a glyph with no clip box.
   GFNT_COLOR_REFUSED_NO_RECORD = 2,   ///< A `PaintColrGlyph` naming a glyph with no version 1 record.
+  GFNT_COLOR_REFUSED_WALK_LIMIT = 3,  ///< A paint graph past the walk's depth or node bound (a glyph that names itself).
   GFNT_COLOR_REFUSAL_COUNT            ///< Closes the enum.
 } GFNT_ColorRefusal;
+
+/**
+ * @brief What a refused glyph is given (color-paint story P5; see the file comment). The values are pinned.
+ */
+typedef enum GFNT_ColorRefusalPolicy {
+  GFNT_COLOR_ON_REFUSAL_PLACEHOLDER = 0, ///< The default: a placeholder item; ::GFNT_OK.
+  GFNT_COLOR_ON_REFUSAL_FALLBACK = 1,    ///< An approximated placeholder and a fill of the base outline in the foreground; ::GFNT_OK.
+  GFNT_COLOR_ON_REFUSAL_NONE = 2,        ///< Nothing recorded; ::GFNT_ERR_UNSUPPORTED and the reason.
+  GFNT_COLOR_ON_REFUSAL_COUNT            ///< Closes the enum.
+} GFNT_ColorRefusalPolicy;
+
+/** @brief What a lowering put in the list for a glyph. The values are pinned. */
+typedef enum GFNT_ColorOutcome {
+  GFNT_COLOR_OUTCOME_LOWERED = 0,     ///< The glyph's whole description (or nothing: it has none; see `source`).
+  GFNT_COLOR_OUTCOME_PLACEHOLDER = 1, ///< A placeholder item for a refusal (`refusal` says why).
+  GFNT_COLOR_OUTCOME_FALLBACK = 2     ///< An approximated placeholder and the monochrome outline's fill.
+} GFNT_ColorOutcome;
 
 /**
  * @brief The space a version 1 glyph's gradients are interpolated in and its layers, composites and blends are
@@ -146,6 +193,7 @@ typedef struct GFNT_ColorRun {
   uint32_t hint_version; ///< Passed to the provider unread.
   int32_t layer;         ///< The declared layer of every item recorded.
   uint32_t space;        ///< A ::GFNT_ColorSpace (zero, the standard's, is the default).
+  uint32_t refusal_policy; ///< A ::GFNT_ColorRefusalPolicy (zero, a placeholder, is the default).
 } GFNT_ColorRun;
 
 /** @brief What a lowering did. */
@@ -154,7 +202,8 @@ typedef struct GFNT_ColorLowering {
   uint32_t refusal;        ///< A ::GFNT_ColorRefusal.
   uint32_t paint_format;   ///< The refused paint's `GFNT_PaintFormat` (version 1), or 0.
   uint32_t composite_mode; ///< A refused blend mode, as `COLR` numbers it; else 0.
-  size_t items;            ///< The items recorded (0 when refused).
+  size_t items;            ///< The items recorded: 0 when refused under ::GFNT_COLOR_ON_REFUSAL_NONE, else the placeholder (and its fill).
+  uint32_t outcome;        ///< A ::GFNT_ColorOutcome: what is in the list (P5).
 } GFNT_ColorLowering;
 
 /**
@@ -184,11 +233,13 @@ GFNT_API GFNT_Result gfnt_scene_intern_palette(const GSHSCENE_Resource * face,
  * @param glyph The base glyph.
  * @param run Its size, origin, hinting and layer.
  * @param out Receives what was done; written on success and on a refusal.
- * @return ::GFNT_OK (lowered, or no color description: see `out->source`);
- *   ::GFNT_ERR_UNSUPPORTED for a refusal (`out->refusal`), nothing recorded;
+ * @return ::GFNT_OK (lowered, or no color description: see `out->source`; or a
+ *   refusal answered by a placeholder or a fallback: see `out->outcome` and
+ *   `out->refusal`); ::GFNT_ERR_UNSUPPORTED for a refusal under
+ *   ::GFNT_COLOR_ON_REFUSAL_NONE (`out->refusal`), nothing recorded;
  *   ::GFNT_ERR_INVALID (NULL, a face not bound by this library, a closed list or
- *   one of another store, a run outside its rules); ::GFNT_ERR_LIMIT (a graph
- *   past the walk's bounds, a list or store limit); ::GFNT_ERR_CORRUPT;
+ *   one of another store, a run outside its rules, a policy past the enum);
+ *   ::GFNT_ERR_LIMIT (a list or store limit); ::GFNT_ERR_CORRUPT;
  *   ::GFNT_ERR_OOM. On every failure the list is as it was.
  */
 GFNT_API GFNT_Result gfnt_scene_record_color_glyph(const GSHSCENE_Resource * face,

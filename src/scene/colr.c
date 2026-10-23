@@ -25,7 +25,7 @@
  * story P4; scene_color.h, documentation/design.md section 8.8): a `CPAL`
  * palette as a palette resource, and a glyph's `COLR` recorded through
  * `shape-scene`'s float-free calls only (fixed.h), so that this file names no
- * floating type. The rules are L1 to L11 of scene_color.h and design.md 8.8.
+ * floating type. The rules are L1 to L13 of scene_color.h and design.md 8.8.
  */
 
 #include <ghoti.io/font/macros.h>
@@ -33,11 +33,14 @@
 
 #include <ghoti.io/font/color.h>
 #include <ghoti.io/font/face.h>
+#include <ghoti.io/font/outline.h>
 #include <ghoti.io/shape-scene/fixed.h>
 #include <ghoti.io/shape-scene/glyph_provider.h>
+#include <ghoti.io/shape-scene/report.h>
 #include <stdbool.h>
 #include <string.h>
 #include "../sfnt/sfnt.h"
+#include "../shape/fallback.h"
 #include "binding.h"
 
 #define GFNT_COLR_TAG GFNT_TAG('C', 'O', 'L', 'R')
@@ -84,6 +87,7 @@ typedef struct GFNT_ColrLower {
   size_t bound_ops;             ///< The transforms above the innermost such clip.
   size_t nodes;                 ///< The nodes visited, bounded by ::GFNT_PAINT_WALK_NODES.
   size_t max_depth;
+  bool walk_exceeded;           ///< The walk met its depth or node bound: a refusal of the glyph (R4), not of the call.
 } GFNT_ColrLower;
 
 /** The seam's failure in this library's spelling. */
@@ -259,6 +263,7 @@ static GFNT_Result gfnt_colr_node(GFNT_ColrLower * l, GFNT_PaintRef ref, size_t 
 static GFNT_Result gfnt_colr_read(GFNT_ColrLower * l, GFNT_PaintRef ref, size_t depth,
     GFNT_ColorPaint * p) {
   if (depth > l->max_depth || ++l->nodes > GFNT_PAINT_WALK_NODES) {
+    l->walk_exceeded = true;
     return gfnt_error_set(l->error, GFNT_ERR_LIMIT, GFNT_COLR_TAG, ref, l->glyph,
         "a paint graph past the walk's depth or node bound");
   }
@@ -645,6 +650,148 @@ static GFNT_Result gfnt_colr_graph(GFNT_ColrLower * l, GFNT_PaintRef root) {
   return r;
 }
 
+/** A box in the font's design units, with the fraction bits its numbers carry. */
+typedef struct GFNT_ColrBox {
+  int32_t v[4];   ///< `x0 y0 x1 y1`, y up.
+  uint32_t bits;  ///< 0 for whole font units, 6 for 26.6.
+  bool found;
+} GFNT_ColrBox;
+
+/**
+ * The box of what a refused glyph could not be drawn as (PH11), in this order: the glyph's `ClipList` box at the face
+ * resource's instance; else the glyph's color extents, the box layout places marks by; else the base glyph's outline
+ * control box; else none. A source that cannot say is passed over: the box is advice to the application, and the
+ * placeholder is reported without one. Only a failure to allocate fails the call.
+ */
+static GFNT_Result gfnt_colr_placeholder_box(GFNT_ColrLower * l, GFNT_ColrBox * box) {
+  GFNT_ColorBox clip;
+  bool found = false;
+  GFNT_Extents e;
+  GFNT_Outline * outline = NULL;
+  GFNT_Error scratch;
+  GFNT_Result r;
+
+  memset(box, 0, sizeof *box);
+  gfnt_error_clear(&scratch);
+  r = gfnt_face_color_clip(l->face, l->glyph, &l->variation, &clip, &found, &scratch);
+  if (r == GFNT_ERR_OOM) {
+    return gfnt_error_set(l->error, GFNT_ERR_OOM, GFNT_COLR_TAG, 0, l->glyph, "no memory for a clip box");
+  }
+  if (r == GFNT_OK && found && clip.x_min <= clip.x_max && clip.y_min <= clip.y_max) {
+    box->v[0] = clip.x_min;
+    box->v[1] = clip.y_min;
+    box->v[2] = clip.x_max;
+    box->v[3] = clip.y_max;
+    box->found = true;
+    return GFNT_OK;
+  }
+  if (gfnt_glyph_extents(l->face, l->glyph, &l->variation, &e) && (e.width != 0 || e.height != 0)) {
+    const int64_t x0 = e.x_bearing;
+    const int64_t y1 = e.y_bearing;
+    const int64_t x1 = x0 + e.width;
+    const int64_t y0 = y1 + e.height;   // the height is negative: y up
+
+    if (x0 <= x1 && y0 <= y1 && x0 >= INT32_MIN && x1 <= INT32_MAX && y0 >= INT32_MIN && y1 <= INT32_MAX) {
+      box->v[0] = (int32_t)x0;
+      box->v[1] = (int32_t)y0;
+      box->v[2] = (int32_t)x1;
+      box->v[3] = (int32_t)y1;
+      box->found = true;
+      return GFNT_OK;
+    }
+  }
+  r = gfnt_face_glyph_outline(l->face, l->glyph, &l->variation, l->face->allocator, &outline, &scratch);
+  if (r == GFNT_ERR_OOM) {
+    return gfnt_error_set(l->error, GFNT_ERR_OOM, GFNT_COLR_TAG, 0, l->glyph, "no memory for an outline's box");
+  }
+  if (r == GFNT_OK) {
+    GFNT_Box control;
+
+    if (gfnt_outline_control_box(outline, &control) == GFNT_OK && !gfnt_box_is_empty(&control)) {
+      box->v[0] = (int32_t)control.x_min;   // 26.6, which the placeholder's fixed bits say
+      box->v[1] = (int32_t)control.y_min;
+      box->v[2] = (int32_t)control.x_max;
+      box->v[3] = (int32_t)control.y_max;
+      box->bits = 6u;
+      box->found = true;
+    }
+    gfnt_outline_destroy(outline);
+  }
+  return GFNT_OK;
+}
+
+/** Whether the base glyph has an outline to draw in a refused color glyph's place: one with a point. */
+static GFNT_Result gfnt_colr_has_outline(GFNT_ColrLower * l, bool * has) {
+  GFNT_Outline * outline = NULL;
+  GFNT_Error scratch;
+  GFNT_Result r;
+
+  *has = false;
+  gfnt_error_clear(&scratch);
+  r = gfnt_face_glyph_outline(l->face, l->glyph, &l->variation, l->face->allocator, &outline, &scratch);
+  if (r == GFNT_ERR_OOM) {
+    return gfnt_error_set(l->error, GFNT_ERR_OOM, GFNT_COLR_TAG, 0, l->glyph, "no memory for an outline");
+  }
+  if (r == GFNT_OK) {
+    *has = gfnt_outline_point_count(outline) > 0;
+    gfnt_outline_destroy(outline);
+  }
+  // An outline the library cannot read (a face of outlines it does not read, a damaged glyph) is no outline to draw: the
+  // placeholder says so as a refusal, and the provider would have refused the fill glyph by glyph anyway.
+  return GFNT_OK;
+}
+
+/**
+ * What a refused glyph is given (R3, PH9 to PH13): a placeholder under shape-scene's registry (source `COLR`, the
+ * refusal as its code), and under the fallback policy, after it, a fill of the base glyph's outline in the foreground,
+ * the placeholder then marked approximated. A base glyph with no outline gets the refused placeholder alone: the report
+ * never says a glyph is drawn when nothing is. All or nothing: a failure truncates back to @p before.
+ */
+static GFNT_Result gfnt_colr_refusal_record(GFNT_ColrLower * l, uint32_t policy, size_t before) {
+  const GSHSCENE_Resource * frame = NULL;
+  const GSHSCENE_Resource * outline_run = NULL;
+  GFNT_ColrBox box;
+  bool has_outline = false;
+  GFNT_Result r = gfnt_colr_placeholder_box(l, &box);
+
+  if (r == GFNT_OK && policy == GFNT_COLOR_ON_REFUSAL_FALLBACK) {
+    r = gfnt_colr_has_outline(l, &has_outline);
+  }
+  if (r == GFNT_OK) {
+    r = gfnt_colr_run_of(l, l->glyph, &frame);
+  }
+  if (r == GFNT_OK) {
+    const bool approximated = has_outline;
+
+    r = gfnt_colr_scene(l, gshscene_list_placeholder_fixed(l->list, frame, NULL, 0, box.found ? box.v : NULL, box.bits,
+        GSHSCENE_PLACEHOLDER_SOURCE_COLR, (uint16_t)l->out->refusal, approximated ? 1u : 0u, l->run->layer),
+        "the scene refused a placeholder");
+  }
+  if (r == GFNT_OK && has_outline) {
+    GSHSCENE_Paint_Fixed foreground;
+
+    foreground.kind = GSHSCENE_FIXED_PAINT_FOREGROUND;
+    foreground.entry = 0;
+    foreground.alpha = GFNT_COLR_ONE;
+    foreground.bits = 14u;
+    r = gfnt_colr_run_of(l, l->glyph, &outline_run);
+    if (r == GFNT_OK) {
+      r = gfnt_colr_scene(l, gshscene_list_fill_fixed(l->list, outline_run, NULL, 0, GSHGEOM_FILL_NONZERO, &foreground,
+          l->run->layer), "the scene refused the fallback's fill");
+    }
+  }
+  gshscene_resource_release(outline_run);
+  gshscene_resource_release(frame);
+  if (r != GFNT_OK) {
+    if (gshscene_list_truncate(l->list, before) != GSHSCENE_OK) {
+      return gfnt_error_set(l->error, GFNT_ERR_INVALID, 0, 0, l->glyph, "the list could not be truncated back");
+    }
+    return r;
+  }
+  l->out->outcome = has_outline ? GFNT_COLOR_OUTCOME_FALLBACK : GFNT_COLOR_OUTCOME_PLACEHOLDER;
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_scene_record_color_glyph(const GSHSCENE_Resource * face,
     GSHSCENE_Store * store, GSHSCENE_List * list, uint32_t glyph,
     const GFNT_ColorRun * run, GFNT_ColorLowering * out, GFNT_Error * error) {
@@ -654,7 +801,7 @@ GFNT_Result gfnt_scene_record_color_glyph(const GSHSCENE_Resource * face,
   GFNT_Result r;
 
   gfnt_error_clear(error);
-  if (!face || !store || !list || !run || !out) {
+  if (!face || !store || !list || !run || !out || run->refusal_policy >= (uint32_t)GFNT_COLOR_ON_REFUSAL_COUNT) {
     return GFNT_ERR_INVALID;
   }
   memset(out, 0, sizeof *out);
@@ -697,6 +844,24 @@ GFNT_Result gfnt_scene_record_color_glyph(const GSHSCENE_Resource * face,
     // All or nothing: what was recorded goes (a refusal says why in `out`).
     if (gshscene_list_truncate(list, before) != GSHSCENE_OK) {
       return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, glyph, "the list could not be truncated back");
+    }
+    if (r == GFNT_ERR_LIMIT && l.walk_exceeded) {
+      // A graph past the walk's bound is a refusal of the glyph (R4), not a limit of the call: the bound is unchanged.
+      out->refusal = (uint32_t)GFNT_COLOR_REFUSED_WALK_LIMIT;
+      out->paint_format = 0;
+      r = gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_COLR_TAG, 0, glyph,
+          "a paint graph past the walk's depth or node bound");
+    }
+    if (r == GFNT_ERR_UNSUPPORTED && out->refusal != (uint32_t)GFNT_COLOR_LOWERED
+        && run->refusal_policy != (uint32_t)GFNT_COLOR_ON_REFUSAL_NONE) {
+      // The glyph is refused, not the call: the report must say so (PH10).
+      r = gfnt_colr_refusal_record(&l, run->refusal_policy, before);
+      if (r != GFNT_OK) {
+        return r;
+      }
+      gfnt_error_clear(error);
+      out->items = gshscene_list_count(list) - before;
+      return GFNT_OK;
     }
     return r;
   }

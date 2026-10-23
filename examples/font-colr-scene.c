@@ -175,7 +175,11 @@ int main(int argc, char ** argv) {
     run.size = (int32_t)upem;
     run.hint_mode = GSHSCENE_HINT_NONE;
     run.space = space;
+    run.refusal_policy = GFNT_COLOR_ON_REFUSAL_NONE;   /* the differential compares refusals, so none is a placeholder */
     GFNT_Result r = gfnt_scene_record_color_glyph(face_resource, store, list, (uint32_t)g, &run, &out, &error);
+    if (r == GFNT_ERR_UNSUPPORTED && out.refusal == (uint32_t)GFNT_COLOR_REFUSED_WALK_LIMIT) {
+      r = GFNT_ERR_LIMIT;   /* a graph past the walk's bound, which this tool and its references print as a limit */
+    }
     if (r == GFNT_OK && out.source == GFNT_COLOR_SOURCE_NONE) {
       gshscene_list_destroy(list);
       continue;

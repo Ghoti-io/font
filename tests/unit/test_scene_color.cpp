@@ -21,6 +21,7 @@
 #include <ghoti.io/font/color.h>
 #include <ghoti.io/font/scene.h>
 #include <ghoti.io/font/scene_color.h>
+#include <ghoti.io/font/outline.h>
 #include <ghoti.io/image/raster.h>
 #include <ghoti.io/shape-cpu/render.h>
 #include <ghoti.io/shape-geometry/map.h>
@@ -28,6 +29,10 @@
 #include <ghoti.io/shape-scene/report.h>
 #include <ghoti.io/shape-scene/resource.h>
 #include <ghoti.io/shape-scene/sink.h>
+
+extern "C" {
+#include "../../src/shape/fallback.h"
+}
 
 namespace {
 
@@ -111,8 +116,9 @@ struct Color {
   }
   GFNT_Result lower(GSHSCENE_List * l, uint32_t glyph, GFNT_ColorLowering * out, int32_t size = 20 * 64,
       int32_t x = 10 * 64, int32_t y = 30 * 64, int32_t layer = 3, const GSHSCENE_Resource * at = nullptr,
-      uint32_t space = GFNT_COLOR_SPACE_STANDARD) {
+      uint32_t space = GFNT_COLOR_SPACE_STANDARD, uint32_t policy = GFNT_COLOR_ON_REFUSAL_PLACEHOLDER) {
     GFNT_ColorRun run{};
+    run.refusal_policy = policy;
     run.size = size;
     run.x = x;
     run.y = y;
@@ -122,6 +128,11 @@ struct Color {
     run.space = space;
     GFNT_Error error{};
     return gfnt_scene_record_color_glyph(at ? at : face_resource, store, l, glyph, &run, out, &error);
+  }
+  /** A lowering whose refusals are the call's error (R3): nothing recorded, ::GFNT_ERR_UNSUPPORTED and the reason. */
+  GFNT_Result lower_none(GSHSCENE_List * l, uint32_t glyph, GFNT_ColorLowering * out) {
+    return lower(l, glyph, out, 20 * 64, 10 * 64, 30 * 64, 3, nullptr, GFNT_COLOR_SPACE_STANDARD,
+        GFNT_COLOR_ON_REFUSAL_NONE);
   }
   /** The face interned at the normalised coordinates @p coords (2.14), held until the end. */
   const GSHSCENE_Resource * instance(std::vector<GFNT_F2Dot14> coords) {
@@ -826,7 +837,7 @@ TEST(SceneColor, ARootGradientFillsThePlaneInsideTheGlyphsClipBoxAndIsRefusedWit
   GSHSCENE_List * l2 = c.open();
   size_t before = gshscene_list_count(l2);
   std::memset(&out, 0xAB, sizeof out);
-  EXPECT_EQ(c.lower(l2, kPaintP, &out), GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(c.lower_none(l2, kPaintP, &out), GFNT_ERR_UNSUPPORTED);
   EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_REFUSED_UNBOUNDED);
   EXPECT_EQ(out.paint_format, (uint32_t)GFNT_PAINT_RADIAL_GRADIENT);
   EXPECT_EQ(out.items, 0u);
@@ -1068,9 +1079,9 @@ TEST(SceneColor, AVariablePaintsNumbersAreTheReadersAtTheInstanceAndNotAtTheDefa
 
 // --- refusals ---------------------------------------------------------------------------------------------------
 
-TEST(SceneColor, EachRefusalNamesItsReasonAndLeavesTheListAsItWas) {
+TEST(SceneColor, UnderTheNonePolicyEachRefusalNamesItsReasonAndLeavesTheListAsItWas) {
   // After L10 two reasons are left: a paint no clip bounds in a glyph that states no box, and a color glyph naming a
-  // glyph with no version 1 record (the second is in the test of the depth bound).
+  // glyph with no version 1 record (the second is in the test of the depth bound); R4 adds the walk's bound (below).
   struct Case {
     const char * font;
     uint32_t glyph;
@@ -1094,6 +1105,7 @@ TEST(SceneColor, EachRefusalNamesItsReasonAndLeavesTheListAsItWas) {
     run.size = 1280;
     run.bits = 6;
     run.hint_mode = GSHSCENE_HINT_NONE;
+    run.refusal_policy = GFNT_COLOR_ON_REFUSAL_NONE;   // the call's own answer (R3); the default records a placeholder
     GFNT_Error error{};
     EXPECT_EQ(gfnt_scene_record_color_glyph(c.face_resource, c.store, l, k.glyph, &run, &out, &error),
         GFNT_ERR_UNSUPPORTED) << k.font << " " << k.glyph;
@@ -1105,6 +1117,401 @@ TEST(SceneColor, EachRefusalNamesItsReasonAndLeavesTheListAsItWas) {
     EXPECT_EQ(out.items, 0u);
     EXPECT_EQ(gshscene_list_count(l), before) << "all or nothing, the glyph's group and clip included";
     EXPECT_EQ(gshscene_list_hash(l), hash);
+  }
+}
+
+// --- what a refusal is given (color-paint story P5: R3, R4, R5; PH9 to PH13) --------------------------------------------
+
+namespace {
+
+/**
+ * A `COLR` table, built here, whose glyph @p base is a `PaintColrGlyph` of @p target (which has no record: the refusal
+ * NO_RECORD) and which states a clip box for @p base: `x0 y0 x1 y1` in font units (PH11's first source).
+ */
+Bytes colr_clipped(uint16_t base, uint16_t target, const int16_t box[4]) {
+  Bytes out;
+  gfnttest::put_u16(out, 1);                       // version
+  gfnttest::put_u16(out, 0);                       // no version 0 records
+  gfnttest::put_u32(out, 0);
+  gfnttest::put_u32(out, 0);
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u32(out, 34);                      // BaseGlyphList
+  gfnttest::put_u32(out, 0);                       // no LayerList
+  gfnttest::put_u32(out, 34 + 10 + 3);             // ClipList, after the one paint
+  gfnttest::put_u32(out, 0);
+  gfnttest::put_u32(out, 0);
+  gfnttest::put_u32(out, 1);                       // BaseGlyphList: one record
+  gfnttest::put_u16(out, base);
+  gfnttest::put_u32(out, 10);                      // its paint, from the list's start
+  out.push_back(11);                               // PaintColrGlyph
+  gfnttest::put_u16(out, target);
+  out.push_back(1);                                // ClipList: format 1, one clip
+  gfnttest::put_u32(out, 1);
+  gfnttest::put_u16(out, base);
+  gfnttest::put_u16(out, base);
+  put24(out, 12);                                  // the box, from the clip list's start: after the one record
+  out.push_back(1);                                // ClipBox format 1
+  for (int k = 0; k < 4; k++) {
+    gfnttest::put_u16(out, (uint16_t)box[k]);
+  }
+  return out;
+}
+
+/** One refused glyph of a fixture and why. */
+struct Refused {
+  const char * what;
+  Bytes font;
+  uint32_t glyph;
+  GFNT_ColorRefusal refusal;
+  uint32_t format;   ///< The refused paint's format (0 for the walk's bound).
+};
+
+std::vector<Refused> refusals_of_the_fixtures() {
+  const Bytes base = file_bytes("color-v1-scene.ttf");
+  static const int16_t box[4] = {-30, -40, 700, 910};
+  std::vector<Refused> out;
+  out.push_back({"an unbounded solid", base, kPaintG, GFNT_COLOR_REFUSED_UNBOUNDED, GFNT_PAINT_SOLID});
+  out.push_back({"an unbounded gradient", base, kPaintP, GFNT_COLOR_REFUSED_UNBOUNDED, GFNT_PAINT_RADIAL_GRADIENT});
+  out.push_back({"a glyph with no record", with_colr(base, colr_nested(kA, kB, kLayerA, 3)), kA,
+      GFNT_COLOR_REFUSED_NO_RECORD, GFNT_PAINT_COLR_GLYPH});
+  out.push_back({"a space with no record", with_colr(base, colr_nested(kSpace, kB, kLayerA, 3)), kSpace,
+      GFNT_COLOR_REFUSED_NO_RECORD, GFNT_PAINT_COLR_GLYPH});
+  out.push_back({"a graph past the depth bound", with_colr(base, colr_nested(kA, kB, kLayerA, 70)), kB,
+      GFNT_COLOR_REFUSED_WALK_LIMIT, 0});
+  out.push_back({"a graph that names itself", base, kPaintH, GFNT_COLOR_REFUSED_WALK_LIMIT, 0});
+  out.push_back({"a clip box and no record", with_colr(base, colr_clipped(kA, kLayerA, box)), kA,
+      GFNT_COLOR_REFUSED_NO_RECORD, GFNT_PAINT_COLR_GLYPH});
+  return out;
+}
+
+/** The base glyph's outline control box at the face resource's instance, 26.6; false for an outline with no points. */
+bool control_box_of(Color & c, uint32_t glyph, GFNT_Box * box) {
+  GFNT_Outline * outline = nullptr;
+  if (gfnt_face_glyph_outline(c.face, glyph, nullptr, nullptr, &outline, nullptr) != GFNT_OK) {
+    return false;
+  }
+  const bool has = gfnt_outline_point_count(outline) > 0 && gfnt_outline_control_box(outline, box) == GFNT_OK &&
+      !gfnt_box_is_empty(box);
+  gfnt_outline_destroy(outline);
+  return has;
+}
+
+/** What PH11 says the placeholder's box is, from the font alone: the clip box, else the extents, else the outline's. */
+bool expected_box(Color & c, const Refused & r, double out[4]) {
+  GFNT_ColorBox clip;
+  bool found = false;
+  EXPECT_EQ(gfnt_face_color_clip(c.face, r.glyph, nullptr, &clip, &found, nullptr), GFNT_OK);
+  if (found) {
+    out[0] = clip.x_min;
+    out[1] = clip.y_min;
+    out[2] = clip.x_max;
+    out[3] = clip.y_max;
+    return true;
+  }
+  GFNT_Extents e;
+  if (gfnt_glyph_extents(c.face, r.glyph, nullptr, &e) && (e.width != 0 || e.height != 0)) {
+    out[0] = e.x_bearing;
+    out[1] = e.y_bearing + e.height;
+    out[2] = e.x_bearing + e.width;
+    out[3] = e.y_bearing;
+    return true;
+  }
+  GFNT_Box box;
+  if (control_box_of(c, r.glyph, &box)) {
+    out[0] = box.x_min / 64.0;
+    out[1] = box.y_min / 64.0;
+    out[2] = box.x_max / 64.0;
+    out[3] = box.y_max / 64.0;
+    return true;
+  }
+  return false;
+}
+
+/** The placeholder item at @p at is as PH1 and PH10 say for a glyph refused for @p r, with the box PH11 gives. */
+void expect_placeholder(Color & c, const GSHSCENE_List * l, size_t at, const Refused & r, unsigned approximated) {
+  const GSHSCENE_Item * item = item_of(l, at);
+  ASSERT_NE(item, nullptr) << r.what;
+  EXPECT_EQ(item->kind, GSHSCENE_ITEM_PLACEHOLDER) << r.what;
+  EXPECT_EQ(item->placeholder.source, (uint16_t)GSHSCENE_PLACEHOLDER_SOURCE_COLR) << r.what;
+  EXPECT_EQ(item->placeholder.code, (uint16_t)r.refusal) << r.what << ": the code is the refusal's";
+  EXPECT_EQ(item->placeholder.approximated, approximated) << r.what;
+  EXPECT_EQ(item->layer, 3) << r.what;
+  EXPECT_EQ(item->depth, 0.0) << r.what;
+  EXPECT_EQ(item->resource, nullptr) << r.what;
+  double want[4] = {0, 0, 0, 0};
+  const bool has = expected_box(c, r, want);
+  EXPECT_EQ(item->placeholder.has_box, has ? 1u : 0u) << r.what;
+  if (has) {
+    for (int k = 0; k < 4; k++) {
+      EXPECT_EQ(item->placeholder.box[k], want[k]) << r.what << " box " << k;
+    }
+    // Placed at the run's origin and size: a design corner lands where the glyph outline puts it (g + s (x, -y)).
+    const double s = 20.0 / c.upem;
+    GSHGEOM_Point q = mapped(item->map, want[2], want[3]);
+    EXPECT_NEAR(q.x, 10.0 + s * want[2], 1e-9) << r.what;
+    EXPECT_NEAR(q.y, 30.0 - s * want[3], 1e-9) << r.what;
+  }
+}
+
+}  // namespace
+
+TEST(SceneColor, UnderTheDefaultPolicyARefusedGlyphIsAPlaceholderTheCallSucceedsAndOnlyThePlaceholderIsRecorded) {
+  size_t with_box = 0;
+  for (const Refused & r : refusals_of_the_fixtures()) {
+    Color c(r.font);
+    GSHSCENE_List * l = c.open();
+    // Something recorded before, which must survive.
+    GFNT_ColorLowering first{};
+    ASSERT_EQ(c.lower(l, kAlt, &first), GFNT_OK) << r.what;
+    const size_t before = gshscene_list_count(l);
+    GFNT_ColorLowering out{};
+    std::memset(&out, 0xAB, sizeof out);
+    GFNT_ColorRun run{};
+    run.size = 20 * 64;
+    run.x = 10 * 64;
+    run.y = 30 * 64;
+    run.bits = 6;
+    run.layer = 3;
+    run.hint_mode = GSHSCENE_HINT_NONE;
+    GFNT_Error error{};
+    ASSERT_EQ(gfnt_scene_record_color_glyph(c.face_resource, c.store, l, r.glyph, &run, &out, &error), GFNT_OK)
+        << r.what;
+    EXPECT_EQ(error.result, GFNT_OK) << r.what << ": a success leaves no diagnostic";
+    EXPECT_EQ(out.outcome, (uint32_t)GFNT_COLOR_OUTCOME_PLACEHOLDER) << r.what;
+    EXPECT_EQ(out.refusal, (uint32_t)r.refusal) << r.what;
+    EXPECT_EQ(out.source, (uint32_t)GFNT_COLOR_SOURCE_V1) << r.what;
+    EXPECT_EQ(out.paint_format, r.format) << r.what;
+    EXPECT_EQ(out.items, 1u) << r.what;
+    ASSERT_EQ(gshscene_list_count(l), before + 1) << r.what << ": the glyph's graph is not in the list, only its placeholder";
+    expect_placeholder(c, l, before, r, 0u);
+    with_box += item_of(l, before)->placeholder.has_box;
+  }
+  EXPECT_GE(with_box, 3u) << "the fixtures reach more than one source of the box";
+}
+
+TEST(SceneColor, ThePlaceholdersBoxIsTheClipBoxThenTheExtentsThenTheOutlinesThenNone) {
+  const Bytes base = file_bytes("color-v1-scene.ttf");
+  // The clip list's box, as the font states it (PH11, first).
+  {
+    static const int16_t box[4] = {-30, -40, 700, 910};
+    Color c(with_colr(base, colr_clipped(kA, kLayerA, box)));
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    ASSERT_EQ(c.lower(l, kA, &out), GFNT_OK);
+    ASSERT_EQ(gshscene_list_count(l), 1u);
+    const GSHSCENE_Item * item = item_of(l, 0);
+    ASSERT_EQ(item->placeholder.has_box, 1u);
+    EXPECT_EQ(item->placeholder.box[0], -30.0);
+    EXPECT_EQ(item->placeholder.box[1], -40.0);
+    EXPECT_EQ(item->placeholder.box[2], 700.0);
+    EXPECT_EQ(item->placeholder.box[3], 910.0);
+  }
+  // No clip box and no ink anywhere: a placeholder with no box, reported all the same (PH11, last).
+  {
+    Color c(with_colr(base, colr_nested(kSpace, kB, kLayerA, 3)));
+    GFNT_Box box;
+    ASSERT_FALSE(control_box_of(c, kSpace, &box)) << "the fixture's space has no outline";
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    ASSERT_EQ(c.lower(l, kSpace, &out), GFNT_OK);
+    ASSERT_EQ(gshscene_list_count(l), 1u);
+    const GSHSCENE_Item * item = item_of(l, 0);
+    EXPECT_EQ(item->kind, GSHSCENE_ITEM_PLACEHOLDER);
+    EXPECT_EQ(item->placeholder.has_box, 0u);
+    for (double v : item->placeholder.box) {
+      EXPECT_EQ(v, 0.0);
+    }
+  }
+}
+
+TEST(SceneColor, UnderTheNonePolicyEveryRefusalIsTheCallsErrorAndNothingIsRecorded) {
+  for (const Refused & r : refusals_of_the_fixtures()) {
+    Color c(r.font);
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering first{};
+    ASSERT_EQ(c.lower(l, kAlt, &first), GFNT_OK) << r.what;
+    const size_t before = gshscene_list_count(l);
+    const uint64_t hash = gshscene_list_hash(l);
+    GFNT_ColorLowering out{};
+    EXPECT_EQ(c.lower_none(l, r.glyph, &out), GFNT_ERR_UNSUPPORTED) << r.what;
+    EXPECT_EQ(out.refusal, (uint32_t)r.refusal) << r.what;
+    EXPECT_EQ(out.outcome, (uint32_t)GFNT_COLOR_OUTCOME_LOWERED) << r.what << ": nothing is in the list";
+    EXPECT_EQ(out.items, 0u) << r.what;
+    EXPECT_EQ(gshscene_list_count(l), before) << r.what;
+    EXPECT_EQ(gshscene_list_hash(l), hash) << r.what;
+  }
+}
+
+TEST(SceneColor, UnderTheFallbackPolicyAGlyphWithAnOutlineDrawsItAndOneWithoutIsRefused) {
+  size_t drawn = 0;
+  size_t empty = 0;
+  for (const Refused & r : refusals_of_the_fixtures()) {
+    Color c(r.font);
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering first{};
+    ASSERT_EQ(c.lower(l, kAlt, &first), GFNT_OK) << r.what;
+    const size_t before = gshscene_list_count(l);
+    GFNT_ColorLowering out{};
+    ASSERT_EQ(c.lower(l, r.glyph, &out, 20 * 64, 10 * 64, 30 * 64, 3, nullptr, GFNT_COLOR_SPACE_STANDARD,
+                  GFNT_COLOR_ON_REFUSAL_FALLBACK), GFNT_OK) << r.what;
+    GFNT_Box box;
+    const bool outline = control_box_of(c, r.glyph, &box);
+    EXPECT_EQ(out.refusal, (uint32_t)r.refusal) << r.what << ": why the stand-in was used";
+    if (outline) {
+      drawn++;
+      EXPECT_EQ(out.outcome, (uint32_t)GFNT_COLOR_OUTCOME_FALLBACK) << r.what;
+      EXPECT_EQ(out.items, 2u) << r.what;
+      ASSERT_EQ(gshscene_list_count(l), before + 2) << r.what;
+      expect_placeholder(c, l, before, r, 1u);
+      // Right after it, with its layer and depth: the base glyph's own outline in the foreground, at alpha 1.
+      const GSHSCENE_Item * fill = item_of(l, before + 1);
+      EXPECT_EQ(fill->kind, GSHSCENE_ITEM_FILL) << r.what;
+      EXPECT_EQ(glyph_of(fill), r.glyph) << r.what;
+      EXPECT_EQ(fill->paint.kind, GSHSCENE_PAINT_FOREGROUND) << r.what;
+      EXPECT_EQ(fill->paint.rgba[3], 1.0) << r.what;
+      EXPECT_EQ(fill->fill_rule, GSHGEOM_FILL_NONZERO) << r.what;
+      EXPECT_EQ(fill->layer, 3) << r.what;
+      EXPECT_EQ(fill->depth, 0.0) << r.what;
+      EXPECT_TRUE(is_identity(fill->map)) << r.what << ": no design map";
+    } else {
+      empty++;
+      EXPECT_EQ(out.outcome, (uint32_t)GFNT_COLOR_OUTCOME_PLACEHOLDER) << r.what << ": nothing to draw";
+      EXPECT_EQ(out.items, 1u) << r.what;
+      ASSERT_EQ(gshscene_list_count(l), before + 1) << r.what;
+      expect_placeholder(c, l, before, r, 0u);
+    }
+  }
+  EXPECT_GE(drawn, 1u) << "a fixture refuses a glyph that has an outline";
+  EXPECT_GE(empty, 1u) << "a fixture refuses a glyph that has none";
+}
+
+TEST(SceneColor, AFailureOfTheCallIsStillAnErrorAndLeavesTheListAsItWas) {
+  // R4: a limit of the list, a damaged table and a bad request are not the glyph's refusals.
+  Color c("color-v1-scene.ttf");
+  {
+    GSHSCENE_Limits limits{};
+    limits.max_list_items = 2;
+    GSHSCENE_List * l = nullptr;
+    ASSERT_EQ(gshscene_list_create(nullptr, &limits, c.store, &l), GSHSCENE_OK);
+    c.lists.push_back(l);
+    GFNT_ColorLowering out{};
+    ASSERT_EQ(c.lower(l, kPaintD, &out), GFNT_ERR_LIMIT) << "the glyph's group, its clip and its fills do not fit";
+    EXPECT_EQ(gshscene_list_count(l), 0u);
+    EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_LOWERED);
+    EXPECT_EQ(out.outcome, (uint32_t)GFNT_COLOR_OUTCOME_LOWERED);
+  }
+  {
+    // A paint format the table does not define is a damaged table: CORRUPT, not a gap.
+    const Bytes base = file_bytes("color-v1-scene.ttf");
+    Color probe(base);
+    GFNT_PaintRef root = 0;
+    ASSERT_EQ(gfnt_face_color_base_paint(probe.face, kPaintG, &root, nullptr), GFNT_OK);
+    Bytes colr = colr_table(base);
+    colr[root] = 99;
+    Color bad(with_colr(base, colr));
+    GSHSCENE_List * l = bad.open();
+    GFNT_ColorLowering out{};
+    EXPECT_EQ(bad.lower(l, kPaintG, &out), GFNT_ERR_CORRUPT);
+    EXPECT_EQ(gshscene_list_count(l), 0u);
+  }
+  {
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorRun run{};
+    run.size = 1280;
+    run.bits = 6;
+    run.refusal_policy = GFNT_COLOR_ON_REFUSAL_COUNT;
+    GFNT_ColorLowering out{};
+    EXPECT_EQ(gfnt_scene_record_color_glyph(c.face_resource, c.store, l, kPaintG, &run, &out, nullptr), GFNT_ERR_INVALID);
+    EXPECT_EQ(gshscene_list_count(l), 0u);
+  }
+}
+
+TEST(SceneColor, ARefusedGlyphReachesTheRenderReportAndTheFallbackDrawsAndIsApproximated) {
+  // The criterion P5 exists for: an application that draws the list and reads only the report learns the glyph is missing.
+  Color c("color-v1-scene.ttf");
+  GSHSCENE_List * refused = c.open();
+  GSHSCENE_List * fallback = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(refused, kPaintG, &out, 40 * 64, 4 * 64, 44 * 64), GFNT_OK);
+  ASSERT_EQ(c.lower(fallback, kPaintG, &out, 40 * 64, 4 * 64, 44 * 64, 3, nullptr, GFNT_COLOR_SPACE_STANDARD,
+                GFNT_COLOR_ON_REFUSAL_FALLBACK), GFNT_OK);
+  ASSERT_EQ(out.outcome, (uint32_t)GFNT_COLOR_OUTCOME_FALLBACK) << "the base glyph has an outline";
+  for (GSHSCENE_List * l : {refused, fallback}) {
+    ASSERT_EQ(gshscene_list_close(l), GSHSCENE_OK);
+  }
+  auto draw = [&](GSHSCENE_List * l, uint32_t flags, GSHSCENE_Result * result, std::vector<GSHSCENE_Report_Entry> * entries,
+                  std::vector<size_t> * chains) {
+    GIMG_Pixel_Format f{};
+    f.channel_model = GIMG_CHANNEL_RGBA;
+    f.layout = GIMG_LAYOUT_INTERLEAVED;
+    f.channel_count = 4;
+    f.channel_type = GIMG_CHANNEL_UNORM;
+    for (int i = 0; i < 4; i++) {
+      f.bits_per_channel[i] = 8;
+    }
+    f.alpha_form = GIMG_ALPHA_STRAIGHT;
+    GIMG_Raster * raster = nullptr;
+    EXPECT_EQ(gimg_raster_create(64, 64, &f, GIMG_RASTER_OWNED, nullptr, 0, &raster), GIMG_OK);
+    uint8_t * px = static_cast<uint8_t *>(gimg_raster_pixels(raster));
+    std::memset(px, 0, gimg_raster_stride_bytes(raster) * 64u);
+    GSHSCENE_Sink * sink = nullptr;
+    EXPECT_EQ(gshcpu_sink_create(nullptr, nullptr, nullptr, &sink), GSHCPU_OK);
+    GSHSCENE_Report * report = nullptr;
+    EXPECT_EQ(gshscene_report_create(nullptr, nullptr, &report), GSHSCENE_OK);
+    GSHSCENE_Target t{};
+    t.kind = GSHSCENE_TARGET_RASTER;
+    t.surface = raster;
+    GSHSCENE_Render_Request rq{};
+    rq.list = l;
+    rq.target = &t;
+    rq.report = report;
+    rq.flags = flags;
+    *result = gshscene_sink_render(sink, &rq);
+    for (size_t i = 0; i < gshscene_report_count(report); i++) {
+      GSHSCENE_Report_Entry e{};
+      gshscene_report_entry(report, i, &e);
+      chains->insert(chains->end(), e.chain, e.chain + e.chain_count);
+      e.chain = nullptr;
+      entries->push_back(e);
+    }
+    std::string pixels(reinterpret_cast<const char *>(px), gimg_raster_stride_bytes(raster) * 64u);
+    gshscene_report_destroy(report);
+    EXPECT_EQ(gshscene_sink_destroy(sink), GSHSCENE_OK);
+    gimg_raster_destroy(raster);
+    return pixels;
+  };
+  const size_t pair = ((size_t)GSHSCENE_PLACEHOLDER_SOURCE_COLR << 16) | GFNT_COLOR_REFUSED_UNBOUNDED;
+  GSHSCENE_Result result;
+  std::vector<GSHSCENE_Report_Entry> entries;
+  std::vector<size_t> chains;
+  // Best effort: nothing drawn, and the report says why.
+  std::string pixels = draw(refused, 0, &result, &entries, &chains);
+  EXPECT_EQ(result, GSHSCENE_OK);
+  EXPECT_FALSE(any_ink(pixels));
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].entry_class, GSHSCENE_ENTRY_REFUSED);
+  EXPECT_EQ(entries[0].reason, GSHSCENE_REASON_PLACEHOLDER);
+  EXPECT_EQ(entries[0].second, pair);
+  EXPECT_STREQ(gshscene_placeholder_string((unsigned)(pair >> 16), (unsigned)(pair & 0xffffu)), "colr:unbounded");
+  ASSERT_EQ(chains.size(), 1u);
+  EXPECT_EQ(chains[0], 0u) << "the placeholder is the list's one item";
+  // Strict fails before the sink is called.
+  entries.clear();
+  chains.clear();
+  pixels = draw(refused, GSHSCENE_RENDER_STRICT, &result, &entries, &chains);
+  EXPECT_EQ(result, GSHSCENE_ERR_REFUSED);
+  EXPECT_FALSE(any_ink(pixels));
+  // The fallback draws the glyph's outline in the foreground (opaque black here) and is approximated, which never fails.
+  for (uint32_t flags : {0u, (uint32_t)GSHSCENE_RENDER_STRICT}) {
+    entries.clear();
+    chains.clear();
+    pixels = draw(fallback, flags, &result, &entries, &chains);
+    EXPECT_EQ(result, GSHSCENE_OK) << flags;
+    EXPECT_TRUE(any_ink(pixels)) << flags << ": the monochrome outline";
+    ASSERT_EQ(entries.size(), 1u) << flags;
+    EXPECT_EQ(entries[0].entry_class, GSHSCENE_ENTRY_APPROXIMATED) << flags;
+    EXPECT_EQ(entries[0].reason, GSHSCENE_REASON_PLACEHOLDER) << flags;
+    EXPECT_EQ(entries[0].second, pair) << flags;
   }
 }
 
@@ -1131,16 +1538,20 @@ TEST(SceneColor, WhatWas14csRefusalsIsNowLowered) {
   ASSERT_EQ(s.lower(multiply, kPaintF, &out), GFNT_OK);
 }
 
-TEST(SceneColor, AGraphThatNamesItselfIsALimitAndLeavesTheListAsItWas) {
+TEST(SceneColor, AGraphThatNamesItselfIsARefusalOfTheGlyphAndLeavesTheListAsItWas) {
+  // R4: the walk's bound is unchanged (a hostile font still cannot make the call allocate without bound), but a graph
+  // past it is a property of the glyph: ::GFNT_COLOR_REFUSED_WALK_LIMIT, not the call's limit.
   Color c("color-v1-scene.ttf");
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kA, &out), GFNT_OK);
-  EXPECT_EQ(c.lower(l, kPaintH, &out), GFNT_ERR_LIMIT);
+  EXPECT_EQ(c.lower_none(l, kPaintH, &out), GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_REFUSED_WALK_LIMIT);
+  EXPECT_EQ(out.items, 0u);
   EXPECT_EQ(gshscene_list_count(l), 5u);
 }
 
-TEST(SceneColor, AGraphDeeperThanTheWalksBoundIsALimitAndAShallowerOneIsLowered) {
+TEST(SceneColor, AGraphDeeperThanTheWalksBoundIsRefusedAndAShallowerOneIsLowered) {
   // Built here rather than as a fixture: the paint-graph differential (color_diff.py) walks every fixture with a
   // reference that has no depth bound and no answer for a glyph with no record.
   const Bytes base = file_bytes("color-v1-scene.ttf");
@@ -1149,18 +1560,19 @@ TEST(SceneColor, AGraphDeeperThanTheWalksBoundIsALimitAndAShallowerOneIsLowered)
     GSHSCENE_List * l = c.open();
     GFNT_ColorLowering out{};
     // The root is depth 0, layer k depth k + 1, the glyph's solid one deeper: a bound of 64 takes 63 levels.
-    GFNT_Result r = c.lower(l, kB, &out);
+    GFNT_Result r = c.lower_none(l, kB, &out);
     if (levels + 1 <= 64) {
       ASSERT_EQ(r, GFNT_OK) << levels;
       ASSERT_EQ(gshscene_list_count(l), 3u);
       expect_fill(l, 1, kLayerA, GSHSCENE_PAINT_PALETTE, 0, 1.0, "the deepest layer");
     } else {
-      EXPECT_EQ(r, GFNT_ERR_LIMIT) << levels;
+      EXPECT_EQ(r, GFNT_ERR_UNSUPPORTED) << levels;
+      EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_REFUSED_WALK_LIMIT) << levels;
       EXPECT_EQ(gshscene_list_count(l), 0u);
     }
     // A color glyph naming a glyph with no version 1 record.
     std::memset(&out, 0, sizeof out);
-    EXPECT_EQ(c.lower(l, kA, &out), GFNT_ERR_UNSUPPORTED);
+    EXPECT_EQ(c.lower_none(l, kA, &out), GFNT_ERR_UNSUPPORTED);
     EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_REFUSED_NO_RECORD);
     EXPECT_EQ(out.paint_format, (uint32_t)GFNT_PAINT_COLR_GLYPH);
   }

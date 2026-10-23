@@ -1004,8 +1004,11 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
   }
   if (empty) {
     // A glyph with no description draws nothing, and that is an answer. Its
-    // phantom point is still a fact, for a composite that borrows its metrics.
-    return want_pp1
+    // phantom point is still a fact, for a composite that borrows its metrics -
+    // but only for one: asked at the top there is no outline to move, and
+    // reading `gvar` for it would make a glyph that never touched `gvar` a
+    // glyph that can be refused for it.
+    return (want_pp1 && depth > 0)
         ? gfnt_glyf_varied_pp1_bare(face, glyph, variation, out_pp1, error)
         : GFNT_OK;
   }
@@ -1015,7 +1018,7 @@ static GFNT_Result gfnt_glyf_load_chained(const GFNT_Face * face,
   }
   if (contours == 0) {
     // A description that exists and states zero contours. Fonts do this.
-    return want_pp1
+    return (want_pp1 && depth > 0)
         ? gfnt_glyf_varied_pp1_bare(face, glyph, variation, out_pp1, error)
         : GFNT_OK;
   }

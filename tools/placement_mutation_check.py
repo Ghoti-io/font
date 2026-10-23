@@ -103,7 +103,7 @@ MUTANTS = [
     (GLYF, "      result = gfnt_glyf_stored_pp1(face, glyph, out_pp1, error);\n      if (result == GFNT_OK && component_deltas",
      "      result = gfnt_glyf_stored_pp1(face, glyph, out_pp1, error);\n      if (0 && component_deltas",
      "a composite's own gvar delta dropped"),
-    (GLYF, "    return want_pp1\n        ? gfnt_glyf_varied_pp1_bare(face, glyph, variation, out_pp1, error)\n        : GFNT_OK;\n  }\n  result = gfnt_read_s16",
+    (GLYF, "    return (want_pp1 && depth > 0)\n        ? gfnt_glyf_varied_pp1_bare(face, glyph, variation, out_pp1, error)\n        : GFNT_OK;\n  }\n  result = gfnt_read_s16",
      "    *out_pp1 = 0;\n    return GFNT_OK;\n  }\n  result = gfnt_read_s16",
      "an empty glyph lends no origin"),
     # At a location.

@@ -88,7 +88,7 @@ struct Loaded {
  * point, `xMin - lsb`) at x = 0, so each outline sits `xMin` to the left of
  * where the file's points are: the paths are the file's, moved left by the
  * glyph's `xMin` (a composite by its own, or by the component flagged
- * USE_MY_METRICS). `Placement` below, on `outline-placement.ttf`, is where the
+ * USE_MY_METRICS). test_placement.cpp, on `outline-placement.ttf`, is where the
  * rule is tested with bearings that differ; here it is what makes a number.
  */
 

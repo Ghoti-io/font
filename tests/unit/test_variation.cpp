@@ -1818,6 +1818,25 @@ TEST(Gvar, AGlyphPastTheCountTheTableStatesIsCorruptWhateverItsOffsetsSay) {
       std::string::npos);
 }
 
+TEST(Gvar, AGlyphWithNoDescriptionIsNotRefusedForAGvarItNeverReads) {
+  // Past the count the header states, glyph 1 is condemned if anything reads its
+  // deltas (above). An empty glyph has no outline to move, and placing the glyph
+  // (rule 1 of design.md section 7.3) is not a reason to read them: at the top
+  // it is an empty outline and not an error, as it was before outlines were placed.
+  Tuple good;
+
+  good.peak = {16384};
+  good.data = {0x03, 0x0A, 0x0A, 0xF6, 0xF6, 0x83, 0x87};
+  GvarSpec spec;
+  spec.glyphs = {glyph_variation_data({good}), glyph_variation_data({good})};
+  spec.glyph_count_delta = -1;
+  Moving font({square(), {}}, build_gvar(spec));
+  GFNT_Result result = GFNT_ERR_INTERNAL;
+
+  EXPECT_TRUE(font.points(1, kFull, &result).empty());
+  EXPECT_EQ(result, GFNT_OK);
+}
+
 TEST(Gvar, ABackwardsOffsetEntryIsNamedAsOne) {
   Tuple good;
 

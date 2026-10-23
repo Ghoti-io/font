@@ -28,6 +28,11 @@ expectation:
     committed here is measured on x86-64, and the other targets are checked by the cross-target
     gates against it.
 
+The same run lowers each refused glyph under every policy for a refusal (color-paint story P5, scene_color.h L12) and the
+gate checks the answers: the default policy records one placeholder, the fallback records its stand-in (two items) or, for a
+base glyph with no outline, the placeholder alone, and none is `GFNT_ERR_UNSUPPORTED`, each with the refusal's own reason; every
+glyph on the refusals list must be among them, so a refusal the real fonts make that the policies do not answer fails.
+
 The gate carries its own control: after the comparison, one committed line is changed in memory and
 fed back through the same comparison, which must report a difference or the gate fails (a `==` that
 has rotted into comparing a file with itself would report every font clean).
@@ -53,7 +58,7 @@ DRIVER = colr_scene_diff.DRIVER
 GOLDEN = os.path.join(ROOT, "tests", "data", "golden")
 REFUSALS = os.path.join(GOLDEN, "colr-refusals.txt")
 HASHES = os.path.join(GOLDEN, "colr-lowered.hash")
-REASONS = {"1": "unbounded", "2": "no-record"}
+REASONS = {"1": "unbounded", "2": "no-record", "3": "walk-limit"}
 # A variable font is also lowered at one instance (normalised 2.14 coordinates): the paints move with it.
 INSTANCE = ("half", ["8192", "-8192"])
 
@@ -66,36 +71,64 @@ def fonts():
 
 
 def summarize(font, name, coords):
-    run = subprocess.run([DRIVER, font, "--summary"] + coords, capture_output=True, text=True)
+    run = subprocess.run([DRIVER, font, "--summary", "--policies"] + coords, capture_output=True, text=True)
     refusals = []
+    policies = []
     summary = None
     for line in run.stdout.splitlines():
         parts = line.split()
         if parts[:1] == ["refused"]:
             refusals.append((int(parts[2 - 1]), REASONS.get(parts[2], parts[2]), parts[3]))
+        elif parts[:1] == ["policies"]:
+            policies.append(parts[1:])
         elif parts[:1] == ["limit"]:
             refusals.append((int(parts[1]), "limit", "0"))
         elif parts[:1] == ["summary"]:
             summary = dict(p.split("=") for p in parts[1:])
     if summary is None:
         raise RuntimeError("%s: no summary (%s)" % (os.path.basename(font), run.stderr.strip()[:200]))
-    return refusals, summary
+    return refusals, summary, policies
+
+
+def policy_problems(base, name, refusals, policies):
+    """What each policy gives every refused glyph (color-paint story P5; scene_color.h, L12): the default one placeholder,
+    the fallback its stand-in with an outline and a placeholder alone without one, none the call's own error."""
+    problems = []
+    seen = set()
+    for gid, parts in ((int(p[0]), p) for p in policies):
+        seen.add(gid)
+        refusal, place_outcome, place_items, fall_outcome, fall_items, none_result = (int(x) for x in parts[1:])
+        what = "%s %s glyph %d" % (base, name, gid)
+        if (place_outcome, place_items) != (1, 1):
+            problems.append("%s: the placeholder policy gave outcome %d with %d items, not a placeholder" % (what, place_outcome, place_items))
+        if (fall_outcome, fall_items) not in ((1, 1), (2, 2)):
+            problems.append("%s: the fallback policy gave outcome %d with %d items" % (what, fall_outcome, fall_items))
+        if none_result != 3:   # GFNT_ERR_UNSUPPORTED
+            problems.append("%s: the none policy gave result %d, not UNSUPPORTED" % (what, none_result))
+    for gid, reason, _ in refusals:
+        if gid not in seen:
+            problems.append("%s %s glyph %d: refused and not lowered under the policies" % (base, name, gid))
+    return problems
 
 
 def measure():
     refusal_lines = []
     hash_lines = []
+    policy_lines = []
+    policies_checked = 0
     for font in fonts():
         base = os.path.basename(font)
         instances = [("default", [])]
         if colr_scene_diff.has_fvar(font):
             instances.append(INSTANCE)
         for name, coords in instances:
-            refusals, s = summarize(font, name, coords)
+            refusals, s, policies = summarize(font, name, coords)
+            policy_lines += policy_problems(base, name, refusals, policies)
+            policies_checked += len(policies)
             for gid, reason, fmt in sorted(refusals):
                 refusal_lines.append("%s %s %d %s %s" % (base, name, gid, reason, fmt))
             hash_lines.append("%s %s %s %s %s" % (base, name, s["glyphs"], s["lowered"], s["hash"]))
-    return refusal_lines, hash_lines
+    return refusal_lines, hash_lines, policy_lines, policies_checked
 
 
 def read(path):
@@ -123,7 +156,7 @@ def compare(want, got, what):
 
 def main(argv):
     try:
-        refusal_lines, hash_lines = measure()
+        refusal_lines, hash_lines, policy_lines, policies_checked = measure()
     except (colr_real_fonts.FetchFailed, oracle_env.OracleUnavailable) as why:
         sys.stderr.write("SKIPPED check_colr_lowered: %s\n" % why)
         return 1 if os.environ.get("GHOTI_ORACLE_REQUIRED") == "1" else 0
@@ -136,7 +169,9 @@ def main(argv):
         return 0
     want_refusals = read(REFUSALS)
     want_hashes = read(HASHES)
-    problems = compare(want_refusals, refusal_lines, "refusals") + compare(want_hashes, hash_lines, "hashes")
+    problems = compare(want_refusals, refusal_lines, "refusals") + compare(want_hashes, hash_lines, "hashes") + policy_lines
+    if policies_checked != len(refusal_lines):
+        problems.append("the policies were checked on %d refused glyphs and %d are expected" % (policies_checked, len(refusal_lines)))
     # The control: one committed line changed in memory must be seen by the same comparison.
     if want_hashes:
         mutated = [want_hashes[0][:-1] + ("0" if want_hashes[0][-1] != "0" else "1")] + want_hashes[1:]
@@ -149,7 +184,8 @@ def main(argv):
     lowered = sum(int(l.split()[3]) for l in hash_lines)
     total = sum(int(l.split()[2]) for l in hash_lines)
     print("check_colr_lowered: %d fonts-and-instances, %d color glyphs, %d lowered, %d refused (all on the committed list), "
-          "%d problems" % (len(hash_lines), total, lowered, len(refusal_lines), len(problems)))
+          "%d problems; each policy checked on %d refused glyphs" % (len(hash_lines), total, lowered, len(refusal_lines),
+                                                                      len(problems), policies_checked))
     return 1 if problems else 0
 
 

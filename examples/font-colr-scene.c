@@ -43,6 +43,11 @@
  * face is interned at; none is the default instance. A `--encoded` argument
  * lowers in the encoded space (GFNT_COLOR_SPACE_ENCODED).
  *
+ * With `--policies` (and `--summary`) each refused glyph is lowered again under the placeholder policy, the fallback and none
+ * (color-paint story P5), into a list of its own, and `policies <glyph> <refusal> <placeholder outcome> <items> <fallback
+ * outcome> <items> <none's result>` is printed, for the whole-font gate to check each policy's answer on every refusal the
+ * real fonts make (`<none's result>` is 0 for a call that succeeded, the library's result number otherwise).
+ *
  * With `--summary` it prints lines instead, for the whole-font gate
  * (tools/check_colr_lowered.py): `refused <glyph> <reason> <paint format>` for each
  * refused glyph, `limit <glyph>` for each past the walk's bounds, and last
@@ -51,7 +56,7 @@
  * the list's own content hash and item count, each as little-endian bytes, so it
  * is the same on every target the lowering is.
  *
- *     font-colr-scene <font> [--encoded] [--summary] [coordinate...]
+ *     font-colr-scene <font> [--encoded] [--summary] [--policies] [coordinate...]
  */
 
 #include <ghoti.io/font/font.h>
@@ -134,6 +139,7 @@ int main(int argc, char ** argv) {
   GFNT_Variation variation = {coords, 0, 0};
   uint32_t space = GFNT_COLOR_SPACE_STANDARD;
   int summary = 0;
+  int policies = 0;
   uint64_t hash = UINT64_C(14695981039346656037);
   size_t color_glyphs = 0;
   size_t lowered = 0;
@@ -147,6 +153,8 @@ int main(int argc, char ** argv) {
       space = GFNT_COLOR_SPACE_ENCODED;
     } else if (strcmp(argv[i], "--summary") == 0) {
       summary = 1;
+    } else if (strcmp(argv[i], "--policies") == 0) {
+      policies = 1;
     } else if (variation.count < 32) {
       coords[variation.count++] = (GFNT_F2Dot14)atoi(argv[i]);
     }
@@ -197,6 +205,33 @@ int main(int argc, char ** argv) {
         printf("refused %zu %u %u\n", g, out.refusal, out.paint_format);
       } else {
         printf("limit %zu\n", g);
+      }
+      if (policies && r != GFNT_OK) {
+        /* P5: the same glyph under each policy, each into a list of its own. */
+        uint32_t refusal = out.refusal;
+        uint32_t outcome[3] = {0, 0, 0};
+        size_t items[3] = {0, 0, 0};
+        GFNT_Result result[3] = {GFNT_OK, GFNT_OK, GFNT_OK};
+        for (uint32_t k = 0; k < 3; k++) {
+          GSHSCENE_List * own = NULL;
+          GFNT_ColorLowering again;
+          GFNT_ColorRun by = run;
+          by.refusal_policy = k == 0 ? GFNT_COLOR_ON_REFUSAL_PLACEHOLDER
+              : k == 1               ? GFNT_COLOR_ON_REFUSAL_FALLBACK
+                                     : GFNT_COLOR_ON_REFUSAL_NONE;
+          if (gshscene_list_create(NULL, NULL, store, &own) != GSHSCENE_OK) {
+            return 1;
+          }
+          result[k] = gfnt_scene_record_color_glyph(face_resource, store, own, (uint32_t)g, &by, &again, NULL);
+          outcome[k] = again.outcome;
+          items[k] = gshscene_list_count(own);
+          if (again.refusal != refusal) {
+            outcome[k] = 99;   /* the gate fails on a policy that gives another reason */
+          }
+          gshscene_list_destroy(own);
+        }
+        printf("policies %zu %u %u %zu %u %zu %d\n", g, refusal, outcome[0], items[0], outcome[1], items[1],
+            (int)result[2]);
       }
       gshscene_list_destroy(list);
       continue;

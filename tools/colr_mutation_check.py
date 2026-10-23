@@ -77,8 +77,8 @@ MUTANTS = [
      "an unknown mode taken for source-over", None),
     (COLR, "  return mode <= 27u ? mode : GFNT_COLR_UNKNOWN_MODE_OPERATOR;", "  return mode <= 27u ? mode - 1u : GFNT_COLR_UNKNOWN_MODE_OPERATOR;",
      "the blend modes off by one", None),
-    (COLR, "  if (mode <= 12u) {\n    return gfnt_colr_operator[mode];", "  if (mode <= 11u) {\n    return gfnt_colr_operator[mode];",
-     "plus (12) taken for a blend mode", None),
+    # (A mutant that narrowed the table's range to end before plus (12) was removed: mode 12 then takes the identity
+    # branch below, and the table maps 12 to 12, so it is the same program.)
     (COLR, "  GFNT_Result r = gfnt_colr_scene(l, gshscene_list_group_push_fixed(l->list, 0u, l->run->layer),\n      \"the scene refused a composite's group\");",
      "  GFNT_Result r = gfnt_colr_scene(l, gshscene_list_group_push_fixed(l->list, 1u, l->run->layer),\n      \"the scene refused a composite's group\");",
      "the composite's outer group not source-over", None),
@@ -126,7 +126,7 @@ MUTANTS = [
      "    r = gfnt_colr_node(l, p->child, depth + 1);", "a glyph's clip not a bound", None),
     (COLR, "    l->bounded = true;\n    l->bound_ops = l->op_count;\n    r = gfnt_colr_node(l, p->child, depth + 1);",
      "    l->bounded = true;\n    l->bound_ops = 0;\n    r = gfnt_colr_node(l, p->child, depth + 1);", "the bound's transforms forgotten", None),
-    (COLR, "    l->bounded = was_bounded;\n    l->bound_ops = was_ops;", "    l->bounded = true;\n    l->bound_ops = was_ops;", "a bound kept past its clip", None),
+    (COLR, "    l->bounded = was_bounded;\n    l->bound_ops = was_ops;", "    l->bounded = true;\n    (void)was_bounded;\n    l->bound_ops = was_ops;", "a bound kept past its clip", None),
     (COLR, "      return r != GFNT_OK ? r : gfnt_colr_leaf(l, &p, l->plane, l->ops, l->bound_ops,\n          l->ops + l->bound_ops, l->op_count - l->bound_ops);",
      "      return r != GFNT_OK ? r : gfnt_colr_leaf(l, &p, l->plane, l->ops, l->op_count,\n          l->ops + l->bound_ops, l->op_count - l->bound_ops);",
      "a plane fill's map with every transform", None),
@@ -150,9 +150,9 @@ MUTANTS = [
      "  }\n  if (r == GFNT_OK) {\n    r = gfnt_colr_node(l, root, 0);", "a clip box not a bound", None),
     # L8: the glyph's group and its space.
     (COLR, "        encoded ? GSHSCENE_FIXED_TRANSFER_SRGB : GSHSCENE_FIXED_TRANSFER_LINEAR, l->run->layer),\n        \"the scene refused the glyph's group\");",
-     "        GSHSCENE_FIXED_TRANSFER_SRGB, l->run->layer),\n        \"the scene refused the glyph's group\");", "the glyph composited in encoded values", None),
+     "        (encoded ? 0 : 0) + GSHSCENE_FIXED_TRANSFER_SRGB, l->run->layer),\n        \"the scene refused the glyph's group\");", "the glyph composited in encoded values", None),
     (COLR, "        encoded ? GSHSCENE_FIXED_TRANSFER_SRGB : GSHSCENE_FIXED_TRANSFER_LINEAR, l->run->layer),\n        \"the scene refused the glyph's group\");",
-     "        GSHSCENE_FIXED_TRANSFER_LINEAR, l->run->layer),\n        \"the scene refused the glyph's group\");", "the encoded space ignored for the group", None),
+     "        (encoded ? 0 : 0) + GSHSCENE_FIXED_TRANSFER_LINEAR, l->run->layer),\n        \"the scene refused the glyph's group\");", "the encoded space ignored for the group", None),
     (COLR, "  if (r == GFNT_OK) {\n    r = gfnt_colr_scene(l, gshscene_list_group_pop(l->list), \"the scene refused a group's pop\");\n  }\n  return r;\n}\n\n/** A box in the font",
      "  if (0) {\n    r = gfnt_colr_scene(l, gshscene_list_group_pop(l->list), \"the scene refused a group's pop\");\n  }\n  return r;\n}\n\n/** A box in the font",
      "the glyph's group left open", None),
@@ -176,7 +176,7 @@ MUTANTS = [
      "        g.v[2] = p->v[2];\n        g.v[3] = p->v[3];\n        if (0) {", "a sweep's angles without their bias", None),
     (COLR, "        if (!gfnt_colr_times(p->v[0], 16384, &g.v[0]) || !gfnt_colr_times(p->v[1], 16384, &g.v[1])) {",
      "        g.v[0] = p->v[0];\n        g.v[1] = p->v[1];\n        if (0) {", "a sweep's center at the wrong bits", None),
-    (COLR, "    g.ops = t_count ? t : NULL;", "    g.ops = NULL;", "a gradient without its own transforms", None),
+    (COLR, "    g.ops = t_count ? t : NULL;", "    (void)t;\n    g.ops = NULL;", "a gradient without its own transforms", None),
     # L1: the instance.
     (COLR, "  GFNT_Result r = gfnt_face_color_paint(l->face, ref, &l->variation, p, l->error);",
      "  GFNT_Result r = gfnt_face_color_paint(l->face, ref, NULL, p, l->error);", "a paint read at the default instance", None),
@@ -249,7 +249,7 @@ MUTANTS = [
     (COLR, "        && run->refusal_policy != (uint32_t)GFNT_COLOR_ON_REFUSAL_NONE) {", "        ) {", "the none policy recording a placeholder", None),
     (COLR, "      r = gfnt_colr_refusal_record(&l, run->refusal_policy, before);", "      r = gfnt_colr_refusal_record(&l, GFNT_COLOR_ON_REFUSAL_PLACEHOLDER, before);",
      "the fallback policy ignored", None),
-    (COLR, "  if (r == GFNT_OK && policy == GFNT_COLOR_ON_REFUSAL_FALLBACK) {", "  if (r == GFNT_OK) {", "the default policy drawing the stand-in", None),
+    (COLR, "  if (r == GFNT_OK && policy == GFNT_COLOR_ON_REFUSAL_FALLBACK) {", "  (void)policy;\n  if (r == GFNT_OK) {", "the default policy drawing the stand-in", None),
     (COLR, "    const bool approximated = has_outline;", "    const bool approximated = true;", "a placeholder approximated when nothing is drawn", None),
     (COLR, "    const bool approximated = has_outline;", "    const bool approximated = false;", "a fallback reported as refused", None),
     (COLR, "    *has = gfnt_outline_point_count(outline) > 0;", "    *has = true;", "a fallback drawn for a glyph with no outline", None),
@@ -276,8 +276,8 @@ MUTANTS = [
      "the refusal's diagnostic left after the call succeeded", None),
     (COLR, "  gshscene_resource_release(l.plane);\n  gshscene_resource_release(l.frame);\n", "  gshscene_resource_release(l.frame);\n",
      "the plane's reference leaked", None),
-    (COLR, "  l.face = gfnt_scene_face_of(face);\n  if (!l.face) {", "  l.face = gfnt_scene_face_of(face);\n  if (0) {",
-     "an unbound face lowered", None),
+    # (A mutant that dropped the first check of an unbound face was removed: the check that follows it, of the face's
+    # instance, fails on the same face with the same result and message, so the program's behavior is the same.)
     # The palette.
     (COLR, "      rgba[4u * i] = c.red;\n      rgba[4u * i + 1u] = c.green;",
      "      rgba[4u * i] = c.blue;\n      rgba[4u * i + 1u] = c.green;", "red read as blue", None),

@@ -1731,6 +1731,431 @@ TEST(SceneColor, ALoweredGlyphRendersAsItsSolidTwinAndAMissingEntryIsRefused) {
   }
 }
 
+// --- the lowering's own seams, each seen to fail (the planted-defect pass) ---------------------------------------------
+
+namespace {
+
+void put_i16(Bytes & out, int v) {
+  gfnttest::put_u16(out, (uint16_t)(int16_t)v);
+}
+
+/** PaintSolid: entry @p entry at alpha @p alpha (F2.14). */
+Bytes p_solid(uint16_t entry, uint16_t alpha = 16384) {
+  Bytes b{2};
+  gfnttest::put_u16(b, entry);
+  gfnttest::put_u16(b, alpha);
+  return b;
+}
+
+/** PaintGlyph of @p glyph over @p child (which follows it). */
+Bytes p_glyph(uint16_t glyph, const Bytes & child) {
+  Bytes b{10};
+  put24(b, 6);
+  gfnttest::put_u16(b, glyph);
+  b.insert(b.end(), child.begin(), child.end());
+  return b;
+}
+
+/** PaintTranslate by (@p dx, @p dy) over @p child. */
+Bytes p_translate(int dx, int dy, const Bytes & child) {
+  Bytes b{14};
+  put24(b, 8);
+  put_i16(b, dx);
+  put_i16(b, dy);
+  b.insert(b.end(), child.begin(), child.end());
+  return b;
+}
+
+/** PaintLinearGradient with a two-stop color line of extend byte @p extend (0 pad, 1 repeat, 2 reflect). */
+Bytes p_linear(uint8_t extend) {
+  Bytes b{4};
+  put24(b, 16);
+  for (int v : {0, 0, 600, 0, 0, 600}) {
+    put_i16(b, v);
+  }
+  b.push_back(extend);
+  gfnttest::put_u16(b, 2);
+  for (uint16_t offset : {0, 16384}) {
+    gfnttest::put_u16(b, offset);
+    gfnttest::put_u16(b, offset ? 1 : 0);
+    gfnttest::put_u16(b, 16384);
+  }
+  return b;
+}
+
+/** PaintVarRotateAroundCenter: angle 0 and a center of (0, 0), its three numbers at variation index @p index. */
+Bytes p_var_rotate(uint32_t index, const Bytes & child) {
+  Bytes b{27};
+  put24(b, 14);
+  put_i16(b, 0);
+  put_i16(b, 0);
+  put_i16(b, 0);
+  gfnttest::put_u32(b, index);
+  b.insert(b.end(), child.begin(), child.end());
+  return b;
+}
+
+/** PaintColrLayers over the layer list's entries @p first and on. */
+Bytes p_layers(uint8_t count, uint32_t first) {
+  Bytes b{1, count};
+  gfnttest::put_u32(b, first);
+  return b;
+}
+
+/**
+ * A `COLR` version 1 table, built here, whose one base glyph @p glyph is @p root; @p layers are paints a
+ * `PaintColrLayers` names; @p store, where there is one, is the item variation store (no index map).
+ */
+Bytes colr_graph(uint16_t glyph, const Bytes & root, const std::vector<Bytes> & layers = {}, const Bytes & store = {}) {
+  const uint32_t list = 34;
+  const uint32_t layer_list = list + 10;
+  const uint32_t layer_bytes = layers.empty() ? 0 : 4 + 4 * (uint32_t)layers.size();
+  Bytes paints;
+  const uint32_t root_at = (uint32_t)paints.size();
+  paints.insert(paints.end(), root.begin(), root.end());
+  std::vector<uint32_t> layer_at;
+  for (const Bytes & layer : layers) {
+    layer_at.push_back((uint32_t)paints.size());
+    paints.insert(paints.end(), layer.begin(), layer.end());
+  }
+  const uint32_t blob = layer_list + layer_bytes;
+  Bytes out;
+  gfnttest::put_u16(out, 1);                       // version
+  gfnttest::put_u16(out, 0);                       // no version 0 records
+  gfnttest::put_u32(out, 0);
+  gfnttest::put_u32(out, 0);
+  gfnttest::put_u16(out, 0);
+  gfnttest::put_u32(out, list);
+  gfnttest::put_u32(out, layers.empty() ? 0 : layer_list);
+  gfnttest::put_u32(out, 0);                       // no clip list
+  gfnttest::put_u32(out, 0);                       // no index map
+  gfnttest::put_u32(out, store.empty() ? 0 : blob + (uint32_t)paints.size());
+  gfnttest::put_u32(out, 1);                       // BaseGlyphList: one record
+  gfnttest::put_u16(out, glyph);
+  gfnttest::put_u32(out, 10 + layer_bytes + root_at);
+  if (!layers.empty()) {
+    gfnttest::put_u32(out, (uint32_t)layers.size());
+    for (uint32_t at : layer_at) {
+      gfnttest::put_u32(out, layer_bytes + at);
+    }
+  }
+  out.insert(out.end(), paints.begin(), paints.end());
+  out.insert(out.end(), store.begin(), store.end());
+  return out;
+}
+
+}  // namespace
+
+TEST(SceneColor, AGradientsTransformsAboveItsGlyphsClipAreTheFillsAndTheOnesBelowAreTheGradients) {
+  // translate (50, 0) over a glyph whose child is a layer list of translate (0, 70) over a gradient: the glyph's child is not a leaf, so
+  // the glyph is a clip, and the first translation is above the clip (the fill's) and the second below it (L4).
+  const Bytes base = file_bytes("color-v1-scene.ttf");
+  Color c(with_colr(base, colr_graph(kA, p_translate(50, 0, p_glyph(kLayerA, p_layers(1, 0))),
+      {p_translate(0, 70, p_linear(0))})));
+  GSHSCENE_List * l = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(l, kA, &out), GFNT_OK);
+  ASSERT_EQ(out.outcome, (uint32_t)GFNT_COLOR_OUTCOME_LOWERED);
+  const double s = 20.0 / c.upem;
+  const GSHSCENE_Item * fill = nullptr;
+  for (size_t i = 0; i < gshscene_list_count(l); i++) {
+    const GSHSCENE_Item * item = item_of(l, i);
+    if (item->kind == GSHSCENE_ITEM_FILL) {
+      fill = item;
+    }
+  }
+  ASSERT_NE(fill, nullptr);
+  ASSERT_NE(plane_resource_of(fill), nullptr);
+  EXPECT_EQ(fill->map.t[0], s * 50.0) << "the translation above the clip is the fill's map";
+  GSHSCENE_Gradient g = gradient_of(fill);
+  GSHGEOM_Point q = mapped(g.map, 0.0, 0.0);
+  EXPECT_NEAR(q.x, 10.0, 1e-9) << "and is not in the gradient's";
+  EXPECT_NEAR(q.y, 30.0 - s * 70.0, 1e-9) << "the translation below the clip is the gradient's";
+}
+
+TEST(SceneColor, ABoundEndsWithItsGlyphsClipAndASiblingAfterItIsUnbounded) {
+  // Two layers: a glyph with a clip (its child is a layer list, so the glyph cannot be a leaf's), then a bare solid.  The solid is outside
+  // the clip and the font states no box, so nothing bounds it (L5).
+  const Bytes base = file_bytes("color-v1-scene.ttf");
+  const std::vector<Bytes> layers = {p_glyph(kLayerA, p_layers(1, 2)), p_solid(1), p_solid(0)};
+  Color c(with_colr(base, colr_graph(kA, p_layers(2, 0), layers)));
+  GSHSCENE_List * l = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower_none(l, kA, &out), GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(out.refusal, (uint32_t)GFNT_COLOR_REFUSED_UNBOUNDED);
+  EXPECT_EQ(out.paint_format, (uint32_t)GFNT_PAINT_SOLID);
+  EXPECT_EQ(gshscene_list_count(l), 0u);
+}
+
+TEST(SceneColor, AnUnknownColorLineExtendIsPadAndNotTheLastKnownOne) {
+  const Bytes base = file_bytes("color-v1-scene.ttf");
+  for (uint8_t extend : {uint8_t{0}, uint8_t{1}, uint8_t{2}, uint8_t{3}, uint8_t{255}}) {
+    Color c(with_colr(base, colr_graph(kA, p_glyph(kLayerA, p_linear(extend)))));
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    const GFNT_Result r = c.lower_none(l, kA, &out);
+    if (extend > 2) {
+      // The reader may refuse a color line it cannot read; if it hands one back, it is pad.
+      if (r != GFNT_OK) {
+        continue;
+      }
+    }
+    ASSERT_EQ(r, GFNT_OK) << (int)extend;
+    GSHSCENE_Gradient g{};
+    bool found = false;
+    for (size_t i = 0; i < gshscene_list_count(l) && !found; i++) {
+      const GSHSCENE_Item * item = item_of(l, i);
+      if (item->kind == GSHSCENE_ITEM_FILL && item->paint.kind == GSHSCENE_PAINT_GRADIENT) {
+        g = gradient_of(item);
+        found = true;
+      }
+    }
+    ASSERT_TRUE(found) << (int)extend;
+    const uint32_t want = extend == 1 ? GSHSCENE_EXTEND_REPEAT : extend == 2 ? GSHSCENE_EXTEND_REFLECT : GSHSCENE_EXTEND_PAD;
+    EXPECT_EQ(g.extend, want) << (int)extend;
+  }
+}
+
+TEST(SceneColor, ANumberTimesItsScaleThatDoesNotFitIsAnErrorAndNeverAWrappedValue) {
+  // color-v1-var.ttf's face, a rotation about a center whose x is moved by a 32-bit delta of two million at the
+  // instance: times 2^15 that is past 32 bits (a variation's delta can be any size, L1).
+  Bytes store;
+  gfnttest::put_u16(store, 1);                     // ItemVariationStore format 1
+  gfnttest::put_u32(store, 12);                    // the region list
+  gfnttest::put_u16(store, 1);                     // one ItemVariationData
+  gfnttest::put_u32(store, 28);
+  gfnttest::put_u16(store, 2);                     // RegionList: two axes, one region
+  gfnttest::put_u16(store, 1);
+  for (int v : {0, 16384, 16384, 0, 0, 0}) {       // axis 0 from 0 to 1, peak 1; axis 1 not used
+    put_i16(store, v);
+  }
+  gfnttest::put_u16(store, 3);                     // ItemVariationData: three rows
+  gfnttest::put_u16(store, 0x8001);                // one 32-bit delta each
+  gfnttest::put_u16(store, 1);
+  gfnttest::put_u16(store, 0);
+  for (uint32_t d : {0u, 2000000u, 0u}) {
+    gfnttest::put_u32(store, d);
+  }
+  const Bytes base = file_bytes("color-v1-var.ttf");
+  Bytes root = p_var_rotate(0, p_glyph(kLayerA, p_solid(0)));
+  Color c(with_colr(base, colr_graph(kA, root, {}, store)));
+  GSHSCENE_List * l = c.open();
+  const GSHSCENE_Resource * moved = c.instance({16384, 0});
+  GFNT_ColorLowering out{};
+  EXPECT_EQ(c.lower(l, kA, &out, 20 * 64, 10 * 64, 30 * 64, 3, nullptr), GFNT_OK) << "at the default the numbers fit";
+  GSHSCENE_List * m = c.open();
+  const size_t before = gshscene_list_count(m);
+  GFNT_Error error{};
+  GFNT_ColorRun run{};
+  run.size = 1280;
+  run.bits = 6;
+  run.hint_mode = GSHSCENE_HINT_NONE;
+  run.refusal_policy = GFNT_COLOR_ON_REFUSAL_NONE;
+  EXPECT_EQ(gfnt_scene_record_color_glyph(moved, c.store, m, kA, &run, &out, &error), GFNT_ERR_LIMIT);
+  EXPECT_EQ(gshscene_list_count(m), before) << "nothing is recorded";
+}
+
+TEST(SceneColor, AColorGlyphsListLeavesNothingHeldInTheStoreOnceItIsDestroyed) {
+  // The plane a root gradient fills is one reference the lowering takes and gives back: after the list is gone the store
+  // holds what it held before.
+  Color c("color-v1-scene.ttf");
+  GSHSCENE_Store_Stats before{};
+  ASSERT_EQ(gshscene_store_stats(c.store, &before), GSHSCENE_OK);
+  GSHSCENE_List * l = nullptr;
+  ASSERT_EQ(gshscene_list_create(nullptr, nullptr, c.store, &l), GSHSCENE_OK);
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(l, kPaintO, &out), GFNT_OK);
+  ASSERT_NE(plane_resource_of(item_of(l, 2)), nullptr) << "a plane is in the list";
+  GSHSCENE_Store_Stats during{};
+  ASSERT_EQ(gshscene_store_stats(c.store, &during), GSHSCENE_OK);
+  EXPECT_GT(during.live, before.live);
+  gshscene_list_destroy(l);
+  GSHSCENE_Store_Stats after{};
+  ASSERT_EQ(gshscene_store_stats(c.store, &after), GSHSCENE_OK);
+  EXPECT_EQ(after.live, before.live) << "no resource of the lowering is still held";
+}
+
+TEST(SceneColor, AVariableClipBoxAndColorStopsAreReadAtTheFaceResourcesInstance) {
+  Color c("color-v1-var.ttf");
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(c.face, &glyphs, nullptr), GFNT_OK);
+  uint32_t first = 0;
+  GFNT_PaintRef root = 0;
+  for (uint32_t g = 0; g < glyphs && !first; g++) {
+    if (gfnt_face_color_base_paint(c.face, g, &root, nullptr) == GFNT_OK && root) {
+      first = g;
+    }
+  }
+  ASSERT_NE(first, 0u);
+  GFNT_F2Dot14 coords[2] = {16384, -8192};
+  const GFNT_Variation v{coords, 2, GFNT_DELTA_ROUND_HALF_UP};
+  const GSHSCENE_Resource * moved = c.instance({16384, -8192});
+
+  // The clip box the font states for the glyph, at the default and at the instance.
+  GFNT_ColorBox want_default{}, want_moved{};
+  bool found = false;
+  ASSERT_EQ(gfnt_face_color_clip(c.face, first, nullptr, &want_default, &found, nullptr), GFNT_OK);
+  ASSERT_TRUE(found);
+  ASSERT_EQ(gfnt_face_color_clip(c.face, first, &v, &want_moved, &found, nullptr), GFNT_OK);
+  ASSERT_TRUE(found);
+  ASSERT_TRUE(want_default.x_max != want_moved.x_max || want_default.x_min != want_moved.x_min ||
+      want_default.y_min != want_moved.y_min || want_default.y_max != want_moved.y_max)
+      << "the fixture's clip box varies";
+  auto clip_bounds = [&](const GSHSCENE_Resource * face) {
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    EXPECT_EQ(c.lower(l, first, &out, 20 * 64, 10 * 64, 30 * 64, 3, face), GFNT_OK);
+    GSHGEOM_Bounds b{};
+    bool seen = false;
+    for (size_t i = 0; i < gshscene_list_count(l) && !seen; i++) {
+      const GSHSCENE_Item * item = item_of(l, i);
+      const GSHGEOM_Path * box = item->kind == GSHSCENE_ITEM_CLIP_PUSH ? gshscene_resource_path(item->resource) : nullptr;
+      if (box) {
+        EXPECT_EQ(gshgeom_path_bounds(box, &b), GSHGEOM_OK);
+        seen = true;
+      }
+    }
+    EXPECT_TRUE(seen);
+    return b;
+  };
+  const GSHGEOM_Bounds at_default = clip_bounds(nullptr);
+  const GSHGEOM_Bounds at_moved = clip_bounds(moved);
+  EXPECT_EQ(at_default.max.x, (double)want_default.x_max);
+  EXPECT_EQ(at_default.min.y, (double)want_default.y_min);
+  EXPECT_EQ(at_moved.min.x, (double)want_moved.x_min);
+  EXPECT_EQ(at_moved.min.y, (double)want_moved.y_min);
+  EXPECT_EQ(at_moved.max.x, (double)want_moved.x_max);
+  EXPECT_EQ(at_moved.max.y, (double)want_moved.y_max);
+
+  // The color stops of the glyph's first gradient, at the instance.
+  struct Find {
+    GFNT_ColorPaint paint{};
+    bool found = false;
+  } f;
+  struct W {
+    static bool enter(void * user, const GFNT_ColorPaint * p, size_t) {
+      Find * f = static_cast<Find *>(user);
+      if (!f->found && (p->format == GFNT_PAINT_LINEAR_GRADIENT || p->format == GFNT_PAINT_VAR_LINEAR_GRADIENT)) {
+        f->found = true;
+        f->paint = *p;
+      }
+      return true;
+    }
+  };
+  GFNT_PaintVisitor vis{W::enter, nullptr};
+  ASSERT_EQ(gfnt_face_color_paint_walk(c.face, first, &v, &vis, &f, nullptr), GFNT_OK);
+  ASSERT_TRUE(f.found);
+  GFNT_ColorLine line{};
+  ASSERT_EQ(gfnt_face_color_line(c.face, &f.paint, &line, nullptr), GFNT_OK);
+  ASSERT_EQ(line.stop_count, 2u);
+  GFNT_ColorStop s_default[2], s_moved[2];
+  bool varies = false;
+  for (size_t i = 0; i < 2; i++) {
+    ASSERT_EQ(gfnt_face_color_stop(c.face, &f.paint, i, nullptr, &s_default[i], nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_face_color_stop(c.face, &f.paint, i, &v, &s_moved[i], nullptr), GFNT_OK);
+    varies = varies || s_default[i].offset != s_moved[i].offset || s_default[i].alpha != s_moved[i].alpha;
+  }
+  ASSERT_TRUE(varies) << "the fixture's color stops vary";
+  GSHSCENE_List * l = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(l, first, &out, 20 * 64, 10 * 64, 30 * 64, 3, moved), GFNT_OK);
+  bool checked = false;
+  for (size_t i = 0; i < gshscene_list_count(l) && !checked; i++) {
+    const GSHSCENE_Item * item = item_of(l, i);
+    if (item->kind == GSHSCENE_ITEM_FILL && item->paint.kind == GSHSCENE_PAINT_GRADIENT) {
+      GSHSCENE_Gradient g{};
+      ASSERT_EQ(gshscene_resource_gradient(item->paint.gradient, &g), GSHSCENE_OK);
+      if (g.kind == GSHSCENE_GRADIENT_LINEAR) {
+        ASSERT_EQ(g.stop_count, 2u);
+        // Sorted by offset, which the deltas are small enough not to reorder.
+        for (size_t k = 0; k < 2; k++) {
+          EXPECT_EQ(g.stops[k].offset, s_moved[k].offset / 16384.0) << k;
+          EXPECT_EQ(g.stops[k].color.rgba[3], s_moved[k].alpha / 16384.0) << k;
+        }
+        checked = true;
+      }
+    }
+  }
+  EXPECT_TRUE(checked);
+}
+
+TEST(SceneColor, APlaceholdersBoxIsAClipBoxEvenOfNoSizeAndTheExtentsAreTheFontsAndNotTheOutlines) {
+  const Bytes base = file_bytes("color-v1-scene.ttf");
+  // A clip box of no width and no height is still the font's box: the extents would pass it over.
+  {
+    static const int16_t box[4] = {7, 9, 7, 9};
+    Color c(with_colr(base, colr_clipped(kA, kLayerA, box)));
+    GSHSCENE_List * l = c.open();
+    GFNT_ColorLowering out{};
+    ASSERT_EQ(c.lower(l, kA, &out), GFNT_OK);
+    const GSHSCENE_Item * item = item_of(l, 0);
+    ASSERT_EQ(item->placeholder.has_box, 1u);
+    EXPECT_EQ(item->placeholder.box[0], 7.0);
+    EXPECT_EQ(item->placeholder.box[1], 9.0);
+    EXPECT_EQ(item->placeholder.box[2], 7.0);
+    EXPECT_EQ(item->placeholder.box[3], 9.0);
+  }
+  // No clip box: the glyph's extents, which are the box its header states and the side bearing `hmtx` states.  In the
+  // fixture they are the outline's own box, so a header that says 33 more at the top and a bearing 55 more than the
+  // outline's left edge are what tell the two apart.
+  Color plain(with_colr(base, colr_nested(kA, kB, kLayerA, 3)));
+  GFNT_Box control;
+  ASSERT_TRUE(control_box_of(plain, kA, &control));
+  GFNT_Extents e{};
+  ASSERT_TRUE(gfnt_glyph_extents(plain.face, kA, nullptr, &e));
+  ASSERT_EQ(e.x_bearing, (int32_t)(control.x_min >> 6)) << "the fixture's bearing is its outline's left edge";
+  ASSERT_EQ(e.y_bearing, (int32_t)(control.y_max >> 6)) << "and its header's top is its outline's";
+  Bytes moved = with_colr(base, colr_nested(kA, kB, kLayerA, 3));
+  auto table_at = [&](uint32_t tag) {
+    const size_t count = (size_t)moved[4] << 8 | moved[5];
+    for (size_t i = 0; i < count; i++) {
+      if (be32(moved, 12 + 16 * i) == tag) {
+        return (size_t)be32(moved, 12 + 16 * i + 8);
+      }
+    }
+    return (size_t)0;
+  };
+  const size_t hmtx = table_at(GFNT_TAG('h', 'm', 't', 'x'));
+  const size_t hhea = table_at(GFNT_TAG('h', 'h', 'e', 'a'));
+  const size_t head = table_at(GFNT_TAG('h', 'e', 'a', 'd'));
+  const size_t loca = table_at(GFNT_TAG('l', 'o', 'c', 'a'));
+  const size_t glyf = table_at(GFNT_TAG('g', 'l', 'y', 'f'));
+  ASSERT_NE(hmtx, 0u);
+  ASSERT_NE(hhea, 0u);
+  ASSERT_NE(head, 0u);
+  ASSERT_NE(loca, 0u);
+  ASSERT_NE(glyf, 0u);
+  const size_t long_metrics = (size_t)moved[hhea + 34] << 8 | moved[hhea + 35];
+  ASSERT_GT(long_metrics, (size_t)kA);
+  const size_t at = hmtx + 4 * kA + 2;
+  const int16_t old_bearing = (int16_t)((moved[at] << 8) | moved[at + 1]);
+  const int16_t new_bearing = (int16_t)(old_bearing + 55);
+  moved[at] = (uint8_t)((uint16_t)new_bearing >> 8);
+  moved[at + 1] = (uint8_t)new_bearing;
+  const bool long_loca = moved[head + 51] != 0;
+  const size_t offset = long_loca ? be32(moved, loca + 4 * kA)
+                                  : 2 * ((size_t)moved[loca + 2 * kA] << 8 | moved[loca + 2 * kA + 1]);
+  const size_t top = glyf + offset + 8;   // yMax of the glyph header
+  const int16_t old_top = (int16_t)((moved[top] << 8) | moved[top + 1]);
+  const int16_t new_top = (int16_t)(old_top + 33);
+  moved[top] = (uint8_t)((uint16_t)new_top >> 8);
+  moved[top + 1] = (uint8_t)new_top;
+  Color c(moved);
+  GSHSCENE_List * l = c.open();
+  GFNT_ColorLowering out{};
+  ASSERT_EQ(c.lower(l, kA, &out), GFNT_OK);
+  const GSHSCENE_Item * item = item_of(l, 0);
+  ASSERT_EQ(item->placeholder.has_box, 1u);
+  GFNT_Extents moved_extents{};
+  ASSERT_TRUE(gfnt_glyph_extents(c.face, kA, nullptr, &moved_extents));
+  ASSERT_EQ(moved_extents.x_bearing, e.x_bearing + 55);
+  ASSERT_EQ(moved_extents.y_bearing, e.y_bearing + 33);
+  EXPECT_EQ(item->placeholder.box[0], (double)moved_extents.x_bearing);
+  EXPECT_EQ(item->placeholder.box[1], (double)(moved_extents.y_bearing + moved_extents.height));
+  EXPECT_EQ(item->placeholder.box[2], (double)(moved_extents.x_bearing + moved_extents.width));
+  EXPECT_EQ(item->placeholder.box[3], (double)moved_extents.y_bearing);
+}
+
 int main(int argc, char ** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

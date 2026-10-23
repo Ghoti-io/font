@@ -798,27 +798,40 @@ TEST(SceneColor, ARootGradientFillsThePlaneInsideTheGlyphsClipBoxAndIsRefusedWit
   EXPECT_EQ(gshscene_list_count(l2), before);
 }
 
-TEST(SceneColor, AColorGlyphNamedByAnotherIsDrawnUnderTheOuterBoxOnly) {
-  // paint.r is paint.o's graph moved by (100, 0), with a box of its own: the one clip is paint.r's. The referenced
-  // glyph's box (0, 0, 300, 500) belongs to paint.o when paint.o is drawn, not to a graph that names it.
+TEST(SceneColor, AColorGlyphNamedByAnotherBringsItsOwnBoxUnderTheTransformsAtTheReference) {
+  // paint.r is paint.o's graph moved by (100, 0), with a box of its own: two clips, paint.r's around paint.o's, and the
+  // box of the glyph that is named moves with the transform above the reference (L5).
   Color c("color-v1-scene.ttf");
   GSHSCENE_List * l = c.open();
   GFNT_ColorLowering out{};
   ASSERT_EQ(c.lower(l, kPaintR, &out), GFNT_OK);
-  ASSERT_EQ(gshscene_list_count(l), 5u);
-  expect_group(l, 5);
-  const GSHSCENE_Item * clip = item_of(l, 1);
-  ASSERT_EQ(clip->kind, GSHSCENE_ITEM_CLIP_PUSH);
+  ASSERT_EQ(gshscene_list_count(l), 7u);
+  expect_group(l, 7);
+  const GSHSCENE_Item * outer = item_of(l, 1);
+  ASSERT_EQ(outer->kind, GSHSCENE_ITEM_CLIP_PUSH);
   GSHGEOM_Bounds b{};
-  ASSERT_EQ(gshgeom_path_bounds(gshscene_resource_path(clip->resource), &b), GSHGEOM_OK);
+  ASSERT_EQ(gshgeom_path_bounds(gshscene_resource_path(outer->resource), &b), GSHGEOM_OK);
   EXPECT_EQ(b.min.x, -100.0);
   EXPECT_EQ(b.max.x, 900.0);
-  const GSHSCENE_Item * fill = item_of(l, 2);
-  ASSERT_NE(plane_resource_of(fill), nullptr);
-  EXPECT_TRUE(is_identity(fill->map)) << "the translation is above no clip, so it is the gradient's";
   const double s = 20.0 / c.upem;
-  GSHGEOM_Point q = mapped(gradient_of(fill).map, 0.0, 0.0);
-  EXPECT_NEAR(q.x, 10.0 + s * 100.0, 1e-9);
+  const GSHSCENE_Item * inner = item_of(l, 2);
+  ASSERT_EQ(inner->kind, GSHSCENE_ITEM_CLIP_PUSH);
+  ASSERT_EQ(gshgeom_path_bounds(gshscene_resource_path(inner->resource), &b), GSHGEOM_OK);
+  EXPECT_EQ(b.min.x, 0.0);
+  EXPECT_EQ(b.max.x, 300.0);
+  EXPECT_EQ(b.max.y, 500.0);
+  GSHGEOM_Point q = mapped(inner->map, 300.0, 500.0);
+  EXPECT_NEAR(q.x, 10.0 + s * 400.0, 1e-9) << "the referenced glyph's box moves with the translation above the reference";
+  EXPECT_NEAR(q.y, 30.0 - s * 500.0, 1e-9);
+  const GSHSCENE_Item * fill = item_of(l, 3);
+  ASSERT_NE(plane_resource_of(fill), nullptr);
+  EXPECT_FALSE(is_identity(fill->map)) << "the translation is above the innermost clip, so it is the fill's";
+  EXPECT_EQ(item_of(l, 4)->kind, GSHSCENE_ITEM_CLIP_POP);
+  EXPECT_EQ(item_of(l, 5)->kind, GSHSCENE_ITEM_CLIP_POP);
+  // paint.o itself, which has the same box and nothing above it: one clip.
+  GSHSCENE_List * alone = c.open();
+  ASSERT_EQ(c.lower(alone, kPaintO, &out), GFNT_OK);
+  EXPECT_EQ(gshscene_list_count(alone), 5u);
 }
 
 TEST(SceneColor, ABoxThatCutsChangesPixelsAndOneThatDoesNotChangesNone) {

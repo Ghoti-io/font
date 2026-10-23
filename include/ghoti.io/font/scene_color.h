@@ -47,8 +47,8 @@
  * - Version 1 is, in order, one isolated source-over group in the blend space
  *   COLRv1 composites in (L8; ::GFNT_COLOR_SPACE_STANDARD, linear light, unless
  *   ::GFNT_ColorRun::space asks for the encoded one), around one clip of the
- *   base glyph's `ClipList` box where it has one (L5; a `PaintColrGlyph` does not
- *   bring its target's box), around the graph: `PaintColrLayers` lowers its
+ *   base glyph's `ClipList` box where it has one (L5; so does a `PaintColrGlyph`
+ *   whose target has a box, under the transforms at that node), around the graph: `PaintColrLayers` lowers its
  *   layers in order; a `PaintGlyph` whose child reaches a solid or a gradient
  *   through transforms is a fill of the glyph (the transforms above it its map,
  *   the ones between it and a gradient the gradient's, L4), and over anything

@@ -517,15 +517,42 @@ static GFNT_Result gfnt_colr_node(GFNT_ColrLower * l, GFNT_PaintRef ref, size_t 
     case GFNT_PAINT_GLYPH:
       return gfnt_colr_glyph(l, &p, depth);
     case GFNT_PAINT_COLR_GLYPH: {
-      // The referenced graph is a continuation of this one (OpenType, "Re-use using PaintColrGlyph"): a clip box is
-      // a property of the color glyph that is drawn, so the target's is not applied here.
+      // The other glyph's graph, under the transforms above this node; where that glyph has a clip box it is pushed
+      // here, under those transforms, and bounds the graph (L5: the reference renderers do the same for a box the
+      // referenced glyph states, which Google's clip-box test glyphs exercise).
       GFNT_PaintRef root = 0;
+      GFNT_ColorBox box;
+      bool found = false;
+
       r = gfnt_face_color_base_paint(l->face, p.glyph, &root, l->error);
       if (r == GFNT_OK && root == 0) {
         return gfnt_colr_refuse(l, GFNT_COLOR_REFUSED_NO_RECORD, (uint32_t)p.format,
             "a color glyph naming a glyph with no version 1 record");
       }
-      return r == GFNT_OK ? gfnt_colr_node(l, root, depth + 1) : r;
+      if (r == GFNT_OK) {
+        r = gfnt_face_color_clip(l->face, p.glyph, &l->variation, &box, &found, l->error);
+      }
+      if (r == GFNT_OK && found) {
+        r = gfnt_colr_scene(l, gshscene_list_clip_push_design_rect_fixed(l->list, l->frame,
+            l->op_count ? l->ops : NULL, l->op_count, box.x_min, box.y_min, box.x_max, box.y_max, 0u,
+            l->run->layer), "the scene refused a referenced glyph's clip box");
+      }
+      if (r == GFNT_OK) {
+        const bool was_bounded = l->bounded;
+        const size_t was_ops = l->bound_ops;
+
+        if (found) {
+          l->bounded = true;
+          l->bound_ops = l->op_count;
+        }
+        r = gfnt_colr_node(l, root, depth + 1);
+        l->bounded = was_bounded;
+        l->bound_ops = was_ops;
+      }
+      if (r == GFNT_OK && found) {
+        r = gfnt_colr_scene(l, gshscene_list_clip_pop(l->list), "the scene refused a clip's pop");
+      }
+      return r;
     }
     case GFNT_PAINT_COMPOSITE:
       return gfnt_colr_composite(l, &p, depth);

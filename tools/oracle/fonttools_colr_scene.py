@@ -28,7 +28,7 @@ transforms are fontTools' own (`Paint.getTransform()`, which computes a skew
 with `tan` and a rotation with `cos` and `sin`), composed here, so the map is a
 second reading of the specification's transforms, not of this library's.
 
-The rules, restated: a `PaintGlyph` whose child reaches a solid or a gradient
+The rules, restated (a box of a glyph named by `PaintColrGlyph` clips too, under the transforms at the reference): a `PaintGlyph` whose child reaches a solid or a gradient
 through transforms is a fill of the glyph's run (the item map is the transforms
 above and including the glyph, a gradient's own map the ones between); any other
 child puts a clip of the glyph around it, a bound; a solid or gradient reached
@@ -305,7 +305,18 @@ class Lower:
             root = self.v1.get(paint.Glyph)
             if root is None:
                 raise Refused(NO_RECORD, int(fmt))
+            # The referenced glyph's own clip box, under the transforms in force here, bounds its graph (L5).
+            box = self.clips.get(str(self.graph.font.getGlyphID(paint.Glyph)))
+            was = (self.bounded, self.bound_ops)
+            if box is not None:
+                x0, y0, x1, y1 = box
+                self.items.append([CLIP_PUSH, RECT, 0, 0, 0, 0] + design_map(self.chain)
+                                  + [{"box": [float(x0), float(y0), float(x1), float(y1)]}])
+                self.bounded, self.bound_ops = True, len(self.chain)
             self.node(root, depth + 1)
+            if box is not None:
+                self.items.append([CLIP_POP, -1, 0, 0, 0, 0] + item_map([]) + [None])
+            self.bounded, self.bound_ops = was
         elif fmt == PF.PaintComposite:
             mode = int(paint.CompositeMode)
             operator = OPERATOR[mode] if mode <= 12 else (mode if mode <= 27 else CLEAR)

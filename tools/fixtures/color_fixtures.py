@@ -315,8 +315,8 @@ def v1_scene_trees():
                             {"StopOffset": 1.0, "PaletteIndex": 2, "Alpha": 1.0}]},
                         "x0": 0, "y0": 0, "x1": 600, "y1": 0, "x2": 0, "y2": 600}),
                     "BackdropPaint": glyph("layer.b", solid(1))},
-        # Another glyph's graph, which has a clip box of its own, moved: the box belongs to the color glyph that is
-        # drawn (this one has the box that bounds the graph), not to a glyph it names.
+        # Another glyph's graph, which has a clip box of its own, moved: both boxes clip (L5), the named glyph's under
+        # the transform above the reference.
         "paint.r": {"Format": PF.PaintTranslate, "dx": 100, "dy": 0, "Paint": {
             "Format": PF.PaintColrGlyph, "Glyph": "paint.o"}},
     }

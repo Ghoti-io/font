@@ -1624,11 +1624,13 @@ this library supplies the palette and lowers all of `COLR` version 1 onto them, 
     the group's transfer is sRGB, which is what Skia, and the browsers on it, draw;
   - **L5 the clip box:** where the base glyph has a `ClipList` box (read at L1's instance, font units), one clip of
     that rectangle in the glyph's design space, built exactly by `shape-geometry`'s fixed builder; it is a bound
-    (L6). The box belongs to the color glyph that is drawn: a `PaintColrGlyph` is "a continuation of the graph of
-    which the PaintColrGlyph table is a part" (OpenType, "Re-use using PaintColrGlyph"), so the graph it names
-    is lowered under the outer glyph's box and the target's own box is not applied (the rendering pseudocode
-    there passes the referenced glyph's paint table, not its record; the unit tests hold this, the Skia gate
-    measures it);
+    (L6). A `PaintColrGlyph` whose target has a box of its own pushes it too, under the transforms in force at
+    that node (the box moves with them), around the target's graph. OpenType's text is silent on whether a
+    referenced glyph's box applies (it says the referenced graph is "a continuation of the graph of which the
+    PaintColrGlyph table is a part", and "any content drawn outside the clip box must not render" of the
+    box); Skia, drawing Google's `clip_box_*` test glyphs (which reference `inset_clipped_radial_reflect`, a
+    glyph with a box of its own, under a shade that marks the outer box), applies the referenced glyph's box, as
+    the approved rule does, and the Skia comparison holds the lowering to it;
   - **the graph** (L2 to L7 below).
 
   Layers (`PaintColrLayers`) lower their paints in order; the transforms (`PaintTransform`, `PaintTranslate`, the

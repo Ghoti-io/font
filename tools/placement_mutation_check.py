@@ -77,9 +77,8 @@ MUTANTS = [
     (GLYF, "  *out = ((int64_t)x_min - (int64_t)bearing) * GFNT_F26DOT6_ONE;",
      "  *out = -(int64_t)bearing * GFNT_F26DOT6_ONE + 0 * (int64_t)x_min;",
      "xMin forgotten"),
-    (GLYF, "  if (result != GFNT_OK || !place || pp1 == 0) {",
-     "  if (result != GFNT_OK || pp1 == 0) {",
-     "the hinter's unmoved points moved"),
+    # (A mutant that dropped `!place` from the test that skips the move was removed: an unplaced load asks for no first
+    # phantom point, so pp1 is zero there and `pp1 == 0` already skips the move.)
     (HINT, "r = gfnt_face_glyph_outline_unplaced(w->face, glyph, NULL, NULL, &units, w->error);",
      "r = gfnt_face_glyph_outline(w->face, glyph, NULL, NULL, &units, w->error);",
      "the hinter given moved points"),

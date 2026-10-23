@@ -17,13 +17,18 @@
  */
 
 #include "test_helpers.h"
+#include "sfnt_builder.h"
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
 #include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/outline.h>
+
+#include "../../src/glyf/glyf.h"
+#include "../../src/outline/outline.h"
 
 namespace {
 
@@ -251,6 +256,153 @@ TEST(Placement, ACharstringOutlineIsNotMoved) {
   EXPECT_EQ(left_edge(font, 2), 40);
   EXPECT_EQ(left_edge(font, 3), 80);
   EXPECT_EQ(left_edge(font, 4), 60);
+}
+
+namespace {
+
+using Bytes = std::vector<uint8_t>;
+
+uint32_t be32(const Bytes & b, size_t at) {
+  return (uint32_t)b[at] << 24 | (uint32_t)b[at + 1] << 16 | (uint32_t)b[at + 2] << 8 | b[at + 3];
+}
+
+Bytes file_bytes(const std::string & name) {
+  const std::string path = gfnttest::data("fonts/" + name);
+  Bytes out;
+  FILE * f = std::fopen(path.c_str(), "rb");
+  EXPECT_NE(f, nullptr) << path;
+  if (!f) {
+    return out;
+  }
+  int c;
+  while ((c = std::fgetc(f)) != EOF) {
+    out.push_back(static_cast<uint8_t>(c));
+  }
+  std::fclose(f);
+  return out;
+}
+
+/** @p font with the table @p tag cut to @p keep bytes, or dropped if @p keep is negative (every other table as it was). */
+Bytes with_table_cut(const Bytes & font, uint32_t tag, long keep) {
+  std::vector<gfnttest::Table> tables;
+  const size_t count = (size_t)font[4] << 8 | font[5];
+  for (size_t i = 0; i < count; i++) {
+    const size_t entry = 12 + 16 * i;
+    gfnttest::Table t;
+    t.tag = be32(font, entry);
+    const size_t offset = be32(font, entry + 8);
+    const size_t length = be32(font, entry + 12);
+    if (t.tag == tag && keep < 0) {
+      continue;
+    }
+    t.data = Bytes(font.begin() + (long)offset, font.begin() + (long)(offset + length));
+    if (t.tag == tag) {
+      t.data.resize((size_t)keep);
+    }
+    tables.push_back(t);
+  }
+  return gfnttest::build_sfnt(be32(font, 0), tables);
+}
+
+/** A face loaded from bytes. */
+struct BytesFont {
+  Bytes bytes;
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_Error error{};
+  GFNT_Result loaded = GFNT_OK;
+
+  explicit BytesFont(Bytes b) : bytes(std::move(b)) {
+    EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_BORROWED, nullptr, nullptr, &blob, &error),
+        GFNT_OK);
+    loaded = gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error);
+  }
+  ~BytesFont() {
+    gfnt_face_free(face);
+    gfnt_blob_destroy(blob);
+  }
+  BytesFont(const BytesFont &) = delete;
+  BytesFont & operator=(const BytesFont &) = delete;
+};
+
+}  // namespace
+
+// The planted-defect pass found these four seams of the placement unseen.
+
+TEST(Placement, TheUnplacedOutlineIsWhereTheFileStoresItAndThePlacedOneIsMoved) {
+  // The hinter is given the outline unplaced and moves it itself afterwards; `moved` stores its points at 100 and its
+  // bearing says 160.
+  Font font("outline-placement.ttf");
+  GFNT_Outline * unplaced = nullptr;
+  GFNT_Box box{};
+
+  ASSERT_EQ(gfnt_face_glyph_outline_unplaced(font.face, kMoved, nullptr, nullptr, &unplaced, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_control_box(unplaced, &box), GFNT_OK);
+  EXPECT_EQ(box.x_min, 100 * 64);
+  gfnt_outline_destroy(unplaced);
+  EXPECT_EQ(left_edge(font, kMoved), 160);
+}
+
+TEST(Placement, AGlyphLoadedOntoAnOutlineThatHoldsPointsMovesOnlyItsOwn) {
+  Font font("outline-placement.ttf");
+  GFNT_Outline * outline = nullptr;
+  GFNT_Outline * first = nullptr;
+  GFNT_Outline * second = nullptr;
+
+  ASSERT_EQ(gfnt_outline_create(nullptr, &outline, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_glyf_load(font.face, kBack, nullptr, outline, &font.error), GFNT_OK);
+  const size_t held = gfnt_outline_point_count(outline);
+  ASSERT_GT(held, 0u);
+  ASSERT_EQ(gfnt_glyf_load(font.face, kMoved, nullptr, outline, &font.error), GFNT_OK);
+  ASSERT_EQ(gfnt_face_glyph_outline(font.face, kBack, nullptr, nullptr, &first, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_glyph_outline(font.face, kMoved, nullptr, nullptr, &second, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_point_count(first), held);
+  ASSERT_EQ(gfnt_outline_point_count(outline), held + gfnt_outline_point_count(second));
+  for (size_t i = 0; i < gfnt_outline_point_count(outline); i++) {
+    GFNT_Point got{}, want{};
+    ASSERT_EQ(gfnt_outline_point_at(outline, i, &got, nullptr), GFNT_OK);
+    ASSERT_EQ(gfnt_outline_point_at(i < held ? first : second, i < held ? i : i - held, &want, nullptr), GFNT_OK);
+    EXPECT_EQ(got.x, want.x) << "point " << i << (i < held ? ": held before, not moved again" : "");
+    EXPECT_EQ(got.y, want.y) << i;
+  }
+  gfnt_outline_destroy(outline);
+  gfnt_outline_destroy(first);
+  gfnt_outline_destroy(second);
+}
+
+TEST(Placement, AFaceWithNoHmtxStatesNoBearingAndItsGlyphsStayWhereTheirPointsAre) {
+  BytesFont font(with_table_cut(file_bytes("outline-placement.ttf"), GFNT_TAG('h', 'm', 't', 'x'), -1));
+  ASSERT_EQ(font.loaded, GFNT_OK);
+  GFNT_Outline * outline = nullptr;
+  GFNT_Box box{};
+
+  ASSERT_EQ(gfnt_face_glyph_outline(font.face, kMoved, nullptr, nullptr, &outline, &font.error), GFNT_OK);
+  ASSERT_EQ(gfnt_outline_control_box(outline, &box), GFNT_OK);
+  EXPECT_EQ(box.x_min, 100 * 64) << "no bearing to place it by";
+  gfnt_outline_destroy(outline);
+}
+
+TEST(Placement, AnHmtxThatIsThereAndCannotBeReadRefusesTheGlyphAndNeverPlacesItAnywhereElse) {
+  // `hhea` says the font has no horizontal metrics at all: `hmtx` is there and no entry of it can be found.  (A table
+  // cut short instead shrinks the face's glyph count, so no glyph is left to ask.)
+  Bytes bytes = file_bytes("outline-placement.ttf");
+  const size_t count = (size_t)bytes[4] << 8 | bytes[5];
+  size_t hhea = 0;
+  for (size_t i = 0; i < count; i++) {
+    if (be32(bytes, 12 + 16 * i) == GFNT_TAG('h', 'h', 'e', 'a')) {
+      hhea = be32(bytes, 12 + 16 * i + 8);
+    }
+  }
+  ASSERT_NE(hhea, 0u);
+  bytes[hhea + 34] = 0;
+  bytes[hhea + 35] = 0;
+  BytesFont font(bytes);
+  ASSERT_EQ(font.loaded, GFNT_OK);
+  GFNT_Outline * outline = nullptr;
+  EXPECT_EQ(gfnt_face_glyph_outline(font.face, kMoved, nullptr, nullptr, &outline, &font.error), GFNT_ERR_CORRUPT)
+      << "the glyph is refused, not handed back where its points are";
+  EXPECT_EQ(outline, nullptr);
+  gfnt_outline_destroy(outline);
 }
 
 int main(int argc, char ** argv) {

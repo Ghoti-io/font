@@ -75,7 +75,7 @@ MUTANTS = [
      "  *out = (int64_t)x_min * GFNT_F26DOT6_ONE;",
      "the bearing forgotten"),
     (GLYF, "  *out = ((int64_t)x_min - (int64_t)bearing) * GFNT_F26DOT6_ONE;",
-     "  *out = -(int64_t)bearing * GFNT_F26DOT6_ONE;",
+     "  *out = -(int64_t)bearing * GFNT_F26DOT6_ONE + 0 * (int64_t)x_min;",
      "xMin forgotten"),
     (GLYF, "  if (result != GFNT_OK || !place || pp1 == 0) {",
      "  if (result != GFNT_OK || pp1 == 0) {",

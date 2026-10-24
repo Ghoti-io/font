@@ -11,13 +11,13 @@ fixture outline-placement.ttf 3217dc326ad0b277
 hash 374f6f1933fb3aa0
 count 292
 # Stroked text (strokes story S5): a run and the path it defines, stroked, in a hash of their own.
-stroke-fixture basic.ttf 66029b1ed128603c
+stroke-fixture basic.ttf 36760084c01c7b79
 stroke-fixture outline-composite.ttf 6ddd603d1a76dfb8
 stroke-fixture outline-simple.ttf 6ddd603d1a76dfb8
 stroke-fixture cff-curves.otf 899f70db0327d0cf
-stroke-fixture cff-seac.otf e9ad711b064f4376
-stroke-fixture type1-big.pfb 3f40fc4edca263da
-stroke-fixture variable-gvar.ttf 819fb0d1aed8c2ac
-stroke-fixture outline-placement.ttf 19340950e9ed8b8a
-stroke-hash ca5256a21455d6d4
+stroke-fixture cff-seac.otf 588f7a471ca8b4fb
+stroke-fixture type1-big.pfb ca7a582f89208395
+stroke-fixture variable-gvar.ttf 6858e87c93db66dc
+stroke-fixture outline-placement.ttf ce4031dd990ede13
+stroke-hash 14a543b603f276d2
 stroke-count 24

@@ -262,7 +262,7 @@ int main(int argc, char ** argv) {
           (int)item->paint.kind, item->paint.entry, item->paint.rgba[3], item->group.composite, item->map.m[0][0],
           item->map.m[0][1], item->map.m[1][0], item->map.m[1][1], item->map.t[0], item->map.t[1]);
       if (item->kind == GSHSCENE_ITEM_FILL && item->paint.kind == GSHSCENE_PAINT_GRADIENT) {
-        print_gradient(item->paint.gradient);
+        print_gradient(item->paint.resource);
       } else if (item->kind == GSHSCENE_ITEM_GROUP_PUSH && item->group.blend_space.primaries) {
         printf("{\"space\":[%d,%d]}", (int)item->group.blend_space.primaries, (int)item->group.blend_space.transfer);
       } else if (id == -3) {

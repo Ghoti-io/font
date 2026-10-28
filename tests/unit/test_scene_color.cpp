@@ -475,14 +475,14 @@ TEST(SceneColor, TheEncodedSpaceIsAFieldOfTheRunAndTheDefaultIsTheStandards) {
   expect_group(standard, 3, GCOL_TRANSFER_LINEAR);
   expect_group(encoded, 3, GCOL_TRANSFER_SRGB);
   GSHSCENE_Gradient a{}, b{};
-  ASSERT_EQ(gshscene_resource_gradient(item_of(standard, 1)->paint.gradient, &a), GSHSCENE_OK);
-  ASSERT_EQ(gshscene_resource_gradient(item_of(encoded, 1)->paint.gradient, &b), GSHSCENE_OK);
+  ASSERT_EQ(gshscene_resource_gradient(item_of(standard, 1)->paint.resource, &a), GSHSCENE_OK);
+  ASSERT_EQ(gshscene_resource_gradient(item_of(encoded, 1)->paint.resource, &b), GSHSCENE_OK);
   EXPECT_EQ(a.space.primaries, GCOL_PRIMARIES_SRGB);
   EXPECT_EQ(a.space.transfer, GCOL_TRANSFER_LINEAR) << "L3: the standard interpolates in linear light";
   EXPECT_EQ(a.premultiplied, 1u) << "premultiplied";
   EXPECT_EQ(b.space.transfer, GCOL_TRANSFER_SRGB) << "the encoded setting is what Skia draws";
   EXPECT_EQ(b.premultiplied, 0u);
-  EXPECT_NE(item_of(standard, 1)->paint.gradient, item_of(encoded, 1)->paint.gradient);
+  EXPECT_NE(item_of(standard, 1)->paint.resource, item_of(encoded, 1)->paint.resource);
   // Not a version 1 glyph's field: version 0 has no group and no space.
   Color v0("color-v0.ttf");
   GSHSCENE_List * l0 = v0.open();
@@ -673,7 +673,7 @@ GSHSCENE_Gradient gradient_of(const GSHSCENE_Item * item) {
   GSHSCENE_Gradient g{};
   EXPECT_EQ(item->kind, GSHSCENE_ITEM_FILL);
   EXPECT_EQ(item->paint.kind, GSHSCENE_PAINT_GRADIENT);
-  EXPECT_EQ(gshscene_resource_gradient(item->paint.gradient, &g), GSHSCENE_OK);
+  EXPECT_EQ(gshscene_resource_gradient(item->paint.resource, &g), GSHSCENE_OK);
   EXPECT_EQ(item->paint.rgba[3], 1.0) << "the stops carry the alphas";
   return g;
 }
@@ -1067,7 +1067,7 @@ TEST(SceneColor, AVariablePaintsNumbersAreTheReadersAtTheInstanceAndNotAtTheDefa
       const GSHSCENE_Item * item = item_of(l, i);
       if (item->kind == GSHSCENE_ITEM_FILL && item->paint.kind == GSHSCENE_PAINT_GRADIENT) {
         GSHSCENE_Gradient g{};
-        ASSERT_EQ(gshscene_resource_gradient(item->paint.gradient, &g), GSHSCENE_OK);
+        ASSERT_EQ(gshscene_resource_gradient(item->paint.resource, &g), GSHSCENE_OK);
         if (g.kind == GSHSCENE_GRADIENT_LINEAR) {
           x1 = g.p1[0];
         }
@@ -2064,7 +2064,7 @@ TEST(SceneColor, AVariableClipBoxAndColorStopsAreReadAtTheFaceResourcesInstance)
     const GSHSCENE_Item * item = item_of(l, i);
     if (item->kind == GSHSCENE_ITEM_FILL && item->paint.kind == GSHSCENE_PAINT_GRADIENT) {
       GSHSCENE_Gradient g{};
-      ASSERT_EQ(gshscene_resource_gradient(item->paint.gradient, &g), GSHSCENE_OK);
+      ASSERT_EQ(gshscene_resource_gradient(item->paint.resource, &g), GSHSCENE_OK);
       if (g.kind == GSHSCENE_GRADIENT_LINEAR) {
         ASSERT_EQ(g.stop_count, 2u);
         // Sorted by offset, which the deltas are small enough not to reorder.

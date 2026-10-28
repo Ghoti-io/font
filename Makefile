@@ -9,6 +9,18 @@
 SUITE := ghoti.io
 PROJECT := font
 
+# The libraries whose headers this one may include and whose shared objects it
+# may link (check-edges), as a regular expression alternation. Itself is always
+# allowed. It is the sources' own includes plus what a dependency's public
+# headers pull in (AD-2: transitive reach is not a manifest edge, but it is not
+# a violation to include what a dependency's header already includes). This
+# library links shape-cpu, the one place the shape family allows a dependency
+# in this direction (AD-1).
+EDGES_ALLOWED := cutil|compress|unicode|image|color|math|shape-geometry|shape-scene|shape-cpu
+
+# no, for every library: nothing is exempt from check-libm (AD-22).
+LIBM_EXEMPT := no
+
 BUILD ?= release
 # The version of this library. MINOR_VERSION carries the minor and the patch as
 # one dotted string; the two are split out below for the places that need three
@@ -209,7 +221,7 @@ PKG_CONFIG_LOOKUP_PATH := $(if $(PKG_CONFIG_PATH_ENV),$(PKG_CONFIG_PATH_ENV):)$(
 
 
 CXX := g++
-CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g $(EXTRA_CXXFLAGS)
+CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -ffp-contract=off -std=c++20 -O1 -g $(EXTRA_CXXFLAGS)
 CC := cc
 # -Wfloat-conversion is not in -Wall or -Wextra and catches what the
 # sanitizer cannot: an *implicit* float-to-integer conversion, typically a
@@ -313,7 +325,7 @@ CC := cc
 # FUZZ_SAN names -fstrict-aliasing separately so its codegen assumption is
 # stated rather than inherited from a compiler default; see the comment there
 # for why that is a no-op on clang and kept anyway.
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -fstrict-aliasing -Wstrict-aliasing=1 -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -fstrict-aliasing -Wstrict-aliasing=1 -Wno-error=unused-function -Wfatal-errors -ffp-contract=off -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GFNT_BUILD enables DLL export on Windows (checked by GFNT_API macro)
 # GFNT_TEST_BUILD enables export of internal functions for testing (checked by GFNT_INTERNAL_API macro)
@@ -509,7 +521,8 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
 	check-reader check-seeds check-layout-unit-snapshot check-phrase-model \
-	check-float-free check-scene-hash check-scene-example fuzz-replay
+	check-float-free check-scene-hash check-scene-example fuzz-replay \
+	check-fp-contract check-edges check-libm check-no-x87 check-gates
 
 # Valgrind flags (exclude "still reachable" as it's not a leak)
 # --suppressions: see tests/valgrind.supp. It holds allocations that are
@@ -734,7 +747,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering check-stamps check-aliasing check-reader
-.PHONY: check-seeds
+.PHONY: check-seeds check-fp-contract check-edges check-libm check-no-x87 check-gates
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -948,6 +961,27 @@ check-aliasing: ## Fail if the strict-aliasing warning is not actually armed
 		printf '\033[0;31mcheck-aliasing: CFLAGS resolves to -Wstrict-aliasing=%s, and only level 1 reports the planted store - 0, 2 and 3 are all silent on it. The level is wrong; the flags are not missing. Note that 3 is also what -Wall implies, so it means either an explicit override later on the command line or ALIASING flags that stopped being passed, and this cannot tell which.\033[0m\n' "$$level" >&2; \
 	fi; \
 	exit 1
+####################################################################
+# The shape family's gates (AD-2, AD-17, AD-22). tools/check-gates.sh
+# plants a violation for each and requires the gate to fail on it.
+####################################################################
+
+check-fp-contract: ## Fail if a compile-flag set lacks -ffp-contract=off (a fused multiply-add changes bits)
+	@tools/check-fp-contract.sh
+
+check-edges: $(APP_DIR)/$(TARGET) ## Fail on an #include or NEEDED edge outside EDGES_ALLOWED (AD-2)
+	@tools/check-edges.sh --allowed '$(EDGES_ALLOWED)' --self $(PROJECT) --includes .
+	@tools/check-edges.sh --allowed '$(EDGES_ALLOWED)' --self $(PROJECT) --links $(APP_DIR)
+
+check-libm: $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET) ## Fail if any libm function is referenced or defined (AD-22)
+	@tools/check-libm.sh $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET)
+
+check-no-x87: $(APP_DIR)/$(STATIC_TARGET) ## Fail if an x86 object holds an x87 instruction (AD-17)
+	@tools/check-no-x87.sh $(APP_DIR)/$(STATIC_TARGET)
+
+check-gates: ## Prove each gate fails on its planted violation and passes its control
+	@CC='$(CC)' GATE_PROJECT='$(PROJECT)' GATE_ALLOWED='$(EDGES_ALLOWED)' GATE_LIBM_EXEMPT='$(LIBM_EXEMPT)' tools/check-gates.sh
+
 check-stamps: ## Fail if a compile rule names no flags stamp, or a stamp omits a variable its rules expand
 # Each build tree keeps a .flags file holding the flag string it was built
 # with, and the object rules depend on it, so a flag change - including one

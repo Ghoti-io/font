@@ -134,15 +134,12 @@ typedef struct GFNT_Coverage {
 } GFNT_Coverage;
 
 /**
- * The revision of the flattener: the rule that turns a curve into the polyline
- * the scan converter fills, and so what every rendering's pixels depend on.
- *
- * - Revision 1: midpoints floored to 26.6 at every level, flat at four
- *   tolerances. Its deviation from the curve grew with the depth, to 13 units on
- *   a curve spanning the int32 range, though the tolerance said 4.
- * - Revision 2: subdivision carried at eight more fractional bits, a vertex
- *   rounded to 26.6 once when it is emitted, flat at `4 * (tolerance - 1)`
- *   units. Within the tolerance for every curve and every accepted tolerance.
+ * The revision of the flattener (1): the rule that turns a curve into the
+ * polyline the scan converter fills, and so what every rendering's pixels
+ * depend on. The rule is subdivision carried at eight more fractional bits, a
+ * vertex rounded to 26.6 once when it is emitted, flat at
+ * `4 * (tolerance - 1)` units, within the tolerance for every curve and every
+ * accepted tolerance.
  *
  * A change to the rule is a new revision, and every committed golden rendering
  * is rebaselined in the same change: the golden file's header names the revision
@@ -151,7 +148,7 @@ typedef struct GFNT_Coverage {
  * for an earlier revision. The rule is `shape-geometry`'s, and this is its
  * `GSHGEOM_FLATTEN_REVISION`: raster.c does not compile if the two differ.
  */
-#define GFNT_RASTER_FLATTEN_REVISION 2
+#define GFNT_RASTER_FLATTEN_REVISION 1
 
 /**
  * The smallest tolerance ::GFNT_RasterOptions::tolerance accepts, in 26.6 units
@@ -188,9 +185,7 @@ typedef struct GFNT_RasterOptions {
    * coverage), and it is the same polyline on every target. The flattener is
    * `shape-geometry`'s (gshgeom_flatten_quadratic(), gshgeom_flatten_cubic()),
    * and the proof is beside it, in that library's src/flatten/flatten.c, and in
-   * design.md section 8.1; the first revision of the
-   * flattener (before ::GFNT_RASTER_FLATTEN_REVISION 2) did not keep it, and
-   * strayed by up to 13 units on large curves.
+   * design.md section 8.1.
    *
    * It holds for every value this field accepts: ::GFNT_RASTER_MIN_TOLERANCE or
    * more. Below that (1, a 64th of a pixel) the guarantee cannot be kept, so

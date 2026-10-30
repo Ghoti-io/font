@@ -293,7 +293,7 @@ on the big-endian targets.
 `testGolden` requires N to be `GFNT_RASTER_FLATTEN_REVISION`. A change to how a
 curve becomes a polyline (design.md section 8.1.1) is a new revision and a
 rewrite of every golden line it touches, in one change; the revision is not in
-any hash. Revision 2 changed 1,500 of 6,429 rows (see the commit that made it).
+any hash.
 
 Phase 2 put the charstrings in it, which is where the rasteriser meets a **cubic**
 producer: `glyf` sends quadratics, a charstring sends cubics, and the flattener's

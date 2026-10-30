@@ -28,7 +28,7 @@
 # line it touches, in one change; the revision is not part of any hash.
 #
 # documentation/design.md section 14.4.
-# flattener revision 2
+# flattener revision 1
 basic.ttf 0 8 0 0 4x6+0+6 2673 9ED5FB46BDEC0F2A
 basic.ttf 0 8 16 0 5x6+0+6 2673 3E3EE6B2E191D17F
 basic.ttf 0 8 32 0 5x6+0+6 2673 341AD25FB4A22995

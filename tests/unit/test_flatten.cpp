@@ -4,7 +4,7 @@
  * The flattener as `font` uses it: the glue, since the flattener itself is
  * `shape-geometry`'s.
  *
- * This library kept a copy of the flattener (`src/raster/flatten.c`, revision 2,
+ * This library kept a copy of the flattener (`src/raster/flatten.c`,
  * with its proof and a test that measured the polyline against the curve) until
  * the cleanup that followed story 9 of the shape family's first milestone. The
  * copy is gone; the proof sits in `shape-geometry`'s `src/flatten/flatten.c`
@@ -93,7 +93,7 @@ GFNT_Outline * curved_outline() {
 }  // namespace
 
 TEST(Flatten, TheRevisionAndTheSmallestToleranceAreTheFlattenersOwn) {
-  EXPECT_EQ(GFNT_RASTER_FLATTEN_REVISION, 2);
+  EXPECT_EQ(GFNT_RASTER_FLATTEN_REVISION, 1);
   EXPECT_EQ(GFNT_RASTER_MIN_TOLERANCE, 2);
   // Equal at compile time (raster.c); equal at run time too, which is what
   // matters when the library found at run time is not the one compiled against.

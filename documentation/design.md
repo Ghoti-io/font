@@ -66,7 +66,7 @@ Every recursion - composite glyphs, charstring subroutines, extension lookups,
 `COLR` v1 paint graphs - carries a depth counter with a limit that does not
 come from the file. Every count is capped by `GFNT_Limits`. And the one
 component that is a bytecode interpreter over file-supplied programs - the
-TrueType hinting VM - is not implemented yet (§2 M3, §8.5). A malformed font
+TrueType hinting VM (§8.5) - runs under a step budget, a bounded stack and zones, and fails closed. A malformed font
 produces a named result and a diagnostic naming the table and offset (§5.6);
 it never produces a crash, a hang, or a read past a buffer, and the fuzzers
 exist to keep that true.
@@ -127,7 +127,7 @@ which of them this library takes, and which of those it reads today.
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
 | | `.dfont`, `.eot` | absent, §16 |
-| | TrueType hinting | not implemented yet; planned work, §8.5 |
+| | TrueType hinting | **implemented** (§8.5): the bytecode interpreter in versions 35 and 40, composites and hinted advances, variable faces; on by default. The autohinter and `CFF`/Type 1 hinting are not built |
 | **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
@@ -3614,7 +3614,7 @@ answered on 2026-09-23/24; the rest stand as recommended.
    toolkit to get ruby. The rule is that the library owns what can be computed
    from text, styles, faces and geometry the caller passes in; the box model,
    markup and CSS parsing, list markers and painting stay the caller's.
-2. **Hinting is planned.** The earlier decision to exclude a TrueType
+2. **Hinting is implemented.** The earlier decision to exclude a TrueType
    interpreter from the first release is superseded; see §8.5 for current
    status and security constraints.
 3. **Bitmap fonts are first-class in the API.** Decided (§5.3, §5.4); standalone and embedded strike formats are implemented.
@@ -4644,9 +4644,9 @@ What that cost in findings:
   `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
   which is a fact about the font rather than about the object model.
 
-**Remaining implementation gaps (current):** TrueType hinting (planned, §8.5);
+**Remaining implementation gaps (current):** the autohinter and `CFF`/Type 1 hinting (§8.5);
 `FeatureVariations` condition format 2; multibyte Macintosh and Microsoft
-`name` encodings; `gasp`; native Windows and macOS font enumeration; `JSTF`
+`name` encodings; native Windows and macOS font enumeration; `JSTF`
 and the AAT features listed in §9;
 PDF-specific writing helpers; and `COLR` v1 compositing and SVG drawing/rewriting.
 Layout gaps are listed in §10.7 and the browser comparison limits in §10.8.

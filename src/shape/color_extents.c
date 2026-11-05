@@ -38,6 +38,7 @@
 #include <ghoti.io/font/color.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/outline.h>
+#include <ghoti.io/math/elementary.h>
 #include <stdint.h>
 #include <string.h>
 #include "../tables/tables.h"
@@ -46,37 +47,18 @@
 #define GFNT_CEXT_DEPTH 80
 
 /* libm is not linked by this library (an example links it before the archive and
- * gets none), and a rotation needs only a sine, so these are written out. */
+ * gets none); the trigonometric functions come from math, the minimum and maximum are
+ * written out. */
 static float fminf_(float a, float b) { return b < a ? b : a; }
 static float fmaxf_(float a, float b) { return b > a ? b : a; }
 
-/* Sine and cosine of an angle in radians, by Taylor series about the nearest
- * multiple of a quarter turn, in double: a float's 24 bits come out right. */
 static void sincos_rad(float angle, float * s, float * c) {
-  double t = (double)angle;
-  double k = (double)(int64_t)(t / 1.57079632679489661923 + (t < 0 ? -0.5 : 0.5));
-  double r = t - k * 1.57079632679489661923;     // |r| <= pi/4
-  double r2 = r * r, sn = r, cs = 1.0, term_s = r, term_c = 1.0;
-
-  for (int n = 1; n <= 9; n++) {
-    term_s *= -r2 / ((2.0 * n) * (2.0 * n + 1.0));
-    term_c *= -r2 / ((2.0 * n - 1.0) * (2.0 * n));
-    sn += term_s;
-    cs += term_c;
-  }
-  switch (((int64_t)k % 4 + 4) % 4) {
-    case 0: *s = (float)sn; *c = (float)cs; break;
-    case 1: *s = (float)cs; *c = (float)-sn; break;
-    case 2: *s = (float)-sn; *c = (float)-cs; break;
-    default: *s = (float)-cs; *c = (float)sn; break;
-  }
+  *s = gmath_sinf(angle);
+  *c = gmath_cosf(angle);
 }
 
 static float tan_rad(float angle) {
-  float s, c;
-
-  sincos_rad(angle, &s, &c);
-  return s / c;
+  return gmath_tanf(angle);
 }
 
 typedef struct CBox {

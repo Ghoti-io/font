@@ -463,6 +463,18 @@ INCLUDE += $(IMAGE_CFLAGS)
 # path from an outline and fills it with shape-cpu. Neither depends on font
 # (suite/libraries.txt lists font after both), and the fill rule type is
 # shape-geometry's. Resolved exactly as the others are.
+# ghoti.io-math supplies the sine, cosine and tangent a color glyph's rotation
+# and skew need (AD-22: the elementary functions come from math, never libm).
+MATH_PC ?= ghoti.io-math-0
+MATH_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(MATH_PC) 2>/dev/null)
+MATH_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(MATH_PC) 2>/dev/null)
+ifeq ($(strip $(MATH_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-math was not found by pkg-config. Build and install the suite into a local prefix (the suite repository's install.sh does it, in dependency order), then pass the same PREFIX here - or point MATH_PC at the module name.)
+endif
+endif
+INCLUDE += $(MATH_CFLAGS)
+
 SHAPE_GEOMETRY_PC ?= ghoti.io-shape-geometry-0
 SHAPE_GEOMETRY_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(SHAPE_GEOMETRY_PC) 2>/dev/null)
 SHAPE_GEOMETRY_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(SHAPE_GEOMETRY_PC) 2>/dev/null)
@@ -504,7 +516,7 @@ INCLUDE += $(SHAPE_SCENE_CFLAGS)
 # reached the recipes and not the stamps would leave objects scoring the previous
 # build's flags.
 
-DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS) $(IMAGE_LIBS) $(SHAPE_CPU_LIBS) $(SHAPE_SCENE_LIBS) $(SHAPE_GEOMETRY_LIBS)
+DEP_LIBS := $(CUTIL_LIBS) $(COMPRESS_LIBS) $(UNICODE_LIBS) $(IMAGE_LIBS) $(MATH_LIBS) $(SHAPE_CPU_LIBS) $(SHAPE_SCENE_LIBS) $(SHAPE_GEOMETRY_LIBS)
 
 # Automatically collect all .c source files under the src directory.
 SOURCES := $(shell find src -type f -name '*.c')
@@ -2378,7 +2390,7 @@ LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
 # What goes in the .pc Requires: field. Built from the same variables the
 # compile uses, so a dependency on another branch cannot be named one way for
 # the build and another way for consumers.
-PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC) $(IMAGE_PC) $(SHAPE_GEOMETRY_PC) $(SHAPE_SCENE_PC) $(SHAPE_CPU_PC)
+PC_REQUIRES := $(CUTIL_PC) $(COMPRESS_PC) $(UNICODE_PC) $(IMAGE_PC) $(MATH_PC) $(SHAPE_GEOMETRY_PC) $(SHAPE_SCENE_PC) $(SHAPE_CPU_PC)
 
 # Where this project's own .pc file is installed.
 PKGCONFIG_INSTALL_PATH ?= $(PC_INSTALL_PATH)

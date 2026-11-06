@@ -246,7 +246,7 @@ UNCOMMITTED_SHAPES = {
     "variable-gvar.ttf": 175,
     "variable-hvar.ttf": 175,
     "variable-stat.ttf": 175,
-    "vertical-text.ttf": 850,
+    "vertical-text.ttf": 825,
     "woff2-triplets-source.ttf": 225,
     "woff2-triplets.woff2": 225,
 }

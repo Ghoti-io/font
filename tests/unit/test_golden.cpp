@@ -315,6 +315,85 @@ TEST(Golden, EveryCommittedRenderingIsReproduced) {
   EXPECT_EQ(checked, expected.size());
 }
 
+/** The rows a bitmap covers, top to bottom, as absolute y of each row's lower edge. */
+bool parse_rows(const std::string & shape, uint32_t * width, int * low, int * high) {
+  unsigned w = 0;
+  unsigned h = 0;
+  int left = 0;
+  int top = 0;
+
+  if (sscanf(shape.c_str(), "%ux%u+%d+%d", &w, &h, &left, &top) != 4) {
+    return false;
+  }
+  *width = w;
+  *high = top - 1;
+  *low = top - static_cast<int>(h);
+  return true;
+}
+
+/**
+ * Whether every row that `taller` covers and `shorter` does not holds less than
+ * one level of ink a pixel across the width of `taller`, by the outline's own
+ * area: the glyph drawn sixteen times as large, its 16 by 16 blocks summed.
+ */
+bool extra_rows_are_faint(const Expected & taller, const Expected & shorter,
+    std::map<std::string, Font *> & fonts) {
+  uint32_t width = 0;
+  uint32_t unused = 0;
+  int low = 0;
+  int high = 0;
+  int short_low = 0;
+  int short_high = 0;
+
+  if (!parse_rows(taller.shape, &width, &low, &high)
+      || !parse_rows(shorter.shape, &unused, &short_low, &short_high)) {
+    return false;
+  }
+  Font *& font = fonts[taller.fixture];
+  if (!font) {
+    font = new Font(taller.fixture);
+  }
+  if (!font->face) {
+    return false;
+  }
+  GFNT_RasterOptions options{};
+  GFNT_Coverage big{};
+  GFNT_Error error{};
+
+  options.hint_mode = GFNT_HINT_MODE_NONE;
+  options.origin_x = taller.origin_x * 16;
+  options.origin_y = taller.origin_y * 16;
+  if (gfnt_face_render_glyph(font->face, taller.glyph, taller.ppem * 16, &options,
+          nullptr, &big, &error) != GFNT_OK) {
+    return false;
+  }
+  bool faint = true;
+
+  for (int y = low; y <= high; ++y) {
+    if (y >= short_low && y <= short_high) {
+      continue;
+    }
+    double ink = 0;
+
+    for (uint32_t r = 0; r < big.height; ++r) {
+      const int sy = big.top - 1 - static_cast<int>(r);
+      const int row = sy >= 0 ? sy / 16 : -((-sy + 15) / 16);
+
+      if (row != y) {
+        continue;
+      }
+      for (uint32_t q = 0; q < big.width; ++q) {
+        ink += big.data[r * big.stride + q] / 256.0;
+      }
+    }
+    if (ink >= static_cast<double>(width)) {
+      faint = false;
+    }
+  }
+  gfnt_coverage_destroy(&big);
+  return faint;
+}
+
 TEST(Golden, ASubPixelOffsetMovesAGlyphSidewaysAndNotUpwards) {
   // What is *exactly* invariant across the four horizontal origins of one glyph
   // at one size: the bitmap's height, and its width to within the one column a
@@ -335,6 +414,7 @@ TEST(Golden, ASubPixelOffsetMovesAGlyphSidewaysAndNotUpwards) {
   const std::vector<Expected> expected = golden();
   ASSERT_FALSE(expected.empty());
   std::map<std::string, std::vector<const Expected *>> groups;
+  std::map<std::string, Font *> fonts;
 
   for (const Expected & entry : expected) {
     if (!entry.refused.empty() || entry.origin_y != 0 || entry.shape.empty()) {
@@ -362,24 +442,23 @@ TEST(Golden, ASubPixelOffsetMovesAGlyphSidewaysAndNotUpwards) {
       uint32_t height = 0;
       ASSERT_EQ(sscanf(group[i]->shape.c_str(), "%ux%u+%d+%d", &width, &height,
           &left, &top), 4) << group[i]->shape;
-      // Two groups carry one faint edge row that appears at some origins and
-      // not at others. shape-cpu floors an area to 256ths of a pixel after
-      // folding its magnitude, so a row whose ink is a fraction of a level is
-      // 0 at one origin and 1 at the next, where rounding it up made it 1
-      // everywhere. The totals of both groups move by at most 18 levels across the
-      // four origins, so the row holds no more; every other group is exact.
-      const bool faint_edge = pair.first == "cff-curves.otf/6/16"
-          || pair.first == "cff-curves.otf/3/48";
-      if (faint_edge) {
-        EXPECT_LE(std::abs(static_cast<long long>(height)
-            - static_cast<long long>(first_height)), 1) << pair.first;
-      }
-      else {
-        EXPECT_EQ(height, first_height)
-            << pair.first << ": " << group[0]->shape << " at origin "
-            << group[0]->origin_x << " and " << group[i]->shape << " at "
-            << group[i]->origin_x
-            << " - a horizontal offset changed the vertical extent";
+      if (height != first_height) {
+        // A row that is there at one origin and not at another is allowed only
+        // if the outline puts almost no ink in it. shape-cpu floors an area to
+        // 256ths of a pixel, so a sliver of a level or two is 0 where it falls
+        // across two pixels and 1 where it falls in one; that is the quantizer,
+        // not the offset. The ink the outline puts in the row does not depend
+        // on a sideways shift, so it is measured once, from a render sixteen
+        // times as large, and has to be under one level a pixel across the
+        // bitmap. A horizontal offset that moved ink up or down would put
+        // whole pixels in the row and fail this.
+        const Expected & taller = height > first_height ? *group[i] : *group[0];
+        const Expected & shorter = height > first_height ? *group[0] : *group[i];
+        EXPECT_TRUE(extra_rows_are_faint(taller, shorter, fonts)) << pair.first
+            << ": " << group[0]->shape << " at origin " << group[0]->origin_x
+            << " and " << group[i]->shape << " at " << group[i]->origin_x
+            << " - a horizontal offset changed the vertical extent by a row "
+               "with ink in it";
       }
       const long long difference = static_cast<long long>(width)
           - static_cast<long long>(first_width);
@@ -389,6 +468,9 @@ TEST(Golden, ASubPixelOffsetMovesAGlyphSidewaysAndNotUpwards) {
           << group[i]->origin_x;
       compared += 1;
     }
+  }
+  for (auto & pair : fonts) {
+    delete pair.second;
   }
   EXPECT_GT(compared, 300u);
 }

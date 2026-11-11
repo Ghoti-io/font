@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Fail on a dependency edge the shape family's spine forbids, in either place
+# Fail on a dependency edge that the layering of the shape libraries forbids, in either place
 # it can hide.
 #
 # AD-2: a library includes the headers of, and links the shared objects of, the

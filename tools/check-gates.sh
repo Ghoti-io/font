@@ -128,7 +128,7 @@ expect_fail 'stamps/planted (the library compile rule loses its stamp)' 'names n
 #---------------------------------------------------------------------------
 printf 'check-edges --includes\n'
 E="$HERE/check-edges.sh"
-FAMILY="math shape-geometry shape-scene shape-cpu font vector shape-vulkan shape-webgpu shape-toolpath shape-solid"
+FAMILY="math shape-geometry shape-scene shape-cpu shape-dxf font vector shape-vulkan shape-webgpu shape-toolpath shape-solid"
 # Every name the allowlist permits, one per line.
 allowed_list="$(printf '%s\n' "$allowed" | tr '|' '\n')"
 

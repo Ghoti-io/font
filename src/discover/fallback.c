@@ -347,6 +347,7 @@ GFNT_Result gfnt_fontfallback_face(GFNT_FontFallback * f, uint32_t cp, GFNT_Tag 
   const GFNT_FontRecord ** recs = NULL;
   size_t * idx = NULL;
   size_t norder = 0;
+  size_t lead = 0;
   size_t most = 0;
   size_t i;
   size_t j;
@@ -405,10 +406,20 @@ GFNT_Result gfnt_fontfallback_face(GFNT_FontFallback * f, uint32_t cp, GFNT_Tag 
       order[norder++] = g;
     }
   }
+  lead = norder; // the families that were asked for, by script or by name: they come before every other
   for (i = 0; i < f->group_count; i++) {
     if (!seen[i]) {
       seen[i] = 1;
       order[norder++] = i;
+    }
+  }
+  // A family that was asked for (by the script's preference or by name) answers with any scalable face whose cmap maps the character, a
+  // claiming one first, before another family is looked at: the cmap is proof and the OS/2 range bits are a hint, and a hint of a family
+  // nobody asked for must not beat the proof of the one that was (a color emoji font states no ranges that its emoji sit in, and a plain
+  // emoji font does).
+  for (i = 0; i < lead && !found && result == GFNT_OK; i++) {
+    for (pass = 0; pass < 2 && !found && result == GFNT_OK; pass++) {
+      result = try_group(f, order[i], cp, pass == 0, false, wanted, recs, idx, &found_at, &found);
     }
   }
   // Scalable faces that claim the character first, in every family; then scalable faces that

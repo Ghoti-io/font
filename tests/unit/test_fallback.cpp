@@ -257,6 +257,40 @@ TEST(Fallback, AFaceThatClaimsOtherRangesIsTriedOnlyWhenNoClaimantMapsTheCharact
   EXPECT_EQ(fb2.label(set2, 0x4E00), "stray");
 }
 
+TEST(Fallback, AFamilyThatWasAskedForAnswersWithAFaceThatMapsTheCharacterWhateverItClaims) {
+  // The asked-for family's face maps Greek and claims only the Latin range; another family claims Greek and maps it too.  The cmap of the first
+  // is proof and the other's claim is a hint, so the family that was named answers (a color emoji font states ranges its emoji are not in).
+  Fonts fonts;
+  Spec asked = face("Asked", "asked", {'A', 0x3B1});
+  asked.claim_bits = {0};
+  fonts.add(asked);
+  Spec other = face("Other", "other", {0x3B1});
+  other.claim_bits = {7};
+  fonts.add(other);
+  const GFNT_FontSet * set = fonts.scan();
+  Fallback fb;
+  ASSERT_EQ(fb.make(set), GFNT_OK);
+  const char * names[] = {"Asked"};
+  GFNT_FontQuery wanted;
+  gfnt_fontquery_init(&wanted);
+  wanted.families = names;
+  wanted.family_count = 1;
+  EXPECT_EQ(fb.label(set, 0x3B1, 0, 0, &wanted), "asked") << "the named family, though it does not claim the range";
+  EXPECT_EQ(fb.label(set, 0x3B1), "other") << "with no family asked for, the claimant is still preferred";
+  // a family that is asked for and does not map the character gives way to the others as before
+  Fonts fonts2;
+  Spec none = face("None", "none", {'A'});
+  fonts2.add(none);
+  Spec some = face("Some", "some", {0x3B1});
+  fonts2.add(some);
+  const GFNT_FontSet * set2 = fonts2.scan();
+  Fallback fb2;
+  ASSERT_EQ(fb2.make(set2), GFNT_OK);
+  const char * names2[] = {"None"};
+  wanted.families = names2;
+  EXPECT_EQ(fb2.label(set2, 0x3B1, 0, 0, &wanted), "some");
+}
+
 TEST(Fallback, ACharacterBeyondThePlaneZeroIsClaimedByBitFiftySeven) {
   // Two faces map the same character in plane 1. One claims only the Latin range, the other
   // sets bit 57 (any character beyond the Basic Multilingual Plane); the second is listed

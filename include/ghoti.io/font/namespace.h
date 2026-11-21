@@ -42,6 +42,9 @@
 // structs differ in layout cannot be confused for one another. GCU_* names
 // are deliberately absent: they are cutil's, and cutil has already renamed
 // them.
+#define GFNT_Afm GHOTIIO_FONT(GFNT_Afm)
+#define GFNT_AfmGlyph GHOTIIO_FONT(GFNT_AfmGlyph)
+#define GFNT_AfmInfo GHOTIIO_FONT(GFNT_AfmInfo)
 #define GFNT_Allocator GHOTIIO_FONT(GFNT_Allocator)
 #define GFNT_Box GHOTIIO_FONT(GFNT_Box)
 #define GFNT_BitmapGlyph GHOTIIO_FONT(GFNT_BitmapGlyph)
@@ -87,6 +90,15 @@
 #define GFNT_NamedInstance GHOTIIO_FONT(GFNT_NamedInstance)
 
 // Public functions.
+#define gfnt_afm_free GHOTIIO_FONT(gfnt_afm_free)
+#define gfnt_afm_glyph_at GHOTIIO_FONT(gfnt_afm_glyph_at)
+#define gfnt_afm_glyph_count GHOTIIO_FONT(gfnt_afm_glyph_count)
+#define gfnt_afm_glyph_for_code GHOTIIO_FONT(gfnt_afm_glyph_for_code)
+#define gfnt_afm_glyph_for_name GHOTIIO_FONT(gfnt_afm_glyph_for_name)
+#define gfnt_afm_info GHOTIIO_FONT(gfnt_afm_info)
+#define gfnt_afm_kern GHOTIIO_FONT(gfnt_afm_kern)
+#define gfnt_afm_kern_count GHOTIIO_FONT(gfnt_afm_kern_count)
+#define gfnt_afm_parse GHOTIIO_FONT(gfnt_afm_parse)
 #define gfnt_allocator_default GHOTIIO_FONT(gfnt_allocator_default)
 #define gfnt_blob_create_file GHOTIIO_FONT(gfnt_blob_create_file)
 #define gfnt_blob_create_memory GHOTIIO_FONT(gfnt_blob_create_memory)

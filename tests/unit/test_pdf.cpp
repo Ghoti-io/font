@@ -18,6 +18,7 @@
 
 #include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/face.h>
+#include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/pdf.h>
 
 namespace {
@@ -234,6 +235,90 @@ TEST(PdfToUnicode, Refusals) {
   EXPECT_EQ(gfnt_pdf_tounicode(&bad, 1, 2, nullptr, nullptr, &blob, nullptr), GFNT_ERR_INVALID);
   EXPECT_EQ(gfnt_pdf_tounicode(nullptr, 1, 2, nullptr, nullptr, &blob, nullptr), GFNT_ERR_INVALID);
   EXPECT_EQ(gfnt_pdf_tounicode(&bad, 0, 2, nullptr, nullptr, nullptr, nullptr), GFNT_ERR_INVALID);
+}
+
+namespace {
+
+std::string name_of(GFNT_PdfEncoding e, unsigned code) {
+  const char * name = gfnt_pdf_encoding_glyph_name(e, static_cast<uint8_t>(code));
+  return name ? name : "(none)";
+}
+
+}  // namespace
+
+TEST(PdfEncodings, TheCodesTheReferenceNamesAreTheNamesItGives) {
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_STANDARD, 0x41), "A");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_STANDARD, 0xE1), "AE");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_STANDARD, 0x27), "quoteright");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_STANDARD, 0x60), "quoteleft");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_STANDARD, 0x00), "(none)");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_WIN_ANSI, 0x27), "quotesingle");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_WIN_ANSI, 0x80), "Euro");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_WIN_ANSI, 0xA0), "space");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_WIN_ANSI, 0x00), "(none)");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_MAC_ROMAN, 0x80), "Adieresis");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_MAC_ROMAN, 0xCA), "space");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_MAC_EXPERT, 0x21), "exclamsmall");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_SYMBOL, 0x61), "alpha");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_SYMBOL, 0xA0), "Euro");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_ZAPF_DINGBATS, 0x21), "a1");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_ZAPF_DINGBATS, 0x20), "space");
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_ZAPF_DINGBATS, 0x00), "(none)");
+}
+
+TEST(PdfEncodings, TheFootnotesOfWinAnsiAreHonoured) {
+  for (unsigned code : {127u, 129u, 141u, 143u, 144u, 157u}) {
+    EXPECT_EQ(name_of(GFNT_PDF_ENCODING_WIN_ANSI, code), "bullet") << code;
+  }
+  EXPECT_EQ(name_of(GFNT_PDF_ENCODING_WIN_ANSI, 173), "hyphen");
+}
+
+TEST(PdfEncodings, EveryNameOfEveryEncodingReadsAsText) {
+  for (int e = 0; e < GFNT_PDF_ENCODING_COUNT; e++) {
+    const auto enc = static_cast<GFNT_PdfEncoding>(e);
+    unsigned defined = 0;
+
+    for (unsigned code = 0; code < 256; code++) {
+      const char * name = gfnt_pdf_encoding_glyph_name(enc, static_cast<uint8_t>(code));
+      if (!name) {
+        continue;
+      }
+      defined++;
+      uint32_t out[8];
+      size_t count = 0;
+      const bool zapf = enc == GFNT_PDF_ENCODING_ZAPF_DINGBATS && std::string(name) != "space";
+      ASSERT_EQ(gfnt_glyph_name_to_unicode(name, zapf, out, 8, &count, nullptr), GFNT_OK) << name;
+      EXPECT_GE(count, 1u) << "encoding " << e << " code " << code << " " << name;
+      uint8_t back = 0;
+      ASSERT_TRUE(gfnt_pdf_encoding_code_for_name(enc, name, &back)) << name;
+      EXPECT_LE(back, code) << name;
+      EXPECT_STREQ(gfnt_pdf_encoding_glyph_name(enc, back), name);
+    }
+    // How many codes each encoding defines, as the generator's two sources agree on them (a cut or
+    // shifted listing would move one of these).
+    switch (enc) {
+      case GFNT_PDF_ENCODING_STANDARD: EXPECT_EQ(defined, 149u); break;
+      case GFNT_PDF_ENCODING_WIN_ANSI: EXPECT_EQ(defined, 224u); break;
+      case GFNT_PDF_ENCODING_MAC_ROMAN: EXPECT_EQ(defined, 208u); break;
+      case GFNT_PDF_ENCODING_MAC_EXPERT: EXPECT_EQ(defined, 165u); break;
+      case GFNT_PDF_ENCODING_SYMBOL: EXPECT_EQ(defined, 189u); break;
+      case GFNT_PDF_ENCODING_ZAPF_DINGBATS: EXPECT_EQ(defined, 202u); break;
+      default: break;
+    }
+  }
+}
+
+TEST(PdfEncodings, NoSuchEncodingOrNameOrCodeIsNoAnswer) {
+  uint8_t code = 77;
+  EXPECT_EQ(gfnt_pdf_encoding_glyph_name(GFNT_PDF_ENCODING_COUNT, 65), nullptr);
+  EXPECT_EQ(gfnt_pdf_encoding_glyph_name(static_cast<GFNT_PdfEncoding>(-1), 65), nullptr);
+  EXPECT_FALSE(gfnt_pdf_encoding_code_for_name(GFNT_PDF_ENCODING_STANDARD, "nosuchglyph", &code));
+  EXPECT_EQ(code, 77);
+  EXPECT_FALSE(gfnt_pdf_encoding_code_for_name(GFNT_PDF_ENCODING_STANDARD, nullptr, &code));
+  EXPECT_FALSE(gfnt_pdf_encoding_code_for_name(GFNT_PDF_ENCODING_STANDARD, "A", nullptr));
+  EXPECT_FALSE(gfnt_pdf_encoding_code_for_name(GFNT_PDF_ENCODING_COUNT, "A", &code));
+  EXPECT_TRUE(gfnt_pdf_encoding_code_for_name(GFNT_PDF_ENCODING_WIN_ANSI, "bullet", &code));
+  EXPECT_EQ(code, 127);   // the lowest of the several
 }
 
 int main(int argc, char ** argv) {

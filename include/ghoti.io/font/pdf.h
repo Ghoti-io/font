@@ -36,6 +36,7 @@
 #ifndef GHOTI_IO_GFNT_PDF_H
 #define GHOTI_IO_GFNT_PDF_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <ghoti.io/font/allocator.h>
@@ -113,6 +114,47 @@ typedef struct GFNT_PdfToUnicodeEntry {
 GFNT_API GFNT_Result gfnt_pdf_tounicode(const GFNT_PdfToUnicodeEntry * entries, size_t count,
     unsigned code_bytes, const GFNT_Limits * limits, const GFNT_Allocator * allocator,
     GFNT_Blob ** out_blob, GFNT_Error * error);
+
+/** The encodings a PDF font names its codes by when its dictionary names no `Differences`. */
+typedef enum {
+  GFNT_PDF_ENCODING_STANDARD = 0, ///< `StandardEncoding`, Type 1's own.
+  GFNT_PDF_ENCODING_WIN_ANSI,     ///< `WinAnsiEncoding`.
+  GFNT_PDF_ENCODING_MAC_ROMAN,    ///< `MacRomanEncoding`.
+  GFNT_PDF_ENCODING_MAC_EXPERT,   ///< `MacExpertEncoding`.
+  GFNT_PDF_ENCODING_SYMBOL,       ///< The built-in encoding of the Symbol font.
+  GFNT_PDF_ENCODING_ZAPF_DINGBATS,///< The built-in encoding of ZapfDingbats.
+  GFNT_PDF_ENCODING_COUNT         ///< Closes the enum.
+} GFNT_PdfEncoding;
+
+/**
+ * @brief The glyph name a code has in one of the base encodings.
+ *
+ * The tables are the PDF Reference's, with its footnotes: in `WinAnsiEncoding` the unused
+ * codes 127, 129, 141, 143, 144 and 157 show a bullet and 173 is a hyphen. To reach text from
+ * the name, use ::gfnt_glyph_name_to_unicode() (with its Zapf Dingbats flag for the last
+ * encoding); to reach a glyph of a face, use ::gfnt_face_glyph_for_name().
+ *
+ * @param encoding Which encoding.
+ * @param code The code.
+ * @return A static string, or NULL when the encoding has no glyph at that code (or the
+ *   encoding is not one of the enum's).
+ */
+GFNT_API const char * gfnt_pdf_encoding_glyph_name(GFNT_PdfEncoding encoding, uint8_t code);
+
+/**
+ * @brief The first code at which an encoding has a glyph of this name.
+ *
+ * What a writer needs to decide which codes of a simple font to use and which to list in
+ * `Differences`. A name that appears at more than one code (a bullet in `WinAnsiEncoding`,
+ * a space in `MacRomanEncoding`) gives the lowest.
+ *
+ * @param encoding Which encoding.
+ * @param name The glyph name.
+ * @param out_code Receives the code. Written only when the answer is true.
+ * @return Whether the encoding has it.
+ */
+GFNT_API bool gfnt_pdf_encoding_code_for_name(GFNT_PdfEncoding encoding, const char * name,
+    uint8_t * out_code);
 
 #ifdef __cplusplus
 }

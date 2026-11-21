@@ -89,13 +89,16 @@ def main(argv):
         print("hint_cff_explore: no fonts in the %s pool (an empty measurement says nothing)" % pool)
         return 1
     print("%d fonts in the %s pool" % (len(paths), pool))
+    same_as_normal = {}
     for target in ("normal", "light"):
         print("\n== target %s ==" % target)
         print("%5s %8s %8s %8s %8s %8s %8s %8s %8s" % ("ppem", "glyphs", "moved", "x moved", "y moved",
               "max|dx|", "max|dy|", "pt diff", "adv diff"))
         for ppem in ppems:
-            t = dict(glyphs=0, moved=0, xm=0, ym=0, dx=0, dy=0, shape=0, adv=0)
+            t = dict(glyphs=0, moved=0, xm=0, ym=0, dx=0, dy=0, shape=0, adv=0, xbig=0, ybig=0,
+                     adv_whole=0, adv_changed_whole=0, b0=0, b1=0, b2=0, b3=0, b4=0, light_same=0)
             worst = []
+            shape_examples = []
             for path in paths:
                 plain = freetype(path, 0, ppem, stride, target)
                 hinted = freetype(path, 35, ppem, stride, target)
@@ -108,6 +111,9 @@ def main(argv):
                     t["glyphs"] += 1
                     if len(a[1]) != len(b[1]) or a[2] != b[2]:
                         t["shape"] += 1
+                        if len(shape_examples) < 3:
+                            shape_examples.append("%s glyph %d: %d points unhinted, %d hinted" % (
+                                os.path.basename(path), g, len(a[1]), len(b[1])))
                         continue
                     mx = max([abs(p[0] - q[0]) for p, q in zip(a[1], b[1])] or [0])
                     my = max([abs(p[1] - q[1]) for p, q in zip(a[1], b[1])] or [0])
@@ -118,12 +124,21 @@ def main(argv):
                     t["dx"] = max(t["dx"], mx)
                     t["dy"] = max(t["dy"], my)
                     t["adv"] += a[0] != b[0]
+                    t["adv_whole"] += b[0] % 64 == 0
+                    t["adv_changed_whole"] += (a[0] != b[0]) and b[0] % 64 == 0
+                    t["xbig"] += mx > 1
+                    t["ybig"] += my > 1
+                    bucket = 0 if my == 0 else 1 if my == 1 else 2 if my <= 8 else 3 if my <= 32 else 4
+                    t["b%d" % bucket] += 1
                     if mx:
                         worst.append((mx, os.path.basename(path), g))
             print("%5d %8d %8d %8d %8d %8d %8d %8d %8d" % (ppem, t["glyphs"], t["moved"], t["xm"],
                   t["ym"], t["dx"], t["dy"], t["shape"], t["adv"]))
-            for mx, name, g in sorted(worst, reverse=True)[:3]:
-                print("        an x move of %d (26.6 units) in %s glyph %d" % (mx, name, g))
+            print("        y moves, in 26.6 units: 0: %d, 1: %d, 2-8: %d, 9-32: %d, over 32: %d; x moves over 1 unit: %d;"
+                  " hinted advance a whole pixel: %d of %d" % (t["b0"], t["b1"], t["b2"], t["b3"], t["b4"],
+                  t["xbig"], t["adv_whole"], t["glyphs"] - t["shape"]))
+            for e in shape_examples:
+                print("        a different point count: " + e)
     return 0
 
 

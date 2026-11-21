@@ -71,8 +71,30 @@ def blue_of(edge, zs, fuzz):
     return None
 
 
+def dump(name, gid, ppem, pool):
+    """One glyph's stems, the zones and what FreeType did, for reading by eye."""
+    path = [p for p in corpus.fonts(pool) if os.path.basename(p) == name][0]
+    params, glyphs = read_data(path, 1)
+    upem = params["upem"][0]
+    scale = ppem * 64.0 / upem
+    plain = explore.freetype(path, 0, ppem, 1, "normal")[gid]
+    hinted = explore.freetype(path, 35, ppem, 1, "normal")[gid]
+    print("upem %d scale %.4f 26.6/unit; blue %s other %s blue_scale %s shift %s fuzz %s stdhw %s snaps %s" % (
+        upem, scale, [v / 65536.0 for v in params.get("blue_values", [])],
+        [v / 65536.0 for v in params.get("other_blues", [])], params.get("blue_scale"),
+        params.get("blue_shift"), params.get("blue_fuzz"), params.get("std_hw"), params.get("stem_snap_h")))
+    info = glyphs[gid]
+    print("stems:", [(k, e, w) for k, e, w in info["stems"]], "masks:", info["masks"])
+    print("%4s %10s %10s %9s" % ("pt", "unhinted y", "hinted y", "font y"))
+    for i, (p, q) in enumerate(zip(plain[1], hinted[1])):
+        print("%4d %10d %10d %9.1f" % (i, p[1], q[1], p[1] / scale))
+    return 0
+
+
 def main(argv):
     pool, limit, stride, ppems = "sfnt", None, 7, [12, 17]
+    if argv[1:2] == ["--dump"]:
+        return dump(argv[2], int(argv[3]), int(argv[4]), argv[5] if len(argv) > 5 else "sfnt")
     args = argv[1:]
     while args:
         a = args.pop(0)
@@ -91,6 +113,8 @@ def main(argv):
         paths = paths[:limit]
     stats = {}
     examples = {}
+    hist = {}
+    oh = {}
 
     def count(key, ok, example):
         stats.setdefault(key, [0, 0])
@@ -139,6 +163,16 @@ def main(argv):
                             continue
                         y = ys[0]
                         if z:
+                            px = z[2] * scale / 64.0
+                            off = (e - z[2]) * scale / 64.0
+                            side = "flat" if abs(e - z[2]) < 0.5 else "overshoot"
+                            if side == "flat":
+                                bucket = int((px - int(px // 1)) * 10) if px >= 0 else int(((px % 1)) * 10)
+                                hist.setdefault((ppem, bucket), [0, 0])
+                                hist[(ppem, bucket)][0 if y // 64 > px // 1 else 1] += 1
+                            else:
+                                oh.setdefault((round(abs(off), 1) if abs(off) < 2 else 2.0, ppem), []).append(
+                                    (round(px, 3), round(y / 64.0 - px, 3)))
                             want = round(z[2] * scale / 64.0) * 64
                             count("blue edge lands on round(flat*scale)", y == want,
                                   (os.path.basename(path), ppem, gid, e, "got", y, "flat", z[2], "want", want))
@@ -158,6 +192,13 @@ def main(argv):
         print("%-52s %7d yes %7d no (%.1f%%)" % (key, yes, no, 100.0 * yes / max(1, yes + no)))
         for e in examples.get(key, []):
             print("        e.g. %s" % (e,))
+    print("\nblue edge exactly on the flat position: frac of flat*scale in pixels (tenths) -> [rounded up, rounded down or kept]")
+    for (ppem, bucket) in sorted(hist):
+        print("  ppem %2d frac %.1f-%.1f: up %5d  not-up %5d" % (ppem, bucket / 10.0, (bucket + 1) / 10.0, hist[(ppem, bucket)][0], hist[(ppem, bucket)][1]))
+    print("\nblue edge on the overshoot side: (overshoot px, ppem) -> samples of (flat px, hinted - flat px)")
+    for key in sorted(oh):
+        v = oh[key]
+        print("  overshoot %.1f px, ppem %d: %d edges, first: %s" % (key[0], key[1], len(v), v[:4]))
     return 0 if stats else 1
 
 

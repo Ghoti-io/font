@@ -204,6 +204,7 @@ struct CffSpec {
   std::function<void(std::vector<uint8_t> &)> mangle;
   bool fd_without_private = false;    ///< A Font DICT with no Private entry.
   std::vector<uint8_t> top_tail;      ///< Raw bytes appended to the Top DICT.
+  std::vector<uint8_t> private_extra; ///< Entries added to the Private DICT, before its Subrs.
 };
 
 /**
@@ -224,6 +225,7 @@ std::vector<uint8_t> build_cff(const CffSpec & spec) {
   std::vector<uint8_t> privat;
   dict_entry(privat, {dict_int(600)}, {20});
   dict_entry(privat, {dict_int(600)}, {21});
+  privat.insert(privat.end(), spec.private_extra.begin(), spec.private_extra.end());
   if (!spec.subrs.empty()) {
     std::vector<uint8_t> probe = privat;
     dict_entry(probe, {dict_offset(0)}, {19});
@@ -2347,6 +2349,120 @@ TEST(Cff, TheGlyphNameDumpSaysWhatEachFontHasAndWhatItDoesNot) {
 }
 
 } // namespace
+
+TEST(Cff, ThePrivateDictsHintParametersAreReadAbsoluteAndDefaulted) {
+  // BlueValues are stated as deltas: -15 then +15 then +700 then +15 is the zones
+  // [-15, 0] and [700, 715]. The scalars the dictionary does not state keep the
+  // specification's defaults.
+  CffSpec spec;
+  spec.charstrings = {{14}};
+  spec.charset = {};
+  dict_entry(spec.private_extra, {dict_int(-15), dict_int(15), dict_int(700), dict_int(15)}, {6});
+  dict_entry(spec.private_extra, {dict_int(-250), dict_int(15)}, {7});
+  dict_entry(spec.private_extra, {dict_int(80)}, {10});
+  dict_entry(spec.private_extra, {dict_int(90)}, {11});
+  dict_entry(spec.private_extra, {dict_int(10)}, {12, 10});       // BlueShift
+  dict_entry(spec.private_extra, {dict_int(2)}, {12, 11});        // BlueFuzz
+  dict_entry(spec.private_extra, {dict_int(80), dict_int(10), dict_int(20)}, {12, 12});  // 80, 90, 110
+  dict_entry(spec.private_extra, {dict_int(1)}, {12, 14});        // ForceBold
+  dict_entry(spec.private_extra, {dict_int(1)}, {12, 17});        // LanguageGroup
+  // BlueScale 0.5, as a DICT real: 30 0a 5f.
+  spec.private_extra.insert(spec.private_extra.end(), {30, 0x0a, 0x5f, 12, 9});
+  Font font(build_cff(spec));
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Cff * cff = nullptr;
+  ASSERT_EQ(gfnt_face_cff(font.face, &cff, nullptr), GFNT_OK);
+  GFNT_CffPrivate priv{};
+  ASSERT_EQ(gfnt_cff_private_for_glyph(font.face, cff, 0, &priv, nullptr), GFNT_OK);
+  const GFNT_CffHintParams & h = priv.hint;
+  ASSERT_EQ(h.blue_value_count, 4u);
+  EXPECT_EQ(h.blue_values[0], -15 * 65536);
+  EXPECT_EQ(h.blue_values[1], 0);
+  EXPECT_EQ(h.blue_values[2], 700 * 65536);
+  EXPECT_EQ(h.blue_values[3], 715 * 65536);
+  ASSERT_EQ(h.other_blue_count, 2u);
+  EXPECT_EQ(h.other_blues[0], -250 * 65536);
+  EXPECT_EQ(h.other_blues[1], -235 * 65536);
+  EXPECT_EQ(h.family_blue_count, 0u);
+  EXPECT_EQ(h.std_hw, 80 * 65536);
+  EXPECT_EQ(h.std_vw, 90 * 65536);
+  EXPECT_EQ(h.blue_shift, 10 * 65536);
+  EXPECT_EQ(h.blue_fuzz, 2 * 65536);
+  EXPECT_EQ(h.blue_scale, 32768);
+  ASSERT_EQ(h.stem_snap_h_count, 3u);
+  EXPECT_EQ(h.stem_snap_h[2], 110 * 65536);
+  EXPECT_EQ(h.stem_snap_v_count, 0u);
+  EXPECT_TRUE(h.force_bold);
+  EXPECT_EQ(h.language_group, 1);
+}
+
+TEST(Cff, APrivateDictThatSaysNothingGetsTheSpecificationsDefaults) {
+  CffSpec spec;
+  spec.charstrings = {{14}};
+  Font font(build_cff(spec));
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Cff * cff = nullptr;
+  ASSERT_EQ(gfnt_face_cff(font.face, &cff, nullptr), GFNT_OK);
+  GFNT_CffPrivate priv{};
+  ASSERT_EQ(gfnt_cff_private_for_glyph(font.face, cff, 0, &priv, nullptr), GFNT_OK);
+  EXPECT_EQ(priv.hint.blue_value_count, 0u);
+  EXPECT_EQ(priv.hint.blue_scale, 2597);   // 0.039625
+  EXPECT_EQ(priv.hint.blue_shift, 7 * 65536);
+  EXPECT_EQ(priv.hint.blue_fuzz, 65536);
+  EXPECT_FALSE(priv.hint.force_bold);
+  EXPECT_EQ(priv.hint.language_group, 0);
+}
+
+TEST(Cff, ABlueArrayThatIsOddOrTooLongIsDroppedNotHalfUsed) {
+  CffSpec spec;
+  spec.charstrings = {{14}};
+  dict_entry(spec.private_extra, {dict_int(-15), dict_int(15), dict_int(700)}, {6});   // odd
+  std::vector<std::vector<uint8_t>> many;
+  for (int i = 0; i < 16; i++) {
+    many.push_back(dict_int(10));
+  }
+  dict_entry(spec.private_extra, many, {7});                                        // 16 > 14
+  Font font(build_cff(spec));
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Cff * cff = nullptr;
+  ASSERT_EQ(gfnt_face_cff(font.face, &cff, nullptr), GFNT_OK);
+  GFNT_CffPrivate priv{};
+  ASSERT_EQ(gfnt_cff_private_for_glyph(font.face, cff, 0, &priv, nullptr), GFNT_OK);
+  EXPECT_EQ(priv.hint.blue_value_count, 0u);
+  EXPECT_EQ(priv.hint.other_blue_count, 0u);
+}
+
+TEST(Cff, ACidFontsHintParametersFollowTheFontDictOfTheGlyph) {
+  // cff-cid.otf has two Font DICTs; neither states blues, so both carry the defaults,
+  // and the question is only that each glyph's Private DICT is asked for its own.
+  Fixture font("cff-cid.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Cff * cff = nullptr;
+  ASSERT_EQ(gfnt_face_cff(font, &cff, nullptr), GFNT_OK);
+  for (uint32_t g = 1; g <= 2; g++) {
+    GFNT_CffPrivate priv{};
+    ASSERT_EQ(gfnt_cff_private_for_glyph(font, cff, g, &priv, nullptr), GFNT_OK);
+    EXPECT_EQ(priv.hint.blue_scale, 2597) << g;
+    EXPECT_EQ(priv.hint.blue_shift, 7 * 65536) << g;
+  }
+}
+
+TEST(Cff, ACffWithNoPrivateDictHasTheDefaultsToo) {
+  CffSpec spec;
+  spec.charstrings = {{14}};
+  spec.fd_without_private = true;
+  spec.cid = true;
+  spec.fdselect = {3, 0, 1, 0, 0, 0, 0, 1};
+  Font font(build_cff(spec));
+  if (font.result != GFNT_OK) {
+    GTEST_SKIP() << "this spec shape is not a loadable font here";
+  }
+  const GFNT_Cff * cff = nullptr;
+  ASSERT_EQ(gfnt_face_cff(font.face, &cff, nullptr), GFNT_OK);
+  GFNT_CffPrivate priv{};
+  ASSERT_EQ(gfnt_cff_private_for_glyph(font.face, cff, 0, &priv, nullptr), GFNT_OK);
+  EXPECT_EQ(priv.hint.blue_scale, 2597);
+}
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

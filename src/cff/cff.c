@@ -71,6 +71,19 @@
 #define GFNT_CFF_OP_SUBRS 19
 #define GFNT_CFF_OP_DEFAULT_WIDTH_X 20
 #define GFNT_CFF_OP_NOMINAL_WIDTH_X 21
+#define GFNT_CFF_OP_BLUE_VALUES 6
+#define GFNT_CFF_OP_OTHER_BLUES 7
+#define GFNT_CFF_OP_FAMILY_BLUES 8
+#define GFNT_CFF_OP_FAMILY_OTHER_BLUES 9
+#define GFNT_CFF_OP_STD_HW 10
+#define GFNT_CFF_OP_STD_VW 11
+#define GFNT_CFF_OP_BLUE_SCALE 0x0c09
+#define GFNT_CFF_OP_BLUE_SHIFT 0x0c0a
+#define GFNT_CFF_OP_BLUE_FUZZ 0x0c0b
+#define GFNT_CFF_OP_STEM_SNAP_H 0x0c0c
+#define GFNT_CFF_OP_STEM_SNAP_V 0x0c0d
+#define GFNT_CFF_OP_FORCE_BOLD 0x0c0e
+#define GFNT_CFF_OP_LANGUAGE_GROUP 0x0c11
 
 /** Two-byte operators, spelled as 0x0c00 | the second byte. */
 #define GFNT_CFF_OP_COPYRIGHT 0x0c00
@@ -611,6 +624,39 @@ static GFNT_Result gfnt_cff_top_visit(void * user,
   }
 }
 
+/**
+ * Read a delta-encoded number array of a Private DICT into absolute values.
+ *
+ * `BlueValues` and the others state each number as the difference from the one before it,
+ * the first from zero; the sum is taken in 64 bits and saturated. An array longer than
+ * the specification allows, or a blue array of odd length (a zone is a pair), is not
+ * trusted: it is dropped to nothing, which the engine reads as "no zones", rather than
+ * half-used. @p pairs says the length must be even.
+ */
+static void gfnt_cff_delta_array(const GFNT_CffDictOp * entry, GFNT_F16Dot16 * out, size_t capacity,
+    size_t * out_count, bool pairs) {
+  int64_t sum = 0;
+  size_t i;
+
+  *out_count = 0;
+  if (entry->count > capacity || (pairs && (entry->count & 1u))) {
+    return;
+  }
+  for (i = 0; i < entry->count; i++) {
+    sum += entry->values[i];
+    out[i] = gfnt_saturate32(sum);
+  }
+  *out_count = entry->count;
+}
+
+/** An empty Private DICT: nothing stated, with the specification's defaults for the hint parameters. */
+static void gfnt_cff_private_defaults(GFNT_CffPrivate * priv) {
+  memset(priv, 0, sizeof *priv);
+  priv->hint.blue_scale = 2597;   /* 0.039625 in 16.16 */
+  priv->hint.blue_shift = 7 * GFNT_FIXED_ONE;
+  priv->hint.blue_fuzz = 1 * GFNT_FIXED_ONE;
+}
+
 /** What the Private DICT walk is filling in. */
 typedef struct GFNT_CffPrivateState {
   GFNT_CffPrivate * priv; ///< The dictionary being filled in.
@@ -639,9 +685,68 @@ static GFNT_Result gfnt_cff_private_visit(void * user,
         state->priv->nominal_width = gfnt_saturate32(entry->values[0]);
       }
       return GFNT_OK;
+    case GFNT_CFF_OP_BLUE_VALUES:
+      gfnt_cff_delta_array(entry, state->priv->hint.blue_values, GFNT_CFF_MAX_BLUES,
+          &state->priv->hint.blue_value_count, true);
+      return GFNT_OK;
+    case GFNT_CFF_OP_OTHER_BLUES:
+      gfnt_cff_delta_array(entry, state->priv->hint.other_blues, GFNT_CFF_MAX_BLUES,
+          &state->priv->hint.other_blue_count, true);
+      return GFNT_OK;
+    case GFNT_CFF_OP_FAMILY_BLUES:
+      gfnt_cff_delta_array(entry, state->priv->hint.family_blues, GFNT_CFF_MAX_BLUES,
+          &state->priv->hint.family_blue_count, true);
+      return GFNT_OK;
+    case GFNT_CFF_OP_FAMILY_OTHER_BLUES:
+      gfnt_cff_delta_array(entry, state->priv->hint.family_other_blues, GFNT_CFF_MAX_BLUES,
+          &state->priv->hint.family_other_blue_count, true);
+      return GFNT_OK;
+    case GFNT_CFF_OP_STEM_SNAP_H:
+      gfnt_cff_delta_array(entry, state->priv->hint.stem_snap_h, GFNT_CFF_MAX_STEM_SNAPS,
+          &state->priv->hint.stem_snap_h_count, false);
+      return GFNT_OK;
+    case GFNT_CFF_OP_STEM_SNAP_V:
+      gfnt_cff_delta_array(entry, state->priv->hint.stem_snap_v, GFNT_CFF_MAX_STEM_SNAPS,
+          &state->priv->hint.stem_snap_v_count, false);
+      return GFNT_OK;
+    case GFNT_CFF_OP_BLUE_SCALE:
+      if (entry->count >= 1) {
+        state->priv->hint.blue_scale = gfnt_saturate32(entry->values[0]);
+      }
+      return GFNT_OK;
+    case GFNT_CFF_OP_BLUE_SHIFT:
+      if (entry->count >= 1) {
+        state->priv->hint.blue_shift = gfnt_saturate32(entry->values[0]);
+      }
+      return GFNT_OK;
+    case GFNT_CFF_OP_BLUE_FUZZ:
+      if (entry->count >= 1) {
+        state->priv->hint.blue_fuzz = gfnt_saturate32(entry->values[0]);
+      }
+      return GFNT_OK;
+    case GFNT_CFF_OP_STD_HW:
+      if (entry->count >= 1) {
+        state->priv->hint.std_hw = gfnt_saturate32(entry->values[0]);
+      }
+      return GFNT_OK;
+    case GFNT_CFF_OP_STD_VW:
+      if (entry->count >= 1) {
+        state->priv->hint.std_vw = gfnt_saturate32(entry->values[0]);
+      }
+      return GFNT_OK;
+    case GFNT_CFF_OP_FORCE_BOLD:
+      if (entry->count >= 1) {
+        state->priv->hint.force_bold = entry->values[0] != 0;
+      }
+      return GFNT_OK;
+    case GFNT_CFF_OP_LANGUAGE_GROUP:
+      if (entry->count >= 1) {
+        state->priv->hint.language_group = (int32_t)(entry->values[0] >> 16);
+      }
+      return GFNT_OK;
     default:
-      // The blue values, the stem widths, the language group: hinting
-      // parameters, and there is no hinter (design.md section 8.5).
+      // The rest of the Private DICT (ExpansionFactor, InitialRandomSeed) is not
+      // read: nothing here uses it.
       return GFNT_OK;
   }
 }
@@ -654,7 +759,7 @@ static GFNT_Result gfnt_cff_private_parse(const GFNT_Reader * table,
   GFNT_Reader dict;
   GFNT_Result result;
 
-  memset(out_private, 0, sizeof *out_private);
+  gfnt_cff_private_defaults(out_private);
   state.priv = out_private;
   state.dict_at = offset;
   state.limit = table->length;
@@ -877,6 +982,9 @@ GFNT_Result gfnt_cff_parse(const GFNT_Face * face, void * out,
     if (result != GFNT_OK) {
       return result;
     }
+  }
+  else {
+    gfnt_cff_private_defaults(&cff->priv);
   }
   return GFNT_OK;
 }
@@ -1510,7 +1618,7 @@ GFNT_Result gfnt_cff_private_for_glyph(const GFNT_Face * face,
   if (!state.stated) {
     // A Font DICT with no Private DICT: no local subroutines and no width
     // defaults, which is a font that draws but states nothing.
-    memset(out_private, 0, sizeof *out_private);
+    gfnt_cff_private_defaults(out_private);
     return GFNT_OK;
   }
   return gfnt_cff_private_parse(&table, state.offset, state.size, out_private,

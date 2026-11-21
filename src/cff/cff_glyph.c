@@ -249,6 +249,44 @@ GFNT_Result gfnt_cff_load(const GFNT_Face * face, uint32_t glyph,
       out_metrics, error);
 }
 
+GFNT_Result gfnt_cff_load_hinted(const GFNT_Face * face, uint32_t glyph, GFNT_Outline * outline,
+    GFNT_CharstringMetrics * out_metrics, GFNT_CharstringHints * out_hints,
+    GFNT_CffHintParams * out_params, GFNT_Error * error) {
+  const GFNT_Cff * cff = NULL;
+  GFNT_CffSubrs local;
+  GFNT_CffSubrs global;
+  GFNT_CffSeac seac;
+  GFNT_CharstringContext context;
+  GFNT_CharstringType type = GFNT_CHARSTRING_TYPE2;
+  const uint8_t * bytes = NULL;
+  size_t length = 0;
+  GFNT_Result result;
+
+  if (!face || !outline || !out_hints) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_cff_context(face, glyph, &cff, &local, &global, &seac, &context, &type, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (out_params) {
+    GFNT_CffPrivate priv;
+
+    result = gfnt_cff_private_for_glyph(face, cff, glyph, &priv, error);
+    if (result != GFNT_OK) {
+      return result;
+    }
+    *out_params = priv.hint;
+  }
+  result = gfnt_cff_element_bytes(&local.table, &cff->charstrings, glyph, &bytes, &length);
+  if (result != GFNT_OK) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF, 0, glyph,
+        "a CharStrings entry whose bytes are not in the table");
+  }
+  context.hints = out_hints;
+  return gfnt_charstring_run(type, bytes, length, &context, outline, out_metrics, error);
+}
+
 GFNT_Result gfnt_cff_is_composite(const GFNT_Face * face, uint32_t glyph,
     bool * out_composite, GFNT_Error * error) {
   GFNT_Outline * outline = NULL;

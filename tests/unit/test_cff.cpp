@@ -2464,6 +2464,163 @@ TEST(Cff, ACffWithNoPrivateDictHasTheDefaultsToo) {
   EXPECT_EQ(priv.hint.blue_scale, 2597);
 }
 
+namespace {
+
+struct HintedGlyph {
+  GFNT_CharstringHints hints;
+  size_t points = 0;
+  GFNT_Result result = GFNT_ERR_INTERNAL;
+};
+
+HintedGlyph load_hinted(const GFNT_Face * face, uint32_t glyph) {
+  HintedGlyph out;
+  GFNT_Outline * outline = nullptr;
+  EXPECT_EQ(gfnt_outline_create(nullptr, &outline, nullptr), GFNT_OK);
+  out.result = gfnt_cff_load_hinted(face, glyph, outline, nullptr, &out.hints, nullptr, nullptr);
+  out.points = gfnt_outline_point_count(outline);
+  gfnt_outline_destroy(outline);
+  return out;
+}
+
+int32_t units(int32_t v) { return v * 65536; }
+
+}  // namespace
+
+TEST(CffHints, StemsAreResolvedToAbsoluteEdgesInDeclarationOrder) {
+  // `stems`: hstemhm 100 50, 300 50 (the second is 300 above the top of the first) and the same
+  // vertically, then a hintmask of all four.
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedGlyph g = load_hinted(font, 2);
+  ASSERT_EQ(g.result, GFNT_OK);
+  ASSERT_TRUE(g.hints.valid);
+  ASSERT_EQ(g.hints.stem_count, 4u);
+  EXPECT_EQ(g.hints.stems[0].edge, units(100));
+  EXPECT_EQ(g.hints.stems[0].width, units(50));
+  EXPECT_FALSE(g.hints.stems[0].vertical);
+  EXPECT_EQ(g.hints.stems[1].edge, units(450));   // 100 + 50 + 300
+  EXPECT_EQ(g.hints.stems[1].width, units(50));
+  EXPECT_FALSE(g.hints.stems[1].vertical);
+  EXPECT_EQ(g.hints.stems[2].edge, units(100));   // the vertical run starts again from 0
+  EXPECT_TRUE(g.hints.stems[2].vertical);
+  EXPECT_EQ(g.hints.stems[3].edge, units(450));
+  ASSERT_EQ(g.hints.mask_count, 1u);
+  EXPECT_EQ(g.hints.masks[0].first_point, 0u);   // before the first point: the moveto
+  EXPECT_EQ(g.hints.masks[0].bits[0], 0xF0);
+}
+
+TEST(CffHints, AMaskOfSeveralBytesAndTenStems) {
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedGlyph g = load_hinted(font, 3);
+  ASSERT_EQ(g.result, GFNT_OK);
+  ASSERT_TRUE(g.hints.valid);
+  EXPECT_EQ(g.hints.stem_count, 10u);
+  ASSERT_EQ(g.hints.mask_count, 1u);
+  EXPECT_EQ(g.hints.masks[0].bits[0], 0xAA);
+  EXPECT_EQ(g.hints.masks[0].bits[1], 0xC0);
+  // 20-wide stems at 100 (then 100+20+150=270...): the fifth horizontal stem
+  EXPECT_EQ(g.hints.stems[4].edge, units(100 + 20 + 150 + 20 + 200 + 20 + 250 + 20 + 300));
+}
+
+TEST(CffHints, StemsDeclaredInASubroutineAreRecordedToo) {
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedGlyph g = load_hinted(font, 4);
+  ASSERT_EQ(g.result, GFNT_OK);
+  ASSERT_TRUE(g.hints.valid);
+  EXPECT_EQ(g.hints.stem_count, 3u);
+  ASSERT_EQ(g.hints.mask_count, 1u);
+  EXPECT_EQ(g.hints.masks[0].bits[0], 0xE0);
+}
+
+TEST(CffHints, OperandsLeftOnTheStackAtAHintMaskAreAnImplicitVerticalStem) {
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedGlyph g = load_hinted(font, 5);
+  ASSERT_EQ(g.result, GFNT_OK);
+  ASSERT_TRUE(g.hints.valid);
+  ASSERT_EQ(g.hints.stem_count, 2u);
+  EXPECT_TRUE(g.hints.stems[0].vertical);
+  EXPECT_TRUE(g.hints.stems[1].vertical);
+  EXPECT_EQ(g.hints.stems[1].edge, units(450));
+  EXPECT_EQ(g.hints.masks[0].bits[0], 0xC0);
+}
+
+TEST(CffHints, ACounterMaskIsNotAHintMask) {
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedGlyph g = load_hinted(font, 6);
+  ASSERT_EQ(g.result, GFNT_OK);
+  ASSERT_EQ(g.hints.mask_count, 1u);
+  EXPECT_EQ(g.hints.masks[0].bits[0], 0x90);   // the hintmask's, not the cntrmask's 0xF0
+}
+
+TEST(CffHints, AGlyphWithStemsAndNoMaskHasNoMasks) {
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedGlyph g = load_hinted(font, 7);   // widthstem: a vstem with the width in front
+  ASSERT_EQ(g.result, GFNT_OK);
+  EXPECT_TRUE(g.hints.valid);
+  EXPECT_EQ(g.hints.stem_count, 2u);
+  EXPECT_EQ(g.hints.mask_count, 0u);
+}
+
+TEST(CffHints, AGlyphWithNoHintsIsValidAndEmpty) {
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedGlyph g = load_hinted(font, 0);
+  ASSERT_EQ(g.result, GFNT_OK);
+  EXPECT_TRUE(g.hints.valid);
+  EXPECT_EQ(g.hints.stem_count, 0u);
+  EXPECT_EQ(g.hints.mask_count, 0u);
+}
+
+TEST(CffHints, RecordingChangesNothingTheRunProduces) {
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  for (uint32_t glyph = 0; glyph < 8; glyph++) {
+    GFNT_Outline * plain = nullptr;
+    ASSERT_EQ(gfnt_face_glyph_outline(font, glyph, nullptr, nullptr, &plain, nullptr), GFNT_OK);
+    HintedGlyph g = load_hinted(font, glyph);
+    ASSERT_EQ(g.result, GFNT_OK);
+    EXPECT_EQ(gfnt_outline_point_count(plain), g.points) << glyph;
+    gfnt_outline_destroy(plain);
+  }
+}
+
+TEST(CffHints, AnAccentedCharacterHasNoValidHints) {
+  Fixture font("cff-seac.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
+  unsigned composite = 0;
+  for (uint32_t g = 0; g < glyphs; g++) {
+    bool is = false;
+    ASSERT_EQ(gfnt_face_glyph_is_composite(font, g, &is, nullptr), GFNT_OK);
+    if (!is) {
+      continue;
+    }
+    composite++;
+    HintedGlyph h = load_hinted(font, g);
+    ASSERT_EQ(h.result, GFNT_OK);
+    EXPECT_FALSE(h.hints.valid) << g;
+  }
+  EXPECT_GT(composite, 0u);
+}
+
+TEST(CffHints, NullArgumentsAreRefused) {
+  Fixture font("cff-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  GFNT_CharstringHints hints;
+  GFNT_Outline * outline = nullptr;
+  ASSERT_EQ(gfnt_outline_create(nullptr, &outline, nullptr), GFNT_OK);
+  EXPECT_EQ(gfnt_cff_load_hinted(nullptr, 0, outline, nullptr, &hints, nullptr, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_cff_load_hinted(font, 0, nullptr, nullptr, &hints, nullptr, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_cff_load_hinted(font, 0, outline, nullptr, nullptr, nullptr, nullptr), GFNT_ERR_INVALID);
+  gfnt_outline_destroy(outline);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -211,6 +211,8 @@ typedef struct GFNT_CsState {
   bool contour_open;                 ///< Whether a contour has been begun.
 
   size_t stems;                      ///< Stem hints declared so far.
+  GFNT_CharstringHints * hints;      ///< Where stems and masks are recorded, or NULL.
+  size_t point_base;                 ///< The outline's point count when this run began.
   bool width_done;                   ///< Whether the leading width has been decided.
   GFNT_F16Dot16 width;               ///< The advance.
   bool width_stated;                 ///< Whether the charstring stated it.
@@ -273,6 +275,62 @@ static GFNT_Result gfnt_cs_push(GFNT_CsState * state, int64_t value) {
 /** A 16.16 operand as a 26.6 coordinate, rounded the library's one way. */
 static GFNT_F26Dot6 gfnt_cs_to_26dot6(int64_t value) {
   return gfnt_saturate32(gfnt_round_shift(gfnt_clamp64(value), 10));
+}
+
+/**
+ * Record the stems the stack holds as one operator's declaration.
+ *
+ * The operands are a start (from 0, or from the top of the stem before in this operator) and
+ * a distance, pairs of them, so the edge of each pair is resolved here, absolutely. A glyph
+ * that declares more than the bound, or that this run did not start (a nested accent), is
+ * marked not valid rather than truncated, because a half-described hint set is worse than
+ * none.
+ */
+static void gfnt_cs_record_stems(GFNT_CsState * state, bool vertical) {
+  GFNT_CharstringHints * hints = state->hints;
+  int64_t position = 0;
+  size_t i;
+
+  if (!hints || !hints->valid) {
+    return;
+  }
+  for (i = 0; i + 1 < state->count; i += 2) {
+    if (hints->stem_count >= GFNT_CS_MAX_STEMS) {
+      hints->valid = false;
+      return;
+    }
+    position = gfnt_add_clamp64(position, state->stack[i]);
+    hints->stems[hints->stem_count].edge = gfnt_saturate32(position);
+    hints->stems[hints->stem_count].width = gfnt_saturate32(state->stack[i + 1]);
+    hints->stems[hints->stem_count].vertical = vertical;
+    hints->stem_count++;
+    position = gfnt_add_clamp64(position, state->stack[i + 1]);
+  }
+}
+
+/** Record a hint mask that takes effect at the next point this run draws. */
+static void gfnt_cs_record_mask(GFNT_CsState * state, const uint8_t * bits, size_t bytes) {
+  GFNT_CharstringHints * hints = state->hints;
+  size_t at;
+  GFNT_CharstringMask * mask;
+
+  if (!hints || !hints->valid) {
+    return;
+  }
+  at = gfnt_outline_point_count(state->outline) - state->point_base;
+  if (hints->mask_count > 0 && hints->masks[hints->mask_count - 1].first_point == at) {
+    mask = &hints->masks[hints->mask_count - 1];   /* two masks with no point between: the later one rules */
+  }
+  else {
+    if (hints->mask_count >= GFNT_CS_MAX_MASKS) {
+      hints->valid = false;
+      return;
+    }
+    mask = &hints->masks[hints->mask_count++];
+  }
+  mask->first_point = (uint32_t)at;
+  memset(mask->bits, 0, sizeof mask->bits);
+  memcpy(mask->bits, bits, bytes < sizeof mask->bits ? bytes : sizeof mask->bits);
 }
 
 /** Add the current point to the open contour. */
@@ -1173,6 +1231,7 @@ static GFNT_Result gfnt_cs_run_frame(GFNT_CsState * state,
           // rule: a charstring whose first operator is vstem has exactly the
           // same odd operand count to explain.
           gfnt_cs_width(state, 0, true);
+          gfnt_cs_record_stems(state, op == GFNT_CS_VSTEM || op == GFNT_CS_VSTEMHM);
           state->stems += state->count / 2;
         }
         state->count = 0;
@@ -1189,6 +1248,7 @@ static GFNT_Result gfnt_cs_run_frame(GFNT_CsState * state,
         gfnt_cs_width(state, 0, true);
         // Operands still on the stack here are an implicit vstem declaration,
         // which is the one place a stem count grows without a stem operator.
+        gfnt_cs_record_stems(state, true);
         state->stems += state->count / 2;
         state->count = 0;
         mask_bytes = (state->stems + 7) / 8;
@@ -1196,9 +1256,13 @@ static GFNT_Result gfnt_cs_run_frame(GFNT_CsState * state,
           return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor,
               "a hintmask whose mask bytes run off the end of the charstring");
         }
-        // The mask says which declared hints are active. Nothing here hints
-        // (design.md section 8.5), so it is skipped - by the count its stems
-        // imply, which is why the stem count has to be right even so.
+        // The mask says which declared hints are active, and takes effect at the next point
+        // drawn. It is recorded for an engine that hints (a cntrmask is counter control, not a
+        // hint mask, and is not); either way it is skipped by the count its stems imply, which
+        // is why the stem count has to be right.
+        if (op == GFNT_CS_HINTMASK) {
+          gfnt_cs_record_mask(state, bytes + cursor, mask_bytes);
+        }
         cursor += mask_bytes;
         break;
       }
@@ -1687,6 +1751,17 @@ GFNT_Result gfnt_charstring_run_nested(GFNT_CharstringType type,
   state.outline = outline;
   state.error = error;
   state.in_seac = in_seac;
+  if (context->hints) {
+    if (in_seac) {
+      context->hints->valid = false;   /* an accent's own stems are a second set */
+    }
+    else {
+      memset(context->hints, 0, sizeof *context->hints);
+      context->hints->valid = true;
+    }
+    state.hints = in_seac ? NULL : context->hints;
+    state.point_base = gfnt_outline_point_count(outline);
+  }
   if (context->limits) {
     state.limits = *context->limits;
   }
@@ -1717,6 +1792,9 @@ GFNT_Result gfnt_charstring_run_nested(GFNT_CharstringType type,
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, 0, 0, GFNT_GLYPH_NONE,
         "a Type 1 charstring that never ran hsbw or sbw, so it states neither "
         "an advance nor a side bearing and there is nowhere else to find them");
+  }
+  if (state.hints && state.seac) {
+    state.hints->valid = false;
   }
   if (out_metrics) {
     out_metrics->width = state.width;

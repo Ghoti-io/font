@@ -126,6 +126,26 @@ GFNT_Result gfnt_cff2_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
     GFNT_CharstringType * out_type, const uint8_t ** out_bytes,
     size_t * out_length, GFNT_Error * error);
 
+/**
+ * ::gfnt_cff_load(), also recording the glyph's hint data.
+ *
+ * The outline is the unhinted one, exactly as ::gfnt_cff_load() gives it; what is added is
+ * the stems and hint masks the charstring declared and the hinting parameters of the Private
+ * DICT that governs the glyph, which together are what an engine that hints needs.
+ *
+ * @param face The face.
+ * @param glyph The glyph index.
+ * @param outline Receives the contours, appended.
+ * @param out_metrics Receives the advance and counts, or NULL.
+ * @param out_hints Receives the stems and masks (see ::GFNT_CharstringHints::valid).
+ * @param out_params Receives the Private DICT's hint parameters, or NULL.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return As ::gfnt_cff_load().
+ */
+GFNT_Result gfnt_cff_load_hinted(const GFNT_Face * face, uint32_t glyph, GFNT_Outline * outline,
+    GFNT_CharstringMetrics * out_metrics, GFNT_CharstringHints * out_hints,
+    GFNT_CffHintParams * out_params, GFNT_Error * error);
+
 /** What a CFF2 glyph's charstring counted, by running it at the default location. */
 GFNT_Result gfnt_cff2_glyph_metrics(const GFNT_Face * face, uint32_t glyph,
     GFNT_CharstringMetrics * out_metrics, GFNT_Error * error);

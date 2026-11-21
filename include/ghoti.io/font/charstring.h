@@ -139,6 +139,56 @@ typedef struct GFNT_CharstringBlend {
   uint32_t default_vsindex; ///< The `vsindex` a charstring has until it says otherwise.
 } GFNT_CharstringBlend;
 
+/** The most stems a Type 2 charstring may declare (the specification's 96). */
+#define GFNT_CS_MAX_STEMS 96
+/** The most hint-mask changes ::GFNT_CharstringHints records for one glyph. */
+#define GFNT_CS_MAX_MASKS 128
+
+/**
+ * @brief One stem hint, as the charstring declared it.
+ *
+ * `hstem` and `vstem` operands arrive as a distance from the previous edge, and this holds
+ * them resolved: @c edge is the first edge in absolute font units and @c width the stated
+ * distance to the second, **as stated**, so a ghost edge (-20 for the top of a stem whose
+ * bottom is the edge, -21 for the bottom of one whose top is) is still -20 or -21 and the
+ * engine decides what it means.
+ */
+typedef struct GFNT_CharstringStem {
+  GFNT_F16Dot16 edge;  ///< The first edge, 16.16 font units, absolute.
+  GFNT_F16Dot16 width; ///< The stated distance to the second edge, 16.16.
+  bool vertical;       ///< `vstem` or `vstemhm`; false for the horizontal stems a y hinter uses.
+} GFNT_CharstringStem;
+
+/**
+ * @brief Which stems are active from a point of the outline on.
+ *
+ * A `hintmask` takes effect at the **next** path point, which is how the point index is
+ * defined here: the index, into the outline this run added to (counted from the first
+ * point this run added), of the first point drawn under this mask. Bit @c i of @c bits (in the specification's
+ * order: bit 7 of byte 0 is stem 0) says whether stem @c i is active.
+ */
+typedef struct GFNT_CharstringMask {
+  uint32_t first_point;                      ///< First outline point drawn under this mask.
+  uint8_t bits[(GFNT_CS_MAX_STEMS + 7) / 8]; ///< The mask bytes as the charstring gave them.
+} GFNT_CharstringMask;
+
+/**
+ * @brief The hint data of one glyph's charstring, for an engine that hints.
+ *
+ * Caller-owned and fixed in size, so recording allocates nothing. @c valid is false when
+ * the glyph cannot be described (more stems or mask changes than the bounds above, or an
+ * accented character assembled from two charstrings, whose hints are two sets); an engine
+ * treats such a glyph as unhinted, which loses the hints and never the outline. A glyph with
+ * stems and no mask has every stem active throughout. Type 2 only so far.
+ */
+typedef struct GFNT_CharstringHints {
+  bool valid;                                   ///< Whether the rest describes the glyph.
+  size_t stem_count;                            ///< Stems declared (horizontal and vertical).
+  GFNT_CharstringStem stems[GFNT_CS_MAX_STEMS]; ///< In declaration order, which is the mask's.
+  size_t mask_count;                            ///< Hint-mask changes.
+  GFNT_CharstringMask masks[GFNT_CS_MAX_MASKS]; ///< In outline order.
+} GFNT_CharstringHints;
+
 /**
  * @brief Everything an interpreter needs that is not the charstring itself.
  */
@@ -180,6 +230,13 @@ typedef struct GFNT_CharstringContext {
    * store.
    */
   const GFNT_CharstringBlend * blend;
+
+  /**
+   * Where to record the glyph's stems and hint masks, or NULL for not at all.
+   *
+   * Cleared at the start of the run. Recording changes nothing the run produces.
+   */
+  GFNT_CharstringHints * hints;
 } GFNT_CharstringContext;
 
 /**

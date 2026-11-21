@@ -6208,6 +6208,25 @@ TEST(ShapeTrak, TheAdvanceIsTheFloorOfTheTrackingPlusAHalf) {
   }
 }
 
+TEST(ShapeTrak, AnAbsurdPointSizeSaturatesTheAdvanceInsteadOfOverflowing) {
+  Font font(small_font({{GFNT_TAG('t', 'r', 'a', 'k'), trak_table_10_20_40()}}));
+  Glyphs g;
+  Request request;
+
+  EXPECT_EQ(shape(font, cps("A"), request, &g), GFNT_OK);
+  const int32_t plain = g[0].x_advance;
+  for (const float size : {1.0e30f, 3.0e38f}) {
+    request.point_size = size;
+    ASSERT_EQ(shape(font, cps("A"), request, &g), GFNT_OK) << size;
+    EXPECT_EQ(g[0].x_advance, INT32_MAX) << size;
+    EXPECT_EQ(g[0].x_offset, INT32_MAX / 2) << size;
+  }
+  request.point_size = -1.0e30f;
+  if (shape(font, cps("A"), request, &g) == GFNT_OK) {
+    EXPECT_LE(g[0].x_advance, plain);
+  }
+}
+
 TEST(ShapeKerx, WithTuplesAValueIsTheOffsetOfTheFirstOfAListOfThem) {
   // One pair, A B, whose value is the offset of two tuples, -100 and -10.
   Bytes body;

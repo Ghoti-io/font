@@ -95,6 +95,7 @@ static float trak_tracking(const GFNT_Reader * r, size_t data, float ptem,
   float t;
   float v0;
   float v1;
+  float tracking;
 
   for (i = 0; i < tracks && !*bad; i++) {
     size_t e = data + 8 + 8 * (size_t)i;
@@ -127,7 +128,24 @@ static float trak_tracking(const GFNT_Reader * r, size_t data, float ptem,
   t = s0 == s1 ? 0.0f : (ptem - s0) / (s1 - s0);
   v0 = (float)(int16_t)gfnt_lr_u16(r, values + 2 * (size_t)(at - 1), bad);
   v1 = (float)(int16_t)gfnt_lr_u16(r, values + 2 * (size_t)at, bad);
-  return t * v1 + (1.0f - t) * v0;
+  tracking = t * v1 + (1.0f - t) * v0;
+  if (!(tracking == tracking)) {
+    /* A size so far outside the table that t * v1 and (1 - t) * v0 overflow to
+     * opposite infinities. The same line written from v0 does not cancel. */
+    tracking = v1 == v0 ? v0 : v0 + t * (v1 - v0);
+  }
+  return tracking;
+}
+
+/** @p a + @p b, saturating at the ends of the int32 range. */
+static int32_t trak_add(int32_t a, int32_t b) {
+  if (b > 0 && a > INT32_MAX - b) {
+    return INT32_MAX;
+  }
+  if (b < 0 && a < INT32_MIN - b) {
+    return INT32_MIN;
+  }
+  return a + b;
 }
 
 GFNT_Result gfnt_trak_apply(const GFNT_Face * face, GFNT_LBuffer * b,
@@ -158,12 +176,12 @@ GFNT_Result gfnt_trak_apply(const GFNT_Face * face, GFNT_LBuffer * b,
   offset = advance / 2;
   for (i = 0; i < b->len; i++) {
     if (vertical) {
-      b->pos[i].y_advance += advance;
-      b->pos[i].y_offset += offset;
+      b->pos[i].y_advance = trak_add(b->pos[i].y_advance, advance);
+      b->pos[i].y_offset = trak_add(b->pos[i].y_offset, offset);
     }
     else {
-      b->pos[i].x_advance += advance;
-      b->pos[i].x_offset += offset;
+      b->pos[i].x_advance = trak_add(b->pos[i].x_advance, advance);
+      b->pos[i].x_offset = trak_add(b->pos[i].x_offset, offset);
     }
   }
   return GFNT_OK;

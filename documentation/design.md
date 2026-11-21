@@ -3099,11 +3099,11 @@ Designed for now because its needs are concrete and cheap to keep open:
 | --- | --- |
 | `FontFile` (Type 1), `FontFile2` (TrueType), `FontFile3` (`Type1C`, `CIDFontType0C`, `OpenType`) | §7.1, §7.4: Type 1, sfnt, bare CFF including CID-keyed |
 | Fonts with no `cmap`, `name` or `OS/2` | §7.8: per-operation requirements |
-| Glyph names → Unicode for text extraction | `post` names, the **Adobe Glyph List** (vendored, BSD-3), the `uniXXXX`/`uXXXX[XX]` conventions, `gXX`/`cidXX` forms |
+| Glyph names → Unicode for text extraction | **implemented** (`gfnt_glyph_name_to_unicode()`): the **Adobe Glyph List** and the Zapf Dingbats names, generated from Adobe's pinned files (BSD-3, notice in `documentation/agl-license.txt`), by the specification's procedure (suffix, underscore components, `uniXXXX`, `uXXXX`); `gXX` and `cidXX` have no text and say so |
 | The standard 14 fonts' metrics without their files | AFM reading (§7.1); the Core 14 AFMs are a fixture the PDF library carries |
 | `StandardEncoding`, `WinAnsiEncoding`, `MacRomanEncoding`, `MacExpertEncoding`, the Symbol and ZapfDingbats built-in encodings | vendored tables in `write.h`'s PDF helpers; not implemented |
 | Embedding a subset with `CIDToGIDMap` identity, or renumbered with a `Differences` array | §12.3's `retain_gids` and its inverse |
-| A `ToUnicode` CMap and a `W`/`Widths` array for the subset | not implemented; they would be built from the subset's cluster and advance data |
+| A `ToUnicode` CMap and a `W` array for the subset | **implemented** (`pdf.h`): `gfnt_pdf_tounicode()` writes the CMap from the (code, codepoints) pairs the caller has, as `bfchar` and `bfrange` within the specification's limits; `gfnt_pdf_widths()` writes the `W` elements for glyph ids, scaled to 1000 units to the thousandth in integer arithmetic. A simple font's `Widths` array waits on the encodings above |
 | Predefined CJK CMaps (`Adobe-Japan1-6`, ...) | **not here**: they are a large separate data set (`poppler-data` on Debian) and a provider seam; `Identity-H`/`V` are built in |
 | Type 3 fonts | **not here**: their glyphs are PDF content streams, which is the PDF library's interpreter |
 | `fsType` embedding permissions | reported, never enforced (§17.9); the PDF library decides |

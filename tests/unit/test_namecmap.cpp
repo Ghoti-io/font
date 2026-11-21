@@ -13,6 +13,9 @@
 #include "sfnt_builder.h"
 
 #include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,6 +23,8 @@
 #include <ghoti.io/font/blob.h>
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/face.h>
+#include <ghoti.io/font/glyph.h>
+#include <ghoti.io/font/metrics.h>
 
 namespace {
 
@@ -117,6 +122,47 @@ TEST(NameCmap, AFaceThatNamesNothingIsStillRefused) {
   gfnt_error_clear(&error);
   uint32_t g = 0;
   EXPECT_EQ(gfnt_face_glyph_for_codepoint(f.face, 'A', &g, &error), GFNT_ERR_UNSUPPORTED);
+}
+
+TEST(NameCmap, ABareCffIsReadThroughItsCharsetNames) {
+  std::ifstream in(gfnttest::data("fonts/bare.cff"), std::ios::binary);
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  ASSERT_FALSE(bytes.empty());
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  ASSERT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_BORROWED, nullptr, nullptr,
+      &blob, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, nullptr), GFNT_OK);
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(face, &glyphs, nullptr), GFNT_OK);
+  // Every glyph whose name is a single character is found by that character, and the glyph
+  // found names the same character (the lowest glyph of a plain name).
+  unsigned found = 0;
+  for (uint32_t g = 1; g < glyphs; g++) {
+    char * name = nullptr;
+    ASSERT_EQ(gfnt_face_glyph_name(face, g, nullptr, &name, nullptr, nullptr), GFNT_OK);
+    uint32_t cps[2];
+    size_t count = 0;
+    ASSERT_EQ(gfnt_glyph_name_to_unicode(name, false, cps, 2, &count, nullptr), GFNT_OK);
+    if (count == 1 && !std::strchr(name, '.')) {
+      uint32_t got = 0;
+      ASSERT_EQ(gfnt_face_glyph_for_codepoint(face, cps[0], &got, nullptr), GFNT_OK) << name;
+      EXPECT_NE(got, 0u) << name;
+      char * back = nullptr;
+      ASSERT_EQ(gfnt_face_glyph_name(face, got, nullptr, &back, nullptr, nullptr), GFNT_OK);
+      uint32_t again[2];
+      size_t n2 = 0;
+      ASSERT_EQ(gfnt_glyph_name_to_unicode(back, false, again, 2, &n2, nullptr), GFNT_OK);
+      EXPECT_EQ(n2, 1u) << name;
+      EXPECT_EQ(again[0], cps[0]) << name;
+      gfnt_glyph_name_free(nullptr, back);
+      found++;
+    }
+    gfnt_glyph_name_free(nullptr, name);
+  }
+  EXPECT_GT(found, 0u) << "the fixture has no glyph named as a character";
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
 }
 
 int main(int argc, char ** argv) {

@@ -29,8 +29,6 @@
  * declares the typedef.
  *
  * `make check-symbols` fails if an exported symbol is missing from this list.
- *
- * See CONVENTIONS.md section 4.
  */
 
 #ifndef GHOTI_IO_GFNT_NAMESPACE_H

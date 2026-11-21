@@ -144,7 +144,7 @@ GFNT_Result gfnt_cff2_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
  */
 GFNT_Result gfnt_cff_load_hinted(const GFNT_Face * face, uint32_t glyph, GFNT_Outline * outline,
     GFNT_CharstringMetrics * out_metrics, GFNT_CharstringHints * out_hints,
-    GFNT_CffHintParams * out_params, GFNT_Error * error);
+    GFNT_CharstringHintParams * out_params, GFNT_Error * error);
 
 /** What a CFF2 glyph's charstring counted, by running it at the default location. */
 GFNT_Result gfnt_cff2_glyph_metrics(const GFNT_Face * face, uint32_t glyph,

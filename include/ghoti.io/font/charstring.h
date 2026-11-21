@@ -139,6 +139,41 @@ typedef struct GFNT_CharstringBlend {
   uint32_t default_vsindex; ///< The `vsindex` a charstring has until it says otherwise.
 } GFNT_CharstringBlend;
 
+/** The most numbers a blue zone array or a StemSnap array may hold (the specification's 14, 10 and 12). */
+#define GFNT_CS_MAX_BLUES 14
+#define GFNT_CS_MAX_STEM_SNAPS 12
+
+/**
+ * The hinting parameters of a font program's Private dictionary (CFF's, or Type 1's), for the engine of design.md section 8.5.
+ *
+ * Every value is 16.16 font units unless said otherwise. The arrays are **absolute**: a
+ * DICT states them as deltas (each number is the difference from the one before), and
+ * they are summed here, once, so that nothing downstream has to remember. Where the
+ * dictionary says nothing the field holds the specification's default, so a font with no
+ * hint parameters at all behaves as the specification says it does.
+ */
+typedef struct GFNT_CharstringHintParams {
+  GFNT_F16Dot16 blue_values[GFNT_CS_MAX_BLUES];       ///< Pairs: bottom then top of each zone.
+  size_t blue_value_count;                             ///< 0 or an even number.
+  GFNT_F16Dot16 other_blues[GFNT_CS_MAX_BLUES];       ///< Descender zones.
+  size_t other_blue_count;
+  GFNT_F16Dot16 family_blues[GFNT_CS_MAX_BLUES];
+  size_t family_blue_count;
+  GFNT_F16Dot16 family_other_blues[GFNT_CS_MAX_BLUES];
+  size_t family_other_blue_count;
+  GFNT_F16Dot16 blue_scale;   ///< `BlueScale`, default 0.039625.
+  GFNT_F16Dot16 blue_shift;   ///< `BlueShift`, default 7.
+  GFNT_F16Dot16 blue_fuzz;    ///< `BlueFuzz`, default 1.
+  GFNT_F16Dot16 std_hw;       ///< `StdHW`; 0 when not stated.
+  GFNT_F16Dot16 std_vw;       ///< `StdVW`; 0 when not stated.
+  GFNT_F16Dot16 stem_snap_h[GFNT_CS_MAX_STEM_SNAPS]; ///< `StemSnapH`, ascending.
+  size_t stem_snap_h_count;
+  GFNT_F16Dot16 stem_snap_v[GFNT_CS_MAX_STEM_SNAPS];
+  size_t stem_snap_v_count;
+  bool force_bold;            ///< `ForceBold`.
+  int32_t language_group;     ///< `LanguageGroup`, 0 (Latin-like) when not stated.
+} GFNT_CharstringHintParams;
+
 /** The most stems a Type 2 charstring may declare (the specification's 96). */
 #define GFNT_CS_MAX_STEMS 96
 /** The most hint-mask changes ::GFNT_CharstringHints records for one glyph. */
@@ -367,6 +402,24 @@ GFNT_API GFNT_Result gfnt_face_glyph_charstring(const GFNT_Face * face,
  */
 GFNT_API GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
     uint32_t glyph, GFNT_CharstringMetrics * out_metrics, GFNT_Error * error);
+
+/**
+ * @brief A glyph's hint data: the stems and hint masks its charstring declares and the
+ *   hinting parameters of the Private dictionary that governs it.
+ *
+ * For an engine that hints (or a tool that inspects hints). The outline is not produced; run
+ * ::gfnt_face_glyph_outline() for that. Costs a run of the charstring.
+ *
+ * @param face The face (CFF only so far; a face with no `CFF ` is ::GFNT_ERR_UNSUPPORTED).
+ * @param glyph The glyph index.
+ * @param out_hints Receives the stems and masks (see ::GFNT_CharstringHints::valid).
+ * @param out_params Receives the Private dictionary's parameters, or NULL.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID; ::GFNT_ERR_UNSUPPORTED; ::GFNT_ERR_CORRUPT;
+ *   ::GFNT_ERR_LIMIT; ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_face_glyph_hints(const GFNT_Face * face, uint32_t glyph,
+    GFNT_CharstringHints * out_hints, GFNT_CharstringHintParams * out_params, GFNT_Error * error);
 
 #ifdef __cplusplus
 }

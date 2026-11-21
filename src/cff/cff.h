@@ -41,6 +41,7 @@
 #ifndef GHOTI_IO_GFNT_CFF_H
 #define GHOTI_IO_GFNT_CFF_H
 
+#include <ghoti.io/font/charstring.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/macros.h>
@@ -106,41 +107,6 @@ typedef struct GFNT_CffIndex {
   size_t end;        ///< One past the INDEX's last byte.
 } GFNT_CffIndex;
 
-/** The most numbers a blue zone array or a StemSnap array may hold (the specification's 14, 10 and 12). */
-#define GFNT_CFF_MAX_BLUES 14
-#define GFNT_CFF_MAX_STEM_SNAPS 12
-
-/**
- * The hinting parameters of a Private DICT, for the engine of design.md section 8.5.
- *
- * Every value is 16.16 font units unless said otherwise. The arrays are **absolute**: a
- * DICT states them as deltas (each number is the difference from the one before), and
- * they are summed here, once, so that nothing downstream has to remember. Where the
- * dictionary says nothing the field holds the specification's default, so a font with no
- * hint parameters at all behaves as the specification says it does.
- */
-typedef struct GFNT_CffHintParams {
-  GFNT_F16Dot16 blue_values[GFNT_CFF_MAX_BLUES];       ///< Pairs: bottom then top of each zone.
-  size_t blue_value_count;                             ///< 0 or an even number.
-  GFNT_F16Dot16 other_blues[GFNT_CFF_MAX_BLUES];       ///< Descender zones.
-  size_t other_blue_count;
-  GFNT_F16Dot16 family_blues[GFNT_CFF_MAX_BLUES];
-  size_t family_blue_count;
-  GFNT_F16Dot16 family_other_blues[GFNT_CFF_MAX_BLUES];
-  size_t family_other_blue_count;
-  GFNT_F16Dot16 blue_scale;   ///< `BlueScale`, default 0.039625.
-  GFNT_F16Dot16 blue_shift;   ///< `BlueShift`, default 7.
-  GFNT_F16Dot16 blue_fuzz;    ///< `BlueFuzz`, default 1.
-  GFNT_F16Dot16 std_hw;       ///< `StdHW`; 0 when not stated.
-  GFNT_F16Dot16 std_vw;       ///< `StdVW`; 0 when not stated.
-  GFNT_F16Dot16 stem_snap_h[GFNT_CFF_MAX_STEM_SNAPS]; ///< `StemSnapH`, ascending.
-  size_t stem_snap_h_count;
-  GFNT_F16Dot16 stem_snap_v[GFNT_CFF_MAX_STEM_SNAPS];
-  size_t stem_snap_v_count;
-  bool force_bold;            ///< `ForceBold`.
-  int32_t language_group;     ///< `LanguageGroup`, 0 (Latin-like) when not stated.
-} GFNT_CffHintParams;
-
 /**
  * What a Private DICT says that the interpreter needs.
  *
@@ -154,7 +120,7 @@ typedef struct GFNT_CffPrivate {
   GFNT_F16Dot16 default_width; ///< `defaultWidthX`, 16.16 font units.
   GFNT_F16Dot16 nominal_width; ///< `nominalWidthX`, 16.16 font units.
   GFNT_CffIndex subrs;     ///< Local subroutines; count 0 when there are none.
-  GFNT_CffHintParams hint; ///< The hinting parameters, defaulted where the dictionary is silent.
+  GFNT_CharstringHintParams hint; ///< The hinting parameters, defaulted where the dictionary is silent.
 } GFNT_CffPrivate;
 
 /**

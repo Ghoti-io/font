@@ -130,6 +130,7 @@
 #define gfnt_face_glyph_is_composite GHOTIIO_FONT(gfnt_face_glyph_is_composite)
 #define gfnt_face_glyph_stated_box GHOTIIO_FONT(gfnt_face_glyph_stated_box)
 #define gfnt_face_glyph_charstring GHOTIIO_FONT(gfnt_face_glyph_charstring)
+#define gfnt_face_glyph_hints GHOTIIO_FONT(gfnt_face_glyph_hints)
 #define gfnt_face_glyph_charstring_metrics GHOTIIO_FONT(gfnt_face_glyph_charstring_metrics)
 #define gfnt_charstring_run GHOTIIO_FONT(gfnt_charstring_run)
 #define gfnt_charstring_dump GHOTIIO_FONT(gfnt_charstring_dump)

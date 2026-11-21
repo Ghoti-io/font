@@ -332,3 +332,25 @@ GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
       "this face's glyphs are not charstrings, so nothing about them states an "
       "advance; gfnt_face_glyph_advance() reads the metric table");
 }
+
+GFNT_Result gfnt_face_glyph_hints(const GFNT_Face * face, uint32_t glyph,
+    GFNT_CharstringHints * out_hints, GFNT_CharstringHintParams * out_params, GFNT_Error * error) {
+  GFNT_Outline * scratch = NULL;
+  GFNT_Result result;
+
+  gfnt_error_clear(error);
+  if (!face || !out_hints) {
+    return GFNT_ERR_INVALID;
+  }
+  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_CFF) {
+    return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
+        "hint data is read from a CFF face only so far");
+  }
+  result = gfnt_outline_create(face->allocator, &scratch, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  result = gfnt_cff_load_hinted(face, glyph, scratch, NULL, out_hints, out_params, error);
+  gfnt_outline_destroy(scratch);
+  return result;
+}

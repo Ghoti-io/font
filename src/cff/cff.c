@@ -686,27 +686,27 @@ static GFNT_Result gfnt_cff_private_visit(void * user,
       }
       return GFNT_OK;
     case GFNT_CFF_OP_BLUE_VALUES:
-      gfnt_cff_delta_array(entry, state->priv->hint.blue_values, GFNT_CFF_MAX_BLUES,
+      gfnt_cff_delta_array(entry, state->priv->hint.blue_values, GFNT_CS_MAX_BLUES,
           &state->priv->hint.blue_value_count, true);
       return GFNT_OK;
     case GFNT_CFF_OP_OTHER_BLUES:
-      gfnt_cff_delta_array(entry, state->priv->hint.other_blues, GFNT_CFF_MAX_BLUES,
+      gfnt_cff_delta_array(entry, state->priv->hint.other_blues, GFNT_CS_MAX_BLUES,
           &state->priv->hint.other_blue_count, true);
       return GFNT_OK;
     case GFNT_CFF_OP_FAMILY_BLUES:
-      gfnt_cff_delta_array(entry, state->priv->hint.family_blues, GFNT_CFF_MAX_BLUES,
+      gfnt_cff_delta_array(entry, state->priv->hint.family_blues, GFNT_CS_MAX_BLUES,
           &state->priv->hint.family_blue_count, true);
       return GFNT_OK;
     case GFNT_CFF_OP_FAMILY_OTHER_BLUES:
-      gfnt_cff_delta_array(entry, state->priv->hint.family_other_blues, GFNT_CFF_MAX_BLUES,
+      gfnt_cff_delta_array(entry, state->priv->hint.family_other_blues, GFNT_CS_MAX_BLUES,
           &state->priv->hint.family_other_blue_count, true);
       return GFNT_OK;
     case GFNT_CFF_OP_STEM_SNAP_H:
-      gfnt_cff_delta_array(entry, state->priv->hint.stem_snap_h, GFNT_CFF_MAX_STEM_SNAPS,
+      gfnt_cff_delta_array(entry, state->priv->hint.stem_snap_h, GFNT_CS_MAX_STEM_SNAPS,
           &state->priv->hint.stem_snap_h_count, false);
       return GFNT_OK;
     case GFNT_CFF_OP_STEM_SNAP_V:
-      gfnt_cff_delta_array(entry, state->priv->hint.stem_snap_v, GFNT_CFF_MAX_STEM_SNAPS,
+      gfnt_cff_delta_array(entry, state->priv->hint.stem_snap_v, GFNT_CS_MAX_STEM_SNAPS,
           &state->priv->hint.stem_snap_v_count, false);
       return GFNT_OK;
     case GFNT_CFF_OP_BLUE_SCALE:

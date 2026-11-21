@@ -251,7 +251,7 @@ GFNT_Result gfnt_cff_load(const GFNT_Face * face, uint32_t glyph,
 
 GFNT_Result gfnt_cff_load_hinted(const GFNT_Face * face, uint32_t glyph, GFNT_Outline * outline,
     GFNT_CharstringMetrics * out_metrics, GFNT_CharstringHints * out_hints,
-    GFNT_CffHintParams * out_params, GFNT_Error * error) {
+    GFNT_CharstringHintParams * out_params, GFNT_Error * error) {
   const GFNT_Cff * cff = NULL;
   GFNT_CffSubrs local;
   GFNT_CffSubrs global;

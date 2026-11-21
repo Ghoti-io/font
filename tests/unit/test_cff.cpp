@@ -2374,7 +2374,7 @@ TEST(Cff, ThePrivateDictsHintParametersAreReadAbsoluteAndDefaulted) {
   ASSERT_EQ(gfnt_face_cff(font.face, &cff, nullptr), GFNT_OK);
   GFNT_CffPrivate priv{};
   ASSERT_EQ(gfnt_cff_private_for_glyph(font.face, cff, 0, &priv, nullptr), GFNT_OK);
-  const GFNT_CffHintParams & h = priv.hint;
+  const GFNT_CharstringHintParams & h = priv.hint;
   ASSERT_EQ(h.blue_value_count, 4u);
   EXPECT_EQ(h.blue_values[0], -15 * 65536);
   EXPECT_EQ(h.blue_values[1], 0);

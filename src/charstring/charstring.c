@@ -213,6 +213,8 @@ typedef struct GFNT_CsState {
   size_t stems;                      ///< Stem hints declared so far.
   GFNT_CharstringHints * hints;      ///< Where stems and masks are recorded, or NULL.
   size_t point_base;                 ///< The outline's point count when this run began.
+  bool replace_pending;              ///< Type 1: a hint replacement was called; its mask applies at the next point.
+  size_t replace_start;              ///< Type 1: how many stems existed before that replacement's subroutine.
   bool width_done;                   ///< Whether the leading width has been decided.
   GFNT_F16Dot16 width;               ///< The advance.
   bool width_stated;                 ///< Whether the charstring stated it.
@@ -333,10 +335,81 @@ static void gfnt_cs_record_mask(GFNT_CsState * state, const uint8_t * bits, size
   memcpy(mask->bits, bits, bytes < sizeof mask->bits ? bytes : sizeof mask->bits);
 }
 
+/**
+ * Record one Type 1 stem: `y dy hstem` or `x dx vstem`.
+ *
+ * Type 1 states stems absolutely, from the left side bearing for a vertical one (`hsbw` puts
+ * the origin of x at the bearing) and from the baseline for a horizontal one. Ghost edges are
+ * -20 and -21 here too, kept as stated.
+ */
+static void gfnt_cs_record_t1_stem(GFNT_CsState * state, int64_t edge, int64_t width, bool vertical) {
+  GFNT_CharstringHints * hints = state->hints;
+
+  if (!hints || !hints->valid) {
+    return;
+  }
+  if (hints->stem_count >= GFNT_CS_MAX_STEMS) {
+    hints->valid = false;
+    return;
+  }
+  if (vertical) {
+    edge = gfnt_add_clamp64(edge, state->side_bearing);
+  }
+  hints->stems[hints->stem_count].edge = gfnt_saturate32(edge);
+  hints->stems[hints->stem_count].width = gfnt_saturate32(width);
+  hints->stems[hints->stem_count].vertical = vertical;
+  hints->stem_count++;
+}
+
+/**
+ * A Type 1 hint replacement takes effect at the next point drawn: from there the stems its
+ * subroutine declared are the active ones and the earlier ones are not. The first replacement
+ * also closes the opening set, which until then was every stem declared, so it is recorded as a
+ * mask at point 0 holding the stems declared before this replacement.
+ */
+static void gfnt_cs_apply_replacement(GFNT_CsState * state) {
+  GFNT_CharstringHints * hints = state->hints;
+  size_t at;
+  size_t i;
+  GFNT_CharstringMask * mask;
+
+  state->replace_pending = false;
+  if (!hints || !hints->valid) {
+    return;
+  }
+  at = gfnt_outline_point_count(state->outline) - state->point_base;
+  if (hints->mask_count == 0 && state->replace_start > 0 && at > 0) {
+    mask = &hints->masks[hints->mask_count++];
+    mask->first_point = 0;
+    memset(mask->bits, 0, sizeof mask->bits);
+    for (i = 0; i < state->replace_start && i < GFNT_CS_MAX_STEMS; i++) {
+      mask->bits[i / 8] |= (uint8_t)(0x80u >> (i % 8));
+    }
+  }
+  if (hints->mask_count > 0 && hints->masks[hints->mask_count - 1].first_point == at) {
+    mask = &hints->masks[hints->mask_count - 1];
+  }
+  else {
+    if (hints->mask_count >= GFNT_CS_MAX_MASKS) {
+      hints->valid = false;
+      return;
+    }
+    mask = &hints->masks[hints->mask_count++];
+  }
+  mask->first_point = (uint32_t)at;
+  memset(mask->bits, 0, sizeof mask->bits);
+  for (i = state->replace_start; i < hints->stem_count; i++) {
+    mask->bits[i / 8] |= (uint8_t)(0x80u >> (i % 8));
+  }
+}
+
 /** Add the current point to the open contour. */
 static GFNT_Result gfnt_cs_emit(GFNT_CsState * state, GFNT_PointTag tag) {
   GFNT_Point point;
 
+  if (state->replace_pending) {
+    gfnt_cs_apply_replacement(state);
+  }
   point.x = gfnt_cs_to_26dot6(state->x);
   point.y = gfnt_cs_to_26dot6(state->y);
   return gfnt_outline_add_point(state->outline, point, tag, state->error);
@@ -1137,7 +1210,12 @@ static GFNT_Result gfnt_cs_othersubr(GFNT_CsState * state, size_t offset) {
     case 3:
       // Hint replacement: the argument is the subroutine number holding the
       // new hints, which `pop callsubr` then calls. Hints are not read here, so
-      // the call is left to happen and does nothing but run the subroutine.
+      // the call is left to happen and runs the subroutine, whose stems are recorded as they are
+      // declared; the mask they form applies from the next point drawn.
+      if (state->hints) {
+        state->replace_pending = true;
+        state->replace_start = state->hints->stem_count;
+      }
       state->ps_count = 0;
       if (argc >= 1) {
         state->ps_stack[state->ps_count++] =
@@ -1222,6 +1300,10 @@ static GFNT_Result gfnt_cs_run_frame(GFNT_CsState * state,
             return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor - 1,
                 "hstemhm or vstemhm, which Type 1 does not have - it has hstem "
                 "and vstem, and no hint masks for the hm to refer to");
+          }
+          if (state->count >= 2) {
+            gfnt_cs_record_t1_stem(state, state->stack[state->count - 2],
+                state->stack[state->count - 1], op == GFNT_CS_VSTEM);
           }
         }
         else {
@@ -1675,6 +1757,14 @@ static GFNT_Result gfnt_cs_run_frame(GFNT_CsState * state,
             if (state->type != GFNT_CHARSTRING_TYPE1) {
               return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, cursor - 2,
                   "a Type 1 hint operator in a Type 2 charstring");
+            }
+            if (op2 == GFNT_CS2_VSTEM3 || op2 == GFNT_CS2_HSTEM3) {
+              size_t k;
+
+              for (k = 0; state->count >= 6 && k < 3; k++) {
+                gfnt_cs_record_t1_stem(state, state->stack[state->count - 6 + 2 * k],
+                    state->stack[state->count - 5 + 2 * k], op2 == GFNT_CS2_VSTEM3);
+              }
             }
             state->count = 0;
             break;

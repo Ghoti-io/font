@@ -410,7 +410,7 @@ GFNT_API GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
  * For an engine that hints (or a tool that inspects hints). The outline is not produced; run
  * ::gfnt_face_glyph_outline() for that. Costs a run of the charstring.
  *
- * @param face The face (CFF only so far; a face with no `CFF ` is ::GFNT_ERR_UNSUPPORTED).
+ * @param face The face (CFF or Type 1 so far; any other is ::GFNT_ERR_UNSUPPORTED).
  * @param glyph The glyph index.
  * @param out_hints Receives the stems and masks (see ::GFNT_CharstringHints::valid).
  * @param out_params Receives the Private dictionary's parameters, or NULL.

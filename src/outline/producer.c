@@ -342,15 +342,26 @@ GFNT_Result gfnt_face_glyph_hints(const GFNT_Face * face, uint32_t glyph,
   if (!face || !out_hints) {
     return GFNT_ERR_INVALID;
   }
-  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_CFF) {
+  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_CFF && gfnt_sfnt_producer(face) != GFNT_PRODUCER_TYPE1) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        "hint data is read from a CFF face only so far");
+        "hint data is read from a CFF or Type 1 face only so far");
   }
   result = gfnt_outline_create(face->allocator, &scratch, error);
   if (result != GFNT_OK) {
     return result;
   }
-  result = gfnt_cff_load_hinted(face, glyph, scratch, NULL, out_hints, out_params, error);
+  gfnt_outline_set_limits(scratch, &face->limits);
+  if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_TYPE1) {
+    const GFNT_Type1 * type1 = NULL;
+
+    result = gfnt_type1_load_hinted(face, glyph, scratch, NULL, out_hints, error);
+    if (result == GFNT_OK && out_params && gfnt_face_type1(face, &type1, error) == GFNT_OK) {
+      *out_params = type1->hint;
+    }
+  }
+  else {
+    result = gfnt_cff_load_hinted(face, glyph, scratch, NULL, out_hints, out_params, error);
+  }
   gfnt_outline_destroy(scratch);
   return result;
 }

@@ -553,6 +553,182 @@ struct Program {
   }
 };
 
+TEST(Type1, ThePrivateDictionarysHintParametersAreReadAbsoluteAndDefaulted) {
+  Program program;
+  program.private_part =
+      "dup /Private 16 dict dup begin\n/lenIV 4 def\n"
+      "/BlueValues [-15 0 700 715] def\n/OtherBlues [-250 -235] def\n"
+      "/FamilyBlues [-14 0 701 716] def\n"
+      "/StdHW [80] def\n/StdVW [90] def\n/BlueScale 0.5 def\n/BlueShift 10 def\n/BlueFuzz 2 def\n"
+      "/StemSnapH [80 90 110] def\n/ForceBold true def\n/LanguageGroup 1 def\n";
+  FromBytes font(program.pfb());
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Type1 * type1 = nullptr;
+  ASSERT_EQ(gfnt_face_type1(font.face, &type1, nullptr), GFNT_OK);
+  const GFNT_CharstringHintParams & h = type1->hint;
+  ASSERT_EQ(h.blue_value_count, 4u);
+  EXPECT_EQ(h.blue_values[0], -15 * 65536);
+  EXPECT_EQ(h.blue_values[3], 715 * 65536);
+  ASSERT_EQ(h.other_blue_count, 2u);
+  EXPECT_EQ(h.other_blues[1], -235 * 65536);
+  EXPECT_EQ(h.family_blue_count, 4u);
+  EXPECT_EQ(h.std_hw, 80 * 65536);
+  EXPECT_EQ(h.std_vw, 90 * 65536);
+  EXPECT_EQ(h.blue_scale, 32768);
+  EXPECT_EQ(h.blue_shift, 10 * 65536);
+  EXPECT_EQ(h.blue_fuzz, 2 * 65536);
+  ASSERT_EQ(h.stem_snap_h_count, 3u);
+  EXPECT_EQ(h.stem_snap_h[2], 110 * 65536);
+  EXPECT_TRUE(h.force_bold);
+  EXPECT_EQ(h.language_group, 1);
+}
+
+TEST(Type1, AProgramThatStatesNoHintParametersGetsTheSpecificationsDefaults) {
+  Program program;
+  FromBytes font(program.pfb());
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Type1 * type1 = nullptr;
+  ASSERT_EQ(gfnt_face_type1(font.face, &type1, nullptr), GFNT_OK);
+  EXPECT_EQ(type1->hint.blue_value_count, 0u);
+  EXPECT_EQ(type1->hint.blue_scale, 2597);
+  EXPECT_EQ(type1->hint.blue_shift, 7 * 65536);
+  EXPECT_EQ(type1->hint.blue_fuzz, 65536);
+  EXPECT_FALSE(type1->hint.force_bold);
+}
+
+TEST(Type1, ABlueArrayThatIsOddOrTooLongIsDroppedAndTheNextKeyStillReads) {
+  Program program;
+  program.private_part =
+      "dup /Private 16 dict dup begin\n/lenIV 4 def\n"
+      "/BlueValues [-15 0 700] def\n"
+      "/OtherBlues [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16] def\n"
+      "/BlueShift 9 def\n";
+  FromBytes font(program.pfb());
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Type1 * type1 = nullptr;
+  ASSERT_EQ(gfnt_face_type1(font.face, &type1, nullptr), GFNT_OK);
+  EXPECT_EQ(type1->hint.blue_value_count, 0u);
+  EXPECT_EQ(type1->hint.other_blue_count, 0u);
+  EXPECT_EQ(type1->hint.blue_shift, 9 * 65536);   // read after the two it refused
+}
+
+TEST(Type1, AHintKeyWithAValueOfTheWrongKindIsIgnoredNotFatal) {
+  Program program;
+  program.private_part =
+      "dup /Private 16 dict dup begin\n/lenIV 4 def\n"
+      "/BlueValues (nope) def\n/BlueScale [1 2] def\n/StdHW 80 def\n";
+  FromBytes font(program.pfb());
+  ASSERT_EQ(font.result, GFNT_OK);
+  const GFNT_Type1 * type1 = nullptr;
+  ASSERT_EQ(gfnt_face_type1(font.face, &type1, nullptr), GFNT_OK);
+  EXPECT_EQ(type1->hint.blue_value_count, 0u);
+  EXPECT_EQ(type1->hint.blue_scale, 2597);
+  EXPECT_EQ(type1->hint.std_hw, 0);
+}
+
+namespace {
+
+/** A Type 1 charstring number in the one-byte range, -107..107. */
+void t1n(std::vector<uint8_t> & cs, int v) { cs.push_back(static_cast<uint8_t>(v + 139)); }
+void t1op(std::vector<uint8_t> & cs, std::initializer_list<uint8_t> bytes) { cs.insert(cs.end(), bytes); }
+
+GFNT_Result hints_of(const Program & program, GFNT_CharstringHints * out) {
+  FromBytes font(program.pfb());
+  EXPECT_EQ(font.result, GFNT_OK);
+  return gfnt_face_glyph_hints(font.face, 0, out, nullptr, nullptr);
+}
+
+}  // namespace
+
+TEST(Type1Hints, HstemAndVstemAreRecordedAbsolutelyFromTheBearing) {
+  Program program;
+  std::vector<uint8_t> cs;
+  t1n(cs, 20); t1n(cs, 100); t1op(cs, {13});          // 20 100 hsbw: bearing 20, advance 100
+  t1n(cs, 10); t1n(cs, 20); t1op(cs, {1});            // 10 20 hstem
+  t1n(cs, 50); t1n(cs, 30); t1op(cs, {3});            // 50 30 vstem: x is from the bearing
+  t1n(cs, 5); t1n(cs, 5); t1op(cs, {21});             // rmoveto
+  t1n(cs, 50); t1op(cs, {6});                         // hlineto
+  t1op(cs, {9, 14});                                  // closepath endchar
+  program.charstring = cs;
+  GFNT_CharstringHints h;
+  ASSERT_EQ(hints_of(program, &h), GFNT_OK);
+  ASSERT_TRUE(h.valid);
+  ASSERT_EQ(h.stem_count, 2u);
+  EXPECT_FALSE(h.stems[0].vertical);
+  EXPECT_EQ(h.stems[0].edge, 10 * 65536);
+  EXPECT_EQ(h.stems[0].width, 20 * 65536);
+  EXPECT_TRUE(h.stems[1].vertical);
+  EXPECT_EQ(h.stems[1].edge, 70 * 65536);   // 20 (the bearing) + 50
+  EXPECT_EQ(h.mask_count, 0u);
+}
+
+TEST(Type1Hints, Hstem3IsThreeStems) {
+  Program program;
+  std::vector<uint8_t> cs;
+  t1n(cs, 0); t1n(cs, 100); t1op(cs, {13});
+  for (int v : {0, 10, 40, 10, 80, 10}) {
+    t1n(cs, v);
+  }
+  t1op(cs, {12, 2});                                  // hstem3
+  t1n(cs, 5); t1n(cs, 5); t1op(cs, {21});
+  t1op(cs, {9, 14});
+  program.charstring = cs;
+  GFNT_CharstringHints h;
+  ASSERT_EQ(hints_of(program, &h), GFNT_OK);
+  ASSERT_EQ(h.stem_count, 3u);
+  EXPECT_EQ(h.stems[1].edge, 40 * 65536);
+  EXPECT_EQ(h.stems[2].edge, 80 * 65536);
+  EXPECT_FALSE(h.stems[2].vertical);
+}
+
+TEST(Type1Hints, AHintReplacementMakesANewSetActiveFromTheNextPoint) {
+  Program program;
+  // Subroutine 0 declares the replacement stem and returns.
+  std::vector<uint8_t> subr;
+  t1n(subr, 30); t1n(subr, 20); t1op(subr, {1});      // 30 20 hstem
+  t1op(subr, {11});                                   // return
+  const std::vector<uint8_t> cipher = encrypt(subr, 4330u, 4);
+  char head[96];
+  snprintf(head, sizeof head, "dup /Private 16 dict dup begin\n/lenIV 4 def\n/Subrs 1 array\ndup 0 %zu RD ",
+      cipher.size());
+  program.private_part = head;
+  program.private_part.append(reinterpret_cast<const char *>(cipher.data()), cipher.size());
+  program.private_part += " NP\n";
+  std::vector<uint8_t> cs;
+  t1n(cs, 0); t1n(cs, 100); t1op(cs, {13});
+  t1n(cs, 10); t1n(cs, 20); t1op(cs, {1});            // the opening stem
+  t1n(cs, 5); t1n(cs, 5); t1op(cs, {21});             // point 0
+  t1n(cs, 50); t1op(cs, {6});                         // point 1
+  t1n(cs, 0); t1n(cs, 1); t1n(cs, 3); t1op(cs, {12, 16});   // 0 1 3 callothersubr
+  t1op(cs, {12, 17});                                 // pop
+  t1op(cs, {10});                                     // callsubr
+  t1n(cs, 50); t1op(cs, {7});                         // vlineto: point 2
+  t1op(cs, {9, 14});
+  program.charstring = cs;
+  GFNT_CharstringHints h;
+  ASSERT_EQ(hints_of(program, &h), GFNT_OK);
+  ASSERT_TRUE(h.valid);
+  ASSERT_EQ(h.stem_count, 2u);
+  EXPECT_EQ(h.stems[1].edge, 30 * 65536);
+  ASSERT_EQ(h.mask_count, 2u);
+  EXPECT_EQ(h.masks[0].first_point, 0u);
+  EXPECT_EQ(h.masks[0].bits[0], 0x80);   // the opening stem, until the replacement
+  EXPECT_EQ(h.masks[1].first_point, 2u);
+  EXPECT_EQ(h.masks[1].bits[0], 0x40);   // the replacement's, from the next point
+}
+
+TEST(Type1Hints, AFaceThatIsNotCffOrType1IsRefused) {
+  GFNT_CharstringHints h;
+  EXPECT_EQ(gfnt_face_glyph_hints(nullptr, 0, &h, nullptr, nullptr), GFNT_ERR_INVALID);
+  Program program;
+  FromBytes font(program.pfb());
+  ASSERT_EQ(font.result, GFNT_OK);
+  EXPECT_EQ(gfnt_face_glyph_hints(font.face, 0, nullptr, nullptr, nullptr), GFNT_ERR_INVALID);
+  GFNT_CharstringHintParams params;
+  ASSERT_EQ(gfnt_face_glyph_hints(font.face, 0, &h, &params, nullptr), GFNT_OK);
+  EXPECT_EQ(params.blue_scale, 2597);   // the parameters ride along
+}
+
 TEST(Type1, AProbeProgramLoads) {
   // The control for every test below: they break one thing each, and if the
   // unbroken one did not load they would all be passing for the wrong reason.

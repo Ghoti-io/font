@@ -152,6 +152,13 @@ typedef struct GFNT_Type1 {
    */
   uint32_t encoding[256];
   bool encoding_is_standard; ///< Whether it said `StandardEncoding`.
+
+  /**
+   * The Private dictionary's hint parameters: `/BlueValues` and the other zones, `/StdHW`, `/StemSnapH`,
+   * `/BlueScale`, `/BlueShift`, `/BlueFuzz`, `/ForceBold`, `/LanguageGroup`. Type 1 states the blue
+   * arrays as absolute numbers (CFF's are deltas); the defaults are the specification's.
+   */
+  GFNT_CharstringHintParams hint;
 } GFNT_Type1;
 
 /**
@@ -266,6 +273,10 @@ GFNT_Result gfnt_type1_subr(const GFNT_Type1 * type1, size_t index,
 GFNT_Result gfnt_type1_load(const GFNT_Face * face, uint32_t glyph,
     GFNT_Outline * outline, GFNT_CharstringMetrics * out_metrics,
     GFNT_Error * error);
+
+/** ::gfnt_type1_load(), also recording the glyph's stems and hint replacements in @p hints (or not, if NULL). */
+GFNT_Result gfnt_type1_load_hinted(const GFNT_Face * face, uint32_t glyph, GFNT_Outline * outline,
+    GFNT_CharstringMetrics * out_metrics, GFNT_CharstringHints * hints, GFNT_Error * error);
 
 /**
  * What one glyph's charstring says about its own advance and side bearing.

@@ -1038,6 +1038,125 @@ static GFNT_Result gfnt_type1_matrix(GFNT_Type1Parse * state,
 }
 
 /**
+ * Read `[ n n n ]` into @p out as 16.16, refusing more than @p capacity numbers.
+ *
+ * A Private dictionary's arrays are absolute in Type 1 (CFF's are deltas). One that is too long,
+ * or for @p pairs odd, is dropped to nothing - the engine reads that as "no zones" - rather than
+ * half-used; whatever the array holds, the scanner is left past its `]`. Returns false when the
+ * value is not an array of numbers at all, which the caller treats as the key not being a hint
+ * parameter here and moves on.
+ */
+static bool gfnt_type1_number_array(GFNT_Type1Scan * scan, GFNT_F16Dot16 * out, size_t capacity,
+    size_t * out_count, bool pairs) {
+  GFNT_Type1Token token;
+  size_t count = 0;
+  bool overflow = false;
+
+  *out_count = 0;
+  if (!gfnt_type1_token(scan, &token) || token.kind != GFNT_T1_OPEN_ARRAY) {
+    return false;
+  }
+  while (gfnt_type1_token(scan, &token)) {
+    if (token.kind == GFNT_T1_CLOSE_ARRAY) {
+      break;
+    }
+    if (token.kind != GFNT_T1_NUMBER) {
+      return false;
+    }
+    if (count < capacity) {
+      out[count] = token.real;
+    }
+    else {
+      overflow = true;
+    }
+    count++;
+  }
+  if (overflow || (pairs && (count & 1u))) {
+    return true;   /* read, and not trusted */
+  }
+  *out_count = count;
+  return true;
+}
+
+/** One number after a key: `/BlueScale 0.039625 def`. */
+static bool gfnt_type1_scalar(GFNT_Type1Scan * scan, GFNT_F16Dot16 * out) {
+  GFNT_Type1Token token;
+
+  if (!gfnt_type1_token(scan, &token) || token.kind != GFNT_T1_NUMBER) {
+    return false;
+  }
+  *out = token.real;
+  return true;
+}
+
+/**
+ * The Private dictionary's hint parameters, if @p token names one.
+ *
+ * @return Whether the token was a hint parameter's key (whether or not its value was usable).
+ */
+static bool gfnt_type1_hint_key(GFNT_Type1Parse * state, const GFNT_Type1Token * token) {
+  GFNT_Type1Scan * scan = &state->scan;
+  GFNT_CharstringHintParams * h = &state->type1->hint;
+  GFNT_F16Dot16 one[1];
+  size_t n = 0;
+  GFNT_Type1Token value;
+
+  if (gfnt_type1_is(scan, token, "BlueValues")) {
+    gfnt_type1_number_array(scan, h->blue_values, GFNT_CS_MAX_BLUES, &h->blue_value_count, true);
+  }
+  else if (gfnt_type1_is(scan, token, "OtherBlues")) {
+    gfnt_type1_number_array(scan, h->other_blues, GFNT_CS_MAX_BLUES, &h->other_blue_count, true);
+  }
+  else if (gfnt_type1_is(scan, token, "FamilyBlues")) {
+    gfnt_type1_number_array(scan, h->family_blues, GFNT_CS_MAX_BLUES, &h->family_blue_count, true);
+  }
+  else if (gfnt_type1_is(scan, token, "FamilyOtherBlues")) {
+    gfnt_type1_number_array(scan, h->family_other_blues, GFNT_CS_MAX_BLUES, &h->family_other_blue_count, true);
+  }
+  else if (gfnt_type1_is(scan, token, "StemSnapH")) {
+    gfnt_type1_number_array(scan, h->stem_snap_h, GFNT_CS_MAX_STEM_SNAPS, &h->stem_snap_h_count, false);
+  }
+  else if (gfnt_type1_is(scan, token, "StemSnapV")) {
+    gfnt_type1_number_array(scan, h->stem_snap_v, GFNT_CS_MAX_STEM_SNAPS, &h->stem_snap_v_count, false);
+  }
+  else if (gfnt_type1_is(scan, token, "StdHW")) {
+    if (gfnt_type1_number_array(scan, one, 1, &n, false) && n == 1) {
+      h->std_hw = one[0];
+    }
+  }
+  else if (gfnt_type1_is(scan, token, "StdVW")) {
+    if (gfnt_type1_number_array(scan, one, 1, &n, false) && n == 1) {
+      h->std_vw = one[0];
+    }
+  }
+  else if (gfnt_type1_is(scan, token, "BlueScale")) {
+    gfnt_type1_scalar(scan, &h->blue_scale);
+  }
+  else if (gfnt_type1_is(scan, token, "BlueShift")) {
+    gfnt_type1_scalar(scan, &h->blue_shift);
+  }
+  else if (gfnt_type1_is(scan, token, "BlueFuzz")) {
+    gfnt_type1_scalar(scan, &h->blue_fuzz);
+  }
+  else if (gfnt_type1_is(scan, token, "ForceBold")) {
+    if (gfnt_type1_token(scan, &value) && value.kind == GFNT_T1_KEYWORD) {
+      h->force_bold = gfnt_type1_is(scan, &value, "true");
+    }
+  }
+  else if (gfnt_type1_is(scan, token, "LanguageGroup")) {
+    GFNT_F16Dot16 group;
+
+    if (gfnt_type1_scalar(scan, &group)) {
+      h->language_group = (int32_t)(group >> 16);
+    }
+  }
+  else {
+    return false;
+  }
+  return true;
+}
+
+/**
  * `.notdef` is glyph 0, and the rest keep the order `/CharStrings` gave them.
  *
  * Type 1 is **name-keyed**: it has no glyph order of its own, and nothing in the
@@ -1103,6 +1222,9 @@ GFNT_Result gfnt_type1_parse(const GFNT_Face * face, void * out,
   // Four unless the font says otherwise, which is the format's default and not a
   // guess: a charstring's first four plaintext bytes are random padding.
   type1->len_iv = 4;
+  type1->hint.blue_scale = 2597;   /* 0.039625 in 16.16 */
+  type1->hint.blue_shift = 7 * 65536;
+  type1->hint.blue_fuzz = 65536;
   for (at = 0; at < 256; ++at) {
     type1->encoding[at] = GFNT_GLYPH_NONE;
   }
@@ -1195,6 +1317,9 @@ GFNT_Result gfnt_type1_parse(const GFNT_Face * face, void * out,
     }
     else if (gfnt_type1_is(&state.scan, &token, "Encoding")) {
       result = gfnt_type1_encoding(&state, error);
+    }
+    else if (gfnt_type1_hint_key(&state, &token)) {
+      continue;
     }
     else if (gfnt_type1_is(&state.scan, &token, "Subrs")) {
       result = gfnt_type1_subrs(&state, error);
@@ -1459,6 +1584,12 @@ static GFNT_Result gfnt_type1_standard_code(void * user, uint8_t code,
 GFNT_Result gfnt_type1_load(const GFNT_Face * face, uint32_t glyph,
     GFNT_Outline * outline, GFNT_CharstringMetrics * out_metrics,
     GFNT_Error * error) {
+  return gfnt_type1_load_hinted(face, glyph, outline, out_metrics, NULL, error);
+}
+
+GFNT_Result gfnt_type1_load_hinted(const GFNT_Face * face, uint32_t glyph,
+    GFNT_Outline * outline, GFNT_CharstringMetrics * out_metrics,
+    GFNT_CharstringHints * hints, GFNT_Error * error) {
   const GFNT_Type1 * type1 = NULL;
   GFNT_Reader table;
   const uint8_t * text = NULL;
@@ -1510,6 +1641,7 @@ GFNT_Result gfnt_type1_load(const GFNT_Face * face, uint32_t glyph,
   context.standard_code = gfnt_type1_standard_code;
   context.standard_user = &run;
   context.limits = &face->limits;
+  context.hints = hints;
   // No nominalWidthX and no defaultWidthX: those are Type 2's, and a Type 1
   // charstring states its advance outright in `hsbw`.
 

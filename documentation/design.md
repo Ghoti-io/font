@@ -469,8 +469,7 @@ exhausting memory.
 **A PCF's encodings are positions in the font's own charset**, which its XLFD
 `CHARSET_REGISTRY` and `CHARSET_ENCODING` properties name. For an `ISO10646-1`
 font those are codepoints; for an `ISO8859-5` font they are not, and converting
-them needs a charset table this library does not carry - the same gap Type 1's
-`/Encoding` has without the Adobe Glyph List.
+them needs a charset table this library does not carry.
 
 **Type 1.** PFB segment headers (`0x80 0x01/0x02/0x03`) and PFA cleartext;
 `eexec` decryption (`r = 55665`), charstring decryption (`r = 4330`, `lenIV`);
@@ -756,9 +755,13 @@ tables are compressed.
 - **Type 1 is name-keyed**, so the glyph *index* is this library's invention.
   `gfnt_type1_order()` is the only place that decides it: `.notdef` first because
   glyph 0 means "no glyph" everywhere else here, then the order `/CharStrings`
-  gave them. A codepoint lookup is refused rather than guessed at - a Type 1
-  `/Encoding` maps codes of the font's own choosing, and reaching Unicode from
-  them needs the Adobe Glyph List, which is not here.
+  gave them. A codepoint lookup is answered from the glyph *names*, never from `/Encoding`
+  (which maps codes of the font's own choosing): a glyph whose name the Adobe Glyph List
+  gives as one character is that character's glyph, the plain name winning over a variant
+  (`a` over `a.sc`) and the lower glyph among equals. A name that is a sequence (`f_i`) or has no
+  text (`g23`) answers for no character. The same holds for any face with no readable `cmap`
+  that names its glyphs, a bare `CFF` and a TrueType font with its `cmap` stripped included; a
+  face that names nothing is still `ERR_UNSUPPORTED`.
 - **The advance is in the charstring.** There is no `hmtx` and never will be:
   each glyph states its own advance in `hsbw`, so reading a metric means running
   a program.

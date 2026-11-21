@@ -312,10 +312,9 @@ GFNT_Result gfnt_type1_name_at(const GFNT_Face * face, uint32_t glyph,
  * The glyph the font's own `/Encoding` puts at a code, or ::GFNT_GLYPH_NONE.
  *
  * A *code*, not a codepoint: a Type 1 `/Encoding` is 256 entries of the font's
- * own choosing and says nothing about Unicode. Turning a codepoint into one of
- * these needs the Adobe Glyph List, which this library does not carry yet - so a
- * Type 1 face answers ::gfnt_face_glyph_for_codepoint() with ERR_UNSUPPORTED
- * rather than guessing that code 193 means U+00C1.
+ * own choosing and says nothing about Unicode. ::gfnt_face_glyph_for_codepoint()
+ * answers from the glyph names instead (src/cmap/namecmap.h) rather than guessing
+ * that code 193 means U+00C1.
  *
  * @param type1 The parsed program, or NULL.
  * @param code The code.

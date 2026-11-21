@@ -43,6 +43,7 @@
 #include <ghoti.io/font/cmap.h>
 #include <ghoti.io/font/macros.h>
 #include "../bitmap/bitmap.h"
+#include "namecmap.h"
 #include "../tables/tables.h"
 
 /** Bytes in a `cmap` header: version and numTables. */
@@ -670,6 +671,18 @@ GFNT_Result gfnt_face_glyph_for_codepoint(const GFNT_Face * face,
     return GFNT_OK;
   }
   result = gfnt_face_cmap_best(face, &best, error);
+  if (result == GFNT_ERR_UNSUPPORTED) {
+    // No cmap this library reads: a Type 1 font, a bare CFF, a font whose cmap was
+    // stripped. If the face names its glyphs, the names say which characters they
+    // are (namecmap.h); if it does not, the refusal above is the answer.
+    GFNT_Result named = gfnt_namecmap_lookup(face, codepoint, out_glyph, NULL);
+
+    if (named == GFNT_OK) {
+      gfnt_error_clear(error);
+      return GFNT_OK;
+    }
+    return result;
+  }
   if (result != GFNT_OK) {
     return result;
   }

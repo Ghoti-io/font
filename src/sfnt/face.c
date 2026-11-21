@@ -487,6 +487,8 @@ void gfnt_face_free(GFNT_Face * face) {
   // The Type 1 parse is the one that allocates: its glyph and subroutine arrays
   // are sized from the font rather than being offsets into it.
   gfnt_type1_release(allocator, &face->type1);
+  // The characters a face's glyph names give, for a face with no cmap of its own.
+  gfnt_namecmap_release(allocator, &face->name_cmap);
   // A bitmap container's arenas are the same kind of thing: sized from the file
   // rather than pointing into it, because the rows are normalised on the way in.
   gfnt_bitmap_release(allocator, &face->bitmap);

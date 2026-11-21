@@ -46,6 +46,7 @@
 #include "../bitmap/ebsc.h"
 #include "../cff/cff.h"
 #include "../cff/cff2.h"
+#include "../cmap/namecmap.h"
 #include "../type1/type1.h"
 #include "../reader/reader.h"
 #include "../var/gvar.h"
@@ -181,6 +182,8 @@ struct GFNT_Face {
   GFNT_Avar avar;
   GFNT_Cached gvar_state;           ///< `gvar`'s header; glyph data is read in place.
   GFNT_Gvar gvar;
+  GFNT_Cached name_cmap_state;      ///< The characters the glyph names give, built on first use.
+  GFNT_NameCmap name_cmap;
 };
 
 /**

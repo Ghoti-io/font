@@ -382,8 +382,9 @@ TEST(Type1, ANameTheProgramDoesNotStateIsUnsupportedAndSaysWhich) {
 
 TEST(Type1, ItsOwnEncodingMapsCodesAndIsNotACmap) {
   // A Type 1 `/Encoding` is 256 entries of the font's own choosing and says
-  // nothing about Unicode, so a codepoint lookup is refused rather than guessed
-  // at - turning a code into a codepoint needs the Adobe Glyph List.
+  // nothing about Unicode. A codepoint is answered from the glyph names instead
+  // (through the Adobe Glyph List), never from the encoding: this font's puts
+  // Aacute at 0xC1 and Latin-1 agrees, but the lookup does not know that.
   Fixture font("type1.pfb");
   ASSERT_EQ(font.result, GFNT_OK);
   const GFNT_Type1 * type1 = nullptr;
@@ -396,10 +397,18 @@ TEST(Type1, ItsOwnEncodingMapsCodesAndIsNotACmap) {
   EXPECT_EQ(gfnt_type1_glyph_for_code(type1, 0x42), GFNT_GLYPH_NONE);
   EXPECT_EQ(gfnt_type1_glyph_for_code(nullptr, 0x41), GFNT_GLYPH_NONE);
 
-  uint32_t glyph = 0;
+  uint32_t glyph = 99;
   GFNT_Error error{};
-  EXPECT_EQ(gfnt_face_glyph_for_codepoint(font, 0x41, &glyph, &error),
-      GFNT_ERR_UNSUPPORTED);
+  EXPECT_EQ(gfnt_face_glyph_for_codepoint(font, 0x41, &glyph, &error), GFNT_OK);
+  EXPECT_EQ(glyph, 2u);   // A
+  EXPECT_EQ(gfnt_face_glyph_for_codepoint(font, 0xC1, &glyph, &error), GFNT_OK);
+  EXPECT_EQ(glyph, 4u);   // Aacute
+  EXPECT_EQ(gfnt_face_glyph_for_codepoint(font, 0xB4, &glyph, &error), GFNT_OK);
+  EXPECT_EQ(glyph, 3u);   // acute
+  EXPECT_EQ(gfnt_face_glyph_for_codepoint(font, 0x20, &glyph, &error), GFNT_OK);
+  EXPECT_EQ(glyph, 1u);   // space
+  EXPECT_EQ(gfnt_face_glyph_for_codepoint(font, 0x42, &glyph, &error), GFNT_OK);
+  EXPECT_EQ(glyph, 0u);   // no glyph is named B
 }
 
 TEST(Type1, AnAccentedCharacterResolvesItsPartsByStandardEncodingCode) {

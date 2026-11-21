@@ -338,6 +338,36 @@ GFNT_API GFNT_Result gfnt_face_glyph_for_name(const GFNT_Face * face,
     const char * name, uint32_t * out_glyph, GFNT_Error * error);
 
 /**
+ * @brief The text a glyph name stands for, by the Adobe Glyph List specification.
+ *
+ * What a PDF reader extracting text, or a Type 1 font with no `cmap`, has to go on.
+ * Everything from the first period is dropped (`a.sc` is `a`); the rest is split at
+ * underscores into components, and each component is mapped by the Adobe Glyph
+ * List (`Aacute`, and the few that stand for a base and a mark), by `uniXXXX` (one
+ * or more groups of four uppercase hexadecimal digits), or by `uXXXX` to `uXXXXXX`.
+ * A component none of those maps contributes nothing, so a name such as `.notdef`,
+ * `g23` or `cid42` has no text and ::GFNT_OK reports a count of zero for it: that
+ * is an answer about the name, not a failure.
+ *
+ * Zapf Dingbats (`a1` ... `a206`) has a list of its own, which the specification
+ * applies only to a font of that name, so the caller says which list applies.
+ *
+ * Call it with @p out NULL and @p capacity 0 to find the count, then again with a
+ * buffer; a buffer too small receives what fits and the full count is still reported.
+ *
+ * @param name The glyph name, NUL-terminated.
+ * @param zapf_dingbats Use the Zapf Dingbats list in place of the Adobe Glyph List.
+ * @param out Receives the codepoints, or NULL.
+ * @param capacity How many @p out holds.
+ * @param out_count Receives how many codepoints the name stands for.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID for a NULL name or count; ::GFNT_ERR_LIMIT
+ *   when @p capacity is smaller than the count (which is still reported).
+ */
+GFNT_API GFNT_Result gfnt_glyph_name_to_unicode(const char * name, bool zapf_dingbats,
+    uint32_t * out, size_t capacity, size_t * out_count, GFNT_Error * error);
+
+/**
  * @brief Write every glyph's name to a stream, one per line.
  *
  * For the differentials: `tools/oracle/ttx_diff.py` compares this against

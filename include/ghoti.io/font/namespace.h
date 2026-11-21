@@ -122,6 +122,7 @@
 #define gfnt_charstring_dump GHOTIIO_FONT(gfnt_charstring_dump)
 #define gfnt_charstring_type_string GHOTIIO_FONT(gfnt_charstring_type_string)
 #define gfnt_glyph_name_free GHOTIIO_FONT(gfnt_glyph_name_free)
+#define gfnt_glyph_name_to_unicode GHOTIIO_FONT(gfnt_glyph_name_to_unicode)
 #define gfnt_face_head GHOTIIO_FONT(gfnt_face_head)
 #define gfnt_face_hhea GHOTIIO_FONT(gfnt_face_hhea)
 #define gfnt_face_line_metrics GHOTIIO_FONT(gfnt_face_line_metrics)

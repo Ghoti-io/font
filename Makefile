@@ -758,6 +758,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 ####################################################################
 
 # General commands
+.PHONY: check-oracle-afm
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering check-stamps check-aliasing check-reader
 .PHONY: check-seeds check-fp-contract check-edges check-libm check-no-x87 check-gates
 # Release build commands
@@ -1120,6 +1121,15 @@ check-oracle: check-oracle-gsub check-oracle-gpos check-oracle-would check-oracl
 check-oracle-cmap: ## Diff every codepoint of every corpus font against fontTools
 check-oracle-cmap: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/cmap_diff.py --quiet
+
+# The Adobe Font Metrics reader against fontTools' own. The files are the caller's (this
+# repository carries no third-party metrics): AFM_FILES defaults to the URW++ set where the host has
+# it, and an empty list fails rather than agreeing with itself. Not in check-oracle, whose image
+# is not known to carry any AFM; run it where the files are, on the host's fontTools.
+AFM_FILES ?= $(wildcard /usr/share/fonts/type1/urw-base35/*.afm)
+check-oracle-afm: ## Diff the AFM reader's output on AFM_FILES against fontTools
+check-oracle-afm: $(EXAMPLES)
+	@python3 $(ORACLE)/afm_diff.py --quiet --binary $(APP_DIR)/examples/font-afm$(EXE_EXTENSION) $(AFM_FILES)
 
 check-oracle-glyf: ## Diff every glyph's outline and path against fontTools, and its points and placement against FreeType
 check-oracle-glyf: $(EXAMPLES)

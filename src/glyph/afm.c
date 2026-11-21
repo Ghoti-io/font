@@ -834,6 +834,23 @@ bool gfnt_afm_kern(const GFNT_Afm * afm, const char * first, const char * second
   return false;
 }
 
+GFNT_Result gfnt_afm_kern_at(const GFNT_Afm * afm, size_t index, const char ** out_first,
+    const char ** out_second, int32_t * out_kern_milli) {
+  if (!afm || index >= afm->kern_count) {
+    return GFNT_ERR_INVALID;
+  }
+  if (out_first) {
+    *out_first = afm->kerns[index].first;
+  }
+  if (out_second) {
+    *out_second = afm->kerns[index].second;
+  }
+  if (out_kern_milli) {
+    *out_kern_milli = afm->kerns[index].x;
+  }
+  return GFNT_OK;
+}
+
 size_t gfnt_afm_kern_count(const GFNT_Afm * afm) {
   return afm ? afm->kern_count : 0;
 }

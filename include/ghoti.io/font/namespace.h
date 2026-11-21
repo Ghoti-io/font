@@ -97,6 +97,7 @@
 #define gfnt_afm_glyph_for_name GHOTIIO_FONT(gfnt_afm_glyph_for_name)
 #define gfnt_afm_info GHOTIIO_FONT(gfnt_afm_info)
 #define gfnt_afm_kern GHOTIIO_FONT(gfnt_afm_kern)
+#define gfnt_afm_kern_at GHOTIIO_FONT(gfnt_afm_kern_at)
 #define gfnt_afm_kern_count GHOTIIO_FONT(gfnt_afm_kern_count)
 #define gfnt_afm_parse GHOTIIO_FONT(gfnt_afm_parse)
 #define gfnt_allocator_default GHOTIIO_FONT(gfnt_allocator_default)

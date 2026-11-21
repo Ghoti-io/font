@@ -163,6 +163,22 @@ GFNT_API bool gfnt_afm_glyph_for_code(const GFNT_Afm * afm, int32_t code, GFNT_A
 GFNT_API bool gfnt_afm_kern(const GFNT_Afm * afm, const char * first, const char * second,
     int32_t * out_kern_milli);
 
+/**
+ * @brief The @p index'th kerning pair, in sorted order (by first name, then second).
+ *
+ * What a caller who wants every pair (to convert them, or to compare them) iterates, since
+ * ::gfnt_afm_kern() answers for one.
+ *
+ * @param afm The AFM.
+ * @param index From 0 to ::gfnt_afm_kern_count() - 1.
+ * @param out_first Receives the left glyph's name (owned by @p afm), or NULL.
+ * @param out_second Receives the right glyph's name, or NULL.
+ * @param out_kern_milli Receives the amount in thousandths, or NULL.
+ * @return ::GFNT_OK or ::GFNT_ERR_INVALID.
+ */
+GFNT_API GFNT_Result gfnt_afm_kern_at(const GFNT_Afm * afm, size_t index, const char ** out_first,
+    const char ** out_second, int32_t * out_kern_milli);
+
 /** @brief How many kerning pairs the file lists. */
 GFNT_API size_t gfnt_afm_kern_count(const GFNT_Afm * afm);
 

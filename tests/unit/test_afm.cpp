@@ -174,6 +174,15 @@ TEST(Afm, KerningPairsAndWhatIsNotOneToThem) {
   EXPECT_EQ(x, -25500);
   ASSERT_TRUE(gfnt_afm_kern(p.afm, "f", "A", &x));
   EXPECT_EQ(x, -10000);   // the x of a KP
+  const char * first = nullptr;
+  const char * second = nullptr;
+  ASSERT_EQ(gfnt_afm_kern_at(p.afm, 0, &first, &second, &x), GFNT_OK);   // sorted: A A, A f, f A
+  EXPECT_STREQ(first, "A");
+  EXPECT_STREQ(second, "A");
+  EXPECT_EQ(x, -25500);
+  ASSERT_EQ(gfnt_afm_kern_at(p.afm, 2, &first, nullptr, nullptr), GFNT_OK);
+  EXPECT_STREQ(first, "f");
+  EXPECT_EQ(gfnt_afm_kern_at(p.afm, 3, &first, &second, &x), GFNT_ERR_INVALID);
   x = 99;
   EXPECT_FALSE(gfnt_afm_kern(p.afm, "f", "f", &x));
   EXPECT_EQ(x, 99);

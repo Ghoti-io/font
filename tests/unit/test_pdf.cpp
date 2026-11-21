@@ -28,7 +28,8 @@ struct Face {
   GFNT_Blob * blob = nullptr;
   GFNT_Face * face = nullptr;
 
-  Face(uint16_t upem, const std::vector<uint16_t> & advances) {
+  Face(uint16_t upem, const std::vector<uint16_t> & advances,
+      const std::vector<gfnttest::Table> & extra = {}) {
     std::vector<std::pair<uint16_t, int16_t>> metrics;
     for (uint16_t a : advances) {
       metrics.push_back({a, 0});
@@ -40,6 +41,16 @@ struct Face {
         {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics)},
         {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(n)},
     });
+    if (!extra.empty()) {
+      std::vector<gfnttest::Table> tables = {
+          {GFNT_TAG('h', 'e', 'a', 'd'), gfnttest::build_head(upem, 0)},
+          {GFNT_TAG('h', 'h', 'e', 'a'), gfnttest::build_hhea(800, -200, 0, n)},
+          {GFNT_TAG('h', 'm', 't', 'x'), gfnttest::build_hmtx(metrics)},
+          {GFNT_TAG('m', 'a', 'x', 'p'), gfnttest::build_maxp(n)},
+      };
+      tables.insert(tables.end(), extra.begin(), extra.end());
+      bytes = gfnttest::build_sfnt(GFNT_FLAVOUR_TRUETYPE, tables);
+    }
     GFNT_Error error;
     gfnt_error_clear(&error);
     EXPECT_EQ(gfnt_blob_create_memory(bytes.data(), bytes.size(), GFNT_BLOB_BORROWED, nullptr,
@@ -319,6 +330,64 @@ TEST(PdfEncodings, NoSuchEncodingOrNameOrCodeIsNoAnswer) {
   EXPECT_FALSE(gfnt_pdf_encoding_code_for_name(GFNT_PDF_ENCODING_COUNT, "A", &code));
   EXPECT_TRUE(gfnt_pdf_encoding_code_for_name(GFNT_PDF_ENCODING_WIN_ANSI, "bullet", &code));
   EXPECT_EQ(code, 127);   // the lowest of the several
+}
+
+namespace {
+
+/** A `post` version 2 table whose every glyph has a name of its own (indices from 258). */
+std::vector<uint8_t> post_with_names(const std::vector<std::string> & names) {
+  std::vector<uint8_t> post = gfnttest::build_post(0x00020000);
+  post.resize(32);
+  gfnttest::put_u16(post, static_cast<uint16_t>(names.size()));
+  for (size_t i = 0; i < names.size(); i++) {
+    gfnttest::put_u16(post, static_cast<uint16_t>(258 + i));
+  }
+  for (const std::string & name : names) {
+    post.push_back(static_cast<uint8_t>(name.size()));
+    post.insert(post.end(), name.begin(), name.end());
+  }
+  return post;
+}
+
+std::string simple(const Face & f, const std::vector<const char *> & names, GFNT_Result * out = nullptr) {
+  GFNT_Blob * blob = nullptr;
+  GFNT_Result r = gfnt_pdf_simple_widths(f.face, names.data(), names.size(), nullptr, nullptr, nullptr,
+      &blob, nullptr);
+  if (out) {
+    *out = r;
+  }
+  return blob ? take(blob) : "";
+}
+
+}  // namespace
+
+TEST(PdfSimpleWidths, AGlyphIsFoundByNameAndFailingThatByTheCharacterItsNameStandsFor) {
+  // Glyphs: .notdef, A, B, uni00A0; the cmap maps U+00A0 to glyph 3, so `nbspace` (which the
+  // post table does not name) is found through the Adobe Glyph List and the cmap.
+  Face f(1000, {500, 600, 700, 250},
+      {{GFNT_TAG('p', 'o', 's', 't'), post_with_names({".notdef", "A", "B", "uni00A0"})},
+       {GFNT_TAG('c', 'm', 'a', 'p'), gfnttest::build_cmap({{3, 1, gfnttest::build_cmap_format4(
+           {{0xA0, 0xA0, static_cast<int16_t>(3 - 0xA0), {}}, {0xFFFF, 0xFFFF, 1, {}}})}})}});
+  EXPECT_EQ(simple(f, {"A", "B", nullptr, "nbspace", "nosuchglyph", "uni00A0"}), "600 700 0 250 0 250");
+}
+
+TEST(PdfSimpleWidths, TheWidthIsScaledAsTheCidArrayScalesIt) {
+  Face f(2048, {1024, 1025}, {{GFNT_TAG('p', 'o', 's', 't'), post_with_names({".notdef", "A"})}});
+  EXPECT_EQ(simple(f, {"A"}), "500.488");
+}
+
+TEST(PdfSimpleWidths, Refusals) {
+  Face f(1000, {500});
+  GFNT_Result r = GFNT_OK;
+  EXPECT_EQ(simple(f, {}, &r), "");
+  EXPECT_EQ(r, GFNT_ERR_INVALID);
+  GFNT_Blob * blob = nullptr;
+  const char * one[] = {"A"};
+  EXPECT_EQ(gfnt_pdf_simple_widths(nullptr, one, 1, nullptr, nullptr, nullptr, &blob, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_pdf_simple_widths(f.face, nullptr, 1, nullptr, nullptr, nullptr, &blob, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_pdf_simple_widths(f.face, one, 1, nullptr, nullptr, nullptr, nullptr, nullptr), GFNT_ERR_INVALID);
+  // A face that names nothing and has no cmap: every width is the missing width.
+  EXPECT_EQ(simple(f, {"A", "B"}), "0 0");
 }
 
 int main(int argc, char ** argv) {

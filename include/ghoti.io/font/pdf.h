@@ -79,6 +79,32 @@ GFNT_API GFNT_Result gfnt_pdf_widths(const GFNT_Face * face, const uint32_t * gl
     size_t count, const GFNT_Variation * variation, const GFNT_Limits * limits,
     const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
 
+/**
+ * @brief The elements of a simple font's `Widths` array, in 1000-unit glyph space.
+ *
+ * One width per name, for the consecutive codes from the font's `FirstChar`: the caller
+ * chooses the names (from ::gfnt_pdf_encoding_glyph_name() and its own `Differences`) and this
+ * says how wide the face's glyph for each is, scaled as ::gfnt_pdf_widths() scales. A glyph is
+ * found by its name in the face, and failing that by the character the Adobe Glyph List gives
+ * the name, through the face's character map, which is what a reader does with a TrueType face
+ * whose `post` names do not include `nbspace` or the like. A NULL name, or a name the face has no
+ * glyph for, is written as 0, which is what `MissingWidth` defaults to.
+ *
+ * @param face The face.
+ * @param names The glyph names, one per code; entries may be NULL.
+ * @param count How many.
+ * @param variation The instance, or NULL for the default.
+ * @param limits Caps, or NULL for the defaults.
+ * @param allocator Where the blob comes from, or NULL for the default.
+ * @param out_blob Receives the text (the widths separated by single spaces). Written only on success.
+ * @param error Receives a diagnostic on failure, or NULL.
+ * @return ::GFNT_OK; ::GFNT_ERR_INVALID for no names or a NULL where a value is needed; whatever
+ *   ::gfnt_face_glyph_advance() answers for a glyph that was found; ::GFNT_ERR_LIMIT; ::GFNT_ERR_OOM.
+ */
+GFNT_API GFNT_Result gfnt_pdf_simple_widths(const GFNT_Face * face, const char * const * names,
+    size_t count, const GFNT_Variation * variation, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error);
+
 /** One code of a font and the text it stands for. */
 typedef struct GFNT_PdfToUnicodeEntry {
   uint32_t code;              ///< The character code (the CID, for a composite font).

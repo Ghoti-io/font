@@ -29,6 +29,8 @@
  * (one hundred entries to a block, a range whose last byte does not wrap).
  */
 
+#include <ghoti.io/font/cmap.h>
+#include <ghoti.io/font/glyph.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/pdf.h>
 #include <stdio.h>
@@ -199,6 +201,84 @@ GFNT_Result gfnt_pdf_widths(const GFNT_Face * face, const uint32_t * glyphs, siz
   }
   result = gfnt_blob_create_memory(b.data, b.length, GFNT_BLOB_COPY, limits, allocator,
       out_blob, error);
+  gfnt_wbuf_free(&b);
+  return result;
+}
+
+/** The glyph of @p face for a glyph name: by name, else by the character the name stands for. */
+static bool glyph_for_pdf_name(const GFNT_Face * face, const char * name, uint32_t * out) {
+  uint32_t cps[2];
+  size_t count = 0;
+  uint32_t glyph = 0;
+
+  if (!name) {
+    return false;
+  }
+  if (gfnt_face_glyph_for_name(face, name, &glyph, NULL) == GFNT_OK && glyph != 0) {
+    *out = glyph;
+    return true;
+  }
+  if (gfnt_glyph_name_to_unicode(name, false, cps, 2, &count, NULL) == GFNT_OK && count == 1
+      && gfnt_face_glyph_for_codepoint(face, cps[0], &glyph, NULL) == GFNT_OK && glyph != 0) {
+    *out = glyph;
+    return true;
+  }
+  return false;
+}
+
+GFNT_Result gfnt_pdf_simple_widths(const GFNT_Face * face, const char * const * names,
+    size_t count, const GFNT_Variation * variation, const GFNT_Limits * limits,
+    const GFNT_Allocator * allocator, GFNT_Blob ** out_blob, GFNT_Error * error) {
+  GFNT_Limits local;
+  GFNT_WBuf b;
+  uint16_t upem = 0;
+  size_t i;
+  GFNT_Result result;
+
+  if (!face || !names || count == 0 || !out_blob) {
+    return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, GFNT_GLYPH_NONE,
+        "a face, some names and a place for the result are required");
+  }
+  if (!limits) {
+    gfnt_limits_default(&local);
+    limits = &local;
+  }
+  if (!allocator) {
+    allocator = gfnt_allocator_default();
+  }
+  result = gfnt_face_units_per_em(face, &upem, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  if (upem == 0) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, 0, 0, GFNT_GLYPH_NONE,
+        "the face states zero units per em");
+  }
+  gfnt_wbuf_init(&b, allocator);
+  for (i = 0; i < count; i++) {
+    uint32_t glyph = 0;
+    int32_t advance = 0;
+    int64_t width = 0;
+
+    if (glyph_for_pdf_name(face, names[i], &glyph)) {
+      result = gfnt_face_glyph_advance(face, glyph, variation, &advance, error);
+      if (result != GFNT_OK) {
+        gfnt_wbuf_free(&b);
+        return result;
+      }
+      width = scaled_thousandths(advance, upem);
+    }
+    if (i) {
+      put_text(&b, " ");
+    }
+    put_width(&b, width);
+  }
+  if (b.oom) {
+    gfnt_wbuf_free(&b);
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, GFNT_GLYPH_NONE, "writing the widths");
+  }
+  result = gfnt_blob_create_memory(b.data, b.length, GFNT_BLOB_COPY, limits, allocator, out_blob,
+      error);
   gfnt_wbuf_free(&b);
   return result;
 }

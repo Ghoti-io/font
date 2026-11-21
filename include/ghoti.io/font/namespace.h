@@ -196,6 +196,7 @@
 #define gfnt_raster_outline GHOTIIO_FONT(gfnt_raster_outline)
 #define gfnt_pdf_encoding_code_for_name GHOTIIO_FONT(gfnt_pdf_encoding_code_for_name)
 #define gfnt_pdf_encoding_glyph_name GHOTIIO_FONT(gfnt_pdf_encoding_glyph_name)
+#define gfnt_pdf_simple_widths GHOTIIO_FONT(gfnt_pdf_simple_widths)
 #define gfnt_pdf_tounicode GHOTIIO_FONT(gfnt_pdf_tounicode)
 #define gfnt_pdf_widths GHOTIIO_FONT(gfnt_pdf_widths)
 #define gfnt_outline_add_point GHOTIIO_FONT(gfnt_outline_add_point)

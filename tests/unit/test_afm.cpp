@@ -111,19 +111,19 @@ TEST(Afm, TheHeaderKeysAreRead) {
   EXPECT_STREQ(info.notice, "(c) Somebody; all rights reserved");
   EXPECT_STREQ(info.encoding_scheme, "AdobeStandardEncoding");
   EXPECT_EQ(info.character_set, nullptr);
-  EXPECT_EQ(info.italic_angle, -12.5);
+  EXPECT_EQ(info.italic_angle_milli, -12500);
   EXPECT_FALSE(info.is_fixed_pitch);
-  EXPECT_EQ(info.underline_position, -100.0);
-  EXPECT_EQ(info.underline_thickness, 50.0);
+  EXPECT_EQ(info.underline_position_milli, -100000);
+  EXPECT_EQ(info.underline_thickness_milli, 50000);
   EXPECT_TRUE(info.has_bbox);
-  EXPECT_EQ(info.bbox[0], -168.0);
-  EXPECT_EQ(info.bbox[3], 898.0);
-  EXPECT_EQ(info.cap_height, 662.0);
-  EXPECT_EQ(info.x_height, 450.0);
-  EXPECT_EQ(info.ascender, 683.0);
-  EXPECT_EQ(info.descender, -217.0);
-  EXPECT_EQ(info.std_hw, 36.0);
-  EXPECT_EQ(info.std_vw, 84.0);
+  EXPECT_EQ(info.bbox_milli[0], -168000);
+  EXPECT_EQ(info.bbox_milli[3], 898000);
+  EXPECT_EQ(info.cap_height_milli, 662000);
+  EXPECT_EQ(info.x_height_milli, 450000);
+  EXPECT_EQ(info.ascender_milli, 683000);
+  EXPECT_EQ(info.descender_milli, -217000);
+  EXPECT_EQ(info.std_hw_milli, 36000);
+  EXPECT_EQ(info.std_vw_milli, 84000);
 }
 
 TEST(Afm, TheCharactersAreReadInFileOrderWithEveryCommand) {
@@ -133,11 +133,11 @@ TEST(Afm, TheCharactersAreReadInFileOrderWithEveryCommand) {
   GFNT_AfmGlyph g;
   ASSERT_EQ(gfnt_afm_glyph_at(p.afm, 1, &g), GFNT_OK);
   EXPECT_EQ(g.code, 102);
-  EXPECT_EQ(g.width_x, 333.5);
-  EXPECT_EQ(g.width_y, 0.0);
+  EXPECT_EQ(g.width_x_milli, 333500);
+  EXPECT_EQ(g.width_y_milli, 0);
   EXPECT_STREQ(g.name, "f");
   EXPECT_TRUE(g.has_bbox);
-  EXPECT_EQ(g.bbox[2], 371.0);
+  EXPECT_EQ(g.bbox_milli[2], 371000);
   EXPECT_STREQ(g.ligatures, "i fi l fl");
   ASSERT_EQ(gfnt_afm_glyph_at(p.afm, 2, &g), GFNT_OK);
   EXPECT_EQ(g.code, -1);
@@ -152,7 +152,7 @@ TEST(Afm, LookupsByNameAndByCode) {
   ASSERT_EQ(p.result, GFNT_OK) << p.error.message;
   GFNT_AfmGlyph g;
   ASSERT_TRUE(gfnt_afm_glyph_for_name(p.afm, "fi", &g));
-  EXPECT_EQ(g.width_x, 556.0);
+  EXPECT_EQ(g.width_x_milli, 556000);
   EXPECT_EQ(g.code, -1);
   EXPECT_FALSE(gfnt_afm_glyph_for_name(p.afm, "nosuch", &g));
   EXPECT_FALSE(gfnt_afm_glyph_for_name(p.afm, "", &g));
@@ -166,17 +166,17 @@ TEST(Afm, LookupsByNameAndByCode) {
 TEST(Afm, KerningPairsAndWhatIsNotOneToThem) {
   Parsed p(kGood);
   ASSERT_EQ(p.result, GFNT_OK) << p.error.message;
-  double x = 0;
+  int32_t x = 0;
   EXPECT_EQ(gfnt_afm_kern_count(p.afm), 3u);   // KPX, KPX and KP; the KPY is counted and not kept
   ASSERT_TRUE(gfnt_afm_kern(p.afm, "A", "f", &x));
-  EXPECT_EQ(x, -50.0);
+  EXPECT_EQ(x, -50000);
   ASSERT_TRUE(gfnt_afm_kern(p.afm, "A", "A", &x));
-  EXPECT_EQ(x, -25.5);
+  EXPECT_EQ(x, -25500);
   ASSERT_TRUE(gfnt_afm_kern(p.afm, "f", "A", &x));
-  EXPECT_EQ(x, -10.0);   // the x of a KP
+  EXPECT_EQ(x, -10000);   // the x of a KP
   x = 99;
   EXPECT_FALSE(gfnt_afm_kern(p.afm, "f", "f", &x));
-  EXPECT_EQ(x, 99.0);
+  EXPECT_EQ(x, 99);
 }
 
 TEST(Afm, ACarriageReturnAndLineFeedPairEndsALineLikeEitherAlone) {
@@ -210,12 +210,12 @@ TEST(Afm, AnAdvanceVectorAndTheOtherSpellingsOfAnAdvance) {
   ASSERT_EQ(p.result, GFNT_OK) << p.error.message;
   GFNT_AfmGlyph g;
   ASSERT_EQ(gfnt_afm_glyph_at(p.afm, 0, &g), GFNT_OK);
-  EXPECT_EQ(g.width_x, 250.0);
-  EXPECT_EQ(g.width_y, 3.0);
+  EXPECT_EQ(g.width_x_milli, 250000);
+  EXPECT_EQ(g.width_y_milli, 3000);
   Parsed v(with("C 32 ; WX 250 ;", "C 32 ; W 250 7 ;"));
   ASSERT_EQ(v.result, GFNT_OK) << v.error.message;
   ASSERT_EQ(gfnt_afm_glyph_at(v.afm, 0, &g), GFNT_OK);
-  EXPECT_EQ(g.width_y, 7.0);
+  EXPECT_EQ(g.width_y_milli, 7000);
 }
 
 TEST(Afm, ANumberIsTheSameUnderEveryLocale) {
@@ -225,6 +225,24 @@ TEST(Afm, ANumberIsTheSameUnderEveryLocale) {
   ASSERT_EQ(ok.result, GFNT_OK);
   Parsed comma(with("333.5", "333,5"));
   EXPECT_EQ(comma.result, GFNT_ERR_CORRUPT);
+}
+
+TEST(Afm, NumbersAreThousandthsRoundedHalfAwayFromZeroAndTooLargeOnesAreRefused) {
+  struct Case { const char * text; int32_t milli; };
+  const Case cases[] = {{"0.5", 500}, {"12.3456", 12346}, {"12.3454", 12345}, {"-12.3455", -12346},
+      {"0.0005", 1}, {"0.0004", 0}, {"-0.0005", -1}, {"7", 7000}, {"+7.25", 7250}, {"1234.", 1234000},
+      {".5", 500}, {"2147483.647", 2147483647}};
+  for (const Case & c : cases) {
+    Parsed p(with("WX 250", std::string("WX ") + c.text));
+    ASSERT_EQ(p.result, GFNT_OK) << c.text << ": " << p.error.message;
+    GFNT_AfmGlyph g;
+    ASSERT_EQ(gfnt_afm_glyph_at(p.afm, 0, &g), GFNT_OK);
+    EXPECT_EQ(g.width_x_milli, c.milli) << c.text;
+  }
+  EXPECT_EQ(Parsed(with("WX 250", "WX 2147483.648")).result, GFNT_ERR_CORRUPT);
+  EXPECT_EQ(Parsed(with("WX 250", "WX 9999999999999")).result, GFNT_ERR_CORRUPT);
+  EXPECT_EQ(Parsed(with("WX 250", "WX .")).result, GFNT_ERR_CORRUPT);
+  EXPECT_EQ(Parsed(with("WX 250", "WX 1e3")).result, GFNT_ERR_CORRUPT);
 }
 
 TEST(Afm, EachRefusal) {
@@ -277,7 +295,7 @@ TEST(Afm, NullArgumentsAndAnEmptyAfmAnswerNothing) {
   EXPECT_EQ(gfnt_afm_parse(nullptr, 5, nullptr, nullptr, &afm, nullptr), GFNT_ERR_INVALID);
   EXPECT_EQ(afm, nullptr);
   GFNT_AfmGlyph g;
-  double x;
+  int32_t x;
   EXPECT_EQ(gfnt_afm_glyph_count(nullptr), 0u);
   EXPECT_EQ(gfnt_afm_glyph_at(nullptr, 0, &g), GFNT_ERR_INVALID);
   EXPECT_FALSE(gfnt_afm_glyph_for_name(nullptr, "A", &g));

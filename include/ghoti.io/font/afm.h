@@ -54,7 +54,14 @@ extern "C" {
 /** A parsed AFM file. Owned by the caller; released with ::gfnt_afm_free(). */
 typedef struct GFNT_Afm GFNT_Afm;
 
-/** The header's global keys that are read. A string the file did not give is NULL. */
+/**
+ * The header's global keys that are read. A string the file did not give is NULL.
+ *
+ * This library holds no floating-point number in its interface, so every number of an AFM
+ * file is given in thousandths: `278` is 278000 and `-12.5` is -12500. Three decimal places are
+ * kept, and a value with more is rounded half away from zero; a value whose thousandths do not
+ * fit an `int32_t` (past two million units) is refused as corrupt.
+ */
 typedef struct GFNT_AfmInfo {
   const char * font_name;       ///< `FontName`.
   const char * full_name;       ///< `FullName`.
@@ -64,27 +71,27 @@ typedef struct GFNT_AfmInfo {
   const char * notice;          ///< `Notice`.
   const char * encoding_scheme; ///< `EncodingScheme` (`AdobeStandardEncoding`, `FontSpecific`, ...).
   const char * character_set;   ///< `CharacterSet`.
-  double italic_angle;          ///< `ItalicAngle`, in degrees; 0 when not given.
+  int32_t italic_angle_milli;   ///< `ItalicAngle`, in thousandths of a degree; 0 when not given.
   bool is_fixed_pitch;          ///< `IsFixedPitch`.
-  double underline_position;    ///< `UnderlinePosition`; 0 when not given.
-  double underline_thickness;   ///< `UnderlineThickness`; 0 when not given.
-  double bbox[4];               ///< `FontBBox`: llx, lly, urx, ury; zeros when not given.
+  int32_t underline_position_milli; ///< `UnderlinePosition`; 0 when not given.
+  int32_t underline_thickness_milli; ///< `UnderlineThickness`; 0 when not given.
+  int32_t bbox_milli[4];        ///< `FontBBox`: llx, lly, urx, ury; zeros when not given.
   bool has_bbox;                ///< Whether `FontBBox` was given.
-  double cap_height;            ///< `CapHeight`; 0 when not given.
-  double x_height;              ///< `XHeight`.
-  double ascender;              ///< `Ascender`.
-  double descender;             ///< `Descender`.
-  double std_hw;                ///< `StdHW`.
-  double std_vw;                ///< `StdVW`.
+  int32_t cap_height_milli;     ///< `CapHeight`; 0 when not given.
+  int32_t x_height_milli;       ///< `XHeight`.
+  int32_t ascender_milli;       ///< `Ascender`.
+  int32_t descender_milli;      ///< `Descender`.
+  int32_t std_hw_milli;         ///< `StdHW`.
+  int32_t std_vw_milli;         ///< `StdVW`.
 } GFNT_AfmInfo;
 
-/** One character's metrics. The strings belong to the ::GFNT_Afm. */
+/** One character's metrics, in thousandths as ::GFNT_AfmInfo says. The strings belong to the ::GFNT_Afm. */
 typedef struct GFNT_AfmGlyph {
   int32_t code;           ///< The character code, or -1 for an unencoded glyph.
-  double width_x;         ///< The advance along x (`WX`, `W0X`, or the x of `W`/`W0`).
-  double width_y;         ///< The advance along y (`WY`, `W0Y`, or the y of `W`/`W0`); usually 0.
+  int32_t width_x_milli;  ///< The advance along x (`WX`, `W0X`, or the x of `W`/`W0`).
+  int32_t width_y_milli;  ///< The advance along y (`WY`, `W0Y`, or the y of `W`/`W0`); usually 0.
   const char * name;      ///< The glyph name (`N`); NULL if the line named none.
-  double bbox[4];         ///< The box (`B`): llx, lly, urx, ury; zeros when not given.
+  int32_t bbox_milli[4];  ///< The box (`B`): llx, lly, urx, ury; zeros when not given.
   bool has_bbox;          ///< Whether `B` was given.
   const char * ligatures; ///< `L` pairs as "successor ligature" separated by spaces, or NULL.
 } GFNT_AfmGlyph;
@@ -149,12 +156,12 @@ GFNT_API bool gfnt_afm_glyph_for_code(const GFNT_Afm * afm, int32_t code, GFNT_A
  * @param afm The AFM.
  * @param first The left glyph's name.
  * @param second The right glyph's name.
- * @param out_kern Receives the amount (the file's `KPX`, or the x of a `KP`). Written only
+ * @param out_kern_milli Receives the amount in thousandths (the file's `KPX`, or the x of a `KP`). Written only
  *   when the answer is true.
  * @return Whether the file has a pair for them.
  */
 GFNT_API bool gfnt_afm_kern(const GFNT_Afm * afm, const char * first, const char * second,
-    double * out_kern);
+    int32_t * out_kern_milli);
 
 /** @brief How many kerning pairs the file lists. */
 GFNT_API size_t gfnt_afm_kern_count(const GFNT_Afm * afm);

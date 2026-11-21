@@ -38,7 +38,7 @@
 typedef struct AfmKern {
   const char * first;
   const char * second;
-  double x;
+  int32_t x;
   uint32_t order; ///< File order, for a stable sort.
 } AfmKern;
 
@@ -116,16 +116,21 @@ static void trim_right(char * s) {
   }
 }
 
-/** A decimal number, read without the locale: a sign, digits, and optionally a point and digits. */
-static bool number(char ** p, double * out) {
-  static const double ten[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12,
-      1e13, 1e14, 1e15, 1e16, 1e17, 1e18};
+/**
+ * A decimal number, read without the locale, as thousandths: a sign, digits, and optionally a
+ * point and digits. A fourth decimal rounds the third half away from zero; one that does not
+ * fit an int32 in thousandths is refused.
+ */
+static bool number(char ** p, int32_t * out) {
   char * s = skip_space(*p);
   bool negative = false;
-  uint64_t mantissa = 0;
+  int64_t whole = 0;
+  int64_t fraction = 0;   /* the first three decimals, as thousandths */
+  unsigned places = 0;
   unsigned digits = 0;
-  unsigned fraction = 0;
+  bool round_up = false;
   bool seen = false;
+  int64_t value;
 
   if (*s == '-' || *s == '+') {
     negative = *s == '-';
@@ -133,42 +138,51 @@ static bool number(char ** p, double * out) {
   }
   for (; *s >= '0' && *s <= '9'; s++) {
     seen = true;
-    if (digits >= 18) {
+    if (++digits > 12) {
       return false;
     }
-    mantissa = mantissa * 10 + (uint64_t)(*s - '0');
-    digits++;
+    whole = whole * 10 + (*s - '0');
   }
   if (*s == '.') {
     s++;
     for (; *s >= '0' && *s <= '9'; s++) {
       seen = true;
-      if (digits >= 18) {
+      if (++digits > 18) {
         return false;
       }
-      mantissa = mantissa * 10 + (uint64_t)(*s - '0');
-      digits++;
-      fraction++;
+      if (places < 3) {
+        fraction = fraction * 10 + (*s - '0');
+        places++;
+      }
+      else if (places == 3) {
+        round_up = *s >= '5';
+        places++;
+      }
     }
   }
   if (!seen || (*s && !is_space(*s))) {
     return false;
   }
-  *out = (double)mantissa / ten[fraction];
-  if (negative) {
-    *out = -*out;
+  while (places < 3) {
+    fraction *= 10;
+    places++;
   }
+  value = whole * 1000 + fraction + (round_up ? 1 : 0);
+  if (value > 2147483647) {
+    return false;
+  }
+  *out = (int32_t)(negative ? -value : value);
   *p = s;
   return true;
 }
 
 static bool integer(char ** p, int32_t * out) {
-  double v;
+  int32_t v;
 
-  if (!number(p, &v) || v < -2147483648.0 || v > 2147483647.0 || v != (double)(int32_t)v) {
+  if (!number(p, &v) || v % 1000 != 0) {
     return false;
   }
-  *out = (int32_t)v;
+  *out = v / 1000;
   return true;
 }
 
@@ -276,17 +290,17 @@ static GFNT_Result read_glyph(const GFNT_Allocator * a, char * line, GFNT_AfmGly
       }
     }
     else if (keyword(key, "WX") || keyword(key, "W0X")) {
-      if (!number(&rest, &g->width_x) || !at_end(rest)) {
+      if (!number(&rest, &g->width_x_milli) || !at_end(rest)) {
         failed = AFM_CORRUPT("an advance that is not a number");
       }
     }
     else if (keyword(key, "WY") || keyword(key, "W0Y")) {
-      if (!number(&rest, &g->width_y) || !at_end(rest)) {
+      if (!number(&rest, &g->width_y_milli) || !at_end(rest)) {
         failed = AFM_CORRUPT("an advance that is not a number");
       }
     }
     else if (keyword(key, "W") || keyword(key, "W0")) {
-      if (!number(&rest, &g->width_x) || !number(&rest, &g->width_y) || !at_end(rest)) {
+      if (!number(&rest, &g->width_x_milli) || !number(&rest, &g->width_y_milli) || !at_end(rest)) {
         failed = AFM_CORRUPT("an advance vector that is not two numbers");
       }
     }
@@ -305,7 +319,7 @@ static GFNT_Result read_glyph(const GFNT_Allocator * a, char * line, GFNT_AfmGly
       int i;
 
       for (i = 0; i < 4 && failed == GFNT_OK; i++) {
-        if (!number(&rest, &g->bbox[i])) {
+        if (!number(&rest, &g->bbox_milli[i])) {
           failed = AFM_CORRUPT("a character box that is not four numbers");
         }
       }
@@ -391,7 +405,7 @@ static bool read_header_key(GFNT_AfmInfo * info, const char * key, char * rest, 
     info->character_set = rest;
   }
   else if (keyword(key, "ItalicAngle")) {
-    *ok = number(&rest, &info->italic_angle) && at_end(rest);
+    *ok = number(&rest, &info->italic_angle_milli) && at_end(rest);
   }
   else if (keyword(key, "IsFixedPitch")) {
     if (keyword(rest, "true")) {
@@ -405,37 +419,37 @@ static bool read_header_key(GFNT_AfmInfo * info, const char * key, char * rest, 
     }
   }
   else if (keyword(key, "UnderlinePosition")) {
-    *ok = number(&rest, &info->underline_position) && at_end(rest);
+    *ok = number(&rest, &info->underline_position_milli) && at_end(rest);
   }
   else if (keyword(key, "UnderlineThickness")) {
-    *ok = number(&rest, &info->underline_thickness) && at_end(rest);
+    *ok = number(&rest, &info->underline_thickness_milli) && at_end(rest);
   }
   else if (keyword(key, "FontBBox")) {
     int i;
 
     for (i = 0; i < 4 && *ok; i++) {
-      *ok = number(&rest, &info->bbox[i]);
+      *ok = number(&rest, &info->bbox_milli[i]);
     }
     *ok = *ok && at_end(rest);
     info->has_bbox = *ok;
   }
   else if (keyword(key, "CapHeight")) {
-    *ok = number(&rest, &info->cap_height) && at_end(rest);
+    *ok = number(&rest, &info->cap_height_milli) && at_end(rest);
   }
   else if (keyword(key, "XHeight")) {
-    *ok = number(&rest, &info->x_height) && at_end(rest);
+    *ok = number(&rest, &info->x_height_milli) && at_end(rest);
   }
   else if (keyword(key, "Ascender")) {
-    *ok = number(&rest, &info->ascender) && at_end(rest);
+    *ok = number(&rest, &info->ascender_milli) && at_end(rest);
   }
   else if (keyword(key, "Descender")) {
-    *ok = number(&rest, &info->descender) && at_end(rest);
+    *ok = number(&rest, &info->descender_milli) && at_end(rest);
   }
   else if (keyword(key, "StdHW")) {
-    *ok = number(&rest, &info->std_hw) && at_end(rest);
+    *ok = number(&rest, &info->std_hw_milli) && at_end(rest);
   }
   else if (keyword(key, "StdVW")) {
-    *ok = number(&rest, &info->std_vw) && at_end(rest);
+    *ok = number(&rest, &info->std_vw_milli) && at_end(rest);
   }
   else {
     return false;
@@ -547,8 +561,8 @@ static GFNT_Result parse_text(GFNT_Afm * afm, const GFNT_Limits * limits, GFNT_E
         char * after;
         char * first;
         char * second;
-        double x;
-        double y;
+        int32_t x;
+        int32_t y;
 
         (void)token(line, &after);
         first = token(after, &after);
@@ -790,11 +804,11 @@ bool gfnt_afm_glyph_for_code(const GFNT_Afm * afm, int32_t code, GFNT_AfmGlyph *
 }
 
 bool gfnt_afm_kern(const GFNT_Afm * afm, const char * first, const char * second,
-    double * out_kern) {
+    int32_t * out_kern_milli) {
   size_t low = 0;
   size_t high;
 
-  if (!afm || !first || !second || !out_kern) {
+  if (!afm || !first || !second || !out_kern_milli) {
     return false;
   }
   high = afm->kern_count;
@@ -814,7 +828,7 @@ bool gfnt_afm_kern(const GFNT_Afm * afm, const char * first, const char * second
   }
   if (low < afm->kern_count && strcmp(afm->kerns[low].first, first) == 0
       && strcmp(afm->kerns[low].second, second) == 0) {
-    *out_kern = afm->kerns[low].x;
+    *out_kern_milli = afm->kerns[low].x;
     return true;
   }
   return false;

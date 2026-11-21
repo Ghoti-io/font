@@ -25,6 +25,7 @@
 #ifndef GHOTI_IO_GFNT_PDF_ENCODINGS_H
 #define GHOTI_IO_GFNT_PDF_ENCODINGS_H
 
+#include <ghoti.io/font/macros.h>
 #include <stdint.h>
 
 /* The glyph names the encodings use, sorted; index 0 is no name. */

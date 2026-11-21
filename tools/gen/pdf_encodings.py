@@ -145,6 +145,7 @@ def main(directory, zapf_path, agl_path, zapf_list_path):
     print("#ifndef GHOTI_IO_GFNT_PDF_ENCODINGS_H")
     print("#define GHOTI_IO_GFNT_PDF_ENCODINGS_H")
     print()
+    print("#include <ghoti.io/font/macros.h>")
     print("#include <stdint.h>")
     print()
     print("/* The glyph names the encodings use, sorted; index 0 is no name. */")

@@ -27,6 +27,7 @@
 #ifndef GHOTI_IO_GFNT_AGL_DATA_H
 #define GHOTI_IO_GFNT_AGL_DATA_H
 
+#include <ghoti.io/font/macros.h>
 #include <stdint.h>
 
 typedef struct GFNT_AglEntry {

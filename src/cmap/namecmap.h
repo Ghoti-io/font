@@ -37,6 +37,7 @@
 #ifndef GHOTI_IO_GFNT_NAMECMAP_H
 #define GHOTI_IO_GFNT_NAMECMAP_H
 
+#include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/core.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/allocator.h>

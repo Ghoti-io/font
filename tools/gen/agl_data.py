@@ -90,6 +90,7 @@ def main(agl_path, zapf_path):
     print("#ifndef GHOTI_IO_GFNT_AGL_DATA_H")
     print("#define GHOTI_IO_GFNT_AGL_DATA_H")
     print()
+    print("#include <ghoti.io/font/macros.h>")
     print("#include <stdint.h>")
     print()
     print("typedef struct GFNT_AglEntry {")

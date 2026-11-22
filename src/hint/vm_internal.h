@@ -75,6 +75,8 @@ typedef struct GFNT_HintZone {
   size_t contour_count;
 } GFNT_HintZone;
 
+struct GFNT_CffHint;
+
 struct GFNT_HintContext {
   const GFNT_Allocator * allocator;
   GFNT_HintLimits limits;
@@ -101,6 +103,8 @@ struct GFNT_HintContext {
   GFNT_HintZone twilight;         ///< As `prep` left it.
   bool usable;
   GFNT_HintFault fault;
+  /** Set for a CFF, CFF2 or Type 1 face, which is hinted by its stems and blue zones and has no program; every other field is then unused. */
+  struct GFNT_CffHint * charstring;
 };
 
 struct GFNT_HintRun {

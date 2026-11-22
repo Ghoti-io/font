@@ -37,6 +37,7 @@
 #include "../../src/cff/cff.h"
 #include "../../src/cff/cff_glyph.h"
 #include <ghoti.io/font/glyph.h>
+#include <ghoti.io/font/hint.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/outline.h>
 
@@ -2624,4 +2625,211 @@ TEST(CffHints, NullArgumentsAreRefused) {
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+namespace {
+
+/** Append a Type 2 number. */
+void cs_num(std::vector<uint8_t> & out, int value) {
+  if (value >= -107 && value <= 107) {
+    out.push_back((uint8_t)(value + 139));
+  }
+  else {
+    out.push_back(28);
+    put_u16(out, (uint16_t)(int16_t)value);
+  }
+}
+
+void cs_ops(std::vector<uint8_t> & out, std::initializer_list<int> numbers, int op) {
+  for (int n : numbers) {
+    cs_num(out, n);
+  }
+  out.push_back((uint8_t)op);
+}
+
+struct HintedOut {
+  std::vector<std::pair<int32_t, int32_t>> points;
+  GFNT_HintStatus status = GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM;
+  GFNT_F26Dot6 advance = 0;
+  GFNT_OutlineSpace space = GFNT_OUTLINE_UNITS;
+  GFNT_Result result = GFNT_ERR_INTERNAL;
+};
+
+HintedOut hinted_at(const GFNT_Face * face, uint32_t glyph, uint32_t ppem) {
+  HintedOut out;
+  GFNT_HintContext * context = nullptr;
+  GFNT_Outline * outline = nullptr;
+
+  out.result = gfnt_hint_context_create(face, ppem, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, nullptr, &context,
+      nullptr);
+  if (out.result != GFNT_OK) {
+    return out;
+  }
+  out.result = gfnt_face_hinted_outline(face, context, glyph, nullptr, &outline, &out.status, &out.advance, nullptr);
+  if (out.result == GFNT_OK) {
+    out.space = gfnt_outline_space(outline);
+    for (size_t i = 0; i < gfnt_outline_point_count(outline); ++i) {
+      GFNT_Point p;
+
+      EXPECT_EQ(gfnt_outline_point_at(outline, i, &p, nullptr), GFNT_OK);
+      out.points.push_back({p.x, p.y});
+    }
+  }
+  gfnt_outline_destroy(outline);
+  gfnt_hint_context_destroy(context);
+  return out;
+}
+
+/** A face with the blue zones [-15, 0] and [700, 715] and one glyph, a rectangle x 100..200, y @p bottom..@p top. */
+std::vector<uint8_t> hint_font_cff(const std::vector<uint8_t> & glyph, bool with_blues) {
+  CffSpec spec;
+
+  spec.charstrings = {{14}, glyph};
+  if (with_blues) {
+    dict_entry(spec.private_extra, {dict_int(-15), dict_int(15), dict_int(700), dict_int(15)}, {6});
+  }
+  return build_cff(spec);
+}
+
+/** hstem pairs, then the rectangle. */
+std::vector<uint8_t> rectangle_glyph(std::initializer_list<int> stems, int bottom, int top) {
+  std::vector<uint8_t> g;
+
+  cs_num(g, 600);
+  if (stems.size()) {
+    cs_ops(g, stems, 1);   // hstem
+  }
+  cs_ops(g, {100, bottom}, 21);   // rmoveto
+  cs_ops(g, {100}, 6);            // hlineto
+  cs_ops(g, {top - bottom}, 7);   // vlineto
+  cs_ops(g, {-100}, 6);
+  g.push_back(14);
+  return g;
+}
+
+}  // namespace
+
+TEST(CffHintEngine, BlueZonesLockTheEdgesInTheirOwnZonesAndTheStemsKeepTheirWidth) {
+  // ppem 12 of 1000 units: 0.012 px a unit. The baseline stem [0, 20] has its bottom edge in [-15, 0]: it stays on
+  // y = 0, and its top is 20 units (0.24 px) above. The stem [680, 700] has its top edge on the flat position of
+  // [700, 715]: 700 * 0.012 = 8.39 px, and an outward bias of 0.6 * (1 - 0.012 / 0.039625) = 0.418 px, so 8.81, so 9.
+  Font font(hint_font_cff(rectangle_glyph({0, 20, 660, 20}, 0, 700), true));
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedOut h = hinted_at(font.face, 1, 12);
+  ASSERT_EQ(h.result, GFNT_OK);
+  EXPECT_EQ(h.status, GFNT_HINT_STATUS_HINTED);
+  EXPECT_EQ(h.space, GFNT_OUTLINE_PIXELS);
+  const std::vector<std::pair<int32_t, int32_t>> want = {{76, 0}, {153, 0}, {153, 576}, {76, 576}};
+  EXPECT_EQ(h.points, want);
+}
+
+TEST(CffHintEngine, ALargeSizeHasNoBiasAndTheFlatEdgeIsJustRounded) {
+  // ppem 48 is past BlueScale (0.039625 * 1000 = 39.6): 700 * 0.048 = 33.6 px rounds to 34.
+  Font font(hint_font_cff(rectangle_glyph({0, 20, 660, 20}, 0, 700), true));
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedOut h = hinted_at(font.face, 1, 48);
+  ASSERT_EQ(h.result, GFNT_OK);
+  ASSERT_EQ(h.points.size(), 4u);
+  EXPECT_EQ(h.points[0].second, 0);
+  EXPECT_EQ(h.points[2].second, 34 * 64);
+}
+
+TEST(CffHintEngine, AStemInNoZoneMovesWhicheverOfItsEdgesIsNearerAPixel) {
+  // [300, 400] at 0.012: 3.598 .. 4.797. The top is 0.203 from 5, the bottom 0.402 from 4: the top goes to 5 and the
+  // bottom keeps its distance below it, 3.801 (243 sixty-fourths).
+  Font font(hint_font_cff(rectangle_glyph({300, 100}, 300, 400), false));
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedOut h = hinted_at(font.face, 1, 12);
+  ASSERT_EQ(h.result, GFNT_OK);
+  ASSERT_EQ(h.points.size(), 4u);
+  EXPECT_EQ(h.points[0].second, 243);
+  EXPECT_EQ(h.points[1].second, 243);
+  EXPECT_EQ(h.points[2].second, 320);
+  EXPECT_EQ(h.points[3].second, 320);
+}
+
+TEST(CffHintEngine, TheAdvanceIsAWholePixel) {
+  // 600 units at 12 ppem is 7.2 px: 7.
+  Font font(hint_font_cff(rectangle_glyph({}, 0, 700), true));
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedOut h = hinted_at(font.face, 1, 12);
+  ASSERT_EQ(h.result, GFNT_OK);
+  EXPECT_EQ(h.advance, 7 * 64);
+}
+
+TEST(CffHintEngine, AHintMaskChangesWhichStemsMoveThePointsAfterIt) {
+  // Two rectangles, y 300..400 and 500..600. The first mask turns on the first stem only, the second the other:
+  // 300..400 goes as above; 500..600 is moved by its own stem, whose bottom edge 5.997 is within 0.003 of 6, so
+  // 384 and 460. Had the first mask stayed in force the second rectangle would sit rigidly above the first
+  // stem's top at 5 + 1.199 = 396.
+  std::vector<uint8_t> g;
+
+  cs_num(g, 600);
+  cs_ops(g, {300, 100, 100, 100}, 18);   // hstemhm
+  g.push_back(19);
+  g.push_back(0x80);                      // hintmask: the first stem
+  cs_ops(g, {100, 300}, 21);
+  cs_ops(g, {100}, 6);
+  cs_ops(g, {100}, 7);
+  cs_ops(g, {-100}, 6);
+  g.push_back(19);
+  g.push_back(0x40);                      // hintmask: the second stem
+  cs_ops(g, {0, 100}, 21);
+  cs_ops(g, {100}, 6);
+  cs_ops(g, {100}, 7);
+  cs_ops(g, {-100}, 6);
+  g.push_back(14);
+  Font font(hint_font_cff(g, false));
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedOut h = hinted_at(font.face, 1, 12);
+  ASSERT_EQ(h.result, GFNT_OK);
+  ASSERT_EQ(h.points.size(), 8u);
+  EXPECT_EQ(h.points[0].second, 243);
+  EXPECT_EQ(h.points[3].second, 320);
+  EXPECT_EQ(h.points[4].second, 384);
+  EXPECT_EQ(h.points[7].second, 460);
+}
+
+TEST(CffHintEngine, XIsScaledAndNeverMoved) {
+  Font font(hint_font_cff(rectangle_glyph({300, 100}, 300, 400), false));
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedOut h = hinted_at(font.face, 1, 12);
+  ASSERT_EQ(h.result, GFNT_OK);
+  ASSERT_EQ(h.points.size(), 4u);
+  EXPECT_EQ(h.points[0].first, 76);    // 100 * 0.012 = 1.1993 px, 76.76 sixty-fourths, truncated
+  EXPECT_EQ(h.points[1].first, 153);
+}
+
+TEST(CffHintEngine, ACompositeGlyphIsReturnedScaledAndSaidToBeUnhinted) {
+  Fixture font("cff-seac.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  size_t glyphs = 0;
+  ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
+  bool found = false;
+  for (uint32_t g = 0; g < glyphs && !found; ++g) {
+    bool composite = false;
+
+    ASSERT_EQ(gfnt_cff_is_composite(font, g, &composite, nullptr), GFNT_OK);
+    if (!composite) {
+      continue;
+    }
+    found = true;
+    HintedOut h = hinted_at(font, g, 12);
+    ASSERT_EQ(h.result, GFNT_OK);
+    EXPECT_EQ(h.status, GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM);
+    EXPECT_EQ(h.space, GFNT_OUTLINE_PIXELS);
+    EXPECT_EQ(h.advance % 64, 0);
+  }
+  EXPECT_TRUE(found);
+}
+
+TEST(CffHintEngine, AContextIsRefusedForNoSize) {
+  Font font(hint_font_cff(rectangle_glyph({}, 0, 700), true));
+  ASSERT_EQ(font.result, GFNT_OK);
+  GFNT_HintContext * context = nullptr;
+
+  EXPECT_EQ(gfnt_hint_context_create(font.face, 0, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, nullptr, &context,
+                nullptr),
+      GFNT_ERR_INVALID);
+  EXPECT_EQ(context, nullptr);
 }

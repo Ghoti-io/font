@@ -68,7 +68,8 @@ struct GFNT_SceneFont {
   uint32_t glyph_count;
   uint32_t flags;      ///< GSHSCENE_FACE_*.
   uint32_t max_ppem;
-  bool truetype;       ///< It has `glyf` outlines, the only ones the hinter runs.
+  bool truetype;       ///< It has `glyf` outlines, which the hinter runs a program over.
+  bool hintable;       ///< Its outlines can be hinted: `glyf` (by program) or `CFF`, `CFF2`, Type 1 (by stems).
   const uint8_t * bytes; ///< The loaded bytes (the checked reader's view of the blob).
   size_t size;
   char * family;       ///< Or NULL.
@@ -249,7 +250,9 @@ GFNT_Result gfnt_scene_font_create(const GFNT_Face * face,
   font->max_ppem = (uint32_t)(face->limits.max_ppem < GSHSCENE_GLYPH_MAX_PPEM
       ? face->limits.max_ppem : GSHSCENE_GLYPH_MAX_PPEM);
   font->truetype = gfnt_face_has_table(face, GFNT_TAG('g', 'l', 'y', 'f'));
-  if (font->truetype && gfnt_scene_has_program(face)) {
+  font->hintable = font->truetype || gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF
+      || gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF2 || gfnt_sfnt_producer(face) == GFNT_PRODUCER_TYPE1;
+  if ((font->truetype && gfnt_scene_has_program(face)) || (font->hintable && !font->truetype)) {
     font->flags |= GSHSCENE_FACE_HINTING;
   }
   if (gfnt_face_has_color_layers(face)) {
@@ -692,7 +695,7 @@ static GSHSCENE_Result gfnt_scene_glyph_device_path(void * ctx,
       || scale != rq->scale) {
     return GSHSCENE_ERR_INVALID;
   }
-  if (rq->hint_mode != GSHSCENE_HINT_NONE && font->truetype
+  if (rq->hint_mode != GSHSCENE_HINT_NONE && font->hintable
       && gfnt_face_gasp_gridfit(font->face, rq->ppem)) {
     GFNT_HintContext * context = NULL;
     bool cached = false;
@@ -741,7 +744,7 @@ static GSHSCENE_Result gfnt_scene_glyph_device_path(void * ctx,
       return gfnt_scene_result(r);
     }
   }
-  // Unhinted (D1): mode NONE, no TrueType outlines, a size gasp does not fit,
+  // Unhinted (D1): mode NONE, outlines nothing hints, a size gasp does not fit,
   // no program, or a program that failed.
   r = gfnt_scene_unhinted(b, rq, out, &advance);
   if (r != GFNT_OK) {

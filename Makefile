@@ -777,7 +777,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-oracle-hint-variable check-oracle-hint-batteries check-hint check-hint-mutations check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-hint-point-mutations check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-oracle-hint-variable check-oracle-hint-batteries check-hint check-hint-mutations check-oracle-tt-decode check-oracle-hint check-oracle-hint-cff check-oracle-hint-probe check-hint-point-mutations check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-placement
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
@@ -1112,7 +1112,7 @@ check-oracle-ttx: $(EXAMPLES)
 	@$(ORACLE_RUN) fonttools -- python3 $(ORACLE)/ttx_diff.py --quiet
 
 check-oracle: ## Run every oracle differential there is
-check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf check-oracle-placement check-oracle-tt-decode check-oracle-hint check-oracle-hint-probe check-oracle-hint-batteries check-oracle-hint-variable
+check-oracle: check-oracle-ttx check-oracle-cmap check-oracle-glyf check-oracle-placement check-oracle-tt-decode check-oracle-hint check-oracle-hint-cff check-oracle-hint-probe check-oracle-hint-batteries check-oracle-hint-variable
 check-oracle: check-oracle-cff check-oracle-bitmap check-oracle-eblc
 check-oracle: check-oracle-var check-oracle-metrics check-oracle-hb
 check-oracle: check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-flow check-oracle-layout-l2 check-oracle-layout-l3b check-oracle-layout-l4 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-subset-rename check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
@@ -1383,6 +1383,19 @@ check-oracle-hint: $(EXAMPLES)
 		python3 $(ORACLE)/hint_diff.py --version 35 --fonts 6 --ppem 11,12,17 --stride 9 --advance --quiet
 	@python3 $(ORACLE)/oracle_run.py freetype -- \
 		python3 $(ORACLE)/hint_diff.py --version 40 --fonts 6 --ppem 11,12,17 --stride 9 --advance --quiet
+
+# CFF and Type 1 glyphs are hinted by their stems and blue zones (design.md section 8.5), by rules recovered from FreeType's
+# answers rather than a specification, so this is the measure of them: the fraction of glyphs whose every point is
+# FreeType's to the 1/64 pixel must stay over a floor set just under what the rules reach, and the floor is seen to bite.
+check-oracle-hint-cff: ## Hint CFF and Type 1 glyphs and compare every point with FreeType's
+check-oracle-hint-cff: $(EXAMPLES)
+	@python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_cff_diff.py --pool sfnt --ppem 9,12,17,32,48 --stride 13 --floor 0.89
+	@python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_cff_diff.py --pool type1 --ppem 9,12,17,32 --stride 17 --floor 0.92
+	@if python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_cff_diff.py --pool sfnt --fonts 2 --ppem 12 --stride 29 --floor 1.01 >/dev/null 2>&1; then \
+		echo "check-oracle-hint-cff: a floor above 1 passed, so the floor does not bite"; exit 1; fi
 
 check-oracle-hint-probe: ## Run random hinting programs through this library and FreeType and compare every point
 check-oracle-hint-probe: $(EXAMPLES)

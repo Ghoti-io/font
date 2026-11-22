@@ -165,6 +165,12 @@ typedef struct GFNT_HintContext GFNT_HintContext;
  * A program that fails does not fail this call; every glyph then comes back
  * unhinted with ::GFNT_HINT_STATUS_UNHINTED_PROGRAM_FAILED.
  *
+ * A `CFF`, `CFF2` or Type 1 face has no program: its glyphs are fitted in y by the stems
+ * and blue zones the font declares (documentation/design.md section 8.5.1), @p version and
+ * @p mode are not consulted, and a `CFF2` face is hinted at @p variation. A glyph whose
+ * stems cannot be read (an accented `seac` glyph) comes back scaled and unfitted with
+ * ::GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM.
+ *
  * @param face The face.
  * @param ppem Pixels per em; zero is invalid, and above `max_ppem` is ::GFNT_ERR_LIMIT.
  * @param version The interpreter behaviour.
@@ -175,8 +181,9 @@ typedef struct GFNT_HintContext GFNT_HintContext;
  *   and every glyph hints from its `gvar`-moved points.
  * @param out_context Receives the context; free it with ::gfnt_hint_context_destroy().
  * @param error Receives a diagnostic on failure, or NULL.
- * @return ::GFNT_OK; ::GFNT_ERR_UNSUPPORTED for a face that has no TrueType
- *   outlines; ::GFNT_ERR_INVALID, ::GFNT_ERR_LIMIT, ::GFNT_ERR_CORRUPT or ::GFNT_ERR_OOM.
+ * @return ::GFNT_OK; ::GFNT_ERR_UNSUPPORTED for a face that has neither TrueType
+ *   outlines nor charstring outlines (`CFF`, `CFF2`, Type 1); ::GFNT_ERR_INVALID,
+ *   ::GFNT_ERR_LIMIT, ::GFNT_ERR_CORRUPT or ::GFNT_ERR_OOM.
  */
 GFNT_API GFNT_Result gfnt_hint_context_create(const GFNT_Face * face,
     uint32_t ppem, GFNT_HintVersion version, GFNT_HintMode mode,

@@ -82,7 +82,7 @@ field's, and font engineering has a long list.
 | --- | --- | --- | --- |
 | M1 | Reading file data through a struct cast, or trusting an offset because the table directory said so | The font-parser CVE class, every major parser, for two decades | One bounds-checked reader (§6); offsets validated against the table's own extent |
 | M2 | Unbounded recursion through file-supplied references | Composite glyphs referencing themselves; charstring subroutines; nested lookups | A depth limit on every recursion, set by the Standard or by `GFNT_Limits`, never by the file (§6.2) |
-| M3 | A bytecode interpreter over programs the file supplies, run in a trusted context | TrueType instructions; Type 1 `OtherSubrs`; the kernel-mode parsers that led to Windows' `fontdrvhost` sandbox | No hinting interpreter yet (§8.5); any implementation must honor the same bounded parsing and execution rules |
+| M3 | A bytecode interpreter over programs the file supplies, run in a trusted context | TrueType instructions; Type 1 `OtherSubrs`; the kernel-mode parsers that led to Windows' `fontdrvhost` sandbox | The TrueType interpreter (§8.5) honors those rules; `CFF` and Type 1 are hinted from their declared stems and run no program |
 | M4 | Line height from whichever metrics table the first platform used | Windows using `usWinAscent`/`usWinDescent`, macOS `hhea`, browsers a compromise; the same font a different height on each | `GFNT_LineMetrics` policy (§10.3), with the documented default following `OS/2` `fsSelection` bit 7 (`USE_TYPO_METRICS`) as the font's own request |
 | M5 | Measuring with fractional advances and painting with rounded ones | Every text box whose last glyph is clipped | Measure and paint are one code path in 26.6 fixed point (§10.2). Rounding, if any, is a named policy applied in both |
 | M6 | Shaping output that discards which characters made which glyphs | Every renderer that could draw text but not select it; `cjelly`'s `semantics.md` names this as the rewrite to avoid | The cluster map is a field of `GFNT_ShapedRun`, not an option (§9.3) |
@@ -127,7 +127,8 @@ which of them this library takes, and which of those it reads today.
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
 | | `.dfont`, `.eot` | absent, §16 |
-| | TrueType hinting | **implemented** (§8.5): the bytecode interpreter in versions 35 and 40, composites and hinted advances, variable faces; on by default. The autohinter and `CFF`/Type 1 hinting are not built |
+| | TrueType hinting | **implemented** (§8.5): the bytecode interpreter in versions 35 and 40, composites and hinted advances, variable faces; on by default. The autohinter is not built |
+| | `CFF`, `CFF2` and Type 1 hinting | **implemented** (§8.5.1): the stems and blue zones the font declares, fitted in y, by rules recovered from FreeType's answers; on by default |
 | **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
 | | Windows FNT/FON, raw ROM fonts | absent |
@@ -1492,8 +1493,9 @@ is `GFNT_HINT_MODE_FONT`, the font's own request (the library's rule for a polic
 to give. `GFNT_HINT_MODE_NONE` asks for the outline as drawn;
 `GFNT_HINT_MODE_FONT_STRICT` is `FONT` where a program that fails fails the call;
 `GFNT_HINT_MODE_AUTO` is reserved for an automatic hinter and refused. A face with
-no TrueType outlines (CFF, Type 1, bitmap), or whose `gasp` table sets no
-grid-fitting bit at the size, is rendered as before. `GFNT_HintVersion` picks the
+no TrueType outlines and no stems to fit (bitmap), or whose `gasp` table sets no
+grid-fitting bit at the size, is rendered unhinted; a `CFF`, `CFF2` or Type 1 face is
+fitted by its stems and blue zones (§8.5.1). `GFNT_HintVersion` picks the
 interpreter behaviour: `AUTO` is version 40, which FreeType and Windows run, and
 `35` is the original.
 
@@ -1609,7 +1611,7 @@ The `hdmx` and `VDMX` tables are not read: FreeType's advances for the corpus fo
 which sizes a font's advances are linear. Hinted advances in layout are the caller's choice: a
 glyph's hinted advance comes with its outline (`gfnt_face_hinted_outline()`), in 26.6 pixels,
 and shaping keeps fractional advances so that measuring and painting stay one path.
-There is no automatic hinter (`GFNT_HINT_MODE_AUTO` is reserved) and no hinting of CFF outlines.
+There is no automatic hinter (`GFNT_HINT_MODE_AUTO` is reserved). `CFF` and Type 1 outlines are hinted by their stems (§8.5.1).
 
 **Speed.** A glyph takes about eleven microseconds from the program to its pixel outline on the
 development machine (a 6,000-glyph font in seventy milliseconds at one size, output included),
@@ -1617,6 +1619,52 @@ because the programs are short and the interpreter has no decisions to make that
 predictor does not. A compiler for the bytecode would add a code generator to the
 untrusted-input surface for a cost nobody pays: a context is made once per size and its glyphs
 are hinted once, and a page of text hints each distinct glyph a single time.
+
+### 8.5.1 CFF, CFF2 and Type 1 hinting
+
+A `CFF`, `CFF2` or Type 1 face has no program. It declares **stems** (`hstem`, `hstemhm`, `hintmask` and, in
+Type 1, `hstem`, `hstem3` and the hint-replacement `OtherSubr`) and **blue zones** (`BlueValues`, `OtherBlues`,
+`BlueScale`, `BlueFuzz`) and leaves the fitting to the renderer. The same calls hint them as hint a TrueType face:
+`gfnt_hint_context_create()` makes a context for the size and `gfnt_face_hinted_outline()` returns the outline in
+26.6 pixels with an advance. A `CFF2` face is hinted at the location of the context: its stems and its Private
+dictionary's blue values are blends, and both are taken there. `gfnt_face_glyph_hints()` is the underlying read: the stems,
+the hint masks (as the point at which each takes effect) and the Private dictionary's parameters.
+
+What is done is a specification of the behaviour of the engine every renderer people compare with uses for these
+formats, recovered by experiment (the scripts under `tools/oracle` whose names begin `hint_cff`) and written in the 16.16
+fixed-point arithmetic it reproduces. **Only y moves.** For a size, with `s` pixels a unit and a hint map built per hint mask
+from the stems that mask turns on:
+
+1. A stem edge in a blue zone **of its own side** (a bottom edge in a bottom zone, a top edge in a top zone) is *locked*
+   to the zone's flat position: `round(flat * s + b)` for a top zone and `round(flat * s - b)` for a bottom one, with the
+   outward bias `b = 0.6 * max(0, 1 - s / BlueScale)` never over half a pixel, so that overshoot is suppressed more at small
+   sizes and not at all at `BlueScale` (39.6 ppem at the default). At and above that size an edge on the flat position is
+   rounded and an overshoot edge keeps its overshoot, rounded outward with a bias of 0.2. The stem's other edge follows at
+   the stem's own width: stems are rigid.
+2. A stem with no locked edge is placed from the locked edges alone, never from other free stems: a provisional shift
+   (interpolated at its centre between the locked edges on either side; the nearest one's when one side only, with an
+   implicit anchor at y = 0 when the locked edges are all above; none when there are none), then whichever of its two edges
+   is strictly nearer a whole pixel is rounded to it, a tie going to the top. Free stems go bottom to top, and one that
+   would end less than half a pixel from the edge below puts its bottom on the first whole pixel that clears it, or stays
+   at its provisional position if that meets the edge above. A ghost hint (-20, a top edge at `y`; -21, a bottom edge at
+   `y + dy`) is one edge.
+3. Every point is mapped through the map: linearly between edges, with the interval's scale a rounded division and the
+   offset a rounded multiply, rigidly outside them; a point on an edge is on the edge's position exactly. The 26.6 result is
+   the 16.16 value shifted right, not rounded. x is scaled and not moved.
+4. The advance is the unhinted one rounded to a whole pixel. A contour's closing point is dropped if it equals the first
+   *after* hinting.
+
+**What it reproduces.** Compared point by point with FreeType (`make check-oracle-hint-cff`) on a sample of the corpus's
+CFF fonts at 9, 12, 17, 32 and 48 ppem and its Type 1 programs at four sizes: 91.0% of 19,835 CFF glyphs and 94.3% of 13,656
+Type 1 glyphs are identical to the 1/64 pixel, every advance is, and no x differs. The gate holds a floor just under those
+figures and is seen to fail on an impossible one. The constants (0.6, 0.2, the half-pixel gap) are fitted, not derived,
+and say so here.
+
+**What it does not match.** An accented glyph built by `seac` is returned scaled and unfitted
+(`GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM`). The TeX Gyre math fonts (whose Private dictionaries state a `BlueFuzz` of 0 and zones close together) differ from
+FreeType on a larger share of their glyphs than any other fonts do, and so do glyphs whose hint masks change several times; sizes between 33 and 47 ppem, where overshoot suppression ends, were not sampled.
+`CFF2` hint data is read and blended at a location and is not yet compared with FreeType at one. These are the
+exclusions: the comparison reports every glyph it does not match rather than skipping it.
 
 ### 8.6 The one unhinted rounding
 
@@ -4646,7 +4694,7 @@ What that cost in findings:
   `self.data` doing it. The adapter decides from the subtable's `imageFormat` now,
   which is a fact about the font rather than about the object model.
 
-**Remaining implementation gaps (current):** the autohinter and `CFF`/Type 1 hinting (§8.5);
+**Remaining implementation gaps (current):** the autohinter (§8.5), and the cases §8.5.1 lists as not matching FreeType;
 `FeatureVariations` condition format 2; multibyte Macintosh and Microsoft
 `name` encodings; native Windows and macOS font enumeration; `JSTF`
 and the AAT features listed in §9;

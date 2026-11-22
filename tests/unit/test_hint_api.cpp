@@ -184,30 +184,49 @@ TEST(HintApi, AHintedOutlineSaysWhatBecameOfTheGlyph) {
   gfnt_hint_context_destroy(context);
 }
 
-TEST(HintApi, AFaceWithoutTrueTypeOutlinesRendersAsItAlwaysDid) {
+TEST(HintApi, ACharstringFaceIsHintedByItsStemsNotByAProgram) {
+  // A CFF2 face has no program, and used to be refused a context and drawn as it was. It is fitted now, by the stems
+  // and blue zones it declares: a context is made, the hinted rendering is a rendering, and the outline came back in
+  // pixels with a whole-pixel advance.
   const std::string path = gfnttest::data("fonts/cff2-fds.otf");
   GFNT_Blob * blob = nullptr;
   GFNT_Face * face = nullptr;
   GFNT_HintContext * context = nullptr;
   GFNT_Error error{};
   GFNT_RasterOptions hinted{};
-  GFNT_RasterOptions none{};
   GFNT_Coverage a{};
-  GFNT_Coverage b{};
+  GFNT_Outline * outline = nullptr;
+  GFNT_HintStatus status = GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM;
+  GFNT_F26Dot6 advance = 1;
+
+  ASSERT_EQ(gfnt_blob_create_file(path.c_str(), nullptr, nullptr, &blob, &error), GFNT_OK);
+  ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
+  ASSERT_EQ(gfnt_hint_context_create(face, 16, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, nullptr, &context, &error),
+      GFNT_OK);
+  ASSERT_EQ(gfnt_face_hinted_outline(face, context, 1, nullptr, &outline, &status, &advance, &error), GFNT_OK);
+  EXPECT_EQ(gfnt_outline_space(outline), GFNT_OUTLINE_PIXELS);
+  EXPECT_EQ(advance % 64, 0);
+  ASSERT_EQ(gfnt_face_render_glyph(face, 1, 16, &hinted, nullptr, &a, &error), GFNT_OK);
+  EXPECT_GT(a.width, 0u);
+  gfnt_outline_destroy(outline);
+  gfnt_coverage_destroy(&a);
+  gfnt_hint_context_destroy(context);
+  gfnt_face_free(face);
+  gfnt_blob_destroy(blob);
+}
+
+TEST(HintApi, AFaceWithNoOutlinesToFitIsRefusedAContext) {
+  const std::string path = gfnttest::data("fonts/bitmap.bdf");
+  GFNT_Blob * blob = nullptr;
+  GFNT_Face * face = nullptr;
+  GFNT_HintContext * context = nullptr;
+  GFNT_Error error{};
 
   ASSERT_EQ(gfnt_blob_create_file(path.c_str(), nullptr, nullptr, &blob, &error), GFNT_OK);
   ASSERT_EQ(gfnt_face_load(blob, 0, nullptr, nullptr, &face, &error), GFNT_OK);
   EXPECT_EQ(gfnt_hint_context_create(face, 16, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, nullptr, &context, &error),
       GFNT_ERR_UNSUPPORTED);
-  none.hint_mode = GFNT_HINT_MODE_NONE;
-  ASSERT_EQ(gfnt_face_render_glyph(face, 1, 16, &hinted, nullptr, &a, &error), GFNT_OK);
-  ASSERT_EQ(gfnt_face_render_glyph(face, 1, 16, &none, nullptr, &b, &error), GFNT_OK);
-  EXPECT_EQ(a.width, b.width);
-  EXPECT_EQ(a.height, b.height);
-  EXPECT_EQ(a.stride * a.height, b.stride * b.height);
-  EXPECT_EQ(0, a.data && b.data ? memcmp(a.data, b.data, a.stride * a.height) : 0);
-  gfnt_coverage_destroy(&a);
-  gfnt_coverage_destroy(&b);
+  EXPECT_EQ(context, nullptr);
   gfnt_face_free(face);
   gfnt_blob_destroy(blob);
 }

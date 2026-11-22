@@ -23,6 +23,7 @@ from hint_cff_model import load, zones, active_sets
 import math, collections
 ONE=65536
 GHOST='prov'      # a free ghost edge: provisional shift from the locked edges, then the nearest pixel
+MINGAP=32768      # half a pixel: the least a free stem is left from the edge below it
 OVERSHOOT=True    # at or above BlueScale an overshoot edge keeps its overshoot, rounded outward
 OV_C=int(0.2*65536)
 S0=1
@@ -35,7 +36,7 @@ def divfix(a,b):
     if b<0: b=-b; sign=-sign
     return sign*(((a<<16)+(b>>1))//b)
 def fround(x): return (x+0x8000)&~0xFFFF   # to whole pixel, 16.16 (floor(x+.5))
-def hint_map(g, only, S, boost_fn, tie=0.006):
+def hint_map(g, only, S, boost_fn, tie=0.0):
     p=g['p']; u=g['u']; par=g['par']
     fuzz=par['blue_fuzz'][0] if par['blue_fuzz'] else ONE
     bs=par['blue_scale'][0]
@@ -92,18 +93,30 @@ def hint_map(g, only, S, boost_fn, tie=0.006):
                 if b[0]==a[0]: return da
                 t=divfix(cs-a[0],b[0]-a[0])
                 return da+mulfix(db-da,t)
-    for lo,hi in pend:
+    for lo,hi in sorted(pend):
         c=(lo+hi)//2
         below=[q for q in blue if q[0]<=lo]; above=[q for q in blue if q[0]>=hi]
         if below and above: d0=interp_delta([below[-1],above[0]],c)
         elif below: d0=delta(*below[-1])
         elif above:
-            d0=interp_delta([(0,0),above[0]],c) if lo>0 else delta(*above[0])
+            d0=interp_delta([(0,0),above[0]],c)
         else: d0=0
         ls=mulfix(lo,S)+d0; hs=mulfix(hi,S)+d0
         r0=fround(ls)-ls; r1=fround(hs)-hs
         dl=r0 if abs(r0)<abs(r1)-int(tie*ONE) else r1
-        nl=ls+dl; edges[lo]=nl; edges[hi]=nl+(mulfix(hi,S)-mulfix(lo,S))
+        nl=ls+dl; width=mulfix(hi,S)-mulfix(lo,S)
+        if MINGAP:
+            # a stem is not left closer than MINGAP to the edge below it: its bottom goes to the first whole
+            # pixel that clears it, unless that runs into the edge above, and then it stays where scaling puts it
+            placed_below=[(cs,ds) for cs,ds in edges.items() if cs<=lo]
+            if placed_below:
+                tcs,tds=max(placed_below)
+                if nl-tds<MINGAP:
+                    cand=fround(tds+MINGAP+0x7FFF)   # the first whole pixel at or above
+                    placed_above=[(cs,ds) for cs,ds in edges.items() if cs>=hi]
+                    if placed_above and cand+width>min(placed_above)[1]-MINGAP: nl=ls
+                    else: nl=cand
+        edges[lo]=nl; edges[hi]=nl+width
     for cs in gpend:
         if GHOST=='round':
             edges[cs]=fround(mulfix(cs,S))
@@ -111,7 +124,7 @@ def hint_map(g, only, S, boost_fn, tie=0.006):
             below=[q for q in blue if q[0]<=cs]; above=[q for q in blue if q[0]>=cs]
             if below and above: d0=interp_delta([below[-1],above[0]],cs)
             elif below: d0=delta(*below[-1])
-            elif above: d0=interp_delta([(0,0),above[0]],cs) if cs>0 else delta(*above[0])
+            elif above: d0=interp_delta([(0,0),above[0]],cs)
             else: d0=0
             edges[cs]=fround(mulfix(cs,S)+d0)
     return sorted(edges.items())
@@ -122,7 +135,8 @@ def map_point(edges,cs,S):
     for i in range(len(edges)-1):
         a,b=edges[i],edges[i+1]
         if a[0]<=cs<=b[0]:
-            if b[0]==a[0]: return a[1]
+            if b[0]==a[0] or cs==a[0]: return a[1]
+            if cs==b[0]: return b[1]       # a point on an edge is on the edge's position exactly
             sc=divfix(b[1]-a[1],b[0]-a[0]); return a[1]+mulfix(cs-a[0],sc)
 def evaluate(rows,S_fn,boost_fn,final=lambda ds:ds>>10,only_single=True,A=0.6):
     ok=tot=0; gl=gok=0
@@ -144,7 +158,7 @@ def score(rows, label, single_only):
     for g in rows:
         if single_only and len(g['mk'])>1: continue
         S=round(g['p']*65536/g['u']); s=g['p']/g['u']; bs=g['par']['blue_scale'][0]/65536
-        boost=round(0.6*max(0,1-s/bs)*ONE)
+        boost=min(round(0.6*max(0,1-s/bs)*ONE),32768)
         sets=active_sets(g)
         maps=[hint_map(g,a,S,lambda S_,b_,b=boost:b) for _,a in sets]
         errs=[]

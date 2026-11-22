@@ -26,6 +26,7 @@
  */
 
 #include "vm_internal.h"
+#include "cff_hint.h"
 
 #include <string.h>
 
@@ -63,6 +64,7 @@ void gfnt_hint_ctx_destroy(GFNT_HintContext * ctx) {
   gfnt_hint_free(a, ctx->storage);
   gfnt_hint_free(a, ctx->coords);
   gfnt_hint_zone_free(a, &ctx->twilight);
+  gfnt_cffhint_destroy(ctx->charstring);
   gfnt_hint_free(a, ctx);
 }
 

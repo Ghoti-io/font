@@ -1655,14 +1655,14 @@ from the stems that mask turns on:
    *after* hinting.
 
 **What it reproduces.** Compared point by point with FreeType (`make check-oracle-hint-cff`) on a sample of the corpus's
-CFF fonts at 9, 12, 17, 32 and 48 ppem and its Type 1 programs at four sizes: 91.0% of 19,835 CFF glyphs and 94.3% of 13,656
+CFF fonts at 9, 12, 17, 32 and 48 ppem and its Type 1 programs at four sizes: 91.2% of 19,835 CFF glyphs and 94.3% of 13,656
 Type 1 glyphs are identical to the 1/64 pixel, every advance is, and no x differs. The gate holds a floor just under those
 figures and is seen to fail on an impossible one. The constants (0.6, 0.2, the half-pixel gap) are fitted, not derived,
 and say so here.
 
 **What it does not match.** An accented glyph built by `seac` is returned scaled and unfitted
 (`GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM`). The TeX Gyre math fonts (whose Private dictionaries state a `BlueFuzz` of 0 and zones close together) differ from
-FreeType on a larger share of their glyphs than any other fonts do, and so do glyphs whose hint masks change several times; sizes between 33 and 47 ppem, where overshoot suppression ends, were not sampled.
+FreeType on a larger share of their glyphs than any other fonts do, and so do glyphs whose hint masks change several times; a stem wholly below the baseline is placed by a fitted fade, the one rule here with no clean explanation.
 `CFF2` hint data is read and blended at a location and is not yet compared with FreeType at one. These are the
 exclusions: the comparison reports every glyph it does not match rather than skipping it.
 

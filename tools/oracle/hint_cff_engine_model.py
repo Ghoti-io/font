@@ -83,6 +83,13 @@ def hint_map(g, only, S, boost_fn, tie=0.0):
         else: pend.append((lo,hi))
     blue=sorted(edges.items())
     def delta(cs,ds): return ds-mulfix(cs,S)
+    def above_only(a,lo,hi,c):
+        # only locked edges above: a stem wholly below the baseline takes the nearest one's shift, fading to nothing
+        # eight pixels away; any other is interpolated against an implicit anchor at y = 0 that does not move
+        if hi<=0:
+            fade=max(0,ONE-(mulfix(a[0]-hi,S)>>3))
+            return mulfix(delta(*a),fade)
+        return interp_delta([(0,0),a],c)
     def interp_delta(anchors,cs):
         if cs<=anchors[0][0]: return delta(*anchors[0])
         if cs>=anchors[-1][0]: return delta(*anchors[-1])
@@ -99,7 +106,7 @@ def hint_map(g, only, S, boost_fn, tie=0.0):
         if below and above: d0=interp_delta([below[-1],above[0]],c)
         elif below: d0=delta(*below[-1])
         elif above:
-            d0=interp_delta([(0,0),above[0]],c)
+            d0=above_only(above[0],lo,hi,c)
         else: d0=0
         ls=mulfix(lo,S)+d0; hs=mulfix(hi,S)+d0
         r0=fround(ls)-ls; r1=fround(hs)-hs
@@ -124,7 +131,7 @@ def hint_map(g, only, S, boost_fn, tie=0.0):
             below=[q for q in blue if q[0]<=cs]; above=[q for q in blue if q[0]>=cs]
             if below and above: d0=interp_delta([below[-1],above[0]],cs)
             elif below: d0=delta(*below[-1])
-            elif above: d0=interp_delta([(0,0),above[0]],cs)
+            elif above: d0=above_only(above[0],cs,cs,cs)
             else: d0=0
             edges[cs]=fround(mulfix(cs,S)+d0)
     return sorted(edges.items())
@@ -145,7 +152,8 @@ def evaluate(rows,S_fn,boost_fn,final=lambda ds:ds>>10,only_single=True,A=0.6):
         S=S_fn(g); sets=active_sets(g)
         maps=[hint_map(g,a,S,boost_fn) for _,a in sets]
         allok=True
-        for i,(fy,y1) in enumerate(zip(g['fy'],g['y1'])):
+        for n,(fy,y1) in enumerate(zip(g['fy'],g['y1'])):
+            i=g['fyi'][n] if g.get('fyi') else n     # the index in this library's outline, which a hint mask counts
             k=0
             for j,(f,_) in enumerate(sets):
                 if f<=i: k=j
@@ -162,7 +170,8 @@ def score(rows, label, single_only):
         sets=active_sets(g)
         maps=[hint_map(g,a,S,lambda S_,b_,b=boost:b) for _,a in sets]
         errs=[]
-        for i,(fy,y1) in enumerate(zip(g['fy'],g['y1'])):
+        for n,(fy,y1) in enumerate(zip(g['fy'],g['y1'])):
+            i=g['fyi'][n] if g.get('fyi') else n     # the index in this library's outline, which a hint mask counts
             k=0
             for j,(f,_) in enumerate(sets):
                 if f<=i: k=j

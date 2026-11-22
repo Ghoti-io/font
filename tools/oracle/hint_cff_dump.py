@@ -60,6 +60,21 @@ def main(argv):
                 if isinstance(a, str) or isinstance(b, str) or len(a[1]) != len(b[1]):
                     continue
                 gp = info["params"]
+                # This library keeps a contour's closing point; the unhinted FreeType outline drops it when it equals the first
+                # in font units. fy is this library's y of the points FreeType has, fyi their indexes in this library's outline
+                # (which is what a hint mask's first point counts), or None when the two cannot be matched.
+                fy_aligned, fyi = None, None
+                if info.get("fy") and info.get("fx") and info.get("fc"):
+                    keep = []
+                    c = info["fc"]
+                    for k in range(0, len(c), 2):
+                        first, n = c[k], c[k + 1]
+                        idx = list(range(first, first + n))
+                        if n >= 2 and info["fy"][idx[-1]] == info["fy"][idx[0]] and info["fx"][idx[-1]] == info["fx"][idx[0]]:
+                            idx = idx[:-1]
+                        keep.extend(idx)
+                    if len(keep) == len(a[1]):
+                        fy_aligned, fyi = [info["fy"][i] for i in keep], keep
                 keep = ("blue_values", "other_blues", "family_blues", "family_other_blues", "blue_scale",
                         "blue_shift", "blue_fuzz", "std_hw", "stem_snap_h")
                 print(json.dumps({
@@ -71,7 +86,8 @@ def main(argv):
                     "e": a[2],
                     "y0": [pt[1] for pt in a[1]], "y1": [pt[1] for pt in b[1]],
                     "x0": [pt[0] for pt in a[1]],
-                    "fy": info.get("fy") if len(info.get("fy", [])) == len(a[1]) else None,
+                    "fy": fy_aligned,
+                    "fyi": fyi,
                 }, separators=(",", ":")))
     return 0
 

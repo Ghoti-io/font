@@ -145,6 +145,23 @@ int main(int argc, char ** argv) {
             printf(" %d", (int)at.y);
           }
         }
+        printf("\nx %zu", points);
+        for (i = 0; i < points; i++) {
+          GFNT_Point at;
+
+          if (gfnt_outline_point_at(outline, i, &at, NULL) == GFNT_OK) {
+            printf(" %d", (int)at.x);
+          }
+        }
+        // The contours, so that a point the unhinted loader drops as a duplicate of its contour's first can be matched.
+        printf("\nc %zu", gfnt_outline_contour_count(outline));
+        for (i = 0; i < gfnt_outline_contour_count(outline); i++) {
+          size_t first = 0;
+          size_t n = 0;
+
+          gfnt_outline_contour_at(outline, i, &first, &n);
+          printf(" %zu %zu", first, n);
+        }
         printf("\n");
         gfnt_outline_destroy(outline);
       }

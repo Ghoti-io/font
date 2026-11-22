@@ -40,7 +40,8 @@
  *   3. A stem with no locked edge moves rigidly. The locked edges alone give it a provisional
  *      shift (interpolated at the stem's centre between the locked edges on either side, the
  *      nearest one's shift when there is one side, or interpolated against an implicit
- *      anchor at y = 0 when the locked edges are all above); then whichever of its two
+ *      anchor at y = 0 when the locked edges are all above, or, for a stem wholly below the baseline, the
+ *      nearest one's shift fading to nothing eight pixels away); then whichever of its two
  *      edges is nearer a whole pixel is rounded to it. Free stems go bottom to top, and one that
  *      would be left less than half a pixel from the edge below puts its bottom on the first whole
  *      pixel that clears it, or stays unrounded if that runs into the edge above.
@@ -278,6 +279,12 @@ static int64_t gfnt_cffh_provisional(const GFNT_CffhEdge * blue, size_t blue_cou
   if (above) {
     GFNT_CffhEdge origin;
 
+    if (hi <= 0) {
+      // Wholly below the baseline: the nearest locked edge's shift, fading to nothing eight pixels away.
+      int64_t fade = 0x10000 - (gfnt_cffh_mul(above->cs - hi, scale) >> 3);
+
+      return gfnt_cffh_mul(gfnt_cffh_delta(above, scale), fade > 0 ? fade : 0);
+    }
     origin.cs = 0;
     origin.ds = 0;
     return gfnt_cffh_interp(&origin, above, cs, scale);

@@ -24,13 +24,16 @@
  * Print every glyph's hinted outline of a CFF, CFF2 or Type 1 face at a pixel size, in the
  * form the FreeType oracle driver prints it, so the two can be compared line by line.
  *
- * Usage: font-hint-cff <font> <face> <ppem> <stride> <first>
+ * Usage: font-hint-cff <font> <face> <ppem> <stride> <first> [coords]
+ *
+ * `coords` is an optional location for a `CFF2` face: comma-separated normalised coordinates in 2.14, or `-`.
  *
  * A glyph that is not hinted prints `g<N> unhinted <why>`.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <ghoti.io/font/font.h>
 #include <ghoti.io/font/hint.h>
@@ -61,8 +64,17 @@ int main(int argc, char ** argv) {
     result = gfnt_face_load(blob, (size_t)strtoul(argv[2], NULL, 10), NULL, NULL, &face, &error);
   }
   if (result == GFNT_OK) {
+    GFNT_F2Dot14 coords[64];
+    GFNT_Variation variation = {coords, 0, 0};
+
+    for (const char * c = argc > 6 && strcmp(argv[6], "-") != 0 ? argv[6] : ""; *c && variation.count < 64;) {
+      char * end;
+
+      coords[variation.count++] = (GFNT_F2Dot14)strtol(c, &end, 10);
+      c = *end == ',' ? end + 1 : end;
+    }
     result = gfnt_hint_context_create(face, (uint32_t)strtoul(argv[3], NULL, 10), GFNT_HINT_VERSION_AUTO,
-        GFNT_HINT_MODE_FONT, NULL, &ctx, &error);
+        GFNT_HINT_MODE_FONT, variation.count ? &variation : NULL, &ctx, &error);
   }
   if (result != GFNT_OK || gfnt_face_num_glyphs(face, &glyphs, &error) != GFNT_OK) {
     fprintf(stderr, "%s: %s\n", argv[1], gfnt_result_string(result));

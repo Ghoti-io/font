@@ -28,15 +28,15 @@ ROOT = hint_diff.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples", "font-hint-cff")
 
 
-def ours(path, ppem, stride):
-    done = subprocess.run([DRIVER, path, "0", str(ppem), str(stride), "0"], capture_output=True, text=True)
+def ours(path, ppem, stride, coords="-"):
+    done = subprocess.run([DRIVER, path, "0", str(ppem), str(stride), "0", coords], capture_output=True, text=True)
     if done.returncode != 0:
         return None
     return hint_diff.parse(done.stdout)
 
 
 def main(argv):
-    pool, ppems, stride, limit, floor, dump = "sfnt", [9, 12, 17, 32], 11, None, 0.0, None
+    pool, ppems, stride, limit, floor, dump, coords, only = "sfnt", [9, 12, 17, 32], 11, None, 0.0, None, "-", None
     args = argv[1:]
     while args:
         a = args.pop(0)
@@ -50,19 +50,25 @@ def main(argv):
             limit = int(args.pop(0))
         elif a == "--floor":
             floor = float(args.pop(0))
+        elif a == "--coords":
+            coords = args.pop(0)
+        elif a == "--only":
+            only = args.pop(0)
         elif a == "--dump":
             dump = open(args.pop(0), "w")
     paths = corpus.fonts(pool)
     if pool == "sfnt":
         paths = [p for p in paths if explore.is_cff(p)]
+    if only:
+        paths = [p for p in paths if os.path.basename(p) == only]
     if limit:
         paths = paths[:limit]
     t = dict(compared=0, same=0, within1=0, points=0, point_same=0, declined=0, refused=0, count_differs=0, adv=0)
     shown = 0
     for path in paths:
         for ppem in ppems:
-            mine = ours(path, ppem, stride)
-            theirs, _ = hint_diff.theirs(path, 35, ppem, stride)
+            mine = ours(path, ppem, stride, coords)
+            theirs, _ = hint_diff.theirs(path, 35, ppem, stride, coords)
             if mine is None or theirs is None:
                 continue
             for glyph, answer in sorted(mine.items()):

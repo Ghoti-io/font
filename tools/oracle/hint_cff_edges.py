@@ -32,6 +32,7 @@ def read_data(path, stride):
     if run.returncode != 0:
         return None
     params, glyphs, cur = {}, {}, None
+    first = None
     for line in run.stdout.splitlines():
         if line.startswith("P "):
             f = line.split()
@@ -41,14 +42,17 @@ def read_data(path, stride):
             gid = int(f[0][1:])
             cur = {"valid": f[1] == "valid", "stems": [], "masks": []} if f[1] in ("valid", "invalid") else None
             if cur:
+                cur["params"] = {k: list(v) for k, v in params.items()}   # the Private DICT in force
                 glyphs[gid] = cur
+                if first is None:
+                    first = cur["params"]
         elif line.startswith("s ") and cur is not None:
             f = line.split()
             cur["stems"].append((f[1], int(f[2]) / 65536.0, int(f[3]) / 65536.0))
         elif line.startswith("m ") and cur is not None:
             f = line.split()
             cur["masks"].append((int(f[1]), f[2]))
-    return params, glyphs
+    return (first or params), glyphs
 
 
 def zones(params):

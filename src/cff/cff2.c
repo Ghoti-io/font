@@ -365,6 +365,7 @@ typedef struct GFNT_Cff2PrivateState {
   size_t limit;
   size_t subrs_offset;   ///< Relative to the Private DICT; 0 when absent.
   uint32_t vsindex;
+  GFNT_CharstringHintParams * hint;  ///< Where hinting parameters go, or NULL to skip them.
 } GFNT_Cff2PrivateState;
 
 static GFNT_Result gfnt_cff2_private_visit(void * user,
@@ -383,15 +384,26 @@ static GFNT_Result gfnt_cff2_private_visit(void * user,
       state->vsindex = (uint32_t)index;
       return result;
     }
+    case 23:
+      // Reaches here only when the walk was not given a variation store to blend with.
+      if (state->hint) {
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF2, 0, GFNT_GLYPH_NONE,
+            "a blend in a Private DICT of a font that has no variation store to blend with");
+      }
+      return GFNT_OK;
     default:
-      // The blue values, the stem widths and `blend`, which can carry them: hinting
-      // parameters, and there is no hinter.
+      // The blue values and the other hinting parameters, which a `blend` before them has
+      // already moved to the location; skipped unless the caller asked for them.
+      if (state->hint) {
+        gfnt_cff_hint_param(entry, state->hint);
+      }
       return GFNT_OK;
   }
 }
 
 GFNT_Result gfnt_cff2_font_for_glyph(const GFNT_Face * face,
     const GFNT_Cff2 * cff2, uint32_t glyph, GFNT_Cff2Font * out_font,
+    const GFNT_CharstringBlend * blend, GFNT_CharstringHintParams * out_params,
     GFNT_Error * error) {
   GFNT_Reader table;
   GFNT_Reader font_dict;
@@ -405,6 +417,9 @@ GFNT_Result gfnt_cff2_font_for_glyph(const GFNT_Face * face,
     return GFNT_ERR_INVALID;
   }
   memset(out_font, 0, sizeof *out_font);
+  if (out_params) {
+    gfnt_cff_hint_defaults(out_params);
+  }
   result = gfnt_face_table_reader(face, GFNT_TAG_CFF2, &table, error);
   if (result != GFNT_OK) {
     return result;
@@ -439,8 +454,10 @@ GFNT_Result gfnt_cff2_font_for_glyph(const GFNT_Face * face,
   }
   memset(&state, 0, sizeof state);
   state.limit = table.length;
-  result = gfnt_cff_dict_walk(&private_dict, GFNT_TAG_CFF2,
-      GFNT_CFF2_DICT_MAX_OPERANDS, gfnt_cff2_private_visit, &state, error);
+  state.hint = out_params;
+  result = gfnt_cff_dict_walk_blended(&private_dict, GFNT_TAG_CFF2,
+      GFNT_CFF2_DICT_MAX_OPERANDS, gfnt_cff2_private_visit, &state,
+      out_params ? blend : NULL, error);
   if (result != GFNT_OK) {
     return result;
   }

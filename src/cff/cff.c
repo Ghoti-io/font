@@ -356,10 +356,72 @@ static GFNT_Result gfnt_cff_real(GFNT_Reader * reader, int64_t * out_value,
  * than a struct-filling parse: the parser does not know what it is reading
  * until after it has read it.
  */
+/** The `blend` operator of a CFF2 DICT, and `vsindex`, which chooses the data it blends by. */
+#define GFNT_CFF2_DICT_OP_VSINDEX 22
+#define GFNT_CFF2_DICT_OP_BLEND 23
+/** The scalars of one ItemVariationData: at most this many regions, each with 24 fractional bits. */
+#define GFNT_CFF_DICT_MAX_REGIONS 64
+#define GFNT_CFF_DICT_SCALAR_BITS 24
+
+/**
+ * `blend` in a DICT: @p n values and then one delta per region for each collapse to the
+ * @p n values with their deltas added in.
+ *
+ * The arithmetic is the charstring `blend`'s - a delta times a scalar has 40 fractional
+ * bits, a value's terms are summed and rounded once to 16.16 - so that a stem and a blue
+ * zone are the same number at a location whichever of them carried the blend.
+ */
+static GFNT_Result gfnt_cff_dict_blend(GFNT_CffDictOp * entry, GFNT_Tag table, size_t at,
+    const GFNT_CharstringBlend * blend, uint32_t vsindex, GFNT_Error * error) {
+  int64_t scalars[GFNT_CFF_DICT_MAX_REGIONS];
+  size_t k = 0;
+  size_t n;
+  size_t base;
+  GFNT_Result result;
+
+  if (entry->count < 1) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, table, at, GFNT_GLYPH_NONE,
+        "a DICT blend with no operand count");
+  }
+  result = blend->scalars(blend->user, vsindex, scalars, GFNT_CFF_DICT_MAX_REGIONS, &k);
+  if (result != GFNT_OK) {
+    return gfnt_error_set(error, result == GFNT_ERR_OOM ? result : GFNT_ERR_CORRUPT, table, at,
+        GFNT_GLYPH_NONE, "a DICT whose vsindex names data the variation store does not have");
+  }
+  {
+    int64_t count = entry->values[--entry->count] >> 16;
+
+    if (count < 0 || (uint64_t)count * (k + 1u) > entry->count) {
+      return gfnt_error_set(error, GFNT_ERR_CORRUPT, table, at, GFNT_GLYPH_NONE,
+          "a DICT blend whose operands are fewer than its count says");
+    }
+    n = (size_t)count;
+  }
+  base = entry->count - n * (k + 1u);
+  for (size_t i = 0; i < n; ++i) {
+    int64_t sum = 0;
+
+    for (size_t j = 0; j < k; ++j) {
+      sum += (int64_t)gfnt_saturate32(entry->values[base + n + i * k + j]) * scalars[j];
+    }
+    entry->values[base + i] = gfnt_add_clamp64(entry->values[base + i],
+        gfnt_round_shift(sum, GFNT_CFF_DICT_SCALAR_BITS));
+  }
+  entry->count = base + n;
+  return GFNT_OK;
+}
+
 GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict, GFNT_Tag table,
     size_t max_operands, GFNT_CffDictVisit visit, void * user,
     GFNT_Error * error) {
+  return gfnt_cff_dict_walk_blended(dict, table, max_operands, visit, user, NULL, error);
+}
+
+GFNT_Result gfnt_cff_dict_walk_blended(GFNT_Reader * dict, GFNT_Tag table,
+    size_t max_operands, GFNT_CffDictVisit visit, void * user,
+    const GFNT_CharstringBlend * blend, GFNT_Error * error) {
   GFNT_CffDictOp entry;
+  uint32_t vsindex = 0;
   GFNT_Result result;
 
   entry.count = 0;
@@ -432,6 +494,20 @@ GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict, GFNT_Tag table,
           return result;
         }
         entry.op = (uint16_t)0x0c00 | b1;
+      }
+      if (blend && entry.op == GFNT_CFF2_DICT_OP_BLEND) {
+        // Folded into the operands the next operator takes; nothing sees it.
+        result = gfnt_cff_dict_blend(&entry, table, gfnt_reader_tell(dict), blend, vsindex, error);
+        if (result != GFNT_OK) {
+          return result;
+        }
+        continue;
+      }
+      if (blend && entry.op == GFNT_CFF2_DICT_OP_VSINDEX && entry.count >= 1) {
+        // Later blends in this DICT use the data it names.
+        int64_t chosen = entry.values[0] >> 16;
+
+        vsindex = chosen < 0 ? 0 : (uint32_t)(chosen > 0xFFFF ? 0xFFFF : chosen);
       }
       result = visit(user, &entry, error);
       if (result != GFNT_OK) {
@@ -652,9 +728,89 @@ static void gfnt_cff_delta_array(const GFNT_CffDictOp * entry, GFNT_F16Dot16 * o
 /** An empty Private DICT: nothing stated, with the specification's defaults for the hint parameters. */
 static void gfnt_cff_private_defaults(GFNT_CffPrivate * priv) {
   memset(priv, 0, sizeof *priv);
-  priv->hint.blue_scale = 2597;   /* 0.039625 in 16.16 */
-  priv->hint.blue_shift = 7 * GFNT_FIXED_ONE;
-  priv->hint.blue_fuzz = 1 * GFNT_FIXED_ONE;
+  gfnt_cff_hint_defaults(&priv->hint);
+}
+
+/**
+ * Take one Private DICT entry into @p hint if it is a hinting parameter.
+ *
+ * The one reading of the parameters, shared by the CFF and CFF2 Private DICTs, whose
+ * operators and operand rules are the same once a CFF2's `blend` has been folded in.
+ *
+ * @return true when @p entry was a hinting parameter.
+ */
+bool gfnt_cff_hint_param(const GFNT_CffDictOp * entry, GFNT_CharstringHintParams * hint) {
+  switch (entry->op) {
+    case GFNT_CFF_OP_BLUE_VALUES:
+      gfnt_cff_delta_array(entry, hint->blue_values, GFNT_CS_MAX_BLUES,
+          &hint->blue_value_count, true);
+      return true;
+    case GFNT_CFF_OP_OTHER_BLUES:
+      gfnt_cff_delta_array(entry, hint->other_blues, GFNT_CS_MAX_BLUES,
+          &hint->other_blue_count, true);
+      return true;
+    case GFNT_CFF_OP_FAMILY_BLUES:
+      gfnt_cff_delta_array(entry, hint->family_blues, GFNT_CS_MAX_BLUES,
+          &hint->family_blue_count, true);
+      return true;
+    case GFNT_CFF_OP_FAMILY_OTHER_BLUES:
+      gfnt_cff_delta_array(entry, hint->family_other_blues, GFNT_CS_MAX_BLUES,
+          &hint->family_other_blue_count, true);
+      return true;
+    case GFNT_CFF_OP_STEM_SNAP_H:
+      gfnt_cff_delta_array(entry, hint->stem_snap_h, GFNT_CS_MAX_STEM_SNAPS,
+          &hint->stem_snap_h_count, false);
+      return true;
+    case GFNT_CFF_OP_STEM_SNAP_V:
+      gfnt_cff_delta_array(entry, hint->stem_snap_v, GFNT_CS_MAX_STEM_SNAPS,
+          &hint->stem_snap_v_count, false);
+      return true;
+    case GFNT_CFF_OP_BLUE_SCALE:
+      if (entry->count >= 1) {
+        hint->blue_scale = gfnt_saturate32(entry->values[0]);
+      }
+      return true;
+    case GFNT_CFF_OP_BLUE_SHIFT:
+      if (entry->count >= 1) {
+        hint->blue_shift = gfnt_saturate32(entry->values[0]);
+      }
+      return true;
+    case GFNT_CFF_OP_BLUE_FUZZ:
+      if (entry->count >= 1) {
+        hint->blue_fuzz = gfnt_saturate32(entry->values[0]);
+      }
+      return true;
+    case GFNT_CFF_OP_STD_HW:
+      if (entry->count >= 1) {
+        hint->std_hw = gfnt_saturate32(entry->values[0]);
+      }
+      return true;
+    case GFNT_CFF_OP_STD_VW:
+      if (entry->count >= 1) {
+        hint->std_vw = gfnt_saturate32(entry->values[0]);
+      }
+      return true;
+    case GFNT_CFF_OP_FORCE_BOLD:
+      if (entry->count >= 1) {
+        hint->force_bold = entry->values[0] != 0;
+      }
+      return true;
+    case GFNT_CFF_OP_LANGUAGE_GROUP:
+      if (entry->count >= 1) {
+        hint->language_group = (int32_t)(entry->values[0] >> 16);
+      }
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** The specification's defaults for the hinting parameters of a Private DICT that states none. */
+void gfnt_cff_hint_defaults(GFNT_CharstringHintParams * hint) {
+  memset(hint, 0, sizeof *hint);
+  hint->blue_scale = 2597;   /* 0.039625 in 16.16 */
+  hint->blue_shift = 7 * GFNT_FIXED_ONE;
+  hint->blue_fuzz = 1 * GFNT_FIXED_ONE;
 }
 
 /** What the Private DICT walk is filling in. */
@@ -685,68 +841,10 @@ static GFNT_Result gfnt_cff_private_visit(void * user,
         state->priv->nominal_width = gfnt_saturate32(entry->values[0]);
       }
       return GFNT_OK;
-    case GFNT_CFF_OP_BLUE_VALUES:
-      gfnt_cff_delta_array(entry, state->priv->hint.blue_values, GFNT_CS_MAX_BLUES,
-          &state->priv->hint.blue_value_count, true);
-      return GFNT_OK;
-    case GFNT_CFF_OP_OTHER_BLUES:
-      gfnt_cff_delta_array(entry, state->priv->hint.other_blues, GFNT_CS_MAX_BLUES,
-          &state->priv->hint.other_blue_count, true);
-      return GFNT_OK;
-    case GFNT_CFF_OP_FAMILY_BLUES:
-      gfnt_cff_delta_array(entry, state->priv->hint.family_blues, GFNT_CS_MAX_BLUES,
-          &state->priv->hint.family_blue_count, true);
-      return GFNT_OK;
-    case GFNT_CFF_OP_FAMILY_OTHER_BLUES:
-      gfnt_cff_delta_array(entry, state->priv->hint.family_other_blues, GFNT_CS_MAX_BLUES,
-          &state->priv->hint.family_other_blue_count, true);
-      return GFNT_OK;
-    case GFNT_CFF_OP_STEM_SNAP_H:
-      gfnt_cff_delta_array(entry, state->priv->hint.stem_snap_h, GFNT_CS_MAX_STEM_SNAPS,
-          &state->priv->hint.stem_snap_h_count, false);
-      return GFNT_OK;
-    case GFNT_CFF_OP_STEM_SNAP_V:
-      gfnt_cff_delta_array(entry, state->priv->hint.stem_snap_v, GFNT_CS_MAX_STEM_SNAPS,
-          &state->priv->hint.stem_snap_v_count, false);
-      return GFNT_OK;
-    case GFNT_CFF_OP_BLUE_SCALE:
-      if (entry->count >= 1) {
-        state->priv->hint.blue_scale = gfnt_saturate32(entry->values[0]);
-      }
-      return GFNT_OK;
-    case GFNT_CFF_OP_BLUE_SHIFT:
-      if (entry->count >= 1) {
-        state->priv->hint.blue_shift = gfnt_saturate32(entry->values[0]);
-      }
-      return GFNT_OK;
-    case GFNT_CFF_OP_BLUE_FUZZ:
-      if (entry->count >= 1) {
-        state->priv->hint.blue_fuzz = gfnt_saturate32(entry->values[0]);
-      }
-      return GFNT_OK;
-    case GFNT_CFF_OP_STD_HW:
-      if (entry->count >= 1) {
-        state->priv->hint.std_hw = gfnt_saturate32(entry->values[0]);
-      }
-      return GFNT_OK;
-    case GFNT_CFF_OP_STD_VW:
-      if (entry->count >= 1) {
-        state->priv->hint.std_vw = gfnt_saturate32(entry->values[0]);
-      }
-      return GFNT_OK;
-    case GFNT_CFF_OP_FORCE_BOLD:
-      if (entry->count >= 1) {
-        state->priv->hint.force_bold = entry->values[0] != 0;
-      }
-      return GFNT_OK;
-    case GFNT_CFF_OP_LANGUAGE_GROUP:
-      if (entry->count >= 1) {
-        state->priv->hint.language_group = (int32_t)(entry->values[0] >> 16);
-      }
-      return GFNT_OK;
     default:
-      // The rest of the Private DICT (ExpansionFactor, InitialRandomSeed) is not
-      // read: nothing here uses it.
+      // The hint parameters, and then the rest of the Private DICT (ExpansionFactor,
+      // InitialRandomSeed), which nothing here uses.
+      gfnt_cff_hint_param(entry, &state->priv->hint);
       return GFNT_OK;
   }
 }

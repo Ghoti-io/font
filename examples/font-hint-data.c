@@ -92,7 +92,7 @@ int main(int argc, char ** argv) {
   }
   printf("P upem %u\n", (unsigned)upem);
   for (g = 0; g < glyphs; g += stride) {
-    result = gfnt_face_glyph_hints(face, (uint32_t)g, hints, &params, &error);
+    result = gfnt_face_glyph_hints(face, (uint32_t)g, NULL, hints, &params, &error);
     if (result != GFNT_OK) {
       printf("g%zu error %d\n", g, (int)result);
       continue;

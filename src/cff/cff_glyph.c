@@ -386,7 +386,7 @@ static GFNT_Result gfnt_cff2_context(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, const GFNT_Cff2 ** out_cff2,
     GFNT_CffSubrs * local, GFNT_CffSubrs * global, GFNT_Cff2Scalars * scalars,
     GFNT_CharstringBlend * blend, GFNT_CharstringContext * context,
-    GFNT_Error * error) {
+    GFNT_CharstringHintParams * out_params, GFNT_Error * error) {
   const GFNT_Cff2 * cff2 = NULL;
   const GFNT_Head * head = NULL;
   GFNT_Cff2Font font;
@@ -416,17 +416,11 @@ static GFNT_Result gfnt_cff2_context(const GFNT_Face * face, uint32_t glyph,
         "font's charstring coordinates are in a space this library would have "
         "to transform them out of rather than report");
   }
-  result = gfnt_cff2_font_for_glyph(face, cff2, glyph, &font, error);
-  if (result != GFNT_OK) {
-    return result;
-  }
   result = gfnt_face_table_reader(face, GFNT_TAG_CFF2, &local->table, error);
   if (result != GFNT_OK) {
     return result;
   }
   global->table = local->table;
-  local->index = font.subrs;
-  global->index = cff2->gsubrs;
 
   memset(scalars, 0, sizeof *scalars);
   scalars->face = face;
@@ -442,6 +436,17 @@ static GFNT_Result gfnt_cff2_context(const GFNT_Face * face, uint32_t glyph,
     }
     blend->scalars = gfnt_cff2_scalars_at;
     blend->user = scalars;
+  }
+  // The Private DICT's own blends (its blue values at the location) need the scalars too,
+  // so they are set up before it is read.
+  result = gfnt_cff2_font_for_glyph(face, cff2, glyph, &font,
+      blend->scalars ? blend : NULL, out_params, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  local->index = font.subrs;
+  global->index = cff2->gsubrs;
+  if (cff2->vstore != 0) {
     blend->default_vsindex = font.vsindex;
     context->blend = blend;
   }
@@ -473,7 +478,7 @@ GFNT_Result gfnt_cff2_load(const GFNT_Face * face, uint32_t glyph,
     return GFNT_ERR_INVALID;
   }
   result = gfnt_cff2_context(face, glyph, variation, &cff2, &local, &global,
-      &scalars, &blend, &context, error);
+      &scalars, &blend, &context, NULL, error);
   if (result != GFNT_OK) {
     return result;
   }
@@ -483,6 +488,39 @@ GFNT_Result gfnt_cff2_load(const GFNT_Face * face, uint32_t glyph,
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF2, 0, glyph,
         "a CharStrings entry whose bytes are not in the table");
   }
+  return gfnt_charstring_run(GFNT_CHARSTRING_CFF2, bytes, length, &context,
+      outline, out_metrics, error);
+}
+
+GFNT_Result gfnt_cff2_load_hinted(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_CharstringMetrics * out_metrics, GFNT_CharstringHints * out_hints,
+    GFNT_CharstringHintParams * out_params, GFNT_Error * error) {
+  const GFNT_Cff2 * cff2 = NULL;
+  GFNT_CffSubrs local;
+  GFNT_CffSubrs global;
+  GFNT_Cff2Scalars scalars;
+  GFNT_CharstringBlend blend;
+  GFNT_CharstringContext context;
+  const uint8_t * bytes = NULL;
+  size_t length = 0;
+  GFNT_Result result;
+
+  if (!face || !outline || !out_hints) {
+    return GFNT_ERR_INVALID;
+  }
+  result = gfnt_cff2_context(face, glyph, variation, &cff2, &local, &global,
+      &scalars, &blend, &context, out_params, error);
+  if (result != GFNT_OK) {
+    return result;
+  }
+  result = gfnt_cff_element_bytes(&local.table, &cff2->charstrings, glyph,
+      &bytes, &length);
+  if (result != GFNT_OK) {
+    return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_TAG_CFF2, 0, glyph,
+        "a CharStrings entry whose bytes are not in the table");
+  }
+  context.hints = out_hints;
   return gfnt_charstring_run(GFNT_CHARSTRING_CFF2, bytes, length, &context,
       outline, out_metrics, error);
 }

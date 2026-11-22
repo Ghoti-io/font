@@ -334,17 +334,25 @@ GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
 }
 
 GFNT_Result gfnt_face_glyph_hints(const GFNT_Face * face, uint32_t glyph,
-    GFNT_CharstringHints * out_hints, GFNT_CharstringHintParams * out_params, GFNT_Error * error) {
+    const GFNT_Variation * variation, GFNT_CharstringHints * out_hints,
+    GFNT_CharstringHintParams * out_params, GFNT_Error * error) {
   GFNT_Outline * scratch = NULL;
+  const GFNT_Variation * active = NULL;
   GFNT_Result result;
 
   gfnt_error_clear(error);
   if (!face || !out_hints) {
     return GFNT_ERR_INVALID;
   }
-  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_CFF && gfnt_sfnt_producer(face) != GFNT_PRODUCER_TYPE1) {
+  if (gfnt_sfnt_producer(face) != GFNT_PRODUCER_CFF && gfnt_sfnt_producer(face) != GFNT_PRODUCER_CFF2
+      && gfnt_sfnt_producer(face) != GFNT_PRODUCER_TYPE1) {
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, glyph,
-        "hint data is read from a CFF or Type 1 face only so far");
+        "hint data is read from a CFF, CFF2 or Type 1 face only so far");
+  }
+  // A location only a CFF2 can honour is refused for the others by name, as for an outline.
+  result = gfnt_producer_variation(face, glyph, variation, &active, error);
+  if (result != GFNT_OK) {
+    return result;
   }
   result = gfnt_outline_create(face->allocator, &scratch, error);
   if (result != GFNT_OK) {
@@ -358,6 +366,9 @@ GFNT_Result gfnt_face_glyph_hints(const GFNT_Face * face, uint32_t glyph,
     if (result == GFNT_OK && out_params && gfnt_face_type1(face, &type1, error) == GFNT_OK) {
       *out_params = type1->hint;
     }
+  }
+  else if (gfnt_sfnt_producer(face) == GFNT_PRODUCER_CFF2) {
+    result = gfnt_cff2_load_hinted(face, glyph, active, scratch, NULL, out_hints, out_params, error);
   }
   else {
     result = gfnt_cff_load_hinted(face, glyph, scratch, NULL, out_hints, out_params, error);

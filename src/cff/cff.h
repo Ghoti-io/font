@@ -306,6 +306,29 @@ GFNT_Result gfnt_cff_dict_walk(GFNT_Reader * dict, GFNT_Tag table,
     size_t max_operands, GFNT_CffDictVisit visit, void * user,
     GFNT_Error * error);
 
+/**
+ * ::gfnt_cff_dict_walk() for a CFF2 DICT that may carry `blend`.
+ *
+ * With @p blend the walk folds each `blend` into the operands of the operator after it,
+ * using the ItemVariationData the DICT's own `vsindex` chose (0 until it says), at the
+ * location @p blend carries; @p visit then sees plain blended values and no `blend`. With
+ * NULL it is ::gfnt_cff_dict_walk().
+ */
+GFNT_Result gfnt_cff_dict_walk_blended(GFNT_Reader * dict, GFNT_Tag table,
+    size_t max_operands, GFNT_CffDictVisit visit, void * user,
+    const GFNT_CharstringBlend * blend, GFNT_Error * error);
+
+/**
+ * Take one Private DICT entry into @p hint if it is a hinting parameter (the blue arrays,
+ * the stem snaps, BlueScale, BlueShift, BlueFuzz, StdHW, StdVW, ForceBold, LanguageGroup).
+ *
+ * @return true when it was one.
+ */
+bool gfnt_cff_hint_param(const GFNT_CffDictOp * entry, GFNT_CharstringHintParams * hint);
+
+/** The specification's defaults for a Private DICT that states no hinting parameters. */
+void gfnt_cff_hint_defaults(GFNT_CharstringHintParams * hint);
+
 /** An operand as an offset below @p limit, refusing a negative or absurd one. */
 GFNT_Result gfnt_cff_offset_operand(const GFNT_CffDictOp * entry,
     GFNT_Tag table, size_t which, size_t limit, size_t * out_offset,

@@ -51,6 +51,7 @@ constexpr uint8_t kReturn = 11;
 constexpr uint8_t kEndchar = 14;
 constexpr uint8_t kVsindex = 15;
 constexpr uint8_t kBlend = 16;
+constexpr uint8_t kHstem = 1;
 constexpr uint8_t kRmoveto = 21;
 constexpr uint8_t kCallgsubr = 29;
 
@@ -164,6 +165,7 @@ const std::vector<Region> kRegions = {
 struct FontDictSpec {
   std::vector<Cs> subrs{};
   int vsindex = -1;           ///< The Private DICT's `vsindex`, or -1 for none.
+  Bytes private_extra{};      ///< Raw entries put in the Private DICT after `vsindex`.
 };
 
 struct Cff2Spec {
@@ -229,6 +231,7 @@ Bytes build_cff2(const Cff2Spec & spec) {
       private_dict.insert(private_dict.end(), number.begin(), number.end());
       put_u8(private_dict, 22);
     }
+    private_dict.insert(private_dict.end(), font.private_extra.begin(), font.private_extra.end());
     if (!font.subrs.empty()) {
       const Bytes number = dict_int(static_cast<int32_t>(private_dict.size() + 6));
 
@@ -840,4 +843,138 @@ TEST(Cff2, AFaceWithNoFvarDrawsTheDefaultAndRefusesALocation) {
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+namespace {
+
+/** A DICT entry of @p op over @p values, each with one delta per region of the data (one here). */
+Bytes dict_blended(uint8_t op, const std::vector<int> & values, const std::vector<int> & deltas) {
+  Bytes out;
+
+  for (int v : values) {
+    const Bytes number = dict_int(v);
+    out.insert(out.end(), number.begin(), number.end());
+  }
+  for (int d : deltas) {
+    const Bytes number = dict_int(d);
+    out.insert(out.end(), number.begin(), number.end());
+  }
+  {
+    const Bytes number = dict_int(static_cast<int>(values.size()));
+    out.insert(out.end(), number.begin(), number.end());
+  }
+  put_u8(out, 23);
+  put_u8(out, op);
+  return out;
+}
+
+struct HintsOf {
+  GFNT_CharstringHints hints{};
+  GFNT_CharstringHintParams params{};
+  GFNT_Result result = GFNT_OK;
+};
+
+HintsOf hints_at(Cff2Face & font, uint32_t glyph, const std::vector<GFNT_F2Dot14> & coordinates = {}) {
+  GFNT_Variation variation{coordinates.data(), coordinates.size(), GFNT_DELTA_ROUND_HALF_UP};
+  HintsOf out;
+
+  out.result = gfnt_face_glyph_hints(font.face, glyph, coordinates.empty() ? nullptr : &variation,
+      &out.hints, &out.params, &font.error);
+  return out;
+}
+
+constexpr int32_t kOne = 65536;
+
+}  // namespace
+
+TEST(Cff2Hints, ThePrivateDictsBlueValuesMoveWithTheLocation) {
+  // BlueValues as deltas -20 20 700 20 (zones -20..0 and 700..720); R0 moves the
+  // third number, so the top zone, by 10 at the maximum.
+  Cff2Spec spec;
+  FontDictSpec font_dict;
+
+  font_dict.vsindex = 0;
+  font_dict.private_extra = dict_blended(6, {-20, 20, 700, 20}, {0, 0, 10, 0});
+  spec.fonts = {font_dict};
+  spec.glyphs = {Cs(), square(100, 100, -100)};
+  spec.store = variation_store(kRegions, {{0}});
+  Cff2Face font(spec);
+
+  ASSERT_EQ(font.load, GFNT_OK);
+  HintsOf at_default = hints_at(font, 1);
+  ASSERT_EQ(at_default.result, GFNT_OK) << font.error.message;
+  ASSERT_EQ(at_default.params.blue_value_count, 4u);
+  EXPECT_EQ(at_default.params.blue_values[0], -20 * kOne);
+  EXPECT_EQ(at_default.params.blue_values[1], 0);
+  EXPECT_EQ(at_default.params.blue_values[2], 700 * kOne);
+  EXPECT_EQ(at_default.params.blue_values[3], 720 * kOne);
+
+  HintsOf at_max = hints_at(font, 1, kMax);
+  ASSERT_EQ(at_max.result, GFNT_OK);
+  EXPECT_EQ(at_max.params.blue_values[1], 0);
+  EXPECT_EQ(at_max.params.blue_values[2], 710 * kOne);
+  EXPECT_EQ(at_max.params.blue_values[3], 730 * kOne);
+
+  HintsOf at_half = hints_at(font, 1, kHalf);
+  ASSERT_EQ(at_half.result, GFNT_OK);
+  EXPECT_EQ(at_half.params.blue_values[2], 705 * kOne);
+  // The lower half is outside R0, so nothing moves.
+  EXPECT_EQ(hints_at(font, 1, kMin).params.blue_values[2], 700 * kOne);
+}
+
+TEST(Cff2Hints, AStemsWidthMovesWithTheLocationAndAPlainOneDoesNot) {
+  Cff2Spec spec;
+  Cs glyph = Cs().blend({0, 100}, {0, 20}).op(kHstem).n(0).n(0).op(kRmoveto).n(100).op(kHlineto);
+
+  spec.glyphs = {Cs(), glyph};
+  spec.store = variation_store(kRegions, {{0}});
+  Cff2Face font(spec);
+
+  ASSERT_EQ(font.load, GFNT_OK);
+  HintsOf at_default = hints_at(font, 1);
+  ASSERT_EQ(at_default.result, GFNT_OK);
+  ASSERT_TRUE(at_default.hints.valid);
+  ASSERT_EQ(at_default.hints.stem_count, 1u);
+  EXPECT_EQ(at_default.hints.stems[0].edge, 0);
+  EXPECT_EQ(at_default.hints.stems[0].width, 100 * kOne);
+  EXPECT_FALSE(at_default.hints.stems[0].vertical);
+
+  HintsOf at_max = hints_at(font, 1, kMax);
+  ASSERT_EQ(at_max.result, GFNT_OK);
+  ASSERT_EQ(at_max.hints.stem_count, 1u);
+  EXPECT_EQ(at_max.hints.stems[0].width, 120 * kOne);
+  // A Private DICT that states nothing gives the specification's defaults at every location.
+  EXPECT_EQ(at_max.params.blue_value_count, 0u);
+  EXPECT_EQ(at_max.params.blue_shift, 7 * kOne);
+}
+
+TEST(Cff2Hints, ABlendInThePrivateDictOfAFontWithNoStoreIsRefused) {
+  Cff2Spec spec;
+  FontDictSpec font_dict;
+
+  font_dict.private_extra = dict_blended(6, {-20, 20}, {1, 1});
+  spec.fonts = {font_dict};
+  spec.glyphs = {Cs(), square(100, 100, -100)};
+  Cff2Face font(spec);
+
+  ASSERT_EQ(font.load, GFNT_OK);
+  EXPECT_EQ(hints_at(font, 1).result, GFNT_ERR_CORRUPT);
+  // The outline does not read the hint parameters, so it is unaffected.
+  EXPECT_EQ(font.outline_result(1), GFNT_OK);
+}
+
+TEST(Cff2Hints, ABlendWithTooFewOperandsIsRefused) {
+  Cff2Spec spec;
+  FontDictSpec font_dict;
+
+  // Claims four values and gives two numbers.
+  font_dict.private_extra = dict_blended(6, {-20, 20, 700, 20}, {});
+  font_dict.vsindex = 0;
+  spec.fonts = {font_dict};
+  spec.glyphs = {Cs(), square(100, 100, -100)};
+  spec.store = variation_store(kRegions, {{0}});
+  Cff2Face font(spec);
+
+  ASSERT_EQ(font.load, GFNT_OK);
+  EXPECT_EQ(hints_at(font, 1).result, GFNT_ERR_CORRUPT);
 }

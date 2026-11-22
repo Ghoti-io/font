@@ -635,7 +635,7 @@ void t1op(std::vector<uint8_t> & cs, std::initializer_list<uint8_t> bytes) { cs.
 GFNT_Result hints_of(const Program & program, GFNT_CharstringHints * out) {
   FromBytes font(program.pfb());
   EXPECT_EQ(font.result, GFNT_OK);
-  return gfnt_face_glyph_hints(font.face, 0, out, nullptr, nullptr);
+  return gfnt_face_glyph_hints(font.face, 0, nullptr, out, nullptr, nullptr);
 }
 
 }  // namespace
@@ -719,13 +719,13 @@ TEST(Type1Hints, AHintReplacementMakesANewSetActiveFromTheNextPoint) {
 
 TEST(Type1Hints, AFaceThatIsNotCffOrType1IsRefused) {
   GFNT_CharstringHints h;
-  EXPECT_EQ(gfnt_face_glyph_hints(nullptr, 0, &h, nullptr, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_glyph_hints(nullptr, 0, nullptr, &h, nullptr, nullptr), GFNT_ERR_INVALID);
   Program program;
   FromBytes font(program.pfb());
   ASSERT_EQ(font.result, GFNT_OK);
-  EXPECT_EQ(gfnt_face_glyph_hints(font.face, 0, nullptr, nullptr, nullptr), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_face_glyph_hints(font.face, 0, nullptr, nullptr, nullptr, nullptr), GFNT_ERR_INVALID);
   GFNT_CharstringHintParams params;
-  ASSERT_EQ(gfnt_face_glyph_hints(font.face, 0, &h, &params, nullptr), GFNT_OK);
+  ASSERT_EQ(gfnt_face_glyph_hints(font.face, 0, nullptr, &h, &params, nullptr), GFNT_OK);
   EXPECT_EQ(params.blue_scale, 2597);   // the parameters ride along
 }
 

@@ -117,11 +117,16 @@ GFNT_Result gfnt_face_cff2(const GFNT_Face * face, const GFNT_Cff2 ** out_cff2,
  * @param cff2 Its parsed CFF2.
  * @param glyph The glyph index.
  * @param out_font Receives the subroutines and the default `vsindex`.
+ * @param blend Where to find the scalars a `blend` in the Private DICT uses, or NULL. Read only
+ *   when @p out_params is.
+ * @param out_params Receives the Private DICT's hinting parameters, blended at the location
+ *   @p blend carries, or NULL for not at all.
  * @param error Receives a diagnostic on failure, or NULL.
  * @return ::GFNT_OK, ::GFNT_ERR_CORRUPT or ::GFNT_ERR_UNSUPPORTED.
  */
 GFNT_Result gfnt_cff2_font_for_glyph(const GFNT_Face * face,
     const GFNT_Cff2 * cff2, uint32_t glyph, GFNT_Cff2Font * out_font,
+    const GFNT_CharstringBlend * blend, GFNT_CharstringHintParams * out_params,
     GFNT_Error * error);
 
 /**

@@ -121,6 +121,22 @@ GFNT_Result gfnt_cff2_load(const GFNT_Face * face, uint32_t glyph,
     const GFNT_Variation * variation, GFNT_Outline * outline,
     GFNT_CharstringMetrics * out_metrics, GFNT_Error * error);
 
+/**
+ * ::gfnt_cff2_load(), also recording the glyph's hint data at the location.
+ *
+ * The stems are the charstring's own, so a `blend` in a stem operand has moved them to
+ * @p variation; the hinting parameters are the Private DICT's, with its `blend`s taken the
+ * same way. At the default location both are the font's defaults.
+ *
+ * @param out_hints Receives the stems and masks (see ::GFNT_CharstringHints::valid).
+ * @param out_params Receives the Private DICT's hint parameters, or NULL.
+ * @return As ::gfnt_cff2_load().
+ */
+GFNT_Result gfnt_cff2_load_hinted(const GFNT_Face * face, uint32_t glyph,
+    const GFNT_Variation * variation, GFNT_Outline * outline,
+    GFNT_CharstringMetrics * out_metrics, GFNT_CharstringHints * out_hints,
+    GFNT_CharstringHintParams * out_params, GFNT_Error * error);
+
 /** One CFF2 glyph's charstring bytes, borrowed; the CFF2 half of ::gfnt_face_glyph_charstring(). */
 GFNT_Result gfnt_cff2_glyph_charstring(const GFNT_Face * face, uint32_t glyph,
     GFNT_CharstringType * out_type, const uint8_t ** out_bytes,

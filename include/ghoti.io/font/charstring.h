@@ -410,8 +410,11 @@ GFNT_API GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
  * For an engine that hints (or a tool that inspects hints). The outline is not produced; run
  * ::gfnt_face_glyph_outline() for that. Costs a run of the charstring.
  *
- * @param face The face (CFF or Type 1 so far; any other is ::GFNT_ERR_UNSUPPORTED).
+ * @param face The face (CFF, CFF2 or Type 1 so far; any other is ::GFNT_ERR_UNSUPPORTED).
  * @param glyph The glyph index.
+ * @param variation The location, or NULL for the default instance. Only a CFF2 face moves: its
+ *   stems and its Private dictionary's blue values are both `blend`s, so both are given at the
+ *   location. Any other face with a location that is not the default is ::GFNT_ERR_UNSUPPORTED.
  * @param out_hints Receives the stems and masks (see ::GFNT_CharstringHints::valid).
  * @param out_params Receives the Private dictionary's parameters, or NULL.
  * @param error Receives a diagnostic on failure, or NULL.
@@ -419,7 +422,7 @@ GFNT_API GFNT_Result gfnt_face_glyph_charstring_metrics(const GFNT_Face * face,
  *   ::GFNT_ERR_LIMIT; ::GFNT_ERR_OOM.
  */
 GFNT_API GFNT_Result gfnt_face_glyph_hints(const GFNT_Face * face, uint32_t glyph,
-    GFNT_CharstringHints * out_hints, GFNT_CharstringHintParams * out_params, GFNT_Error * error);
+    const GFNT_Variation * variation, GFNT_CharstringHints * out_hints, GFNT_CharstringHintParams * out_params, GFNT_Error * error);
 
 #ifdef __cplusplus
 }

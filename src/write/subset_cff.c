@@ -800,7 +800,7 @@ static GFNT_Result flatten_glyph(const Src * s, uint32_t glyph, bool drop_hint,
   if (s->cff2) {
     GFNT_Cff2Font font;
 
-    result = gfnt_cff2_font_for_glyph(s->face, s->c2, glyph, &font, error);
+    result = gfnt_cff2_font_for_glyph(s->face, s->c2, glyph, &font, NULL, NULL, error);
     subrs = font.subrs;
     f->vsindex = font.vsindex;
   }

@@ -51,12 +51,13 @@ def zones(par):
 def blue_pos(flat,kind,s,bs,A=0.6):
     b=A*max(0,1-s/bs)
     return rnd(flat*s+b)  if kind=='top' else rnd(flat*s-b)
-def edges_of(g, variant):
+def edges_of(g, variant, only=None):
     par=g['par']; fuzz=par['blue_fuzz'][0]/65536 if par['blue_fuzz'] else 1.0
     zs=zones(par); s=g['p']/g['u']; bs=par['blue_scale'][0]/65536
     res=[]  # (font-unit edge, hinted px or None if not aligned)
-    for k,e,w in g['st']:
+    for idx,(k,e,w) in enumerate(g['st']):
         if k!='h': continue
+        if only is not None and idx not in only: continue
         if w==-20.0: es=[e]
         elif w==-21.0: es=[e+w]
         else: es=[e,e+w]
@@ -80,9 +81,10 @@ def interp(anchors, pos):
         if a0<=pos<=a1:
             t=(pos-a0)/(a1-a0) if a1>a0 else 0
             return d0*(1-t)+d1*t
-def predict(g, variant='v1'):
+def predict_map(g, only=None, variant='v1'):
+    """the hint map for the stems in `only` (indices into g['st']), as sorted [(px, delta)]"""
     s=g['p']/g['u']; par=g['par']; bs=par['blue_scale'][0]/65536
-    stems=edges_of(g,variant)
+    stems=edges_of(g,variant,only)
     anchors={}   # px(unhinted) -> delta
     pending=[]
     for e,w,ent in stems:
@@ -115,12 +117,31 @@ def predict(g, variant='v1'):
         dl=r0 if abs(r0)<abs(r1)-0.006 else r1
         d=d0+dl
         anchors[lo]=d; anchors[hi]=d
-    m=sorted(anchors.items())
+    return sorted(anchors.items())
+def apply_map(m, y):
+    yp=y/64
+    d=interp(m,yp) if m else 0
+    return rnd((yp+d)*64)
+def active_sets(g):
+    """[(first_point, set of stem indices)] for the glyph's hint masks; one set of everything if none"""
+    n=len(g['st'])
+    if not g['mk']: return [(0,set(range(n)))]
     out=[]
-    for y in g['y0']:
-        yp=y/64
-        d=interp(m,yp) if m else 0
-        out.append(rnd((yp+d)*64))
+    for first,bits in g['mk']:
+        raw=bytes.fromhex(bits); act=set()
+        for i in range(n):
+            if i//8<len(raw) and raw[i//8]&(0x80>>(i%8)): act.add(i)
+        out.append((first,act))
+    if out[0][0]>0: out.insert(0,(0,set(range(n))))
+    return out
+def predict(g, variant='v1'):
+    sets=active_sets(g); maps=[predict_map(g,act,variant) for _,act in sets]
+    out=[]
+    for i,y in enumerate(g['y0']):
+        k=0
+        for j,(first,_) in enumerate(sets):
+            if first<=i: k=j
+        out.append(apply_map(maps[k],y))
     return out
 def evaluate(rows, variant='v0', show=0):
     tot=collections.Counter(); per=collections.defaultdict(collections.Counter)

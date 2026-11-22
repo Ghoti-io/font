@@ -130,6 +130,25 @@ int main(int argc, char ** argv) {
       printf("s %c %d %d\n", hints->stems[i].vertical ? 'v' : 'h', (int)hints->stems[i].edge,
           (int)hints->stems[i].width);
     }
+    {
+      // The unhinted outline in font units (26.6 of a unit), for fitting the arithmetic exactly.
+      GFNT_Outline * outline = NULL;
+
+      if (gfnt_face_glyph_outline(face, (uint32_t)g, NULL, NULL, &outline, &error) == GFNT_OK) {
+        size_t points = gfnt_outline_point_count(outline);
+
+        printf("y %zu", points);
+        for (i = 0; i < points; i++) {
+          GFNT_Point at;
+
+          if (gfnt_outline_point_at(outline, i, &at, NULL) == GFNT_OK) {
+            printf(" %d", (int)at.y);
+          }
+        }
+        printf("\n");
+        gfnt_outline_destroy(outline);
+      }
+    }
     for (i = 0; i < hints->mask_count; i++) {
       printf("m %u ", (unsigned)hints->masks[i].first_point);
       for (k = 0; k < (hints->stem_count + 7) / 8; k++) {

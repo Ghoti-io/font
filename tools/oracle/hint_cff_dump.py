@@ -71,6 +71,7 @@ def main(argv):
                     "e": a[2],
                     "y0": [pt[1] for pt in a[1]], "y1": [pt[1] for pt in b[1]],
                     "x0": [pt[0] for pt in a[1]],
+                    "fy": info.get("fy") if len(info.get("fy", [])) == len(a[1]) else None,
                 }, separators=(",", ":")))
     return 0
 

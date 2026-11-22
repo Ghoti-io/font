@@ -49,6 +49,9 @@ def read_data(path, stride):
         elif line.startswith("s ") and cur is not None:
             f = line.split()
             cur["stems"].append((f[1], int(f[2]) / 65536.0, int(f[3]) / 65536.0))
+        elif line.startswith("y ") and cur is not None:
+            f = line.split()
+            cur["fy"] = [int(v) for v in f[2:]]
         elif line.startswith("m ") and cur is not None:
             f = line.split()
             cur["masks"].append((int(f[1]), f[2]))

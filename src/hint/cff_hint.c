@@ -587,6 +587,8 @@ GFNT_Result gfnt_cffhint_glyph_outline(const GFNT_Face * face, const GFNT_CffHin
   const GFNT_Variation * variation;
   GFNT_Point * points = NULL;
   GFNT_PointTag * tags = NULL;
+  int64_t * fine_x = NULL;
+  int64_t * fine_y = NULL;
   size_t count;
   int64_t scale;
   int64_t boost = 0;
@@ -640,7 +642,9 @@ GFNT_Result gfnt_cffhint_glyph_outline(const GFNT_Face * face, const GFNT_CffHin
   }
   points = face->allocator->calloc_fn(face->allocator->ctx, count ? count : 1u, sizeof *points);
   tags = face->allocator->calloc_fn(face->allocator->ctx, count ? count : 1u, sizeof *tags);
-  if (!points || !tags) {
+  fine_x = face->allocator->calloc_fn(face->allocator->ctx, count ? count : 1u, sizeof *fine_x);
+  fine_y = face->allocator->calloc_fn(face->allocator->ctx, count ? count : 1u, sizeof *fine_y);
+  if (!points || !tags || !fine_x || !fine_y) {
     r = gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, glyph, "no memory for a hinted outline");
     goto done;
   }
@@ -689,8 +693,10 @@ GFNT_Result gfnt_cffhint_glyph_outline(const GFNT_Face * face, const GFNT_CffHin
         if (gfnt_outline_point_at(source, i, &p, &tag) != GFNT_OK) {
           continue;
         }
-        points[i].y = gfnt_cffh_to_26_6(gfnt_cffh_map_point(map, (int64_t)p.y * 1024, scale));
-        points[i].x = gfnt_cffh_to_26_6(gfnt_cffh_mul((int64_t)p.x * 1024, scale));
+        fine_y[i] = gfnt_cffh_map_point(map, (int64_t)p.y * 1024, scale);
+        fine_x[i] = gfnt_cffh_mul((int64_t)p.x * 1024, scale);
+        points[i].y = gfnt_cffh_to_26_6(fine_y[i]);
+        points[i].x = gfnt_cffh_to_26_6(fine_x[i]);
         tags[i] = tag;
       }
     }
@@ -706,8 +712,8 @@ GFNT_Result gfnt_cffhint_glyph_outline(const GFNT_Face * face, const GFNT_CffHin
       break;
     }
     // A contour closed by a point equal to its first is not drawn twice, once the two are
-    // equal *after* hinting; before hinting, equal points can still part.
-    if (n >= 2u && points[first + n - 1u].x == points[first].x && points[first + n - 1u].y == points[first].y
+    // equal *after* hinting, compared before the 26.6 truncation; before hinting, equal points can still part.
+    if (n >= 2u && fine_x[first + n - 1u] == fine_x[first] && fine_y[first + n - 1u] == fine_y[first]
         && tags[first + n - 1u] == GFNT_POINT_ON && tags[first] == GFNT_POINT_ON) {
       n -= 1u;
     }
@@ -735,6 +741,12 @@ done:
   }
   if (tags) {
     face->allocator->free_fn(face->allocator->ctx, tags);
+  }
+  if (fine_x) {
+    face->allocator->free_fn(face->allocator->ctx, fine_x);
+  }
+  if (fine_y) {
+    face->allocator->free_fn(face->allocator->ctx, fine_y);
   }
   gfnt_outline_destroy(result);
   gfnt_outline_destroy(source);

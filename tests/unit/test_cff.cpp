@@ -2590,24 +2590,56 @@ TEST(CffHints, RecordingChangesNothingTheRunProduces) {
   }
 }
 
-TEST(CffHints, AnAccentedCharacterHasNoValidHints) {
+TEST(CffHints, AnAccentedCharactersHintsAreItsComponentsMergedWithTheAccentMovedByItsOffset) {
+  // cff-seac-hints.otf: glyphs 2 A (hstem 0 20, 660 20), 3 E (three horizontal stems and a vertical one, one
+  // mask), 4 acute (hstem 745 40, drawn 750 up), 7 Aacute = A + acute at (200, 40), 10 Eacute.
+  Fixture font("cff-seac-hints.otf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedGlyph base = load_hinted(font, 2);
+  HintedGlyph accent = load_hinted(font, 4);
+  HintedGlyph both = load_hinted(font, 7);
+  ASSERT_EQ(base.result, GFNT_OK);
+  ASSERT_EQ(accent.result, GFNT_OK);
+  ASSERT_EQ(both.result, GFNT_OK);
+  EXPECT_TRUE(both.hints.valid);
+  EXPECT_TRUE(both.hints.accent);
+  EXPECT_FALSE(base.hints.accent);
+  EXPECT_EQ(both.points, base.points + accent.points);
+  EXPECT_EQ(both.hints.accent_first_point, base.points);
+  ASSERT_EQ(both.hints.stem_count, base.hints.stem_count + accent.hints.stem_count);
+  EXPECT_EQ(both.hints.stems[0].edge, base.hints.stems[0].edge);
+  EXPECT_EQ(both.hints.stems[1].edge, base.hints.stems[1].edge);
+  // The accent's stem sits where the accent is drawn: 745 + 40.
+  EXPECT_EQ(both.hints.stems[2].edge, units(785));
+  EXPECT_EQ(both.hints.stems[2].width, units(40));
+  // Each component has a mask naming only its own stems: the base's first, the accent's at its first point.
+  ASSERT_EQ(both.hints.mask_count, 2u);
+  EXPECT_EQ(both.hints.masks[0].first_point, 0u);
+  EXPECT_EQ(both.hints.masks[0].bits[0], 0xC0);
+  EXPECT_EQ(both.hints.masks[1].first_point, base.points);
+  EXPECT_EQ(both.hints.masks[1].bits[0], 0x20);
+
+  // A base with a hint mask of its own keeps it, and the accent's bits move past the base's stems.
+  HintedGlyph e = load_hinted(font, 3);
+  HintedGlyph eacute = load_hinted(font, 10);
+  ASSERT_EQ(e.result, GFNT_OK);
+  ASSERT_EQ(eacute.result, GFNT_OK);
+  EXPECT_TRUE(eacute.hints.valid);
+  EXPECT_EQ(eacute.hints.stem_count, e.hints.stem_count + 1u);
+  EXPECT_EQ(eacute.hints.masks[0].bits[0], e.hints.masks[0].bits[0]);
+  const size_t last = eacute.hints.mask_count - 1u;
+  EXPECT_EQ(eacute.hints.masks[last].first_point, e.points);
+  EXPECT_TRUE((eacute.hints.masks[last].bits[0] & (0x80u >> e.hints.stem_count)) != 0);
+}
+
+TEST(CffHints, AnAccentedCharacterWhoseComponentsDeclareNoStemsIsStillValid) {
   Fixture font("cff-seac.otf");
   ASSERT_EQ(font.result, GFNT_OK);
-  size_t glyphs = 0;
-  ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
-  unsigned composite = 0;
-  for (uint32_t g = 0; g < glyphs; g++) {
-    bool is = false;
-    ASSERT_EQ(gfnt_face_glyph_is_composite(font, g, &is, nullptr), GFNT_OK);
-    if (!is) {
-      continue;
-    }
-    composite++;
-    HintedGlyph h = load_hinted(font, g);
-    ASSERT_EQ(h.result, GFNT_OK);
-    EXPECT_FALSE(h.hints.valid) << g;
-  }
-  EXPECT_GT(composite, 0u);
+  HintedGlyph g = load_hinted(font, 4);
+  ASSERT_EQ(g.result, GFNT_OK);
+  EXPECT_TRUE(g.hints.valid);
+  EXPECT_TRUE(g.hints.accent);
+  EXPECT_EQ(g.hints.stem_count, 0u);
 }
 
 TEST(CffHints, NullArgumentsAreRefused) {
@@ -2830,27 +2862,38 @@ TEST(CffHintEngine, XIsScaledAndNeverMoved) {
   EXPECT_EQ(h.points[1].first, 153);
 }
 
-TEST(CffHintEngine, ACompositeGlyphIsReturnedScaledAndSaidToBeUnhinted) {
-  Fixture font("cff-seac.otf");
-  ASSERT_EQ(font.result, GFNT_OK);
-  size_t glyphs = 0;
-  ASSERT_EQ(gfnt_face_num_glyphs(font, &glyphs, nullptr), GFNT_OK);
-  bool found = false;
-  for (uint32_t g = 0; g < glyphs && !found; ++g) {
-    bool composite = false;
-
-    ASSERT_EQ(gfnt_cff_is_composite(font, g, &composite, nullptr), GFNT_OK);
-    if (!composite) {
-      continue;
-    }
-    found = true;
-    HintedOut h = hinted_at(font, g, 12);
-    ASSERT_EQ(h.result, GFNT_OK);
-    EXPECT_EQ(h.status, GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM);
-    EXPECT_EQ(h.space, GFNT_OUTLINE_PIXELS);
-    EXPECT_EQ(h.advance % 64, 0);
+TEST(CffHintEngine, AnAccentedCharacterIsHintedWhereItsComponentsAreDrawnAndTheAccentComesFirst) {
+  // The accent is hinted at its place (stems moved by the offset, so its top edge meets the blue zone as
+  // drawn) and a CFF puts it before the base; a Type 1 keeps the base first. Both measured against FreeType
+  // (`make check-oracle-hint-cff` compares these fixtures point by point).
+  Fixture cff("cff-seac-hints.otf");
+  ASSERT_EQ(cff.result, GFNT_OK);
+  HintedOut base = hinted_at(cff, 2, 12);
+  HintedOut accent = hinted_at(cff, 4, 12);
+  HintedOut both = hinted_at(cff, 7, 12);
+  ASSERT_EQ(both.result, GFNT_OK);
+  EXPECT_EQ(both.status, GFNT_HINT_STATUS_HINTED);
+  EXPECT_EQ(both.space, GFNT_OUTLINE_PIXELS);
+  EXPECT_EQ(both.advance % 64, 0);
+  ASSERT_EQ(both.points.size(), base.points.size() + accent.points.size());
+  // The base's points are the last ones, exactly as the base alone is hinted.
+  for (size_t i = 0; i < base.points.size(); ++i) {
+    EXPECT_EQ(both.points[accent.points.size() + i], base.points[i]) << i;
   }
-  EXPECT_TRUE(found);
+  // The accent's x is its own plus the scaled offset (200 units at 12 ppem = 2.4 px), and its y is a whole
+  // number of pixels away from the accent alone only by what its stems did there.
+  EXPECT_EQ(both.points[0].first - accent.points[0].first, 154);   // 200 * 12 / 1000 * 64, truncated
+
+  Fixture t1("type1-seac-hints.pfb");
+  ASSERT_EQ(t1.result, GFNT_OK);
+  HintedOut t1base = hinted_at(t1, 2, 12);
+  HintedOut t1both = hinted_at(t1, 7, 12);
+  ASSERT_EQ(t1both.result, GFNT_OK);
+  EXPECT_EQ(t1both.status, GFNT_HINT_STATUS_HINTED);
+  ASSERT_GE(t1both.points.size(), t1base.points.size());
+  for (size_t i = 0; i < t1base.points.size(); ++i) {
+    EXPECT_EQ(t1both.points[i], t1base.points[i]) << i;
+  }
 }
 
 TEST(CffHintEngine, AContextIsRefusedForNoSize) {

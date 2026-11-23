@@ -703,13 +703,22 @@ GFNT_Result gfnt_cffhint_glyph_outline(const GFNT_Face * face, const GFNT_CffHin
     face->allocator->free_fn(face->allocator->ctx, map);
   }
   r = gfnt_outline_create(allocator ? allocator : face->allocator, &result, error);
-  for (size_t c = 0; r == GFNT_OK && c < gfnt_outline_contour_count(source); ++c) {
+  // An accented character's accent is emitted before its base in a CFF (measured against FreeType; a Type 1
+  // glyph keeps the base first), so two passes over the contours: the accent's, then the rest.
+  const bool accent_first = hints.accent && gfnt_sfnt_producer(face) != GFNT_PRODUCER_TYPE1;
+  const size_t contour_count = gfnt_outline_contour_count(source);
+
+  for (size_t step = 0; r == GFNT_OK && step < (accent_first ? 2u * contour_count : contour_count); ++step) {
+    size_t c = accent_first ? step % contour_count : step;
     size_t first = 0;
     size_t n = 0;
 
     r = gfnt_outline_contour_at(source, c, &first, &n);
     if (r != GFNT_OK) {
       break;
+    }
+    if (accent_first && (first >= hints.accent_first_point) != (step < contour_count)) {
+      continue;
     }
     // A contour closed by a point equal to its first is not drawn twice, once the two are
     // equal *after* hinting, compared before the 26.6 truncation; before hinting, equal points can still part.

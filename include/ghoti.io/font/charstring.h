@@ -212,9 +212,10 @@ typedef struct GFNT_CharstringMask {
  *
  * Caller-owned and fixed in size, so recording allocates nothing. @c valid is false when
  * the glyph cannot be described (more stems or mask changes than the bounds above, or an
- * accented character assembled from two charstrings, whose hints are two sets); an engine
+ * accented character whose two components' hints together exceed them, or whose own charstring
+ * drew or declared something before naming them); an engine
  * treats such a glyph as unhinted, which loses the hints and never the outline. A glyph with
- * stems and no mask has every stem active throughout. Type 2 only so far.
+ * stems and no mask has every stem active throughout. Recorded for Type 2, CFF2 and Type 1 charstrings.
  */
 typedef struct GFNT_CharstringHints {
   bool valid;                                   ///< Whether the rest describes the glyph.
@@ -222,6 +223,13 @@ typedef struct GFNT_CharstringHints {
   GFNT_CharstringStem stems[GFNT_CS_MAX_STEMS]; ///< In declaration order, which is the mask's.
   size_t mask_count;                            ///< Hint-mask changes.
   GFNT_CharstringMask masks[GFNT_CS_MAX_MASKS]; ///< In outline order.
+  /**
+   * Whether the glyph is an accented character (`seac`, or `endchar` with four operands) whose two
+   * components' hints were merged: the base's stems come first and the accent's follow, moved by the
+   * accent's offset, and each mask names only its own component's stems.
+   */
+  bool accent;
+  uint32_t accent_first_point;                  ///< With @c accent: the first outline point of the accent.
 } GFNT_CharstringHints;
 
 /**

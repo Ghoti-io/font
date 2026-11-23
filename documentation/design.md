@@ -1655,16 +1655,21 @@ from the stems that mask turns on:
    offset a rounded multiply, rigidly outside them; a point on an edge is on the edge's position exactly. The 26.6 result is
    the 16.16 value shifted right, not rounded. x is scaled and not moved.
 4. The advance is the unhinted one rounded to a whole pixel. A contour's closing point is dropped if it equals the first
-   *after* hinting.
+   *after* hinting, compared before the 26.6 truncation.
+5. **An accented character** (`seac`, or `endchar` with four operands) is hinted *where its parts are drawn*: the base's
+   stems and the accent's, the accent's moved by its offset, are one list, each part's hint masks name only its own stems,
+   and the combined outline goes through rules 1-4 once. The accent's x is its own plus the scaled offset. A CFF emits the
+   accent's contours before the base's and a Type 1 the base's first, as FreeType does; the unhinted outline keeps the
+   base first in both. A charstring that draws or declares stems of its own before naming its parts, or whose parts
+   together have more than 96 stems or 128 mask changes, is returned unfitted (`UNHINTED_NO_PROGRAM`).
 
 **What it reproduces.** Compared point by point with FreeType (`make check-oracle-hint-cff`) on a sample of the corpus's
 CFF fonts at 9, 12, 17, 32 and 48 ppem and its Type 1 programs at four sizes: 91.2% of 19,835 CFF glyphs and 94.3% of 13,656
 Type 1 glyphs are identical to the 1/64 pixel, every advance is, and no x differs. The gate holds a floor just under those
-figures and is seen to fail on an impossible one. The constants (0.6, 0.2, the half-pixel gap) are fitted, not derived,
+figures and is seen to fail on an impossible one. Accented characters, which the corpus has none of, are checked on two generated fixtures (`cff-seac-hints.otf`, `type1-seac-hints.pfb`, six accented characters each with hinted parts) that the same gate requires to be identical to FreeType at five sizes. The constants (0.6, 0.2, the half-pixel gap) are fitted, not derived,
 and say so here.
 
-**What it does not match.** An accented glyph built by `seac` is returned scaled and unfitted
-(`GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM`). The TeX Gyre math fonts (whose Private dictionaries state a `BlueFuzz` of 0 and zones close together) differ from
+**What it does not match.** The TeX Gyre math fonts (whose Private dictionaries state a `BlueFuzz` of 0 and zones close together) differ from
 FreeType on a larger share of their glyphs than any other fonts do, and so do glyphs whose hint masks change several times; a stem wholly below the baseline is placed by a fitted fade, the one rule here with no clean explanation.
 `CFF2` hint data is read and blended at a location; on the one variable `CFF2` font in the corpus 92.6% of glyphs are identical at the default location and 92.1%, 84.5% and 84.0% at three others (`hint_cff_diff.py --coords`), so the blending is sound and the rules fit its heavier weights less well. These are the
 exclusions: the comparison reports every glyph it does not match rather than skipping it.

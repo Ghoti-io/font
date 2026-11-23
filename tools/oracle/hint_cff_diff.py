@@ -6,7 +6,7 @@
 # This file is part of Ghoti.io Font.
 """Hinted CFF and Type 1 outlines, this library against FreeType, point by point (plan C4).
 
-    hint_cff_diff.py [--pool sfnt|type1] [--ppem N[,N...]] [--stride N] [--fonts N] [--fonts-skip N]
+    hint_cff_diff.py [--pool sfnt|type1] [--ppem N[,N...]] [--stride N] [--fonts N] [--fonts-skip N] [--files PATH[,PATH...]]
 
 For each glyph of each CFF-flavoured font (or Type 1 program) at each size, the outline this
 library hints from its stems and blue zones is compared with FreeType's, as integers in 26.6.
@@ -36,7 +36,7 @@ def ours(path, ppem, stride, coords="-"):
 
 
 def main(argv):
-    pool, ppems, stride, limit, floor, dump, coords, only = "sfnt", [9, 12, 17, 32], 11, None, 0.0, None, "-", None
+    pool, ppems, stride, limit, floor, dump, coords, only, files = "sfnt", [9, 12, 17, 32], 11, None, 0.0, None, "-", None, None
     args = argv[1:]
     while args:
         a = args.pop(0)
@@ -54,11 +54,15 @@ def main(argv):
             coords = args.pop(0)
         elif a == "--only":
             only = args.pop(0)
+        elif a == "--files":
+            files = [os.path.abspath(v) for v in args.pop(0).split(",")]
         elif a == "--dump":
             dump = open(args.pop(0), "w")
     paths = corpus.fonts(pool)
     if pool == "sfnt":
         paths = [p for p in paths if explore.is_cff(p)]
+    if files:
+        paths = files
     if only:
         paths = [p for p in paths if os.path.basename(p) == only]
     if limit:

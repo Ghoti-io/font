@@ -32,6 +32,7 @@ cff-curves.otf	CFF: every curve operator in the form a pen never writes - three-
 cff-hints.otf	CFF: stem hints and the masks their count sizes - an odd operand count carrying the advance, a two-byte mask, stems declared inside a subroutine, an implicit vstem before hintmask, cntrmask, and a width on vstem
 cff-names.otf	CFF: a Top DICT stating FullName and FamilyName as strings of its own, after the glyph names, for the subsetter's rename
 cff-repeats.otf	CFF: twelve glyphs sharing two path fragments, six hinted glyphs sharing stems, masks and fragments, a long run of one stroke, and one glyph that shares nothing, for the subsetter's subroutines
+cff-seac-hints.otf	CFF: six accented characters (endchar with four operands) whose base and accent each have hint stems, one base with a hint mask, and blue zones, for hinting an accented character
 cff-seac.otf	CFF: an accented character (endchar with four operands) named by Standard Encoding code, a charset in format 1, a name in the font's own String INDEX, and a custom encoding with a supplement
 cff-subrs.otf	CFF: local and global subroutines with the bias applied, nesting, a subroutine that ends without return, defaultWidthX, a nominalWidthX delta, and one glyph whose charstring advance hmtx disagrees with
 cff-subset.otf	CFF: eight and sixteen stems before a hintmask (mask width on a multiple-of-eight boundary), three glyphs named in the font's own String INDEX, and a subroutine call, for the subsetter
@@ -90,6 +91,7 @@ strikes.ttf	Three EBLC strikes - 10, 12 and 16 ppem - of four glyphs each, index
 svg-docs.ttf	An SVG table of four documents: a gzip one for glyph 0, a plain one for glyphs 2 and 3, a gzip one for glyph 4 and a plain one with a non-ASCII character for glyphs 6 and 7, with glyph 5 and everything past 7 in none - written by fontTools, which is also the oracle
 type1-big.pfb	A Type 1 program larger than one allocation: 80 glyphs, subroutine numbers 0, 1 and 40 with a gap between, and a glyph that calls the high one - the three reallocation paths no other fixture reaches
 type1-gz.pfb.gz	A gzipped Type 1 program - two derivations stacked, inflate then eexec - which nobody ships and which is the only input where each layer has to free the one it consumed
+type1-seac-hints.pfb	Type 1 (PFB): six accented characters (seac with a side-bearing correction) whose base and accent each have hint stems, with blue zones, for hinting an accented character
 type1.pfa	The same Type 1 font as ASCII: hex after eexec, no segment framing, the -| |- | spellings, /lenIV 0, a /CharStrings count smaller than the glyphs it defines, and StandardEncoding
 type1.pfb	A Type 1 font program in PFB framing: binary segments with little-endian lengths, eexec, a per-charstring cipher, a custom /Encoding, and the same charstrings as cff-type1.otf
 variable-avar2.ttf	variable-gvar.ttf's font with an avar version 2: segment maps, then a variation store of three regions (weight up, width up, weight down) that moves each axis as a function of the others, and an index map that sends the weight axis to the second row and the width axis to the first, written by fontTools

@@ -1393,6 +1393,12 @@ check-oracle-hint-cff: $(EXAMPLES)
 		python3 $(ORACLE)/hint_cff_diff.py --pool sfnt --ppem 9,12,17,32,48 --stride 13 --floor 0.89
 	@python3 $(ORACLE)/oracle_run.py freetype -- \
 		python3 $(ORACLE)/hint_cff_diff.py --pool type1 --ppem 9,12,17,32 --stride 17 --floor 0.92
+	@python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_cff_diff.py --pool sfnt --files tests/data/fonts/cff-seac-hints.otf,tests/data/fonts/cff-seac.otf \
+		--ppem 9,12,17,32,48 --stride 1 --floor 1.0
+	@python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_cff_diff.py --pool type1 --files tests/data/fonts/type1-seac-hints.pfb,tests/data/fonts/type1.pfb \
+		--ppem 9,12,17,32,48 --stride 1 --floor 1.0
 	@if python3 $(ORACLE)/oracle_run.py freetype -- \
 		python3 $(ORACLE)/hint_cff_diff.py --pool sfnt --fonts 2 --ppem 12 --stride 29 --floor 1.01 >/dev/null 2>&1; then \
 		echo "check-oracle-hint-cff: a floor above 1 passed, so the floor does not bite"; exit 1; fi

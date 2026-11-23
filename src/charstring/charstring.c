@@ -47,6 +47,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../core/fixed.h"
 #include "../outline/outline.h"
@@ -524,6 +525,71 @@ static bool gfnt_cs_is_seac_endchar(const GFNT_CsState * state) {
   return state->count == 4;
 }
 
+/** Whether bit @p i of a hint mask is set, in the specification's order (bit 7 of byte 0 is stem 0). */
+static bool gfnt_cs_mask_bit(const uint8_t * bits, size_t i) {
+  return (bits[i / 8u] & (0x80u >> (i % 8u))) != 0;
+}
+
+static void gfnt_cs_mask_set(uint8_t * bits, size_t i) {
+  bits[i / 8u] = (uint8_t)(bits[i / 8u] | (0x80u >> (i % 8u)));
+}
+
+/**
+ * Add one component's stems and masks to an accented character's set.
+ *
+ * The two components' stems become one list (the base's, then the accent's, with the accent's
+ * moved by its offset: it is hinted where it is drawn), and each component's masks are made to
+ * name only its own stems. A component with no mask has all its own stems active throughout, so
+ * it is given one at its first point; without it the glyph's "every stem" default before the
+ * first mask would switch the other component's stems on.
+ *
+ * @return false when the result would not fit the bounds of ::GFNT_CharstringHints.
+ */
+static bool gfnt_cs_merge_hints(GFNT_CharstringHints * into, const GFNT_CharstringHints * part,
+    size_t first_point, int64_t dx, int64_t dy) {
+  size_t first_stem = into->stem_count;
+  size_t k;
+
+  if (!part->valid || first_stem + part->stem_count > GFNT_CS_MAX_STEMS) {
+    return false;
+  }
+  for (k = 0; k < part->stem_count; k++) {
+    into->stems[first_stem + k] = part->stems[k];
+    into->stems[first_stem + k].edge = gfnt_saturate32(
+        (int64_t)part->stems[k].edge + (part->stems[k].vertical ? dx : dy));
+  }
+  into->stem_count += part->stem_count;
+  if (part->mask_count == 0 || part->masks[0].first_point > 0) {
+    GFNT_CharstringMask * m;
+
+    if (into->mask_count >= GFNT_CS_MAX_MASKS) {
+      return false;
+    }
+    m = &into->masks[into->mask_count++];
+    memset(m, 0, sizeof *m);
+    m->first_point = (uint32_t)first_point;
+    for (k = 0; k < part->stem_count; k++) {
+      gfnt_cs_mask_set(m->bits, first_stem + k);
+    }
+  }
+  for (size_t i = 0; i < part->mask_count; i++) {
+    GFNT_CharstringMask * m;
+
+    if (into->mask_count >= GFNT_CS_MAX_MASKS) {
+      return false;
+    }
+    m = &into->masks[into->mask_count++];
+    memset(m, 0, sizeof *m);
+    m->first_point = (uint32_t)(first_point + part->masks[i].first_point);
+    for (k = 0; k < part->stem_count; k++) {
+      if (gfnt_cs_mask_bit(part->masks[i].bits, k)) {
+        gfnt_cs_mask_set(m->bits, first_stem + k);
+      }
+    }
+  }
+  return true;
+}
+
 /**
  * Assemble an accented character out of two other glyphs.
  *
@@ -540,6 +606,17 @@ static GFNT_Result gfnt_cs_seac(GFNT_CsState * state, int64_t adx, int64_t ady,
   GFNT_Outline * accent = NULL;
   GFNT_CharstringMetrics ignored;
   GFNT_Result result;
+  // Each component is recorded into a set of its own when the glyph's hints are wanted; the
+  // sets are merged below. A charstring that drew or declared anything itself before naming its
+  // components has hints that cannot be merged, and the glyph's are then marked unusable.
+  GFNT_CharstringHints base_set;
+  GFNT_CharstringHints accent_set;
+  GFNT_CharstringHints * base_hints = NULL;
+  GFNT_CharstringHints * accent_hints = NULL;
+  GFNT_CharstringContext part_context;
+  size_t base_points;
+  bool record = state->hints && state->hints->valid && state->hints->stem_count == 0
+      && state->hints->mask_count == 0 && gfnt_outline_point_count(state->outline) == state->point_base;
 
   if (state->in_seac) {
     return gfnt_cs_fail(state, GFNT_ERR_CORRUPT, 0,
@@ -557,6 +634,13 @@ static GFNT_Result gfnt_cs_seac(GFNT_CsState * state, int64_t adx, int64_t ady,
         "an accented character naming a code outside 0-255");
   }
 
+  part_context = *state->ctx;
+  if (record) {
+    base_hints = &base_set;
+    accent_hints = &accent_set;
+  }
+  part_context.hints = base_hints;
+
   // The base glyph, drawn into the outline that is already open.
   result = state->ctx->standard_code(state->ctx->standard_user,
       (uint8_t)(bchar >> 16), &bytes, &length);
@@ -564,11 +648,12 @@ static GFNT_Result gfnt_cs_seac(GFNT_CsState * state, int64_t adx, int64_t ady,
     return gfnt_cs_fail(state, result, 0,
         "an accented character whose base glyph this font does not have");
   }
-  result = gfnt_charstring_run_nested(state->type, bytes, length, state->ctx,
+  result = gfnt_charstring_run_nested(state->type, bytes, length, &part_context,
       state->outline, &ignored, true, state->error);
   if (result != GFNT_OK) {
     return result;
   }
+  base_points = gfnt_outline_point_count(state->outline) - state->point_base;
 
   // The accent, into its own outline so that it can be translated on the way in.
   result = state->ctx->standard_code(state->ctx->standard_user,
@@ -583,7 +668,8 @@ static GFNT_Result gfnt_cs_seac(GFNT_CsState * state, int64_t adx, int64_t ady,
     return result;
   }
   gfnt_outline_set_limits(accent, &state->limits);
-  result = gfnt_charstring_run_nested(state->type, bytes, length, state->ctx,
+  part_context.hints = accent_hints;
+  result = gfnt_charstring_run_nested(state->type, bytes, length, &part_context,
       accent, &ignored, true, state->error);
   if (result == GFNT_OK) {
     // Type 1 places the accent by the difference of the two side bearings, and
@@ -596,6 +682,17 @@ static GFNT_Result gfnt_cs_seac(GFNT_CsState * state, int64_t adx, int64_t ady,
   if (result == GFNT_OK) {
     state->seac = true;
     state->ended = true;
+    if (state->hints) {
+      GFNT_CharstringHints * into = state->hints;
+
+      into->valid = false;
+      if (record && gfnt_cs_merge_hints(into, base_hints, 0, 0, 0)) {
+        // Reset what a failed merge may have half-written before the second part is added.
+        into->valid = gfnt_cs_merge_hints(into, accent_hints, base_points, adx, ady);
+      }
+      into->accent = into->valid;
+      into->accent_first_point = (uint32_t)base_points;
+    }
   }
   return result;
 }
@@ -1842,14 +1939,11 @@ GFNT_Result gfnt_charstring_run_nested(GFNT_CharstringType type,
   state.error = error;
   state.in_seac = in_seac;
   if (context->hints) {
-    if (in_seac) {
-      context->hints->valid = false;   /* an accent's own stems are a second set */
-    }
-    else {
-      memset(context->hints, 0, sizeof *context->hints);
-      context->hints->valid = true;
-    }
-    state.hints = in_seac ? NULL : context->hints;
+    // A component of an accented character is handed a set of its own (or none), which the
+    // accented character then merges into the glyph's: see gfnt_cs_seac().
+    memset(context->hints, 0, sizeof *context->hints);
+    context->hints->valid = true;
+    state.hints = context->hints;
     state.point_base = gfnt_outline_point_count(outline);
   }
   if (context->limits) {
@@ -1882,9 +1976,6 @@ GFNT_Result gfnt_charstring_run_nested(GFNT_CharstringType type,
     return gfnt_error_set(error, GFNT_ERR_CORRUPT, 0, 0, GFNT_GLYPH_NONE,
         "a Type 1 charstring that never ran hsbw or sbw, so it states neither "
         "an advance nor a side bearing and there is nowhere else to find them");
-  }
-  if (state.hints && state.seac) {
-    state.hints->valid = false;
   }
   if (out_metrics) {
     out_metrics->width = state.width;

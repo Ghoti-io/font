@@ -2778,7 +2778,8 @@ def assemble_cff(font_name, charstrings, *, strings=(), gsubrs=(),
     # Each Private DICT, with its Subrs offset pointing just past itself.
     private_blocks = []
     for entries, subrs in privates:
-        items = [(op, [value]) for op, value in sorted(entries.items())]
+        items = [(op, list(value) if isinstance(value, (list, tuple)) else [value])
+                 for op, value in sorted(entries.items())]
         if subrs:
             probe = cff_dict(items + [(19, [cff_dict_offset(0)])])
             block = cff_dict(items + [(19, [cff_dict_offset(len(probe))])])
@@ -3412,6 +3413,94 @@ def build_cff_seac(out):
     fb.save(out)
 
 
+def seac_hint_glyphs(type1):
+    """Hinted bases, hinted accents and the accented characters that join them.
+
+    Two components with stems of their own, so that the hinter has two sets to merge: the
+    base's stems stay where they are and the accent's move with it. 'E' has three horizontal
+    stems and a hint mask in the CFF; the accents sit above the blue zone [700, 715].
+    """
+    if type1:
+        cs = lambda *t: charstring(*t, type1=True)
+        glyphs = {
+            ".notdef": cs(50, 600, "hsbw", 0, 0, "rmoveto", 500, "hlineto", 700, "vlineto", -500, "hlineto",
+                "closepath", "endchar"),
+            "space": cs(0, 300, "hsbw", "endchar"),
+            "A": cs(50, 600, "hsbw", 0, 20, "hstem", 660, 20, "hstem", 0, -10, "rmoveto", 250, 720, "rlineto",
+                250, -720, "rlineto", -80, "hlineto", -170, 500, "rlineto", -170, -500, "rlineto", "closepath",
+                "endchar"),
+            "E": cs(50, 600, "hsbw", -12, 30, "hstem", 340, 30, "hstem", 684, 30, "hstem", 0, 0, "rmoveto",
+                400, "hlineto", 30, "vlineto", -370, "hlineto", 100, "vlineto", 300, "hlineto", 30, "vlineto",
+                -300, "hlineto", 250, "vlineto", 350, "hlineto", 30, "vlineto", -400, "hlineto", "closepath",
+                "endchar"),
+            "acute": cs(200, 600, "hsbw", 745, 40, "hstem", 0, 750, "rmoveto", 100, 150, "rlineto", 60, -150,
+                "rlineto", "closepath", "endchar"),
+            "grave": cs(200, 600, "hsbw", 712, 26, "hstem", 0, 740, "rmoveto", 100, 170, "rlineto", 60, -170,
+                "rlineto", "closepath", "endchar"),
+            "dieresis": cs(200, 600, "hsbw", 640, 50, "hstem", 0, 640, "rmoveto", 60, "hlineto", 50, "vlineto",
+                -60, "hlineto", "closepath", 150, 0, "rmoveto", 60, "hlineto", 50, "vlineto", -60, "hlineto",
+                "closepath", "endchar"),
+        }
+        seac = lambda base, accent: cs(50, 600, "hsbw", 200, 200, 40, base, accent, "seac")
+    else:
+        cs = charstring
+        glyphs = {
+            ".notdef": cs(600, 50, 0, "rmoveto", 500, "hlineto", 700, "vlineto", -500, "hlineto", "endchar"),
+            "space": cs(300, "endchar"),
+            "A": cs(600, 0, 20, 660, 20, "hstem", 50, -10, "rmoveto", 250, 720, 250, -720, "rlineto", -80,
+                "hlineto", -170, 500, -170, -500, "rlineto", "endchar"),
+            "E": cs(600, -12, 30, 340, 30, 684, 30, "hstemhm", 100, 50, "hintmask", ("mask", b"\xe0"),
+                50, 0, "rmoveto", 400, "hlineto", 30, "vlineto", -370, "hlineto", 100, "vlineto", 300, "hlineto",
+                30, "vlineto", -300, "hlineto", 250, "vlineto", 350, "hlineto", 30, "vlineto", -400, "hlineto",
+                "endchar"),
+            "acute": cs(600, 745, 40, "hstem", 200, 750, "rmoveto", 100, 150, 60, -150, "rlineto", "endchar"),
+            "grave": cs(600, 712, 26, "hstem", 200, 740, "rmoveto", 100, 170, 60, -170, "rlineto", "endchar"),
+            "dieresis": cs(600, 640, 50, "hstem", 200, 640, "rmoveto", 60, "hlineto", 50, "vlineto", -60,
+                "hlineto", 150, 0, "rmoveto", 60, "hlineto", 50, "vlineto", -60, "hlineto", "endchar"),
+        }
+        seac = lambda base, accent: cs(600, 200, 40, base, accent, "endchar")
+    order = list(glyphs)
+    for base, base_code in (("A", 65), ("E", 69)):
+        for accent, accent_code in (("acute", 194), ("grave", 193), ("dieresis", 200)):
+            name = base + accent
+            order.append(name)
+            glyphs[name] = seac(base_code, accent_code)
+    return order, glyphs
+
+
+def build_cff_seac_hints(out):
+    """Accented characters whose two components are hinted, with the blue zones to hint against.
+
+    The same glyphs as `type1-seac-hints.pfb`. FreeType's hinted output for these is the reference
+    `make check-oracle-hint-cff` compares to: the accent is hinted where it is drawn (its stems moved
+    by its offset) and comes out before its base.
+    """
+    order, glyphs = seac_hint_glyphs(False)
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    charset, strings = cff_names(order)
+    # BlueValues [-15 0 700 715] (delta-coded), BlueScale 0.039625, StdHW 30.
+    table = assemble_cff(names("CFF seac hints")["psName"], [glyphs[n] for n in order], charset=charset,
+        strings=strings, privates=[({20: 600, 21: 0, 6: (-15, 15, 700, 15)}, [])])
+    fb = cff_otf("CFF seac hints", order, table, advances, {0x20: "space"})
+    fb.save(out)
+
+
+def build_type1_seac_hints(out):
+    """The Type 1 twin of `cff-seac-hints.otf`: `seac` with a side-bearing correction, hinted components."""
+    order, glyphs = seac_hint_glyphs(True)
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    clear, cipher = assemble_type1("Type1 seac hints", order, advances, [], glyphs, blue_values="-15 0 700 715")
+    trailer = (b"0" * 64 + b"\n") * 8 + b"cleartomark\n"
+    with open(out, "wb") as handle:
+        for kind, payload in ((1, clear), (2, cipher), (1, trailer)):
+            handle.write(bytes([0x80, kind]))
+            handle.write(len(payload).to_bytes(4, "little"))
+            handle.write(payload)
+        handle.write(bytes([0x80, 3]))
+
+
 def build_cff_cid(out):
     """A CID-keyed font: an `FDArray`, an `FDSelect`, and a charset of CIDs.
 
@@ -3708,7 +3797,7 @@ def t1_encrypt(plain, r, pad=4):
 
 def assemble_type1(label, order, advances, subrs, programs, *, encoding=None,
                    font_matrix=None, len_iv=4, rd="RD", nd="ND", np="NP",
-                   dict_count=None):
+                   dict_count=None, blue_values=""):
     """One Type 1 font program's bytes, cleartext plus `eexec`-encrypted half.
 
     The spellings are parameters because they are what varies between writers and
@@ -3754,7 +3843,7 @@ def assemble_type1(label, order, advances, subrs, programs, *, encoding=None,
         "/ND {noaccess def} executeonly def",
         "/NP {noaccess put} executeonly def",
         "/lenIV %d def" % len_iv,
-        "/BlueValues [] ND",
+        "/BlueValues [%s] ND" % blue_values,
         "/MinFeature {16 16} ND",
         "/password 5839 def",
     ]
@@ -5229,6 +5318,12 @@ FIXTURES = {
         "CFF: an accented character (endchar with four operands) named by "
         "Standard Encoding code, a charset in format 1, a name in the font's "
         "own String INDEX, and a custom encoding with a supplement"),
+    "cff-seac-hints.otf": (build_cff_seac_hints,
+        "CFF: six accented characters (endchar with four operands) whose base and accent each have hint "
+        "stems, one base with a hint mask, and blue zones, for hinting an accented character"),
+    "type1-seac-hints.pfb": (build_type1_seac_hints,
+        "Type 1 (PFB): six accented characters (seac with a side-bearing correction) whose base and accent "
+        "each have hint stems, with blue zones, for hinting an accented character"),
     "cff-names.otf": (build_cff_names,
         "CFF: a Top DICT stating FullName and FamilyName as strings of its own, after "
         "the glyph names, for the subsetter's rename"),

@@ -697,6 +697,84 @@ TEST(Charstring, AnAccentedCharacterDrawsBothGlyphsAndTranslatesTheAccent) {
       "move 200 700", "line 200 750", "close"}));
 }
 
+namespace {
+
+/** A component with @p stems horizontal stems and one box. */
+Program stemmed_box(int stems) {
+  Program p;
+  for (int i = 0; i < stems; ++i) {
+    p.num(i * 10).num(5).op(kHstem);
+  }
+  p.num(0).num(0).op(kRmoveto).num(100).num(0).op(kRlineto).num(0).num(50).op(kRlineto).op(kEndchar);
+  return p;
+}
+
+}  // namespace
+
+TEST(Charstring, AnAccentedCharactersHintsAreMergedAndTheOutlineIsUnchangedByRecordingThem) {
+  StandardGlyphs glyphs;
+  glyphs.items.push_back({65, stemmed_box(2).bytes});
+  glyphs.items.push_back({194, stemmed_box(1).bytes});
+  Program program;
+  program.num(200).num(700).num(65).num(194).op(kEndchar);
+  GFNT_CharstringContext plain = bare();
+  plain.standard_code = &StandardGlyphs::at;
+  plain.standard_user = &glyphs;
+  Drawn without;
+  ASSERT_EQ(without.go(program, &plain), GFNT_OK);
+
+  GFNT_CharstringHints hints;
+  GFNT_CharstringContext recording = plain;
+  recording.hints = &hints;
+  Drawn with;
+  ASSERT_EQ(with.go(program, &recording), GFNT_OK);
+  EXPECT_EQ(path_of(with.outline), path_of(without.outline));
+  EXPECT_TRUE(hints.valid);
+  EXPECT_TRUE(hints.accent);
+  EXPECT_EQ(hints.stem_count, 3u);
+  EXPECT_EQ(hints.accent_first_point, 3u);   // the base box has three points
+  // The accent's one stem: edge 0 moved up by its 700 offset.
+  EXPECT_EQ(hints.stems[2].edge, 700 * 65536);
+}
+
+TEST(Charstring, AnAccentedCharacterThatDrewBeforeNamingItsPartsHasNoUsableHints) {
+  StandardGlyphs glyphs;
+  glyphs.items.push_back({65, stemmed_box(1).bytes});
+  glyphs.items.push_back({194, stemmed_box(1).bytes});
+  Program program;
+  // A point of its own first: the two sets of hints could no longer be told apart by point index.
+  program.num(5).num(5).op(kRmoveto).num(10).num(0).op(kRlineto);
+  program.num(200).num(700).num(65).num(194).op(kEndchar);
+  GFNT_CharstringContext context = bare();
+  context.standard_code = &StandardGlyphs::at;
+  context.standard_user = &glyphs;
+  GFNT_CharstringHints hints;
+  context.hints = &hints;
+  Drawn run;
+
+  ASSERT_EQ(run.go(program, &context), GFNT_OK) << run.error.message;
+  EXPECT_FALSE(hints.valid);
+  EXPECT_FALSE(hints.accent);
+}
+
+TEST(Charstring, AnAccentedCharacterWhoseComponentsTogetherExceedTheStemBoundHasNoUsableHints) {
+  StandardGlyphs glyphs;
+  glyphs.items.push_back({65, stemmed_box(60).bytes});
+  glyphs.items.push_back({194, stemmed_box(60).bytes});
+  Program program;
+  program.num(0).num(0).num(65).num(194).op(kEndchar);
+  GFNT_CharstringContext context = bare();
+  context.standard_code = &StandardGlyphs::at;
+  context.standard_user = &glyphs;
+  GFNT_CharstringHints hints;
+  context.hints = &hints;
+  Drawn run;
+
+  ASSERT_EQ(run.go(program, &context), GFNT_OK) << run.error.message;
+  EXPECT_FALSE(hints.valid);
+  EXPECT_EQ(gfnt_outline_contour_count(run.outline), 2u);   // the outline is complete: only the hints are lost
+}
+
 TEST(Charstring, AnAccentedCharacterWhoseAccentIsOneDoesNotRecurse) {
   StandardGlyphs glyphs;
   Program nested;

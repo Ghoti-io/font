@@ -6805,3 +6805,111 @@ TEST(ShapeIndic, AnOldSpecRaIsGivenBlwfOnlyWhenItsHalantIsNotFollowedByAZwj) {
   EXPECT_EQ(with_zwj[0], 3u);
   EXPECT_EQ(without[0], 30u);
 }
+
+namespace {
+
+struct Lang {
+  GFNT_Result result;
+  GFNT_Tag script;
+  GFNT_Tag language;
+  bool found;
+};
+
+Lang bcp47(const char * tag) {
+  Lang l{GFNT_OK, 99, 99, true};
+
+  l.result = gfnt_language_from_bcp47(tag, strlen(tag), &l.script, &l.language, &l.found);
+  return l;
+}
+
+}  // namespace
+
+TEST(Bcp47Language, ALanguageGivesItsOpenTypeTagAndUsualScript) {
+  Lang l = bcp47("tr");
+  EXPECT_EQ(l.result, GFNT_OK);
+  EXPECT_TRUE(l.found);
+  EXPECT_EQ(l.language, GFNT_TAG('T', 'R', 'K', ' '));
+  EXPECT_EQ(l.script, GFNT_TAG('l', 'a', 't', 'n'));
+  l = bcp47("ja-JP");
+  EXPECT_EQ(l.language, GFNT_TAG('J', 'A', 'N', ' '));
+  EXPECT_EQ(l.script, GFNT_TAG('k', 'a', 'n', 'a'));
+  l = bcp47("ko");
+  EXPECT_EQ(l.language, GFNT_TAG('K', 'O', 'R', ' '));
+  EXPECT_EQ(l.script, GFNT_TAG('h', 'a', 'n', 'g'));
+  l = bcp47("ar");
+  EXPECT_EQ(l.language, GFNT_TAG('A', 'R', 'A', ' '));
+  EXPECT_EQ(l.script, GFNT_TAG('a', 'r', 'a', 'b'));
+  l = bcp47("lo");
+  EXPECT_EQ(l.script, GFNT_TAG('l', 'a', 'o', ' '));
+}
+
+TEST(Bcp47Language, TheTagIsReadWithoutRegardToCaseAndPrivateUseIsIgnored) {
+  Lang a = bcp47("EN-us-X-foo");
+  EXPECT_EQ(a.result, GFNT_OK);
+  EXPECT_TRUE(a.found);
+  EXPECT_EQ(a.language, GFNT_TAG('E', 'N', 'G', ' '));
+  Lang b = bcp47("en");
+  EXPECT_EQ(a.language, b.language);
+  EXPECT_EQ(a.script, b.script);
+  Lang c = bcp47("sr-latn");
+  EXPECT_EQ(c.language, GFNT_TAG('S', 'R', 'B', ' '));
+  EXPECT_EQ(c.script, GFNT_TAG('l', 'a', 't', 'n'));
+  EXPECT_EQ(bcp47("sr-Cyrl").script, GFNT_TAG('c', 'y', 'r', 'l'));
+  EXPECT_EQ(bcp47("sr").script, GFNT_TAG('c', 'y', 'r', 'l'));
+}
+
+TEST(Bcp47Language, ChineseIsSplitByScriptThenRegion) {
+  const GFNT_Tag zhs = GFNT_TAG('Z', 'H', 'S', ' ');
+  const GFNT_Tag zht = GFNT_TAG('Z', 'H', 'T', ' ');
+  const GFNT_Tag zhh = GFNT_TAG('Z', 'H', 'H', ' ');
+
+  EXPECT_EQ(bcp47("zh").language, zhs);
+  EXPECT_EQ(bcp47("zh-Hans").language, zhs);
+  EXPECT_EQ(bcp47("zh-CN").language, zhs);
+  EXPECT_EQ(bcp47("zh-SG").language, zhs);
+  EXPECT_EQ(bcp47("zh-Hant").language, zht);
+  EXPECT_EQ(bcp47("zh-TW").language, zht);
+  EXPECT_EQ(bcp47("zh-Hant-TW").language, zht);
+  EXPECT_EQ(bcp47("zh-HK").language, zhh);
+  EXPECT_EQ(bcp47("zh-MO").language, zhh);
+  EXPECT_EQ(bcp47("zh-Hant-HK").language, zhh);
+  EXPECT_EQ(bcp47("zh-Hans-HK").language, zhs);   // the script outranks the region
+  EXPECT_EQ(bcp47("zh-Hant-CN").language, zht);
+  EXPECT_EQ(bcp47("yue").language, zhh);
+  EXPECT_EQ(bcp47("zh-yue").language, zhh);
+  EXPECT_EQ(bcp47("zh-Hant").script, GFNT_TAG('h', 'a', 'n', 'i'));
+  EXPECT_EQ(bcp47("zh").script, GFNT_TAG('h', 'a', 'n', 'i'));
+}
+
+TEST(Bcp47Language, AnUnknownButWellFormedLanguageIsNotFoundAndAScriptSubtagStillCounts) {
+  Lang l = bcp47("qaa");
+  EXPECT_EQ(l.result, GFNT_OK);
+  EXPECT_FALSE(l.found);
+  EXPECT_EQ(l.language, 0u);
+  EXPECT_EQ(l.script, 0u);
+  l = bcp47("qaa-Arab");
+  EXPECT_FALSE(l.found);
+  EXPECT_EQ(l.script, GFNT_TAG('a', 'r', 'a', 'b'));
+  l = bcp47("x-private");
+  EXPECT_EQ(l.result, GFNT_OK);
+  EXPECT_FALSE(l.found);
+  EXPECT_EQ(bcp47("ro-MD").language, GFNT_TAG('M', 'O', 'L', ' '));
+  EXPECT_EQ(bcp47("ro").language, GFNT_TAG('R', 'O', 'M', ' '));
+}
+
+TEST(Bcp47Language, AMalformedTagIsRefused) {
+  for (const char * bad : {"", "e", "en-", "-en", "en--US", "en_US", "en-US-toolongsubtag", "e n", "12", "en-\xc3\xa9"}) {
+    Lang l = bcp47(bad);
+    EXPECT_EQ(l.result, GFNT_ERR_INVALID) << bad;
+    EXPECT_FALSE(l.found) << bad;
+  }
+  GFNT_Tag s = 0;
+  GFNT_Tag g = 0;
+  bool f = false;
+  EXPECT_EQ(gfnt_language_from_bcp47(nullptr, 2, &s, &g, &f), GFNT_ERR_INVALID);
+  EXPECT_EQ(gfnt_language_from_bcp47("en", 2, nullptr, &g, &f), GFNT_ERR_INVALID);
+  // The length bounds the read: an unterminated buffer is fine.
+  const char buf[] = {'t', 'r', 'X'};
+  EXPECT_EQ(gfnt_language_from_bcp47(buf, 2, &s, &g, &f), GFNT_OK);
+  EXPECT_EQ(g, GFNT_TAG('T', 'R', 'K', ' '));
+}

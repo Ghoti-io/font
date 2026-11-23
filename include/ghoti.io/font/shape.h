@@ -350,6 +350,36 @@ GFNT_API GFNT_Tag gfnt_shape_script_of(const uint32_t * codepoints,
     size_t count);
 
 /**
+ * @brief The OpenType script and language-system tags a BCP 47 language tag selects.
+ *
+ * For the `lang` or `xml:lang` of text about to be shaped. The tag is read case-insensitively
+ * as language, extended language, script, region, variants, extensions and private use; only
+ * the language, script and region decide the answer. Chinese is split the way OpenType splits
+ * it: `zh-Hans`, `zh-CN`, `zh-SG` and a bare `zh` give `ZHS `, `zh-Hant` and `zh-TW` give
+ * `ZHT `, and `zh-HK`, `zh-MO` and `yue` give `ZHH ` (a script subtag outranks a region).
+ *
+ * @p out_script is the script the tag states (`Hant` and `Hans` are `hani`, `Hira`, `Kana`
+ * and `Jpan` are `kana`, `Kore` is `hang`, Common and Inherited are 0), or else the language's
+ * usual script (`ja` is `kana`, `ko` is `hang`, `zh` is `hani`, `sr` is `cyrl`, `tr` is
+ * `latn`), or 0.
+ *
+ * A well-formed tag for a language the table does not hold is not an error: ::GFNT_OK with
+ * @p out_found false, @p out_language 0 and @p out_script only what a script subtag states.
+ * `x-...` and `i-...` tags are well formed and give that same answer.
+ *
+ * @param tag The tag, UTF-8 (it is ASCII), not necessarily terminated.
+ * @param length Its length in bytes.
+ * @param out_script Receives the script tag, or 0.
+ * @param out_language Receives the language-system tag, or 0 for the script's default.
+ * @param out_found Receives whether the language is one the table knows.
+ * @return ::GFNT_OK, or ::GFNT_ERR_INVALID for a NULL argument, an empty tag, or a tag that is
+ *   not well formed (an empty subtag, one over eight characters, or a character that is not
+ *   a letter, digit or hyphen).
+ */
+GFNT_API GFNT_Result gfnt_language_from_bcp47(const char * tag, size_t length, GFNT_Tag * out_script,
+    GFNT_Tag * out_language, bool * out_found);
+
+/**
  * @brief The direction a script is written in.
  *
  * @param script An OpenType script tag, or 0.

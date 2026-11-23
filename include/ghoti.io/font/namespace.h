@@ -288,6 +288,7 @@
 #define gfnt_face_runs_free GHOTIIO_FONT(gfnt_face_runs_free)
 #define gfnt_face_layout_dump GHOTIIO_FONT(gfnt_face_layout_dump)
 #define gfnt_shape_script_of GHOTIIO_FONT(gfnt_shape_script_of)
+#define gfnt_language_from_bcp47 GHOTIIO_FONT(gfnt_language_from_bcp47)
 #define gfnt_shape_script_direction GHOTIIO_FONT(gfnt_shape_script_direction)
 #define GFNT_WriteTable GHOTIIO_FONT(GFNT_WriteTable)
 #define gfnt_write_sfnt GHOTIIO_FONT(gfnt_write_sfnt)

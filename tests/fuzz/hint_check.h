@@ -63,47 +63,50 @@ inline void check_hinting(GFNT_Face * face, uint32_t glyph, uint32_t ppem, const
       }
     }
   }
-  GFNT_HintContext * context = nullptr;
+  // The font's own hint program and the automatic hinter, which share every property checked here.
+  for (GFNT_HintMode mode : {GFNT_HINT_MODE_FONT, GFNT_HINT_MODE_AUTO}) {
+    GFNT_HintContext * context = nullptr;
 
-  if (gfnt_hint_context_create(face, ppem, GFNT_HINT_VERSION_AUTO, GFNT_HINT_MODE_FONT, variation, &context, &error)
-      == GFNT_OK) {
-    GFNT_Outline * first = nullptr;
-    GFNT_Outline * second = nullptr;
-    GFNT_HintStatus status = GFNT_HINT_STATUS_HINTED;
-    GFNT_HintStatus again = GFNT_HINT_STATUS_HINTED;
-    GFNT_F26Dot6 advance = 0;
-    GFNT_F26Dot6 advance_again = 0;
+    if (gfnt_hint_context_create(face, ppem, GFNT_HINT_VERSION_AUTO, mode, variation, &context, &error)
+        == GFNT_OK) {
+      GFNT_Outline * first = nullptr;
+      GFNT_Outline * second = nullptr;
+      GFNT_HintStatus status = GFNT_HINT_STATUS_HINTED;
+      GFNT_HintStatus again = GFNT_HINT_STATUS_HINTED;
+      GFNT_F26Dot6 advance = 0;
+      GFNT_F26Dot6 advance_again = 0;
 
-    if (gfnt_face_hinted_outline(face, context, glyph, nullptr, &first, &status, &advance, &error) == GFNT_OK) {
-      if (gfnt_outline_space(first) != GFNT_OUTLINE_PIXELS) {
-        hint_fail("a hinted outline that is not in pixels");
-      }
-      if (gfnt_outline_contour_count(first) != gfnt_outline_contour_count(unhinted)) {
-        hint_fail("a hinted outline with a different number of contours");
-      }
-      if (status == GFNT_HINT_STATUS_HINTED && advance % 64 != 0) {
-        hint_fail("a hinted advance that is not a whole pixel");
-      }
-      if (gfnt_face_hinted_outline(face, context, glyph, nullptr, &second, &again, &advance_again, &error)
-              != GFNT_OK
-          || status != again || advance != advance_again
-          || gfnt_outline_point_count(first) != gfnt_outline_point_count(second)) {
-        hint_fail("a hinted glyph that is not the same when asked twice");
-      }
-      for (size_t i = 0; i < gfnt_outline_point_count(first); ++i) {
-        GFNT_Point a{};
-        GFNT_Point b{};
+      if (gfnt_face_hinted_outline(face, context, glyph, nullptr, &first, &status, &advance, &error) == GFNT_OK) {
+        if (gfnt_outline_space(first) != GFNT_OUTLINE_PIXELS) {
+          hint_fail("a hinted outline that is not in pixels");
+        }
+        if (gfnt_outline_contour_count(first) != gfnt_outline_contour_count(unhinted)) {
+          hint_fail("a hinted outline with a different number of contours");
+        }
+        if (status == GFNT_HINT_STATUS_HINTED && advance % 64 != 0) {
+          hint_fail("a hinted advance that is not a whole pixel");
+        }
+        if (gfnt_face_hinted_outline(face, context, glyph, nullptr, &second, &again, &advance_again, &error)
+                != GFNT_OK
+            || status != again || advance != advance_again
+            || gfnt_outline_point_count(first) != gfnt_outline_point_count(second)) {
+          hint_fail("a hinted glyph that is not the same when asked twice");
+        }
+        for (size_t i = 0; i < gfnt_outline_point_count(first); ++i) {
+          GFNT_Point a{};
+          GFNT_Point b{};
 
-        gfnt_outline_point_at(first, i, &a, nullptr);
-        gfnt_outline_point_at(second, i, &b, nullptr);
-        if (a.x != b.x || a.y != b.y) {
-          hint_fail("a hinted point that is not the same when asked twice");
+          gfnt_outline_point_at(first, i, &a, nullptr);
+          gfnt_outline_point_at(second, i, &b, nullptr);
+          if (a.x != b.x || a.y != b.y) {
+            hint_fail("a hinted point that is not the same when asked twice");
+          }
         }
       }
+      gfnt_outline_destroy(first);
+      gfnt_outline_destroy(second);
+      gfnt_hint_context_destroy(context);
     }
-    gfnt_outline_destroy(first);
-    gfnt_outline_destroy(second);
-    gfnt_hint_context_destroy(context);
   }
   gfnt_outline_destroy(unhinted);
 }

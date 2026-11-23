@@ -1405,9 +1405,10 @@ check-oracle-hint-cff: $(EXAMPLES)
 		python3 $(ORACLE)/hint_cff_diff.py --pool sfnt --fonts 2 --ppem 12 --stride 29 --floor 1.01 >/dev/null 2>&1; then \
 		echo "check-oracle-hint-cff: a floor above 1 passed, so the floor does not bite"; exit 1; fi
 
-check-oracle-autohint: ## The automatic hinter's global model (blue zones, x-height scale) against FreeType's
+check-oracle-autohint: ## The automatic hinter's model (blue zones, x-height scale, edges and stems, points) against FreeType's
 check-oracle-autohint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_zones_diff.py
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_edges_diff.py --floor 0.85 --show 0
 
 check-oracle-hint-probe: ## Run random hinting programs through this library and FreeType and compare every point
 check-oracle-hint-probe: $(EXAMPLES)

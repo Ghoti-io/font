@@ -16,7 +16,6 @@ A face is `{"upem": N, "glyphs": {char: {"pts": [[x, y, on_curve], ...], "ends":
 as `autohint_dump.py` writes it. Analysis arithmetic is in Python floats; nothing here is the library's code.
 """
 import math
-import statistics
 
 BLUES = {
     "CAP_TOP": ("THEZOCQS", True),
@@ -60,22 +59,46 @@ def zones(glyphs):
                 (rounds if is_round else flats).append(y)
         if not flats and not rounds:
             continue
-        ref = statistics.median(flats) if flats else statistics.median(rounds)
-        shoot = statistics.median(rounds) if rounds else statistics.median(flats)
+        flats.sort()
+        rounds.sort()
+        # The element at half the count, not the mean of the two middle ones.
+        ref = flats[len(flats) // 2] if flats else rounds[len(rounds) // 2]
+        shoot = rounds[len(rounds) // 2] if rounds else flats[len(flats) // 2]
         out[name] = (ref, shoot, len(flats), len(rounds))
     return out
 
 
+def mulfix(a, b):
+    """FreeType's rounded 16.16 multiply of an integer by a 16.16 scale."""
+    p = a * b
+    return (p + 0x8000) >> 16 if p >= 0 else -((-p + 0x8000) >> 16)
+
+
+def muldiv(a, b, c):
+    """a * b / c, rounded, in integers."""
+    p = a * b
+    return (p + c // 2) // c if p >= 0 else -((-p + c // 2) // c)
+
+
+def scales(z, ppem, upem):
+    """(plain scale, corrected scale) as 16.16 pixels-in-26.6 per font unit, and the fitted x-height in 26.6."""
+    scale = ((ppem * 64) << 16) // upem + 0   # truncated; the half is added below
+    scale = (((ppem * 64) << 16) + upem // 2) // upem
+    scaled = mulfix(z["SMALL_TOP"][1], scale)
+    fitted = (scaled + 40) & ~63
+    if scaled and scaled != fitted:
+        return scale, muldiv(scale, fitted, scaled), fitted
+    return scale, scale, scaled
+
+
 def scale_fit(z, ppem, upem):
     """(fitted x-height in pixels, the scale correction) for a size."""
-    shoot = z["SMALL_TOP"][1] * ppem / upem
-    fit = math.floor(shoot + 0.625)
-    return fit, (fit / shoot if shoot > 0 else 1.0)
+    scale, new, fitted = scales(z, ppem, upem)
+    return fitted // 64, new / scale if scale else 1.0
 
 
 def predict(z, ppem, upem):
     """Whole-pixel heights FreeType gives the flat and round letters, by the model."""
-    fit, k = scale_fit(z, ppem, upem)
-    s = ppem / upem
-    return {"x": rnd(z["SMALL_TOP"][0] * s * k), "o": fit, "H": rnd(z["CAP_TOP"][0] * s * k),
-            "p": rnd(z["DESC"][0] * s * k)}
+    scale, new, fitted = scales(z, ppem, upem)
+    pix = lambda units: ((mulfix(units, new) + 32) & ~63) // 64
+    return {"x": pix(z["SMALL_TOP"][0]), "o": fitted // 64, "H": pix(z["CAP_TOP"][0]), "p": pix(z["DESC"][0])}

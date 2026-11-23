@@ -29,6 +29,7 @@
  * it is measured against.
  */
 
+#include <ghoti.io/font/macros.h>
 #include <ghoti.io/font/face.h>
 #include <ghoti.io/font/hint.h>
 #include <ghoti.io/font/outline.h>

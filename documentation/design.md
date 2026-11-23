@@ -127,7 +127,7 @@ which of them this library takes, and which of those it reads today.
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
 | | `.dfont`, `.eot` | absent, §16 |
-| | TrueType hinting | **implemented** (§8.5): the bytecode interpreter in versions 35 and 40, composites and hinted advances, variable faces; on by default. The autohinter is not built |
+| | TrueType hinting | **implemented** (§8.5): the bytecode interpreter in versions 35 and 40, composites and hinted advances, variable faces; on by default. The automatic hinter is built for the light target (§8.5.2) and is a mode the caller asks for |
 | | `CFF`, `CFF2` and Type 1 hinting | **implemented** (§8.5.1): the stems and blue zones the font declares, fitted in y, by rules recovered from FreeType's answers; on by default |
 | **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
@@ -1677,6 +1677,41 @@ and say so here.
 FreeType on a larger share of their glyphs than any other fonts do, and so do glyphs whose hint masks change several times; a stem wholly below the baseline is placed by a fitted fade, the one rule here with no clean explanation.
 `CFF2` hint data is read and blended at a location; on the one variable `CFF2` font in the corpus 92.6% of glyphs are identical at the default location and 92.1%, 84.5% and 84.0% at three others (`hint_cff_diff.py --coords`), so the blending is sound and the rules fit its heavier weights less well. These are the
 exclusions: the comparison reports every glyph it does not match rather than skipping it.
+
+### 8.5.2 The automatic hinter
+
+`GFNT_HINT_MODE_AUTO` makes a context that fits an outline face (`glyf`, `CFF`, `CFF2`, Type 1) **from its shapes and
+reads no program**, whatever the face declares. It is the light target of the reference engine: **y only**, x scaled and
+not moved, the advance rounded to a whole pixel. It is a mode a caller asks for: a face with its own program or stems is
+hinted by them by default, and a face with neither is returned unhinted unless this mode is asked for. The method was
+recovered by experiment against FreeType's light automatic hinter (the scripts `tools/oracle/autohint_*.py`;
+`autohint_edges_model.py` is the engine's prototype) and is done in FreeType's 26.6 and 16.16 integers so that the rounding
+agrees:
+
+1. **Blue zones**, once per face: for six zones (capital top and bottom, small f top, small top, small bottom, small
+   descender) the extreme of each letter the zone is named for (`THEZOCQS`, `HEZLOCUS`, `fijkdbh`, `xzroesc`, `xzroesc`,
+   `pqgjy`), flat or round (round when a neighbour of the extreme point is off the curve). The reference is the element at
+   half the count of the flat extremes, the overshoot that of the round ones. The **standard width** is the thinnest
+   horizontal stem of an `o`.
+2. **Scale**, once per size: the x-height (the overshoot of the small-top zone) is rounded up from three eighths of a pixel
+   and the y scale corrected to put it there, unless that moves the tallest zone by two pixels. A zone more than three
+   quarters of a pixel tall is inactive; the overshoot of an active one is kept in steps of half a pixel.
+3. **Segments** are runs of points whose outgoing vectors are horizontal (within 14 to 1), linked across a stem to the
+   overlapping opposite segment above or below; **edges** group the segments of one direction within a fifth of the standard
+   width, with the link or serif of their segments.
+4. **Fitting**: an edge near a zone (within a fortieth of an em) is aligned to its fitted position and its stem partner
+   follows at its scaled width; the first remaining stem is the anchor and stems under a pixel and a half are centred on a
+   pixel's middle (or a little off it), the rest placed from the anchor; serifs follow their base; what is left is
+   interpolated between placed edges or snapped to half pixels.
+5. **Points**: those on an edge take its position; the others between edges by their distance in font units; off-curve
+   points and those in a straight run, along their contour between the touched points, by their scaled positions.
+
+**What it reproduces.** Against FreeType (`make check-oracle-autohint`): the zones and scale in 578 of 578 heights (ten
+faces, fifteen sizes to 64 ppem); a generated face of boxes and ellipses (`latin-boxes.ttf`) at eleven sizes point for
+point; the Latin letters of ten faces at six sizes **79% of 2,946 glyphs exactly and 96% of points**, every advance and
+every x. **What it does not match:** the remaining letters (diagonals' vertices that FreeType treats as weak, the dots of
+`i` and `j` at some sizes, serif tips); the normal target (x fitting); every script but Latin, whose own zones are not
+known, so a glyph of another script is fitted with the Latin ones; and the scene provider does not use the mode yet.
 
 ### 8.6 The one unhinted rounding
 

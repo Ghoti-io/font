@@ -574,8 +574,10 @@ static bool af_weak(const AfGlyph * g, size_t i) {
 /* ------------------------------------------------------------------------------------------------ */
 
 static int af_compare_int(const void * a, const void * b) {
-  int32_t x = *(const int32_t *)a;
-  int32_t y = *(const int32_t *)b;
+  const int32_t * pa = a;
+  const int32_t * pb = b;
+  int32_t x = pa[0];
+  int32_t y = pb[0];
 
   return x < y ? -1 : x > y ? 1 : 0;
 }

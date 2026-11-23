@@ -559,11 +559,12 @@ TEST(SceneGate, TheDirectCallIsAOneGlyphScene) {
   }
   cases.push_back({"ties", tie_font()});
   cases.push_back({"hinted", hinted_font()});
+  cases.push_back({"hinted-gasp", hinted_font(true)});
   for (const Case & c : cases) {
     Font font(c.bytes);
     ASSERT_NE(font.scene, nullptr) << c.label;
     const size_t n = font.glyphs < 12 ? font.glyphs : 12;
-    for (uint32_t mode : {GSHSCENE_HINT_NONE, GSHSCENE_HINT_FONT, GSHSCENE_HINT_FONT_STRICT}) {
+    for (uint32_t mode : {GSHSCENE_HINT_NONE, GSHSCENE_HINT_FONT, GSHSCENE_HINT_FONT_STRICT, GSHSCENE_HINT_AUTO}) {
       for (uint32_t ppem : {8u, 13u, 16u, 31u, 48u}) {
         for (size_t g = 0; g < n; g++) {
           const uint32_t fx = kFractions[(g + ppem) % 5];
@@ -962,7 +963,7 @@ TEST(Scene, HostileFontsThroughTheProvider) {
           for (uint32_t g = 0; g < 8; g++) {
             glyphs.push_back({g, 4.0 + 20.0 * g, 24.0, nullptr});
           }
-          for (uint32_t mode : {GSHSCENE_HINT_NONE, GSHSCENE_HINT_FONT, GSHSCENE_HINT_FONT_STRICT}) {
+          for (uint32_t mode : {GSHSCENE_HINT_NONE, GSHSCENE_HINT_FONT, GSHSCENE_HINT_FONT_STRICT, GSHSCENE_HINT_AUTO}) {
             for (double size : {16.0, 16.5}) {
               const GSHSCENE_Resource * run = s.run(f, size, mode, glyphs);
               const Rendered r = render(s.fill(run, nullptr), 176, 40);

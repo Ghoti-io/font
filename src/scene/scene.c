@@ -695,8 +695,11 @@ static GSHSCENE_Result gfnt_scene_glyph_device_path(void * ctx,
       || scale != rq->scale) {
     return GSHSCENE_ERR_INVALID;
   }
+  // AUTO fits whatever the face declares, so `gasp` does not gate it, as in
+  // gfnt_face_render_glyph().
   if (rq->hint_mode != GSHSCENE_HINT_NONE && font->hintable
-      && gfnt_face_gasp_gridfit(font->face, rq->ppem)) {
+      && (rq->hint_mode == GSHSCENE_HINT_AUTO
+          || gfnt_face_gasp_gridfit(font->face, rq->ppem))) {
     GFNT_HintContext * context = NULL;
     bool cached = false;
     GFNT_HintStatus hinted = GFNT_HINT_STATUS_UNHINTED_NO_PROGRAM;

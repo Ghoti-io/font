@@ -85,12 +85,10 @@ TEST(HintApi, EitherVersionRendersAndTheAutoVersionIsForty) {
   EXPECT_EQ(rows(f, GFNT_HINT_MODE_FONT, nullptr, GFNT_HINT_VERSION_AUTO), 3u);
 }
 
-TEST(HintApi, AutoHintingIsReservedAndAnUnknownModeIsInvalid) {
+TEST(HintApi, AnUnknownModeIsInvalid) {
   Fixture f({gfnttest::build_glyf_glyph({kSquare})}, {{300, 40}});
   GFNT_Result r;
 
-  rows(f, GFNT_HINT_MODE_AUTO, &r);
-  EXPECT_EQ(r, GFNT_ERR_UNSUPPORTED);
   rows(f, static_cast<GFNT_HintMode>(99), &r);
   EXPECT_EQ(r, GFNT_ERR_INVALID);
 }

@@ -54,8 +54,9 @@
  * not absent (section 8.5): it is on by default, so a TrueType outline is fitted
  * to the pixel grid by the font's own instructions unless `hint_mode` is
  * `GFNT_HINT_MODE_NONE` or the font's `gasp` table asks for no grid-fitting at
- * the size. What is absent is an automatic hinter (`GFNT_HINT_MODE_AUTO` is
- * reserved and refused) and any hinting of CFF, Type 1 or bitmap faces.
+ * the size. `GFNT_HINT_MODE_AUTO` fits the outline of any `glyf`, CFF, CFF2 or
+ * Type 1 face with the automatic hinter, in y only, whatever the face declares
+ * (its `gasp` included). What is absent is any hinting of bitmap faces.
  */
 
 #ifndef GHOTI_IO_GFNT_RASTER_H
@@ -196,7 +197,7 @@ typedef struct GFNT_RasterOptions {
   /**
    * Whether ::gfnt_face_render_glyph() fits the outline to the pixel grid with
    * the font's own program. Zero is the font's own request; ::GFNT_HINT_MODE_NONE
-   * renders the outline as drawn. ::gfnt_raster_outline() takes an outline that
+   * renders the outline as drawn; ::GFNT_HINT_MODE_AUTO fits it with the automatic hinter. ::gfnt_raster_outline() takes an outline that
    * is already in pixels and ignores this.
    */
   GFNT_HintMode hint_mode;

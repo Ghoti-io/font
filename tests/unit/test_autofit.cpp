@@ -25,6 +25,7 @@
 #include <ghoti.io/font/hint.h>
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/outline.h>
+#include <ghoti.io/font/raster.h>
 
 #include <gtest/gtest.h>
 
@@ -154,6 +155,31 @@ TEST(Autofit, TheXHeightCorrectionIsNotAppliedWhenItWouldMoveTheTallestZoneByTwo
   Hinted at11 = hinted(font.face, glyph_of(font.face, 'o'), 11);
   EXPECT_EQ(top_of(at11), 2 * 64);
   EXPECT_NE(top_of(hinted(font.face, glyph_of(font.face, 'd'), 11)), 11 * 64);
+}
+
+TEST(Autofit, TheRasterRendersAGlyphFittedByItWithTheTopOnAWholePixel) {
+  // The capitals are 700 units of 1000: 7.7 px at 11 ppem, which unhinted leaves the top row 70% covered; fitted
+  // by the automatic hinter the top is 8 px and the row is full.
+  Fixture font("latin-boxes.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  const uint32_t glyph = glyph_of(font.face, 'H');
+  GFNT_RasterOptions options{};
+  GFNT_Coverage fitted{};
+  GFNT_Coverage plain{};
+  GFNT_Error error{};
+
+  options.hint_mode = GFNT_HINT_MODE_AUTO;
+  ASSERT_EQ(gfnt_face_render_glyph(font.face, glyph, 11, &options, nullptr, &fitted, &error), GFNT_OK);
+  options.hint_mode = GFNT_HINT_MODE_NONE;
+  ASSERT_EQ(gfnt_face_render_glyph(font.face, glyph, 11, &options, nullptr, &plain, &error), GFNT_OK);
+  ASSERT_GT(fitted.width, 2u);
+  ASSERT_GT(plain.width, 2u);
+  EXPECT_EQ(fitted.top, 8);
+  EXPECT_EQ(fitted.data[fitted.width / 2], 255);
+  EXPECT_LT(plain.data[plain.width / 2], 255);
+  EXPECT_EQ(fitted.height, 8u);
+  gfnt_coverage_destroy(&fitted);
+  gfnt_coverage_destroy(&plain);
 }
 
 TEST(Autofit, XIsScaledAndNeverMovedAndTheAdvanceIsAWholePixel) {

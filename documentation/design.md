@@ -1492,9 +1492,10 @@ is `GFNT_HINT_MODE_FONT`, the font's own request (the library's rule for a polic
 §10.3), so `gfnt_face_render_glyph()` returns the rendering the font was designed
 to give. `GFNT_HINT_MODE_NONE` asks for the outline as drawn;
 `GFNT_HINT_MODE_FONT_STRICT` is `FONT` where a program that fails fails the call;
-`GFNT_HINT_MODE_AUTO` is reserved for an automatic hinter and refused. A face with
-no TrueType outlines and no stems to fit (bitmap), or whose `gasp` table sets no
-grid-fitting bit at the size, is rendered unhinted; a `CFF`, `CFF2` or Type 1 face is
+`GFNT_HINT_MODE_AUTO` fits any outline face from its shapes (§8.5.2), the face's `gasp`
+included, because the caller asked for it. A face with no TrueType outlines and no
+stems to fit (bitmap), or whose `gasp` table sets no grid-fitting bit at the size, is
+rendered unhinted unless that mode is asked for; a `CFF`, `CFF2` or Type 1 face is
 fitted by its stems and blue zones (§8.5.1). `GFNT_HintVersion` picks the
 interpreter behaviour: `AUTO` is version 40, which FreeType and Windows run, and
 `35` is the original.
@@ -1611,7 +1612,7 @@ The `hdmx` and `VDMX` tables are not read: FreeType's advances for the corpus fo
 which sizes a font's advances are linear. Hinted advances in layout are the caller's choice: a
 glyph's hinted advance comes with its outline (`gfnt_face_hinted_outline()`), in 26.6 pixels,
 and shaping keeps fractional advances so that measuring and painting stay one path.
-There is no automatic hinter (`GFNT_HINT_MODE_AUTO` is reserved). `CFF` and Type 1 outlines are hinted by their stems (§8.5.1).
+The automatic hinter is §8.5.2. `CFF` and Type 1 outlines are hinted by their stems (§8.5.1).
 
 **Speed.** A glyph takes about eleven microseconds from the program to its pixel outline on the
 development machine (a 6,000-glyph font in seventy milliseconds at one size, output included),

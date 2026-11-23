@@ -6,7 +6,7 @@
 # This file is part of Ghoti.io Font.
 """This library's automatic hinter against FreeType's light one, on the Latin letters, point by point.
 
-    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--show N] [--floor F] [FONT...]
+    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--show N] [--points] [--records FILE] [--floor F] [FONT...]
 
 For each face, size and Latin letter, the outline `font-hint-cff <font> ... auto` prints against the one
 `freetype-hinted ... autolight` prints, in 26.6, both axes and the advance. Reports the glyphs identical,
@@ -32,7 +32,8 @@ DEFAULT = ["DejaVuSans.ttf", "DejaVuSerif.ttf", "DejaVuSans-Bold.ttf", "Liberati
 
 
 def main(argv):
-    ppems, names, letters, show, floor = [9, 11, 12, 14, 17, 24], [], None, 8, 0.0
+    ppems, names, letters, show, floor, points = [9, 11, 12, 14, 17, 24], [], None, 8, 0.0, False
+    records = None
     args = argv[1:]
     while args:
         a = args.pop(0)
@@ -42,6 +43,10 @@ def main(argv):
             letters = args.pop(0)
         elif a == "--show":
             show = int(args.pop(0))
+        elif a == "--records":
+            records = open(args.pop(0), "w")
+        elif a == "--points":
+            points = True
         elif a == "--floor":
             floor = float(args.pop(0))
         else:
@@ -74,6 +79,12 @@ def main(argv):
                 if a is None or b is None or isinstance(a, str) or isinstance(b, str) or len(a[1]) != len(b[1]):
                     continue
                 bad = [i for i, (p, q) in enumerate(zip(a[1], b[1])) if p[0] != q[0] or p[1] != q[1]]
+                if records:
+                    g = faces[os.path.basename(path)]["glyphs"][ch]
+                    json.dump({"font": os.path.basename(path), "ppem": ppem, "ch": ch, "upem": faces[os.path.basename(path)]["upem"],
+                               "pts": g["pts"], "ends": g["ends"], "ours": [list(p[:2]) for p in a[1]],
+                               "theirs": [list(p[:2]) for p in b[1]]}, records)
+                    records.write("\n")
                 glyphs_total += 1
                 points_total += len(a[1])
                 points_same += len(a[1]) - len(bad)
@@ -85,6 +96,12 @@ def main(argv):
                     if seen < show:
                         seen += 1
                         i = bad[0]
+                        if points:
+                            orig = faces[os.path.basename(path)]["glyphs"][ch]
+                            for k, (p, q) in enumerate(zip(a[1], b[1])):
+                                print("   %3d %s orig %s ours %s theirs %s%s" % (
+                                    k, "on " if orig["pts"][k][2] else "off", orig["pts"][k][:2], p[:2], q[:2],
+                                    "  <--" if k in bad else ""))
                         print("%s ppem %d %s: %d of %d points differ, e.g. point %d ours %s theirs %s" % (
                             os.path.basename(path), ppem, ch, len(bad), len(a[1]), i, a[1][i][:2], b[1][i][:2]))
     print("compared %d glyphs: %d identical (%.1f%%); points %d of %d identical; %d advances differ" % (

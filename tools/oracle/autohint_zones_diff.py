@@ -30,7 +30,7 @@ DEFAULT = ["DejaVuSans.ttf", "DejaVuSerif.ttf", "DejaVuSans-Bold.ttf", "Liberati
 
 
 def main(argv):
-    ppems, names = [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24], []
+    ppems, names = [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 32, 48, 64], []
     args = argv[1:]
     while args:
         a = args.pop(0)
@@ -66,6 +66,8 @@ def main(argv):
             want = model.predict(z, ppem, upem)
             got = {"x": seen("x", max), "o": seen("o", max), "H": seen("H", max), "p": seen("p", min)}
             for key in want:
+                if want[key] is None:
+                    continue
                 total += 1
                 if abs(want[key] - got[key]) > 0.02:
                     bad += 1

@@ -87,7 +87,11 @@ def scales(z, ppem, upem):
     scaled = mulfix(z["SMALL_TOP"][1], scale)
     fitted = (scaled + 40) & ~63
     if scaled and scaled != fitted:
-        return scale, muldiv(scale, fitted, scaled), fitted
+        new = muldiv(scale, fitted, scaled)
+        # The correction is not applied if it would move the tallest zone by two pixels or more.
+        tallest = max(max(abs(v[0]), abs(v[1])) for v in z.values())
+        if abs(mulfix(tallest, new) - mulfix(tallest, scale)) < 128:
+            return scale, new, fitted
     return scale, scale, scaled
 
 
@@ -97,8 +101,28 @@ def scale_fit(z, ppem, upem):
     return fitted // 64, new / scale if scale else 1.0
 
 
+def blue_fit(ref, shoot, new):
+    """(ref fit, shoot fit, active) of a zone at a scale, in 26.6: the overshoot is kept in steps of half a pixel."""
+    dist = mulfix(ref - shoot, new)
+    if dist > 48 or dist < -48:
+        return 0, 0, False
+    delta2 = abs(mulfix(shoot - ref, new))
+    if delta2 < 32:
+        delta2 = 0
+    elif delta2 < 64:
+        delta2 = 32 + (((delta2 - 32) + 16) & ~31)
+    else:
+        delta2 = (delta2 + 32) & ~63
+    reffit = (mulfix(ref, new) + 32) & ~63
+    return reffit, reffit + delta2 if shoot > ref else reffit - delta2, True
+
+
 def predict(z, ppem, upem):
-    """Whole-pixel heights FreeType gives the flat and round letters, by the model."""
+    """Whole-pixel heights FreeType gives the flat and round letters, by the model; None where the zone is inactive."""
     scale, new, fitted = scales(z, ppem, upem)
-    pix = lambda units: ((mulfix(units, new) + 32) & ~63) // 64
-    return {"x": pix(z["SMALL_TOP"][0]), "o": fitted // 64, "H": pix(z["CAP_TOP"][0]), "p": pix(z["DESC"][0])}
+
+    def fit(zone, which):
+        reffit, shootfit, active = blue_fit(z[zone][0], z[zone][1], new)
+        return (reffit if which == 0 else shootfit) / 64.0 if active else None
+
+    return {"x": fit("SMALL_TOP", 0), "o": fit("SMALL_TOP", 1), "H": fit("CAP_TOP", 0), "p": fit("DESC", 0)}

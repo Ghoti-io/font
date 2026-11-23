@@ -17,6 +17,7 @@ import math
 import autohint_model as model
 from autohint_model import mulfix, muldiv
 
+SKIP_ZONE = None
 UP, DOWN, LEFT, RIGHT = 1, -1, -2, 2   # outgoing vector directions: vertical or horizontal
 
 
@@ -130,6 +131,7 @@ def segments_of(g):
                 s.min_x, s.max_x = min(xs), max(xs)
                 s.round = (not g.on(run[0])) or (not g.on(run[-1]))
                 s.is_top = (d == RIGHT) == g.clockwise
+                s.length = abs(g.x(run[-1]) - g.x(run[0]))
                 tail = [q for q in run if g.on(q)]
                 s.length = abs(g.x(tail[-1] if tail else run[-1]) - g.x(run[0]))
                 segs.append(s)
@@ -204,6 +206,8 @@ def edges_of(segs, scale, stdw):
     threshold = min(mulfix(int(stdw / 5), scale), 16)
     edges = []
     for s in segs:
+        if False:
+            continue                         # shorter than a pixel: no edge of its own
         for e in edges:
             if e.is_top == s.is_top and abs(mulfix(e.fpos - s.pos, scale)) < threshold:
                 e.segs.append(s)
@@ -267,14 +271,12 @@ def hint(glyph, z, ppem, up, stdw=None):
         e.pos = e.opos
     zones = []
     for name, (ref, sh, nf, nr) in z.items():
-        top = model.BLUES[name][1]
-        dist = mulfix(ref - sh, new)
-        if dist > 48 or dist < -48:
+        if name == SKIP_ZONE:
             continue
-        reffit = pixround(mulfix(ref, new))
-        d1 = abs(mulfix(sh - ref, new))
-        d2 = 0 if d1 < 32 else (32 if d1 < 48 else 64)
-        shootfit = reffit + d2 if sh > ref else reffit - d2
+        top = model.BLUES[name][1]
+        reffit, shootfit, active = model.blue_fit(ref, sh, new)
+        if not active:
+            continue
         zones.append((top, ref, sh, reffit, shootfit))
     best_limit = min(mulfix(up // 40, new), 32)
     for e in edges:

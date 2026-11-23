@@ -46,6 +46,8 @@ def main(argv):
             floor = float(args.pop(0))
         else:
             names.append(a)
+    if os.environ.get('AH_SKIP'):
+        edges.SKIP_ZONE = os.environ['AH_SKIP']
     names = names or DEFAULT
     paths = [p for n in names for p in corpus.fonts("sfnt") if p.endswith("/" + n)]
     here = os.path.dirname(os.path.abspath(__file__))

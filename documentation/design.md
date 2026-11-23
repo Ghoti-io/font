@@ -122,7 +122,7 @@ which of them this library takes, and which of those it reads today.
 | | `CBDT`/`CBLC` | **implemented** (§7.5): the strike list, a glyph's PNG or BGRA bytes and metrics, and a decode to RGBA (8 or 16 bits) by `image`; shaped extents as HarfBuzz measures them |
 | | `sbix` | **implemented** (§7.5): PNG, JPEG and TIFF pictures, `dupe` followed; shaped extents as HarfBuzz measures them (PNG only) |
 | | variations: `fvar`/`avar` (versions 1 and 2)/`gvar`, `HVAR`/`MVAR`, `cvar`, `STAT`, `FeatureVariations` | **implemented** for `glyf` outlines, for advances, side bearings and line metrics, for control values, for axis value names and for which layout-feature substitution applies at a location (§7.7). `VVAR` is not (no vertical metrics are read): a metric the font does not say how to vary is refused, not guessed |
-| | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE`/`JSTF` are not read |
+| | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE` is read for baseline alignment; `JSTF` is parsed for the justifier (§10.6) |
 | | WOFF 2 | **implemented** (§7.1): one Brotli stream through `compress`, `glyf`/`loca` and `hmtx` transforms undone, collections rebuilt as `ttcf`; the metadata and private blocks are range-checked and not read. **Written** too (§12.4), one font at a time |
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |

@@ -595,6 +595,91 @@ def avar2_table(maps, store, index_map=b""):
     return bytes(out) + index_map + store
 
 
+def sfnt_table(path, name):
+    """One table of a committed fixture font, or None."""
+    data = Path(path).read_bytes()
+    count = struct.unpack(">H", data[4:6])[0]
+    for index in range(count):
+        entry = data[12 + index * 16:28 + index * 16]
+        if entry[:4] == name.encode("ascii"):
+            offset, length = struct.unpack(">II", entry[8:16])
+            return data[offset:offset + length]
+    return None
+
+
+def cff_index(data, at):
+    """The items of the INDEX at @p at, and the offset just past it."""
+    count = struct.unpack(">H", data[at:at + 2])[0]
+    if count == 0:
+        return [], at + 2
+    size = data[at + 2]
+    offsets = [int.from_bytes(data[at + 3 + i * size:at + 3 + (i + 1) * size], "big") for i in range(count + 1)]
+    base = at + 3 + (count + 1) * size - 1
+    return [data[base + offsets[i]:base + offsets[i + 1]] for i in range(count)], base + offsets[-1]
+
+
+def cff_charstrings(cff):
+    """The CharStrings INDEX of a CFF, by reading its Top DICT's operator 17."""
+    _, after = cff_index(cff, cff[2])
+    tops, _ = cff_index(cff, after)
+    dict_data, stack, i = tops[0], [], 0
+    while i < len(dict_data):
+        b = dict_data[i]
+        if b <= 21:
+            op = b if b != 12 else (12, dict_data[i + 1])
+            i += 2 if b == 12 else 1
+            if op == 17 and stack:
+                return cff_index(cff, stack[-1])[0]
+            stack = []
+        elif b == 28:
+            stack.append(struct.unpack(">h", dict_data[i + 1:i + 3])[0])
+            i += 3
+        elif b == 29:
+            stack.append(struct.unpack(">i", dict_data[i + 1:i + 5])[0])
+            i += 5
+        elif b == 30:
+            i += 1
+            while i < len(dict_data) and (dict_data[i] & 0x0F) != 0x0F and (dict_data[i] >> 4) != 0x0F:
+                i += 1
+            i += 1
+            stack.append(0)
+        elif 32 <= b <= 246:
+            stack.append(b - 139)
+            i += 1
+        elif 247 <= b <= 250:
+            stack.append((b - 247) * 256 + dict_data[i + 1] + 108)
+            i += 2
+        else:
+            stack.append(-(b - 251) * 256 - dict_data[i + 1] - 108)
+            i += 2
+    return []
+
+
+def charstring_and_cff_seeds():
+    """Seeds for `fuzz_cff` and `fuzz_charstring` from the committed CFF fixtures.
+
+    `fuzz_cff` takes an options byte and the whole table; its 0x01 bit hints every glyph it reaches, so
+    the seeds include the fixtures whose glyphs have stems, masks, blue zones and accents. `fuzz_charstring`
+    takes an options byte, a cut byte and the program (with whatever follows as its subroutines): each seed
+    is one glyph's charstring and four `endchar`s, the cut chosen to leave the program whole.
+    """
+    fonts = root / "tests/data/fonts"
+    names = ["cff-hints", "cff-seac", "cff-seac-hints", "cff-subrs", "cff-curves", "cff-arith", "cff-cid", "cff-cid3",
+             "cff-subset", "cff-type1"]
+    for name in names:
+        path = fonts / (name + ".otf")
+        if not path.exists():
+            continue
+        cff = sfnt_table(path, "CFF ")
+        if cff is None:
+            continue
+        write(corpus / ("cff/%s.seed" % name), 0x61, cff)
+        for number, program in enumerate(cff_charstrings(cff)[:6]):
+            tail = program + b"\x0e" * 4
+            cut = min(255, (len(program) * 256 + len(tail) - 1) // len(tail))
+            write_pair(corpus / ("charstring/%s-%d.seed" % (name, number)), 0xA0, cut, tail)
+
+
 def main():
     latin = {
         "head": head(),
@@ -919,6 +1004,7 @@ def main():
     body += lstr("sans-serif") + lstr("Alpha")
     write(corpus / "fontset/two-faces.seed", 0, body)
     write(corpus / "fontset/empty.seed", 0, struct.pack("<II", 0, 0))
+    charstring_and_cff_seeds()
     return 0
 
 

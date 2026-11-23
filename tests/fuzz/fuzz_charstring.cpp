@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -79,9 +80,78 @@ struct Standard {
   }
 };
 
+void fail(const char * what) {
+  fprintf(stderr, "fuzz_charstring: %s\n", what);
+  abort();
+}
+
+/** The points of an outline, flat, tags included. */
+std::vector<int32_t> flat(const GFNT_Outline * outline) {
+  std::vector<int32_t> out;
+
+  for (size_t i = 0; i < gfnt_outline_point_count(outline); ++i) {
+    GFNT_Point p{};
+    GFNT_PointTag tag{};
+
+    gfnt_outline_point_at(outline, i, &p, &tag);
+    out.push_back(p.x);
+    out.push_back(p.y);
+    out.push_back(static_cast<int32_t>(tag));
+  }
+  return out;
+}
+
+/**
+ * Run the program again recording its hints, and check what recording promises: it changes neither the
+ * result nor a point, and the record is within its bounds and indexes real points.
+ */
+void check_recording(GFNT_CharstringType type, const std::vector<uint8_t> & program,
+    const GFNT_CharstringContext * context, GFNT_Result plain_result, const GFNT_Outline * plain) {
+  GFNT_CharstringContext recording = *context;
+  static GFNT_CharstringHints hints;
+  GFNT_Outline * outline = nullptr;
+  GFNT_Error error;
+
+  gfnt_error_clear(&error);
+  memset(&hints, 0xA5, sizeof hints);
+  recording.hints = &hints;
+  if (gfnt_outline_create(nullptr, &outline, &error) != GFNT_OK) {
+    return;
+  }
+  const GFNT_Result result = gfnt_charstring_run(type, program.empty() ? nullptr : program.data(),
+      program.size(), &recording, outline, nullptr, &error);
+
+  if (result != plain_result) {
+    fail("recording hints changed the result");
+  }
+  if (result == GFNT_OK) {
+    if (flat(outline) != flat(plain)) {
+      fail("recording hints changed the outline");
+    }
+    if (hints.stem_count > GFNT_CS_MAX_STEMS || hints.mask_count > GFNT_CS_MAX_MASKS) {
+      fail("a hint record past its bounds");
+    }
+    if (hints.valid) {
+      const size_t points = gfnt_outline_point_count(outline);
+      uint32_t last = 0;
+
+      for (size_t i = 0; i < hints.mask_count; ++i) {
+        if (hints.masks[i].first_point < last || hints.masks[i].first_point > points) {
+          fail("a hint mask at a point that is not there or out of order");
+        }
+        last = hints.masks[i].first_point;
+      }
+      if (hints.accent && hints.accent_first_point > points) {
+        fail("an accent that starts past the outline");
+      }
+    }
+  }
+  gfnt_outline_destroy(outline);
+}
+
 /** Run one program in one language, into a fresh outline. */
 void run(GFNT_CharstringType type, const std::vector<uint8_t> & program,
-    GFNT_CharstringContext * context, bool dump) {
+    GFNT_CharstringContext * context, bool dump, bool record) {
   GFNT_Outline * outline = nullptr;
   GFNT_CharstringMetrics metrics;
   GFNT_Error error;
@@ -91,9 +161,13 @@ void run(GFNT_CharstringType type, const std::vector<uint8_t> & program,
   if (gfnt_outline_create(nullptr, &outline, &error) != GFNT_OK) {
     return;
   }
-  if (gfnt_charstring_run(type, program.empty() ? nullptr : program.data(),
-          program.size(), context, outline, &metrics, &error)
-      == GFNT_OK) {
+  const GFNT_Result result = gfnt_charstring_run(type, program.empty() ? nullptr : program.data(),
+      program.size(), context, outline, &metrics, &error);
+
+  if (record) {
+    check_recording(type, program, context, result, outline);
+  }
+  if (result == GFNT_OK) {
     GFNT_Box box;
 
     memset(&box, 0, sizeof box);
@@ -179,7 +253,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   }
 
   const bool dump = (options & 0x40u) != 0;
-  run(GFNT_CHARSTRING_TYPE2, program, &context, dump);
-  run(GFNT_CHARSTRING_TYPE1, program, &context, dump);
+  const bool record = (options & 0x80u) != 0;
+  run(GFNT_CHARSTRING_TYPE2, program, &context, dump, record);
+  run(GFNT_CHARSTRING_TYPE1, program, &context, dump, record);
   return 0;
 }

@@ -1742,7 +1742,7 @@ scene-example: $(SCENE_EXAMPLE) ## Rewrite tests/data/golden/scene-example.txt (
 # is seen to fail first: the replay built with GFNT_REPLAY_PLANT aborts after its first input.
 FUZZ_REPLAY_DIR := $(APP_DIR)/fuzz-replay
 FUZZ_REPLAY_HARNESSES := $(sort $(patsubst tests/fuzz/%.cpp,%,$(wildcard tests/fuzz/fuzz_*.cpp)))
-FUZZ_REPLAY_UNSEEDED := cff charstring
+FUZZ_REPLAY_UNSEEDED :=
 
 $(FUZZ_REPLAY_DIR)/%$(EXE_EXTENSION): tests/fuzz/%.cpp tests/fuzz/replay_main.cpp $(APP_DIR)/$(STATIC_TARGET) \
 		$(FLAGS_STAMP) | $(APP_DIR)/$(TARGET)

@@ -142,6 +142,20 @@ TEST(Autofit, TheXHeightIsRoundedUpFromThreeEighthsAndTheCapitalsFollowIt) {
   EXPECT_EQ(top_of(hinted(font.face, glyph_of(font.face, 'o'), 10)), 5 * 64);
 }
 
+TEST(Autofit, TheXHeightCorrectionIsNotAppliedWhenItWouldMoveTheTallestZoneByTwoPixels) {
+  // x-height 150 and round top 160 under ascenders of 1000. At 10 ppem the round top is 1.6 px and would go
+  // to 2, a correction of 1.25 that would carry the ascenders from 10 px to 12.5: a move of 2.5 px, so the
+  // correction is dropped and the ascender stays at 10.
+  Fixture font("latin-boxes-tall.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  EXPECT_EQ(top_of(hinted(font.face, glyph_of(font.face, 'd'), 10)), 10 * 64);
+  // At 11 ppem 1.76 px goes to 2, a correction of 1.14 that moves the ascenders by 1.5 px: applied, 11 -> 12.5 -> 13
+  // (and the round top is 2).
+  Hinted at11 = hinted(font.face, glyph_of(font.face, 'o'), 11);
+  EXPECT_EQ(top_of(at11), 2 * 64);
+  EXPECT_NE(top_of(hinted(font.face, glyph_of(font.face, 'd'), 11)), 11 * 64);
+}
+
 TEST(Autofit, XIsScaledAndNeverMovedAndTheAdvanceIsAWholePixel) {
   Fixture font("latin-boxes.ttf");
   ASSERT_EQ(font.result, GFNT_OK);

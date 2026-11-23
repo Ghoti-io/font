@@ -777,7 +777,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # Oracle commands
 .PHONY: oracle-build oracle-build-firefox oracle-version oracle-corpus oracle-corpus-clean
 .PHONY: check-oracle check-oracle-ttx check-oracle-cmap check-oracle-cmap-exhaustive
-.PHONY: check-hint-cff-mutations check-oracle-hint-variable check-oracle-hint-batteries check-hint check-hint-mutations check-oracle-tt-decode check-oracle-hint check-oracle-hint-cff check-oracle-autohint check-oracle-hint-probe check-hint-point-mutations check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
+.PHONY: check-hint-cff-mutations check-oracle-hint-variable check-oracle-hint-batteries check-hint check-hint-mutations check-oracle-tt-decode check-oracle-hint check-oracle-hint-cff check-oracle-autohint check-autohint-mutations check-oracle-hint-probe check-hint-point-mutations check-layout check-layout-unit-snapshot check-layout-l1-mutations check-layout-l1 check-layout-l2-mutations check-layout-l2 check-layout-l3-mutations check-layout-l3 check-layout-l3b-mutations check-layout-l3b check-oracle-layout-l3b check-layout-l4-mutations check-layout-l4 check-oracle-layout-l2 check-oracle-layout-l4 check-oracle-flow check-oracle-subset check-oracle-subset-rename check-oracle-layout check-oracle-css check-oracle-css-l1 check-oracle-pango check-oracle-instances check-oracle-orientation check-oracle-kashida check-oracle-color check-oracle-colr-scene check-oracle-color-extents check-oracle-subset-color check-oracle-subset-math check-oracle-math check-oracle-strike-images check-oracle-svg check-oracle-subset-strikes check-oracle-woff2 check-oracle-woff2-real check-oracle-woff2-write check-oracle-bitmap-write check-oracle-type1-write check-oracle-collection-write
 .PHONY: check-oracle-placement
 .PHONY: check-oracle-glyf check-oracle-glyf-exhaustive check-oracle-hb check-oracle-gsub check-oracle-gpos check-oracle-would check-oracle-morx check-oracle-norm check-oracle-fallback check-oracle-uvs
 .PHONY: check-oracle-var check-oracle-var-exhaustive check-oracle-metrics
@@ -1412,6 +1412,9 @@ check-oracle-autohint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py freetype -- \
 		python3 $(ORACLE)/hint_cff_diff.py --auto --pool sfnt --files tests/data/fonts/latin-boxes.ttf \
 		--ppem 9,10,11,12,13,14,16,17,20,24,32 --stride 1 --floor 1.0
+	@python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_cff_diff.py --auto --pool sfnt --files tests/data/fonts/latin-boxes-tall.ttf \
+		--ppem 8,9,10,11,12,14,16,20,24 --stride 1 --floor 1.0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.78 --show 0
 
 check-oracle-hint-probe: ## Run random hinting programs through this library and FreeType and compare every point
@@ -1453,6 +1456,10 @@ check-hint-mutations: $(APP_DIR)/testHint$(EXE_EXTENSION) $(EXAMPLES)
 check-hint-cff-mutations: ## Plant defects in the CFF and Type 1 hinter; FreeType's comparison or the unit tests must refuse each
 check-hint-cff-mutations: $(APP_DIR)/testCff$(EXE_EXTENSION) $(EXAMPLES)
 	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/hint_cff_mutation_check.py
+
+check-autohint-mutations: ## Plant defects in the automatic hinter; FreeType's comparison or the unit tests must refuse each
+check-autohint-mutations: $(APP_DIR)/testAutofit$(EXE_EXTENSION) $(EXAMPLES)
+	@PREFIX="$(PREFIX)" BUILD="$(BUILD)" python3 $(ORACLE)/autohint_mutation_check.py
 
 check-hint: ## Every TrueType hinting gate: the unit tests, the fontTools comparison and its mutation check
 check-hint: $(APP_DIR)/testHint$(EXE_EXTENSION) $(APP_DIR)/testHint_vm$(EXE_EXTENSION) $(APP_DIR)/testHint_point$(EXE_EXTENSION) $(APP_DIR)/testHint_glyph$(EXE_EXTENSION) $(APP_DIR)/testHint_api$(EXE_EXTENSION) $(APP_DIR)/testHint_variation$(EXE_EXTENSION) $(APP_DIR)/testHint_tolerance$(EXE_EXTENSION) $(APP_DIR)/testHint_oom$(EXE_EXTENSION)

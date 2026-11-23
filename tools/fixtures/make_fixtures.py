@@ -3531,7 +3531,7 @@ def build_cff_stems(out):
     fb.save(out)
 
 
-def build_latin_boxes(out):
+def build_latin_boxes(out, cap=700, asc=760, xh=500, desc=-210, over=12, family="Latin boxes"):
     """The Latin letters the automatic hinter measures a face by, as boxes and ellipses.
 
     Capitals are boxes to the capital height, the ascenders and the dotted letters to the ascender height,
@@ -3540,7 +3540,6 @@ def build_latin_boxes(out):
     automatic hinter can be given and its zones known in advance (`make check-oracle-autohint` compares
     its glyphs with FreeType's).
     """
-    cap, asc, xh, desc, over = 700, 760, 500, -210, 12
     order = [".notdef", "space"]
     glyphs = {".notdef": TTGlyphPen(None).glyph(), "space": TTGlyphPen(None).glyph()}
     cmap = {0x20: "space"}
@@ -3592,9 +3591,15 @@ def build_latin_boxes(out):
         order.append(ch)
         cmap[ord(ch)] = ch
         glyphs[ch] = box(80, desc, 440, xh)
-    fb = truetype("Latin boxes", [subtable(4, 3, 1, cmap)], order=order, glyphs=glyphs,
+    fb = truetype(family, [subtable(4, 3, 1, cmap)], order=order, glyphs=glyphs,
         advances={name: 600 for name in order})
     fb.save(out)
+
+
+def build_latin_boxes_tall(out):
+    """The same letters with a small x-height under tall ascenders, so that fitting the x-height to a whole
+    pixel moves the tallest zone by two pixels or more at some sizes, where the correction is not applied."""
+    build_latin_boxes(out, cap=900, asc=1000, xh=150, desc=-250, over=10, family="Latin boxes tall")
 
 
 def build_cff_cid(out):
@@ -5426,6 +5431,9 @@ FIXTURES = {
     "latin-boxes.ttf": (build_latin_boxes,
         "glyf: the Latin letters a face is measured by, as boxes and ellipses (capitals to 700, ascenders to "
         "760, small letters to 500, descenders to -210, round ones overshooting by 12), for the automatic hinter"),
+    "latin-boxes-tall.ttf": (build_latin_boxes_tall,
+        "glyf: the Latin boxes with a small x-height (150) under tall ascenders (1000), for the automatic hinter's "
+        "scale correction that is skipped when it would move the tallest zone by two pixels"),
     "cff-names.otf": (build_cff_names,
         "CFF: a Top DICT stating FullName and FamilyName as strings of its own, after "
         "the glyph names, for the subsetter's rename"),

@@ -201,6 +201,7 @@ const std::vector<Entry> & every_fixture() {
       {"cff-seac-hints.otf", 13},
       {"cff-stems.otf", 272},
       {"latin-boxes.ttf", 53},
+      {"latin-boxes-tall.ttf", 53},
       {"cff-subrs.otf", 10},
       {"cff-type1.otf", 8},
       {"cmap-format0.ttf", kNumGlyphs},

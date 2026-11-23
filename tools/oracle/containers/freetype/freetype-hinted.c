@@ -8,7 +8,8 @@
  *   ppem     whole pixels per em.
  *   stride   every nth glyph, from glyph `first`.
  *   target   normal (default), light, mono or lcd: the render target flag, which
- *            changes what a version 40 interpreter does.
+ *            changes what a version 40 interpreter does. `auto` and `autolight` force the
+ *            automatic hinter (the normal and the light target) and read no program.
  *   coords   a comma-separated list of normalised axis coordinates in 2.14 (the
  *            form this library's variations take), or `-` for the default instance.
  *
@@ -97,6 +98,11 @@ int main(int argc, char ** argv) {
   flags = FT_LOAD_NO_BITMAP | FT_LOAD_NO_AUTOHINT;
   if (version == 0) {
     flags |= FT_LOAD_NO_HINTING;
+  }
+  else if (strcmp(target, "auto") == 0 || strcmp(target, "autolight") == 0) {
+    /* The automatic hinter, whatever the font declares: no program and no stems are read. */
+    flags = FT_LOAD_NO_BITMAP | FT_LOAD_FORCE_AUTOHINT
+        | (strcmp(target, "auto") == 0 ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_LIGHT);
   }
   else if (strcmp(target, "light") == 0) {
     flags |= FT_LOAD_TARGET_LIGHT;

@@ -55,6 +55,10 @@ MUTANTS = [
     ("e->pos = g->edges[anchor].pos + ((e->opos - g->edges[anchor].opos + 16) & ~(int64_t)31);",
      "e->pos = g->edges[anchor].pos + ((e->opos - g->edges[anchor].opos + 8) & ~(int64_t)31);",
      "an edge left to the half-pixel snap rounds at a quarter and not a half"),
+    ("    return &af->scripts[af->script_of[glyph]];", "    return &af->scripts[AF_LATIN];",
+     "a Greek glyph is fitted with the Latin zones"),
+    ("{0x370, 0x3FF, 0x1F00, 0x1FFF, 0, 0, 0, 0, 0, 0},", "{0x3C0, 0x3FF, 0x1F00, 0x1FFF, 0, 0, 0, 0, 0, 0},",
+     "the Greek capitals are not mapped to the Greek script"),
 ]
 
 SAMPLES = [
@@ -62,6 +66,8 @@ SAMPLES = [
                "tests/data/fonts/latin-boxes.ttf", "--ppem", "9,10,11,12,13,14,16,17,20,24,32", "--stride", "1"]),
     ("tall", ["freetype", "--", "python3", "tools/oracle/hint_cff_diff.py", "--auto", "--pool", "sfnt", "--files",
               "tests/data/fonts/latin-boxes-tall.ttf", "--ppem", "8,9,10,11,12,14,16,20,24", "--stride", "1"]),
+    ("greek", ["freetype", "--", "python3", "tools/oracle/hint_cff_diff.py", "--auto", "--pool", "sfnt", "--files",
+               "tests/data/fonts/latin-greek-boxes.ttf", "--ppem", "8,9,10,11,12,13,14,16,17,20,24,32", "--stride", "1"]),
     ("letters", ["fonttools,freetype", "--", "python3", "tools/oracle/autohint_diff.py", "--show", "0"]),
 ]
 

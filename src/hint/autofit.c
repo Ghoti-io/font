@@ -47,8 +47,8 @@
  *      touched points.
  *
  * Everything is 26.6 and 16.16 integers as FreeType's, so that the rounding agrees. x is scaled and
- * not moved. Only the Latin letters' zones are known: a glyph of another script is fitted with them,
- * which is a gap (see notes in the autohinter plan).
+ * not moved. Latin, Greek and Cyrillic have zones of their own, found from the face's letters of each;
+ * a glyph of any other script, or of one the face has no letters of, is fitted with the Latin ones.
  */
 
 #include "autofit.h"
@@ -78,6 +78,16 @@ typedef struct AfZone {
   bool active;
 } AfZone;
 
+/** What is read from a face's letters of one script: its zones, standard stem width and corrected scale. */
+typedef struct AfScript {
+  bool present;       ///< The face has letters of the script to take the zones from.
+  int32_t yscale;     ///< The scale with the x-height correction.
+  int32_t stdw;       ///< The standard horizontal stem width, font units.
+  AfZone zones[AF_ZONES];
+} AfScript;
+
+enum { AF_LATIN, AF_GREEK, AF_CYRILLIC, AF_SCRIPTS };
+
 struct GFNT_Autofit {
   const GFNT_Allocator * allocator;
   uint32_t ppem;
@@ -85,17 +95,21 @@ struct GFNT_Autofit {
   GFNT_F2Dot14 * coords;
   GFNT_Variation variation;
   int32_t scale;      ///< 26.6 pixels per font unit, 16.16, uncorrected.
-  int32_t yscale;     ///< The same with the x-height correction.
-  int32_t stdw;       ///< The standard horizontal stem width, font units.
-  AfZone zones[AF_ZONES];
+  AfScript scripts[AF_SCRIPTS];
+  uint8_t * script_of;  ///< The script of each glyph; absent for a face with no cmap letters of another script.
+  uint32_t glyph_count;
 };
 
+/** The letters each zone is named for, per script, and the letter the standard stem width comes from. */
 static const struct {
-  const char * letters;
-  bool top;
-} af_blue_strings[AF_ZONES] = {
-  {"THEZOCQS", true}, {"HEZLOCUS", false}, {"fijkdbh", true}, {"xzroesc", true}, {"xzroesc", false}, {"pqgjy", false},
+  const uint32_t * letters[AF_ZONES];
+  uint32_t standard;
+} af_blue_strings[AF_SCRIPTS] = {
+  {{U"THEZOCQS", U"HEZLOCUS", U"fijkdbh", U"xzroesc", U"xzroesc", U"pqgjy"}, U'o'},
+  {{U"ΓΒΕΖΘΟΩ", U"ΒΔΖΞΘΟ", U"βθδζλξ", U"οε", U"αεοσ", U"βγημρφχψ"}, U'ο'},
+  {{U"БВЕПЗОСЭ", U"БВЕШЗОСЭ", U"", U"хпншезос", U"хпншезос", U"руф"}, U'о'},
 };
+static const bool af_zone_top[AF_ZONES] = {true, false, true, true, false, false};
 enum { AF_CAP_TOP, AF_CAP_BOT, AF_F_TOP, AF_SMALL_TOP, AF_SMALL_BOT, AF_DESC };
 
 /** FreeType's rounded multiply of an integer by a 16.16 value. */
@@ -614,14 +628,14 @@ static bool af_letter_extreme(const GFNT_Face * face, const GFNT_Variation * var
   return found;
 }
 
-/** The thinnest horizontal stem of an `o`, font units; 0 when the face has none. */
-static int32_t af_standard_width(const GFNT_Face * face, const GFNT_Variation * variation, int64_t up) {
+/** The thinnest horizontal stem of a script's standard letter (`o` in Latin), font units; 0 when the face has none. */
+static int32_t af_standard_width(const GFNT_Face * face, const GFNT_Variation * variation, int64_t up, uint32_t cp) {
   uint32_t glyph = 0;
   GFNT_Outline * outline = NULL;
   AfGlyph g;
   int32_t best = 0;
 
-  if (gfnt_face_glyph_for_codepoint(face, 'o', &glyph, NULL) != GFNT_OK || glyph == 0
+  if (gfnt_face_glyph_for_codepoint(face, cp, &glyph, NULL) != GFNT_OK || glyph == 0
       || gfnt_face_glyph_outline(face, glyph, variation, NULL, &outline, NULL) != GFNT_OK) {
     return 0;
   }
@@ -674,14 +688,136 @@ bool gfnt_autofit_applies(const GFNT_Face * face) {
   return p == GFNT_PRODUCER_GLYF || p == GFNT_PRODUCER_CFF || p == GFNT_PRODUCER_CFF2 || p == GFNT_PRODUCER_TYPE1;
 }
 
+/** One script's zones, standard stem width and corrected scale, from the face's letters of it. */
+static void af_script_build(const GFNT_Face * face, GFNT_Autofit * af, int sc, int64_t scale) {
+  AfScript * script = &af->scripts[sc];
+  const GFNT_Variation * variation = af->variation.count ? &af->variation : NULL;
+  int64_t scaled;
+  int64_t fitted;
+
+  script->yscale = (int32_t)scale;
+  for (int z = 0; z < AF_ZONES; ++z) {
+    int32_t flats[16];
+    int32_t rounds[16];
+    size_t nf = 0;
+    size_t nr = 0;
+
+    for (const uint32_t * c = af_blue_strings[sc].letters[z]; *c; ++c) {
+      int32_t y = 0;
+      bool is_round = false;
+
+      if (!af_letter_extreme(face, variation, *c, af_zone_top[z], &y, &is_round)) {
+        continue;
+      }
+      if (is_round && nr < 16u) {
+        rounds[nr++] = y;
+      }
+      else if (!is_round && nf < 16u) {
+        flats[nf++] = y;
+      }
+    }
+    script->zones[z].top = af_zone_top[z];
+    if (nf == 0 && nr == 0) {
+      continue;
+    }
+    qsort(flats, nf, sizeof flats[0], af_compare_int);
+    qsort(rounds, nr, sizeof rounds[0], af_compare_int);
+    script->zones[z].present = true;
+    script->present = true;
+    script->zones[z].ref = nf ? flats[nf / 2u] : rounds[nr / 2u];
+    script->zones[z].shoot = nr ? rounds[nr / 2u] : flats[nf / 2u];
+  }
+  script->stdw = af_standard_width(face, variation, af->upem, af_blue_strings[sc].standard);
+  if (script->stdw == 0) {
+    script->stdw = 50 * af->upem / 2048;
+  }
+  if (script->zones[AF_SMALL_TOP].present) {
+    int64_t tallest = 0;
+
+    scaled = af_mulfix(script->zones[AF_SMALL_TOP].shoot, scale);
+    fitted = (scaled + 40) & ~(int64_t)63;
+    if (scaled != 0 && scaled != fitted) {
+      int64_t corrected = af_muldiv(scale, fitted, scaled);
+
+      for (int z = 0; z < AF_ZONES; ++z) {
+        int64_t r = script->zones[z].ref < 0 ? -(int64_t)script->zones[z].ref : script->zones[z].ref;
+        int64_t s = script->zones[z].shoot < 0 ? -(int64_t)script->zones[z].shoot : script->zones[z].shoot;
+
+        if (script->zones[z].present) {
+          tallest = r > tallest ? r : tallest;
+          tallest = s > tallest ? s : tallest;
+        }
+      }
+      {
+        int64_t moved = af_mulfix(tallest, corrected) - af_mulfix(tallest, scale);
+
+        if ((moved < 0 ? -moved : moved) < 128) {
+          script->yscale = (int32_t)corrected;
+        }
+      }
+    }
+  }
+  for (int z = 0; z < AF_ZONES; ++z) {
+    if (script->zones[z].present) {
+      af_zone_fit(&script->zones[z], script->yscale);
+    }
+  }
+}
+
+/** The code points a script's letters are looked up from, as inclusive pairs; Latin is the default. */
+static const uint32_t af_ranges[AF_SCRIPTS][10] = {
+  {0x20, 0x7E, 0xA0, 0x24F, 0x1E00, 0x1EFF, 0x2C60, 0x2C7F, 0xA720, 0xA7FF},
+  {0x370, 0x3FF, 0x1F00, 0x1FFF, 0, 0, 0, 0, 0, 0},
+  {0x400, 0x52F, 0x1C80, 0x1C8F, 0x2DE0, 0x2DFF, 0xA640, 0xA69F, 0, 0},
+};
+
+/** Which glyphs belong to which script: the first script whose range reaches the glyph through the cmap. */
+static GFNT_Result af_script_map(const GFNT_Face * face, GFNT_Autofit * af) {
+  size_t count = 0;
+  const GFNT_Allocator * a = face->allocator;
+
+  if (!af->scripts[AF_GREEK].present && !af->scripts[AF_CYRILLIC].present) {
+    return GFNT_OK;
+  }
+  if (gfnt_face_num_glyphs(face, &count, NULL) != GFNT_OK || count == 0) {
+    return GFNT_OK;
+  }
+  af->script_of = a->calloc_fn(a->ctx, count, 1);
+  if (!af->script_of) {
+    return GFNT_ERR_OOM;
+  }
+  memset(af->script_of, 0xFF, count);
+  af->glyph_count = (uint32_t)count;
+  for (int sc = 0; sc < AF_SCRIPTS; ++sc) {
+    for (size_t r = 0; r + 1 < 10u; r += 2) {
+      for (uint32_t cp = af_ranges[sc][r]; af_ranges[sc][r] && cp <= af_ranges[sc][r + 1]; ++cp) {
+        uint32_t glyph = 0;
+
+        if (gfnt_face_glyph_for_codepoint(face, cp, &glyph, NULL) == GFNT_OK && glyph != 0 && glyph < count
+            && af->script_of[glyph] == 0xFF) {
+          af->script_of[glyph] = (uint8_t)sc;
+        }
+      }
+    }
+  }
+  return GFNT_OK;
+}
+
+/** The script a glyph is fitted with: its own when the face has that script's letters, else Latin. */
+static const AfScript * af_script_of(const GFNT_Autofit * af, uint32_t glyph) {
+  if (af->script_of && glyph < af->glyph_count && af->script_of[glyph] < AF_SCRIPTS
+      && af->scripts[af->script_of[glyph]].present) {
+    return &af->scripts[af->script_of[glyph]];
+  }
+  return &af->scripts[AF_LATIN];
+}
+
 GFNT_Result gfnt_autofit_create(const GFNT_Face * face, uint32_t ppem, const GFNT_Variation * variation,
     GFNT_Autofit ** out, GFNT_Error * error) {
   GFNT_Autofit * af;
   const GFNT_Allocator * a;
   uint16_t upem = 0;
   int64_t scale;
-  int64_t scaled;
-  int64_t fitted;
 
   gfnt_error_clear(error);
   if (!face || !out) {
@@ -712,74 +848,14 @@ GFNT_Result gfnt_autofit_create(const GFNT_Face * face, uint32_t ppem, const GFN
     af->variation = *variation;
     af->variation.coords = af->coords;
   }
-  for (int z = 0; z < AF_ZONES; ++z) {
-    int32_t flats[16];
-    int32_t rounds[16];
-    size_t nf = 0;
-    size_t nr = 0;
-
-    for (const char * c = af_blue_strings[z].letters; *c; ++c) {
-      int32_t y = 0;
-      bool is_round = false;
-
-      if (!af_letter_extreme(face, af->variation.count ? &af->variation : NULL, (uint32_t)(unsigned char)*c,
-              af_blue_strings[z].top, &y, &is_round)) {
-        continue;
-      }
-      if (is_round && nr < 16u) {
-        rounds[nr++] = y;
-      }
-      else if (!is_round && nf < 16u) {
-        flats[nf++] = y;
-      }
-    }
-    af->zones[z].top = af_blue_strings[z].top;
-    if (nf == 0 && nr == 0) {
-      continue;
-    }
-    qsort(flats, nf, sizeof flats[0], af_compare_int);
-    qsort(rounds, nr, sizeof rounds[0], af_compare_int);
-    af->zones[z].present = true;
-    af->zones[z].ref = nf ? flats[nf / 2u] : rounds[nr / 2u];
-    af->zones[z].shoot = nr ? rounds[nr / 2u] : flats[nf / 2u];
-  }
-  af->stdw = af_standard_width(face, af->variation.count ? &af->variation : NULL, upem);
-  if (af->stdw == 0) {
-    af->stdw = 50 * upem / 2048;
-  }
   scale = (((int64_t)ppem * 64 << 16) + upem / 2) / upem;
   af->scale = (int32_t)scale;
-  af->yscale = (int32_t)scale;
-  if (af->zones[AF_SMALL_TOP].present) {
-    int64_t tallest = 0;
-
-    scaled = af_mulfix(af->zones[AF_SMALL_TOP].shoot, scale);
-    fitted = (scaled + 40) & ~(int64_t)63;
-    if (scaled != 0 && scaled != fitted) {
-      int64_t corrected = af_muldiv(scale, fitted, scaled);
-
-      for (int z = 0; z < AF_ZONES; ++z) {
-        int64_t r = af->zones[z].ref < 0 ? -(int64_t)af->zones[z].ref : af->zones[z].ref;
-        int64_t s = af->zones[z].shoot < 0 ? -(int64_t)af->zones[z].shoot : af->zones[z].shoot;
-
-        if (af->zones[z].present) {
-          tallest = r > tallest ? r : tallest;
-          tallest = s > tallest ? s : tallest;
-        }
-      }
-      {
-        int64_t moved = af_mulfix(tallest, corrected) - af_mulfix(tallest, scale);
-
-        if ((moved < 0 ? -moved : moved) < 128) {
-          af->yscale = (int32_t)corrected;
-        }
-      }
-    }
+  for (int sc = 0; sc < AF_SCRIPTS; ++sc) {
+    af_script_build(face, af, sc, scale);
   }
-  for (int z = 0; z < AF_ZONES; ++z) {
-    if (af->zones[z].present) {
-      af_zone_fit(&af->zones[z], af->yscale);
-    }
+  if (af_script_map(face, af) != GFNT_OK) {
+    gfnt_autofit_destroy(af);
+    return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, 0, "no memory for the automatic hinter");
   }
   *out = af;
   return GFNT_OK;
@@ -791,6 +867,9 @@ void gfnt_autofit_destroy(GFNT_Autofit * af) {
   }
   if (af->coords) {
     af->allocator->free_fn(af->allocator->ctx, af->coords);
+  }
+  if (af->script_of) {
+    af->allocator->free_fn(af->allocator->ctx, af->script_of);
   }
   af->allocator->free_fn(af->allocator->ctx, af);
 }
@@ -828,8 +907,8 @@ static void af_align_linked(AfEdge * base, AfEdge * stem) {
   stem->done = true;
 }
 
-static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af) {
-  int64_t yscale = af->yscale;
+static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * script) {
+  int64_t yscale = script->yscale;
   int64_t best_limit = af_mulfix(af->upem / 40, yscale);
   ptrdiff_t anchor = -1;
   bool have_anchor = false;
@@ -851,7 +930,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af) {
     int64_t bd = best_limit;
 
     for (int z = 0; z < AF_ZONES; ++z) {
-      const AfZone * zone = &af->zones[z];
+      const AfZone * zone = &script->zones[z];
       int64_t d;
 
       if (!zone->present || !zone->active || zone->top != e->top) {
@@ -1019,8 +1098,8 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af) {
 }
 
 /** The hinted y of every point. */
-static void af_fit_points(AfGlyph * g, const GFNT_Autofit * af) {
-  int64_t yscale = af->yscale;
+static void af_fit_points(AfGlyph * g, const AfScript * script) {
+  int64_t yscale = script->yscale;
 
   for (size_t i = 0; i < g->n; ++i) {
     g->touched[i] = false;
@@ -1166,6 +1245,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   AfGlyph g;
   GFNT_Result r;
   const GFNT_Variation * variation;
+  const AfScript * script;
 
   gfnt_error_clear(error);
   if (!face || !af || !out_outline || !out_status) {
@@ -1184,9 +1264,10 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   }
   af_segments(&g);
   af_link_segments(&g, af->upem);
-  af_edges(&g, af->yscale, af->stdw);
-  af_fit_edges(&g, af);
-  af_fit_points(&g, af);
+  script = af_script_of(af, glyph);
+  af_edges(&g, script->yscale, script->stdw);
+  af_fit_edges(&g, af, script);
+  af_fit_points(&g, script);
   r = gfnt_outline_create(allocator ? allocator : face->allocator, &result, error);
   for (size_t c = 0; r == GFNT_OK && c < g.contours; ++c) {
     r = gfnt_outline_begin_contour(result, error);

@@ -6,14 +6,17 @@
 # This file is part of Ghoti.io Font.
 """Dump the Latin letters of faces for autohint_model.py: outlines in font units, with their on-curve flags.
 
-    autohint_dump.py OUT.json FONT...        (runs in the fontTools image; see autohint_zones_diff.py)
+    autohint_dump.py OUT.json [chars=LETTERS] FONT...        (runs in the fontTools image; see autohint_zones_diff.py)
 """
-import sys,json
+import os,sys,json
 from fontTools.ttLib import TTFont
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 out={}
 chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-for path in sys.argv[2:]:
+fonts=sys.argv[2:]
+if fonts and fonts[0].startswith("chars="):
+    chars=fonts.pop(0)[6:]
+for path in fonts:
     f=TTFont(path); gs=f.getGlyphSet(); cmap=f.getBestCmap(); order=f.getGlyphOrder()
     upem=f['head'].unitsPerEm
     d={"upem":upem,"glyphs":{}}

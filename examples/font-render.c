@@ -23,7 +23,7 @@
  *
  * Rasterise every glyph at every size and sub-pixel offset, and print a hash.
  *
- * Usage: font-render <label> <font> [--hint] [--art <glyph> <ppem>]
+ * Usage: font-render <label> <font> [--hint|--hint=auto] [--art <glyph> <ppem>]
  *        font-render --flatten-revision
  *
  * **This is the golden-bitmap gate's driver** (documentation/design.md section
@@ -132,13 +132,13 @@ int main(int argc, char ** argv) {
     printf("%d\n", GFNT_RASTER_FLATTEN_REVISION);
     return 0;
   }
-  if (argc >= 4 && strcmp(argv[3], "--hint") == 0) {
-    hint_mode = GFNT_HINT_MODE_FONT;
+  if (argc >= 4 && (strcmp(argv[3], "--hint") == 0 || strcmp(argv[3], "--hint=auto") == 0)) {
+    hint_mode = strcmp(argv[3], "--hint") == 0 ? GFNT_HINT_MODE_FONT : GFNT_HINT_MODE_AUTO;
     memmove(argv + 3, argv + 4, (size_t)(argc - 3) * sizeof *argv);
     --argc;
   }
   if (argc < 3) {
-    fprintf(stderr, "usage: %s <label> <font> [--hint] [--art <glyph> <ppem>]\n"
+    fprintf(stderr, "usage: %s <label> <font> [--hint|--hint=auto] [--art <glyph> <ppem>]\n"
         "       %s --flatten-revision\n",
         argv[0], argv[0]);
     return 2;

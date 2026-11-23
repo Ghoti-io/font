@@ -58,7 +58,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 WORKSPACE = os.path.dirname(os.path.dirname(ROOT))
 GOLDEN = os.path.join(ROOT, "tests", "data", "golden", "coverage.txt")
+HINTED_GOLDEN = os.path.join(ROOT, "tests", "data", "golden", "hinted.txt")
 GENERATOR = os.path.join(HERE, "make_golden.py")
+HINTED_MARK = "#HINTED-SECTION"
 SHIM = os.path.join(HERE, "cross_shim.c")
 
 # The image the suite's cross toolchains live in, and the targets to use.
@@ -216,7 +218,14 @@ for name in %(strikes)s; do
     %(qemu)s -L /usr/%(triple)s %(out)s/font-bitmap --golden "$name" \
         tests/data/fonts/"$name"
 done
+echo "%(mark)s"
+%(hinted)s
 """ % {
+        "mark": HINTED_MARK,
+        "hinted": "\n".join(
+            '%s -L /usr/%s %s/font-render "%s@%s" tests/data/fonts/"%s" %s'
+            % (qemu, triple, out, name, "auto" if flag.endswith("auto") else "hint", name, flag)
+            for name, flag in hinted_fixtures()),
         "out": out,
         "root": ROOT,
         "cc": compiler,
@@ -239,6 +248,25 @@ done
 # after it is a strike rendering and everything before it is an outline one, which
 # is how this file knows which driver produced which line.
 STRIKE_SECTION = "# And the bitmap containers, whose glyphs are pixels"
+
+
+def hinted_fixtures():
+    """The fixtures and hinters the committed hinted file covers, in its own order, read from the file."""
+    out = []
+    if not os.path.exists(HINTED_GOLDEN):
+        raise SystemExit("%s does not exist; run `make golden`" % HINTED_GOLDEN)
+    with open(HINTED_GOLDEN, encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("#") or not line.strip():
+                continue
+            label = line.split()[0]
+            name, _, how = label.partition("@")
+            entry = (name, "--hint=auto" if how == "auto" else "--hint")
+            if entry not in out:
+                out.append(entry)
+    if not out:
+        raise SystemExit("the committed hinted file has no renderings")
+    return out
 
 
 def golden_fixtures():
@@ -372,6 +400,14 @@ def main(argv):
             "`make golden` to rewrite it deliberately.\n" % GOLDEN)
         return 1
 
+    hinted_now = subprocess.run(
+        [sys.executable, os.path.join(HERE, "make_golden.py"), "--hinted-stdout"], capture_output=True, text=True)
+    if hinted_now.returncode != 0 or hinted_now.stdout != open(HINTED_GOLDEN, encoding="utf-8").read():
+        sys.stderr.write("check-golden: %s is not what tools/golden/make_golden.py emits; a hinted rendering "
+                         "changed on this machine. Run `make golden` to rewrite it deliberately.\n%s"
+                         % (HINTED_GOLDEN, hinted_now.stderr))
+        return 1
+
     # The shim's list against what the library needs, before anything is built:
     # a seventh cutil dependency would otherwise be a confusing link error.
     needed = cutil_dependencies()
@@ -408,8 +444,12 @@ def main(argv):
             sys.stderr.write("check-golden: no such target: %s\n" % label)
             return 1
         got = render_on(tool, label)
+        got, _, got_hinted = got.partition(HINTED_MARK + "\n")
         complaints.extend(compare(label, expected, got))
         complaints.extend(control(label, expected, got))
+        hinted_expected = open(HINTED_GOLDEN, encoding="utf-8").read()
+        complaints.extend(compare(label + " (hinted)", hinted_expected, got_hinted))
+        complaints.extend(control(label + " (hinted)", hinted_expected, got_hinted))
         if not complaints and not quiet:
             print("  %-12s %s: identical to the committed renderings"
                   % (label, TARGETS[label][3]))

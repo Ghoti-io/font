@@ -6,7 +6,7 @@
 # This file is part of Ghoti.io Font.
 """This library's automatic hinter against FreeType's light one, on the Latin letters, point by point.
 
-    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--show N] [--points] [--records FILE] [--floor F] [FONT...]
+    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--script latin|greek|cyrillic] [--show N] [--points] [--records FILE] [--floor F] [FONT...]
 
 For each face, size and Latin letter, the outline `font-hint-cff <font> ... auto` prints against the one
 `freetype-hinted ... autolight` prints, in 26.6, both axes and the advance. Reports the glyphs identical,
@@ -30,10 +30,15 @@ DEFAULT = ["DejaVuSans.ttf", "DejaVuSerif.ttf", "DejaVuSans-Bold.ttf", "Liberati
            "LiberationSerif-Regular.ttf", "LiberationSans-Bold.ttf", "NimbusSans-Regular.otf",
            "NimbusRoman-Regular.otf", "NimbusRoman-Bold.otf", "C059-Roman.otf"]
 
+SCRIPTS = {"latin": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+           "greek": "ΑΒΓΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΩαβγδεζηθικλμνξοπρστυφχψω",
+           "cyrillic": "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЫЭЮЯабвгдежзийклмнопрстуфхцчшщыэюя"}
+
 
 def main(argv):
     ppems, names, letters, show, floor, points = [9, 11, 12, 14, 17, 24], [], None, 8, 0.0, False
     records = None
+    script = None
     args = argv[1:]
     while args:
         a = args.pop(0)
@@ -43,6 +48,8 @@ def main(argv):
             letters = args.pop(0)
         elif a == "--show":
             show = int(args.pop(0))
+        elif a == "--script":
+            script = args.pop(0)
         elif a == "--records":
             records = open(args.pop(0), "w")
         elif a == "--points":
@@ -56,7 +63,8 @@ def main(argv):
     here = os.path.dirname(os.path.abspath(__file__))
     with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR") or None) as scratch:
         dump = os.path.join(scratch, "faces.json")
-        command = oracle_env.command("fonttools", argv=["python3", os.path.join(here, "autohint_dump.py"), dump] + paths,
+        command = oracle_env.command("fonttools", argv=["python3", os.path.join(here, "autohint_dump.py"), dump]
+                                     + (["chars=" + SCRIPTS[script]] if script else []) + paths,
                                      scratch=scratch)
         done = subprocess.run(command, capture_output=True, text=True)
         if done.returncode != 0:

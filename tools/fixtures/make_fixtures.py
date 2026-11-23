@@ -3455,8 +3455,10 @@ def seac_hint_glyphs(type1):
                 "endchar"),
             "acute": cs(600, 745, 40, "hstem", 200, 750, "rmoveto", 100, 150, 60, -150, "rlineto", "endchar"),
             "grave": cs(600, 712, 26, "hstem", 200, 740, "rmoveto", 100, 170, 60, -170, "rlineto", "endchar"),
-            "dieresis": cs(600, 640, 50, "hstem", 200, 640, "rmoveto", 60, "hlineto", 50, "vlineto", -60,
-                "hlineto", 150, 0, "rmoveto", 60, "hlineto", 50, "vlineto", -60, "hlineto", "endchar"),
+            # Two stems and a hint mask that changes between the two dots, so that an accent has masks of its own.
+            "dieresis": cs(600, 640, 50, 110, 40, "hstemhm", "hintmask", ("mask", b"\xc0"), 200, 640, "rmoveto",
+                60, "hlineto", 50, "vlineto", -60, "hlineto", "hintmask", ("mask", b"\x80"), 150, 0, "rmoveto",
+                60, "hlineto", 50, "vlineto", -60, "hlineto", "endchar"),
         }
         seac = lambda base, accent: cs(600, 200, 40, base, accent, "endchar")
     order = list(glyphs)
@@ -3499,6 +3501,34 @@ def build_type1_seac_hints(out):
             handle.write(len(payload).to_bytes(4, "little"))
             handle.write(payload)
         handle.write(bytes([0x80, 3]))
+
+
+def build_cff_stems(out):
+    """Pairs of free horizontal stems at every spacing from touching to well apart.
+
+    No blue zones, so every stem is free: 3 widths x 6 gaps (4 to 150 units) x 3 widths x 5 heights, each
+    glyph two rectangles with an hstem for each. FreeType's hinted outlines for these are the reference for
+    how two stems that would collide are placed (`make check-oracle-hint-cff`); the comparison is exact
+    only for the pairs whose gap is not small, so the gate holds a floor and not equality.
+    """
+    import itertools
+    order = [".notdef", "space"]
+    programs = {".notdef": charstring(600, 50, 0, "rmoveto", 500, "hlineto", 700, "vlineto", -500, "hlineto",
+        "endchar"), "space": charstring(300, "endchar")}
+    for w1, gap, w2, y1 in itertools.product((30, 50, 80), (4, 10, 20, 40, 80, 150), (30, 50, 80),
+                                             (100, 137, 163, 211, 300)):
+        name = "s%d" % (len(order) - 2)
+        order.append(name)
+        programs[name] = charstring(600, y1, w1, gap, w2, "hstem", 100, y1, "rmoveto", 300, "hlineto", w1,
+            "vlineto", -300, "hlineto", 0, gap, "rmoveto", 300, "hlineto", w2, "vlineto", -300, "hlineto",
+            "endchar")
+    advances = {name: 600 for name in order}
+    advances["space"] = 300
+    charset, strings = cff_names(order)
+    table = assemble_cff(names("CFF stems")["psName"], [programs[n] for n in order], charset=charset,
+        strings=strings, privates=[({20: 600, 21: 0}, [])])
+    fb = cff_otf("CFF stems", order, table, advances, {0x20: "space"})
+    fb.save(out)
 
 
 def build_cff_cid(out):
@@ -5324,6 +5354,9 @@ FIXTURES = {
     "type1-seac-hints.pfb": (build_type1_seac_hints,
         "Type 1 (PFB): six accented characters (seac with a side-bearing correction) whose base and accent "
         "each have hint stems, with blue zones, for hinting an accented character"),
+    "cff-stems.otf": (build_cff_stems,
+        "CFF: 270 glyphs of two free horizontal stems each, at widths of 30, 50 and 80 units and gaps of 4 to "
+        "150, with no blue zones, for how two stems that would collide are fitted"),
     "cff-names.otf": (build_cff_names,
         "CFF: a Top DICT stating FullName and FamilyName as strings of its own, after "
         "the glyph names, for the subsetter's rename"),

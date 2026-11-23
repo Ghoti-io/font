@@ -1649,8 +1649,12 @@ from the stems that mask turns on:
    implicit anchor at y = 0 when the locked edges are all above; none when there are none), then whichever of its two edges
    is strictly nearer a whole pixel is rounded to it, a tie going to the top. Free stems go bottom to top, and one that
    would end less than half a pixel from the edge below puts its bottom on the first whole pixel that clears it, or stays
-   at its provisional position if that meets the edge above. A ghost hint (-20, a top edge at `y`; -21, a bottom edge at
-   `y + dy`) is one edge.
+   at its provisional position if that meets the edge above. **Stems whose scaled gap to the next is under three
+   quarters of a pixel, before any fitting, are fitted together instead**: each puts its top or its bottom on a whole
+   pixel (or stays where scaling puts it, at a cost of two pixels), and the positions chosen are those that move the
+   stems least in total with no stem within half a pixel of the one below it (a dynamic programme over the run; a
+   half pixel rounds up and a tie goes to the top, as for one stem). A ghost hint (-20, a top edge at `y`; -21, a bottom
+   edge at `y + dy`) is one edge.
 3. Every point is mapped through the map: linearly between edges, with the interval's scale a rounded division and the
    offset a rounded multiply, rigidly outside them; a point on an edge is on the edge's position exactly. The 26.6 result is
    the 16.16 value shifted right, not rounded. x is scaled and not moved.
@@ -1664,7 +1668,7 @@ from the stems that mask turns on:
    together have more than 96 stems or 128 mask changes, is returned unfitted (`UNHINTED_NO_PROGRAM`).
 
 **What it reproduces.** Compared point by point with FreeType (`make check-oracle-hint-cff`) on a sample of the corpus's
-CFF fonts at 9, 12, 17, 32 and 48 ppem and its Type 1 programs at four sizes: 91.2% of 19,835 CFF glyphs and 94.3% of 13,656
+CFF fonts at 9, 12, 17, 32 and 48 ppem and its Type 1 programs at four sizes: 93.9% of 19,835 CFF glyphs and 94.7% of 13,656
 Type 1 glyphs are identical to the 1/64 pixel, every advance is, and no x differs. The gate holds a floor just under those
 figures and is seen to fail on an impossible one. Accented characters, which the corpus has none of, are checked on two generated fixtures (`cff-seac-hints.otf`, `type1-seac-hints.pfb`, six accented characters each with hinted parts) that the same gate requires to be identical to FreeType at five sizes. The constants (0.6, 0.2, the half-pixel gap) are fitted, not derived,
 and say so here.

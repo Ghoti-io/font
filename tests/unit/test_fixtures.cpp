@@ -199,6 +199,7 @@ const std::vector<Entry> & every_fixture() {
       {"math-variable.ttf", 27},
       {"cff-seac.otf", 6},
       {"cff-seac-hints.otf", 13},
+      {"cff-stems.otf", 272},
       {"cff-subrs.otf", 10},
       {"cff-type1.otf", 8},
       {"cmap-format0.ttf", kNumGlyphs},

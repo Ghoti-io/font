@@ -34,6 +34,7 @@ cff-names.otf	CFF: a Top DICT stating FullName and FamilyName as strings of its 
 cff-repeats.otf	CFF: twelve glyphs sharing two path fragments, six hinted glyphs sharing stems, masks and fragments, a long run of one stroke, and one glyph that shares nothing, for the subsetter's subroutines
 cff-seac-hints.otf	CFF: six accented characters (endchar with four operands) whose base and accent each have hint stems, one base with a hint mask, and blue zones, for hinting an accented character
 cff-seac.otf	CFF: an accented character (endchar with four operands) named by Standard Encoding code, a charset in format 1, a name in the font's own String INDEX, and a custom encoding with a supplement
+cff-stems.otf	CFF: 270 glyphs of two free horizontal stems each, at widths of 30, 50 and 80 units and gaps of 4 to 150, with no blue zones, for how two stems that would collide are fitted
 cff-subrs.otf	CFF: local and global subroutines with the bias applied, nesting, a subroutine that ends without return, defaultWidthX, a nominalWidthX delta, and one glyph whose charstring advance hmtx disagrees with
 cff-subset.otf	CFF: eight and sixteen stems before a hintmask (mask width on a multiple-of-eight boundary), three glyphs named in the font's own String INDEX, and a subroutine call, for the subsetter
 cff-type1.otf	CFF with CharstringType 1: Type 1 programs - hsbw, sbw, closepath, seac with its side-bearing correction, flex and hint replacement through callothersubr and pop, div, dotsection, hstem3 and setcurrentpoint

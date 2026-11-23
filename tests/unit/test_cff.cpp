@@ -2759,6 +2759,17 @@ TEST(CffHintEngine, BlueZonesLockTheEdgesInTheirOwnZonesAndTheStemsKeepTheirWidt
   EXPECT_EQ(h.points, want);
 }
 
+TEST(CffHintEngine, TheOutwardBiasIsNotCutBelowHalfAPixelWhereItIsLarger) {
+  // ppem 13 of 1000 units: 700 units are 9.1 px, and the bias is 0.6 * (1 - 0.013 / 0.039625) = 0.403 px, so
+  // the top of the stem is at 9.503 px and rounds to 10. A bias capped at 0.375 would leave it at 9.475 and 9.
+  Font font(hint_font_cff(rectangle_glyph({0, 20, 660, 20}, 0, 700), true));
+  ASSERT_EQ(font.result, GFNT_OK);
+  HintedOut h = hinted_at(font.face, 1, 13);
+  ASSERT_EQ(h.result, GFNT_OK);
+  ASSERT_EQ(h.points.size(), 4u);
+  EXPECT_EQ(h.points[2].second, 10 * 64);
+}
+
 TEST(CffHintEngine, ALargeSizeHasNoBiasAndTheFlatEdgeIsJustRounded) {
   // ppem 48 is past BlueScale (0.039625 * 1000 = 39.6): 700 * 0.048 = 33.6 px rounds to 34.
   Font font(hint_font_cff(rectangle_glyph({0, 20, 660, 20}, 0, 700), true));

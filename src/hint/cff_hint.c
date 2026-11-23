@@ -338,6 +338,204 @@ typedef struct GFNT_CffhFree {
   int64_t hi;
 } GFNT_CffhFree;
 
+/** The most positions tried for one free stem: its top, or its bottom, on each of six whole pixels, and where scaling leaves it. */
+#define GFNT_CFFH_CANDIDATES 13
+/** What leaving a stem unaligned costs, 16.16 pixels: more than any alignment it would otherwise take. */
+#define GFNT_CFFH_UNALIGNED_COST 0x20000
+/** Stems closer than this (0.75 pixel), scaled and before any fitting, are fitted together; the figure is the best of 0.5, 0.75, 1 and 2 against FreeType. */
+#define GFNT_CFFH_CLUSTER_GAP 0xC000
+#define GFNT_CFFH_INFEASIBLE INT64_MAX
+
+/**
+ * Place the free stems, those with no edge in a blue zone, bottom to top.
+ *
+ * Each stem is fitted by putting one of its edges on a whole pixel, or leaving it where scaling puts it,
+ * and the stems of a glyph are fitted *together*: the positions are chosen that move the stems least in
+ * total, subject to no stem coming within MIN_GAP of the edge below it, or within MIN_GAP under a locked
+ * edge above it. A stem alone takes the edge nearer a whole pixel (a tie goes to the top, and a half
+ * pixel rounds up), which is the same rule; stems that would collide are resolved by whichever of them
+ * can be moved the least, as measured against FreeType on stem pairs with gaps of 0.05 to 2 pixels.
+ */
+static void gfnt_cffh_place_cluster(GFNT_CffhMap * map, const GFNT_CffhEdge * blue, size_t blue_count,
+    const GFNT_CffhFree * pending, size_t count, int64_t scale) {
+  int64_t cost[GFNT_CS_MAX_STEMS][GFNT_CFFH_CANDIDATES];
+  int64_t bottom[GFNT_CS_MAX_STEMS][GFNT_CFFH_CANDIDATES];
+  int64_t total[GFNT_CS_MAX_STEMS][GFNT_CFFH_CANDIDATES];
+  uint8_t from[GFNT_CS_MAX_STEMS][GFNT_CFFH_CANDIDATES];
+  int64_t width[GFNT_CS_MAX_STEMS];
+  uint8_t pick[GFNT_CS_MAX_STEMS];
+
+  for (size_t i = 0; i < count; ++i) {
+    int64_t lo = pending[i].lo;
+    int64_t hi = pending[i].hi;
+    int64_t shift = gfnt_cffh_provisional(blue, blue_count, lo, hi, gfnt_cffh_half_floor(lo + hi), scale);
+    int64_t ls = gfnt_cffh_mul(lo, scale) + shift;
+    int64_t hs = gfnt_cffh_mul(hi, scale) + shift;
+    int64_t floor_below = 0;
+    int64_t ceiling_above = 0;
+    bool has_below = false;
+    bool has_above = false;
+    size_t n = 0;
+
+    width[i] = gfnt_cffh_mul(hi, scale) - gfnt_cffh_mul(lo, scale);
+    for (size_t k = 0; k < map->n; ++k) {
+      // Only the locked edges are in the map yet.
+      if (map->e[k].cs <= lo && (!has_below || map->e[k].ds > floor_below)) {
+        has_below = true;
+        floor_below = map->e[k].ds;
+      }
+      if (map->e[k].cs >= hi && (!has_above || map->e[k].ds < ceiling_above)) {
+        has_above = true;
+        ceiling_above = map->e[k].ds;
+      }
+    }
+    // The top on a whole pixel, then the bottom, each from the highest pixel down: with equal costs the
+    // first stays, so a tie goes to the top edge and a half pixel rounds up.
+    for (int pass = 0; pass < 2; ++pass) {
+      int64_t base = gfnt_cffh_round_px(pass == 0 ? hs : ls);
+
+      for (int o = 3; o >= -2; --o) {
+        int64_t line = base + (int64_t)o * 0x10000;
+        int64_t b = pass == 0 ? line - width[i] : line;
+        bool ok = true;
+
+        if (has_below && b - floor_below < GFNT_CFFH_MIN_GAP) {
+          ok = false;
+        }
+        if (has_above && b + width[i] > ceiling_above - GFNT_CFFH_MIN_GAP) {
+          ok = false;
+        }
+        bottom[i][n] = b;
+        cost[i][n] = ok ? gfnt_cffh_abs(b - ls) : GFNT_CFFH_INFEASIBLE;
+        n += 1u;
+      }
+    }
+    bottom[i][n] = ls;
+    cost[i][n] = GFNT_CFFH_UNALIGNED_COST;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    for (size_t c = 0; c < GFNT_CFFH_CANDIDATES; ++c) {
+      int64_t best = GFNT_CFFH_INFEASIBLE;
+      uint8_t source = 0;
+
+      if (cost[i][c] == GFNT_CFFH_INFEASIBLE) {
+        total[i][c] = GFNT_CFFH_INFEASIBLE;
+        from[i][c] = 0;
+        continue;
+      }
+      if (i == 0) {
+        best = 0;
+      }
+      else {
+        for (size_t p = 0; p < GFNT_CFFH_CANDIDATES; ++p) {
+          bool free_choice = c == GFNT_CFFH_CANDIDATES - 1u;   // an unaligned stem is not held to the gap
+
+          if (total[i - 1u][p] == GFNT_CFFH_INFEASIBLE) {
+            continue;
+          }
+          if (!free_choice && bottom[i][c] - (bottom[i - 1u][p] + width[i - 1u]) < GFNT_CFFH_MIN_GAP) {
+            continue;
+          }
+          if (best == GFNT_CFFH_INFEASIBLE || total[i - 1u][p] < best) {
+            best = total[i - 1u][p];
+            source = (uint8_t)p;
+          }
+        }
+      }
+      if (best == GFNT_CFFH_INFEASIBLE) {
+        total[i][c] = GFNT_CFFH_INFEASIBLE;
+      }
+      else {
+        total[i][c] = best + cost[i][c];
+      }
+      from[i][c] = source;
+    }
+  }
+  if (count == 0) {
+    return;
+  }
+  {
+    int64_t best = GFNT_CFFH_INFEASIBLE;
+    uint8_t at = GFNT_CFFH_CANDIDATES - 1u;
+
+    for (size_t c = 0; c < GFNT_CFFH_CANDIDATES; ++c) {
+      if (total[count - 1u][c] != GFNT_CFFH_INFEASIBLE && (best == GFNT_CFFH_INFEASIBLE || total[count - 1u][c] < best)) {
+        best = total[count - 1u][c];
+        at = (uint8_t)c;
+      }
+    }
+    for (size_t i = count; i-- > 0;) {
+      pick[i] = at;
+      at = from[i][at];
+    }
+  }
+  for (size_t i = 0; i < count; ++i) {
+    gfnt_cffh_set_edge(map, pending[i].lo, bottom[i][pick[i]]);
+    gfnt_cffh_set_edge(map, pending[i].hi, bottom[i][pick[i]] + width[i]);
+  }
+}
+
+/** One free stem alone: the edge nearer a whole pixel, then pushed up past the edge below it if it is too close. */
+static void gfnt_cffh_place_one(GFNT_CffhMap * map, const GFNT_CffhEdge * blue, size_t blue_count,
+    const GFNT_CffhFree * stem, int64_t scale) {
+  int64_t lo = stem->lo;
+  int64_t hi = stem->hi;
+  int64_t shift = gfnt_cffh_provisional(blue, blue_count, lo, hi, gfnt_cffh_half_floor(lo + hi), scale);
+  int64_t ls = gfnt_cffh_mul(lo, scale) + shift;
+  int64_t hs = gfnt_cffh_mul(hi, scale) + shift;
+  int64_t r0 = gfnt_cffh_round_px(ls) - ls;
+  int64_t r1 = gfnt_cffh_round_px(hs) - hs;
+  int64_t move = gfnt_cffh_abs(r0) < gfnt_cffh_abs(r1) - GFNT_CFFH_TIE ? r0 : r1;
+  int64_t placed = ls + move;
+  int64_t width = gfnt_cffh_mul(hi, scale) - gfnt_cffh_mul(lo, scale);
+  const GFNT_CffhEdge * below = NULL;
+  const GFNT_CffhEdge * above = NULL;
+
+  // A stem is not left closer than half a pixel to the edge below it: its bottom goes to the first
+  // whole pixel that clears it, unless that runs into the edge above, and then it stays where
+  // scaling (with the provisional shift) puts it.
+  for (size_t k = 0; k < map->n; ++k) {
+    if (map->e[k].cs <= lo && (!below || map->e[k].cs > below->cs || (map->e[k].cs == below->cs && map->e[k].ds > below->ds))) {
+      below = &map->e[k];
+    }
+    if (map->e[k].cs >= hi && (!above || map->e[k].cs < above->cs || (map->e[k].cs == above->cs && map->e[k].ds < above->ds))) {
+      above = &map->e[k];
+    }
+  }
+  if (below && placed - below->ds < GFNT_CFFH_MIN_GAP) {
+    int64_t candidate = gfnt_cffh_round_px(below->ds + GFNT_CFFH_MIN_GAP + 0x7FFF);
+
+    placed = above && candidate + width > above->ds - GFNT_CFFH_MIN_GAP ? ls : candidate;
+  }
+  gfnt_cffh_set_edge(map, lo, placed);
+  gfnt_cffh_set_edge(map, hi, placed + width);
+}
+
+/**
+ * Place the free stems bottom to top. Stems whose scaled gap to the next is under MIN_GAP *before* any
+ * fitting are inherently close and are fitted together (the least total movement, see above); the
+ * rest are fitted one at a time and pushed up past the edge below if rounding brought them too close.
+ */
+static void gfnt_cffh_place_free(GFNT_CffhMap * map, const GFNT_CffhEdge * blue, size_t blue_count,
+    const GFNT_CffhFree * pending, size_t count, int64_t scale) {
+  size_t i = 0;
+
+  while (i < count) {
+    size_t end = i + 1u;
+
+    while (end < count && gfnt_cffh_mul(pending[end].lo - pending[end - 1u].hi, scale) < GFNT_CFFH_CLUSTER_GAP) {
+      end += 1u;
+    }
+    if (end - i == 1u) {
+      gfnt_cffh_place_one(map, blue, blue_count, &pending[i], scale);
+    }
+    else {
+      gfnt_cffh_place_cluster(map, blue, blue_count, &pending[i], end - i, scale);
+    }
+    i = end;
+  }
+}
+
 /** Build the hint map of the stems in @p active. */
 static void gfnt_cffh_build(const GFNT_CharstringHints * hints, const bool * active,
     const GFNT_CharstringHintParams * params, int64_t scale, int64_t boost, GFNT_CffhMap * map) {
@@ -419,39 +617,7 @@ static void gfnt_cffh_build(const GFNT_CharstringHints * hints, const bool * act
     }
     pending[j] = key;
   }
-  for (size_t i = 0; i < pending_count; ++i) {
-    int64_t lo = pending[i].lo;
-    int64_t hi = pending[i].hi;
-    int64_t shift = gfnt_cffh_provisional(blue, blue_count, lo, hi, gfnt_cffh_half_floor(lo + hi), scale);
-    int64_t ls = gfnt_cffh_mul(lo, scale) + shift;
-    int64_t hs = gfnt_cffh_mul(hi, scale) + shift;
-    int64_t r0 = gfnt_cffh_round_px(ls) - ls;
-    int64_t r1 = gfnt_cffh_round_px(hs) - hs;
-    int64_t move = gfnt_cffh_abs(r0) < gfnt_cffh_abs(r1) - GFNT_CFFH_TIE ? r0 : r1;
-    int64_t placed = ls + move;
-    int64_t width = gfnt_cffh_mul(hi, scale) - gfnt_cffh_mul(lo, scale);
-    const GFNT_CffhEdge * below = NULL;
-    const GFNT_CffhEdge * above = NULL;
-
-    // A stem is not left closer than half a pixel to the edge below it: its bottom goes to the first
-    // whole pixel that clears it, unless that runs into the edge above, and then it stays where
-    // scaling (with the provisional shift) puts it.
-    for (size_t k = 0; k < map->n; ++k) {
-      if (map->e[k].cs <= lo && (!below || map->e[k].cs > below->cs || (map->e[k].cs == below->cs && map->e[k].ds > below->ds))) {
-        below = &map->e[k];
-      }
-      if (map->e[k].cs >= hi && (!above || map->e[k].cs < above->cs || (map->e[k].cs == above->cs && map->e[k].ds < above->ds))) {
-        above = &map->e[k];
-      }
-    }
-    if (below && placed - below->ds < GFNT_CFFH_MIN_GAP) {
-      int64_t candidate = gfnt_cffh_round_px(below->ds + GFNT_CFFH_MIN_GAP + 0x7FFF);
-
-      placed = above && candidate + width > above->ds - GFNT_CFFH_MIN_GAP ? ls : candidate;
-    }
-    gfnt_cffh_set_edge(map, lo, placed);
-    gfnt_cffh_set_edge(map, hi, placed + width);
-  }
+  gfnt_cffh_place_free(map, blue, blue_count, pending, pending_count, scale);
   for (size_t i = 0; i < ghost_count; ++i) {
     int64_t shift = gfnt_cffh_provisional(blue, blue_count, ghosts[i], ghosts[i], ghosts[i], scale);
 

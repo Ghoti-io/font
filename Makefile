@@ -1421,6 +1421,8 @@ check-oracle-autohint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.78 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script greek --floor 0.70 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script cyrillic --floor 0.78 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script hebrew --floor 0.88 --show 0 \
+		DejaVuSans.ttf DejaVuSans-Bold.ttf LiberationSans-Regular.ttf
 
 check-oracle-hint-probe: ## Run random hinting programs through this library and FreeType and compare every point
 check-oracle-hint-probe: $(EXAMPLES)

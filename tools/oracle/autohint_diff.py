@@ -32,6 +32,7 @@ DEFAULT = ["DejaVuSans.ttf", "DejaVuSerif.ttf", "DejaVuSans-Bold.ttf", "Liberati
 
 SCRIPTS = {"latin": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
            "greek": "ΑΒΓΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΩαβγδεζηθικλμνξοπρστυφχψω",
+           "hebrew": "אבגדהוזחטיכלמנסעפצקרשתךםןףץ",
            "cyrillic": "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЫЭЮЯабвгдежзийклмнопрстуфхцчшщыэюя"}
 
 

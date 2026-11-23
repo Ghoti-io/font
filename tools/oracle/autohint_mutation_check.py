@@ -59,6 +59,8 @@ MUTANTS = [
      "a Greek glyph is fitted with the Latin zones"),
     ("{0x370, 0x3FF, 0x1F00, 0x1FFF, 0, 0, 0, 0, 0, 0},", "{0x3C0, 0x3FF, 0x1F00, 0x1FFF, 0, 0, 0, 0, 0, 0},",
      "the Greek capitals are not mapped to the Greek script"),
+    ("{0x590, 0x5FF, 0xFB1D, 0xFB4F, 0, 0, 0, 0, 0, 0},", "{0x5D0, 0x5E0, 0xFB1D, 0xFB4F, 0, 0, 0, 0, 0, 0},",
+     "the Hebrew letters after lamed are not mapped to the Hebrew script"),
 ]
 
 SAMPLES = [

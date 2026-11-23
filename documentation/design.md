@@ -1711,9 +1711,12 @@ agrees:
 faces, fifteen sizes to 64 ppem); a generated face of boxes and ellipses (`latin-boxes.ttf`) at eleven sizes point for
 point; the Latin letters of ten faces at six sizes **79% of 2,946 glyphs exactly and 96% of points**, every advance and
 every x. **What it does not match:** the remaining letters (diagonals' vertices that FreeType treats as weak, the dots of
-`i` and `j` at some sizes, serif tips); the normal target (x fitting); scripts other than Latin, Greek and Cyrillic, which have no zones of their own
+`i` and `j` at some sizes, serif tips); the normal target (x fitting); scripts other than Latin, Greek, Cyrillic and Hebrew, which have no zones of their own
 and are fitted with the Latin ones (Greek matches FreeType exactly on 71% of the default set's glyphs and Cyrillic on
-79%; a generated Greek face point for point); and the scene provider does not use the mode yet.
+79%; Hebrew, which has a top zone, the baseline and a descender zone and no x-height, on 92% of the three sans faces
+that have it, and on none of a serif face whose letters end in hooks, whose top FreeType does not align the way it
+does a sans face's; a generated Greek and Hebrew face point for point). The scene provider serves the mode
+(`GSHSCENE_HINT_AUTO`, which does not read `gasp`, as the direct render does not).
 
 ### 8.6 The one unhinted rounding
 

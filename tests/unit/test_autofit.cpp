@@ -313,3 +313,20 @@ TEST(Autofit, AFaceWithNoGreekLettersIsFittedWithTheLatinZones) {
   ASSERT_EQ(h.result, GFNT_OK);
   EXPECT_EQ(top_of(h) % 64, 0);
 }
+
+TEST(Autofit, AHebrewLetterIsFittedToTheHebrewZones) {
+  // The Hebrew letters reach 640 and the final forms -250, heights no Latin zone has, and the script has no
+  // x-height to correct the scale by: the top, the baseline and the descender land on whole pixels by their
+  // own zones.
+  Fixture font("latin-greek-boxes.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  for (uint32_t ppem : {8u, 9u, 11u, 12u, 17u}) {
+    SCOPED_TRACE(ppem);
+    for (char32_t letter : {U'ב', U'ד', U'ר', U'ם', U'ך', U'ק'}) {
+      Hinted h = hinted(font.face, glyph_of(font.face, letter), ppem);
+      ASSERT_EQ(h.result, GFNT_OK);
+      EXPECT_EQ(top_of(h) % 64, 0) << (unsigned)letter << " top " << top_of(h);
+      EXPECT_EQ(bottom_of(h) % 64, 0) << (unsigned)letter << " bottom " << bottom_of(h);
+    }
+  }
+}

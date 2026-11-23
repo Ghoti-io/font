@@ -2681,12 +2681,16 @@ HintedOut hinted_at(const GFNT_Face * face, uint32_t glyph, uint32_t ppem) {
 }
 
 /** A face with the blue zones [-15, 0] and [700, 715] and one glyph, a rectangle x 100..200, y @p bottom..@p top. */
-std::vector<uint8_t> hint_font_cff(const std::vector<uint8_t> & glyph, bool with_blues) {
+std::vector<uint8_t> hint_font_cff(const std::vector<uint8_t> & glyph, bool with_blues, bool wide_zone = false) {
   CffSpec spec;
 
   spec.charstrings = {{14}, glyph};
   if (with_blues) {
     dict_entry(spec.private_extra, {dict_int(-15), dict_int(15), dict_int(700), dict_int(15)}, {6});
+  }
+  if (wide_zone) {
+    // OtherBlues [-300, -180]: 120 units wide, so BlueScale 0.039625 * 120 > 1.
+    dict_entry(spec.private_extra, {dict_int(-300), dict_int(120)}, {7});
   }
   return build_cff(spec);
 }
@@ -2732,6 +2736,32 @@ TEST(CffHintEngine, ALargeSizeHasNoBiasAndTheFlatEdgeIsJustRounded) {
   ASSERT_EQ(h.points.size(), 4u);
   EXPECT_EQ(h.points[0].second, 0);
   EXPECT_EQ(h.points[2].second, 34 * 64);
+}
+
+TEST(CffHintEngine, AnOvershootOfBlueShiftOrMoreIsAPixelOnceBlueScaleIsPast) {
+  // The stem [-10, 10] overshoots the baseline zone [-15, 0] by 10 units, which is over BlueShift (7).
+  // Ordinarily 12 ppem is below BlueScale and the overshoot is flattened to the baseline.
+  Font plain(hint_font_cff(rectangle_glyph({-10, 20}, -10, 10), true));
+  ASSERT_EQ(plain.result, GFNT_OK);
+  HintedOut a = hinted_at(plain.face, 1, 12);
+  ASSERT_EQ(a.result, GFNT_OK);
+  ASSERT_EQ(a.points.size(), 4u);
+  EXPECT_EQ(a.points[0].second, 0);
+  // A zone 120 units wide limits BlueScale to 1/120: 12 ppem (0.012) is past it, and the overshoot is kept
+  // as a whole pixel below the baseline.
+  Font wide(hint_font_cff(rectangle_glyph({-10, 20}, -10, 10), true, true));
+  ASSERT_EQ(wide.result, GFNT_OK);
+  HintedOut b = hinted_at(wide.face, 1, 12);
+  ASSERT_EQ(b.result, GFNT_OK);
+  ASSERT_EQ(b.points.size(), 4u);
+  EXPECT_EQ(b.points[0].second, -64);
+  // An overshoot under BlueShift (6 units) is flattened even there.
+  Font small(hint_font_cff(rectangle_glyph({-6, 16}, -6, 10), true, true));
+  ASSERT_EQ(small.result, GFNT_OK);
+  HintedOut c = hinted_at(small.face, 1, 12);
+  ASSERT_EQ(c.result, GFNT_OK);
+  ASSERT_EQ(c.points.size(), 4u);
+  EXPECT_EQ(c.points[0].second, 0);
 }
 
 TEST(CffHintEngine, AStemInNoZoneMovesWhicheverOfItsEdgesIsNearerAPixel) {

@@ -1639,8 +1639,11 @@ from the stems that mask turns on:
    to the zone's flat position: `round(flat * s + b)` for a top zone and `round(flat * s - b)` for a bottom one, with the
    outward bias `b = 0.6 * max(0, 1 - s / BlueScale)` never over half a pixel, so that overshoot is suppressed more at small
    sizes and not at all at `BlueScale` (39.6 ppem at the default). At and above that size an edge on the flat position is
-   rounded and an overshoot edge keeps its overshoot, rounded outward with a bias of 0.2. The stem's other edge follows at
-   the stem's own width: stems are rigid.
+   rounded and an overshoot edge keeps its overshoot, rounded outward with a bias of 0.2, except that an overshoot under
+   `BlueShift` units is flattened and one of `BlueShift` or more is at least a pixel. `BlueScale` is itself limited to the
+   reciprocal of the widest blue zone's width, so a font with a 114-unit descender zone stops suppressing overshoot at
+   9 ppem and not at 45 (measured on TeX Gyre Schola Math). The stem's other edge follows at the stem's own width: stems
+   are rigid.
 2. A stem with no locked edge is placed from the locked edges alone, never from other free stems: a provisional shift
    (interpolated at its centre between the locked edges on either side; the nearest one's when one side only, with an
    implicit anchor at y = 0 when the locked edges are all above; none when there are none), then whichever of its two edges

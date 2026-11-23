@@ -6,7 +6,7 @@
 # This file is part of Ghoti.io Font.
 """Where FreeType puts a blue-zone edge, as a table (plan C2, experiment 3).
 
-    hint_cff_zones.py [--pool sfnt|type1] [--fonts N] [--stride N] [--ppem N[,N...]]
+    hint_cff_zones.py [--pool sfnt|type1] [--fonts N] [--stride N] [--ppem N[,N...]] [--only FILE]
 
 One tab-separated row per (font, size, stem edge inside a blue zone): the zone's bounds and
 flat position in font units, the edge's own position, and the 26.6 height FreeType's hinted
@@ -24,7 +24,7 @@ import hint_cff_edges as edges
 
 
 def main(argv):
-    pool, limit, stride = "sfnt", None, 7
+    pool, limit, stride, only = "sfnt", None, 7, None
     ppems = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32]
     args = argv[1:]
     while args:
@@ -35,11 +35,15 @@ def main(argv):
             limit = int(args.pop(0))
         elif a == "--stride":
             stride = int(args.pop(0))
+        elif a == "--only":
+            only = args.pop(0)
         elif a == "--ppem":
             ppems = [int(v) for v in args.pop(0).split(",")]
     paths = corpus.fonts(pool)
     if pool == "sfnt":
         paths = [p for p in paths if explore.is_cff(p)]
+    if only:
+        paths = [p for p in paths if os.path.basename(p) == only]
     if limit:
         paths = paths[:limit]
     print("font\tppem\tupem\tzone\tlo\thi\tflat\tedge\thinted\tglyphs\tblue_scale\tblue_shift\tblue_fuzz")

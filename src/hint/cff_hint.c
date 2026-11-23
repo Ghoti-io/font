@@ -231,7 +231,7 @@ static size_t gfnt_cffh_zones(const GFNT_CharstringHintParams * params, GFNT_Cff
 }
 
 /** Where a locked edge goes, or false when @p cs is in no zone of @p top's side. */
-static bool gfnt_cffh_locked(const GFNT_CffhZone * zones, size_t zone_count, int64_t fuzz, int64_t cs,
+static bool gfnt_cffh_locked(const GFNT_CffhZone * zones, size_t zone_count, int64_t fuzz, int64_t shift, int64_t cs,
     bool top, int64_t scale, int64_t boost, int64_t * out) {
   for (size_t i = 0; i < zone_count; ++i) {
     const GFNT_CffhZone * z = &zones[i];
@@ -244,9 +244,18 @@ static bool gfnt_cffh_locked(const GFNT_CffhZone * zones, size_t zone_count, int
     if (boost == 0 && cs != z->flat) {
       // At or above BlueScale: the overshoot is kept, rounded outward.
       int64_t overshoot = gfnt_cffh_mul(cs - z->flat, scale);
+      int64_t kept = gfnt_cffh_round_px(overshoot + (z->top ? GFNT_CFFH_OVERSHOOT_BIAS : -GFNT_CFFH_OVERSHOOT_BIAS));
+      int64_t units = cs > z->flat ? cs - z->flat : z->flat - cs;
 
-      *out = gfnt_cffh_round_px(v)
-          + gfnt_cffh_round_px(overshoot + (z->top ? GFNT_CFFH_OVERSHOOT_BIAS : -GFNT_CFFH_OVERSHOOT_BIAS));
+      if (units < shift) {
+        // An overshoot under BlueShift is flattened at any size.
+        kept = 0;
+      }
+      else if (z->top ? kept < 0x10000 : kept > -0x10000) {
+        // At or over it, the overshoot is at least a pixel.
+        kept = z->top ? 0x10000 : -0x10000;
+      }
+      *out = gfnt_cffh_round_px(v) + kept;
     }
     else {
       *out = gfnt_cffh_round_px(z->top ? v + boost : v - boost);
@@ -254,6 +263,37 @@ static bool gfnt_cffh_locked(const GFNT_CffhZone * zones, size_t zone_count, int
     return true;
   }
   return false;
+}
+
+/**
+ * BlueScale as the engine applies it. A font whose widest blue zone times BlueScale exceeds one pixel
+ * asks for overshoot suppression at sizes where that zone is taller than a pixel; the engine then
+ * limits BlueScale to the reciprocal of that width, so suppression ends where the widest zone
+ * reaches a pixel. (Measured: TeX Gyre Schola Math, a 114-unit descender zone with BlueScale 0.0455,
+ * stops suppressing at 9 ppem, not at 45.)
+ */
+static int64_t gfnt_cffh_effective_blue_scale(const GFNT_CharstringHintParams * params) {
+  int64_t widest = 0;
+  int64_t scale = params->blue_scale;
+
+  for (size_t i = 0; i + 1u < params->blue_value_count; i += 2u) {
+    int64_t w = (int64_t)params->blue_values[i + 1u] - params->blue_values[i];
+
+    widest = w > widest ? w : widest;
+  }
+  for (size_t i = 0; i + 1u < params->other_blue_count; i += 2u) {
+    int64_t w = (int64_t)params->other_blues[i + 1u] - params->other_blues[i];
+
+    widest = w > widest ? w : widest;
+  }
+  if (widest > 0 && scale > 0) {
+    int64_t limit = gfnt_cffh_div(0x10000, widest);
+
+    if (limit < scale) {
+      scale = limit;
+    }
+  }
+  return scale;
 }
 
 /** The provisional shift at @p cs from the locked edges @p blue (sorted), as the rules say. */
@@ -304,6 +344,7 @@ static void gfnt_cffh_build(const GFNT_CharstringHints * hints, const bool * act
   GFNT_CffhZone zones[GFNT_CFFH_MAX_ZONES];
   size_t zone_count = gfnt_cffh_zones(params, zones);
   int64_t fuzz = params->blue_fuzz;
+  int64_t shift = params->blue_shift;
   GFNT_CffhFree pending[GFNT_CS_MAX_STEMS];
   int64_t ghosts[GFNT_CS_MAX_STEMS];
   GFNT_CffhEdge blue[GFNT_CFFH_MAX_EDGES];
@@ -328,7 +369,7 @@ static void gfnt_cffh_build(const GFNT_CharstringHints * hints, const bool * act
       bool top = width == -20 * GFNT_F16DOT16_ONE;
       int64_t cs = top ? edge : edge + width;
 
-      if (gfnt_cffh_locked(zones, zone_count, fuzz, cs, top, scale, boost, &at)) {
+      if (gfnt_cffh_locked(zones, zone_count, fuzz, shift, cs, top, scale, boost, &at)) {
         gfnt_cffh_set_edge(map, cs, at);
       }
       else if (ghost_count < GFNT_CS_MAX_STEMS) {
@@ -341,8 +382,8 @@ static void gfnt_cffh_build(const GFNT_CharstringHints * hints, const bool * act
     {
       int64_t a = 0;
       int64_t b = 0;
-      bool lock_lo = gfnt_cffh_locked(zones, zone_count, fuzz, lo, false, scale, boost, &a);
-      bool lock_hi = gfnt_cffh_locked(zones, zone_count, fuzz, hi, true, scale, boost, &b);
+      bool lock_lo = gfnt_cffh_locked(zones, zone_count, fuzz, shift, lo, false, scale, boost, &a);
+      bool lock_hi = gfnt_cffh_locked(zones, zone_count, fuzz, shift, hi, true, scale, boost, &b);
 
       if (lock_lo && lock_hi) {
         gfnt_cffh_set_edge(map, lo, a);
@@ -586,7 +627,7 @@ GFNT_Result gfnt_cffhint_glyph_outline(const GFNT_Face * face, const GFNT_CffHin
   }
   {
     // The outward bias fades from 0.6 pixel to nothing at BlueScale.
-    int64_t blue_scale = params.blue_scale;
+    int64_t blue_scale = gfnt_cffh_effective_blue_scale(&params);
 
     if (blue_scale > 0 && scale < blue_scale) {
       int64_t remaining = 0x10000 - gfnt_cffh_div(scale, blue_scale);

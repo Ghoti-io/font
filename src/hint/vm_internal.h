@@ -105,6 +105,7 @@ struct GFNT_HintContext {
   GFNT_HintFault fault;
   /** Set for a CFF, CFF2 or Type 1 face, which is hinted by its stems and blue zones and has no program; every other field is then unused. */
   struct GFNT_CffHint * charstring;
+  struct GFNT_Autofit * autofit;   ///< Set for ::GFNT_HINT_MODE_AUTO: the automatic hinter, which reads no program.
 };
 
 struct GFNT_HintRun {

@@ -6,7 +6,7 @@
 # This file is part of Ghoti.io Font.
 """Hinted CFF and Type 1 outlines, this library against FreeType, point by point (plan C4).
 
-    hint_cff_diff.py [--pool sfnt|type1] [--ppem N[,N...]] [--stride N] [--fonts N] [--fonts-skip N] [--files PATH[,PATH...]]
+    hint_cff_diff.py [--pool sfnt|type1] [--ppem N[,N...]] [--stride N] [--fonts N] [--fonts-skip N] [--files PATH[,PATH...]] [--auto]
 
 For each glyph of each CFF-flavoured font (or Type 1 program) at each size, the outline this
 library hints from its stems and blue zones is compared with FreeType's, as integers in 26.6.
@@ -28,14 +28,16 @@ ROOT = hint_diff.ROOT
 DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples", "font-hint-cff")
 
 
-def ours(path, ppem, stride, coords="-"):
-    done = subprocess.run([DRIVER, path, "0", str(ppem), str(stride), "0", coords], capture_output=True, text=True)
+def ours(path, ppem, stride, coords="-", auto=False):
+    done = subprocess.run([DRIVER, path, "0", str(ppem), str(stride), "0", coords] + (["auto"] if auto else []),
+                          capture_output=True, text=True)
     if done.returncode != 0:
         return None
     return hint_diff.parse(done.stdout)
 
 
 def main(argv):
+    auto = False
     pool, ppems, stride, limit, floor, dump, coords, only, files = "sfnt", [9, 12, 17, 32], 11, None, 0.0, None, "-", None, None
     args = argv[1:]
     while args:
@@ -52,6 +54,8 @@ def main(argv):
             floor = float(args.pop(0))
         elif a == "--coords":
             coords = args.pop(0)
+        elif a == "--auto":
+            auto = True
         elif a == "--only":
             only = args.pop(0)
         elif a == "--files":
@@ -59,7 +63,7 @@ def main(argv):
         elif a == "--dump":
             dump = open(args.pop(0), "w")
     paths = corpus.fonts(pool)
-    if pool == "sfnt":
+    if pool == "sfnt" and not auto:
         paths = [p for p in paths if explore.is_cff(p)]
     if files:
         paths = files
@@ -71,8 +75,8 @@ def main(argv):
     shown = 0
     for path in paths:
         for ppem in ppems:
-            mine = ours(path, ppem, stride, coords)
-            theirs, _ = hint_diff.theirs(path, 35, ppem, stride, coords)
+            mine = ours(path, ppem, stride, coords, auto)
+            theirs, _ = hint_diff.theirs(path, 35, ppem, stride, coords, "autolight" if auto else "normal")
             if mine is None or theirs is None:
                 continue
             for glyph, answer in sorted(mine.items()):

@@ -102,10 +102,10 @@ def ours(path, version, ppem, stride, coords="-"):
     return parse(done.stdout), ""
 
 
-def theirs(path, version, ppem, stride, coords="-"):
+def theirs(path, version, ppem, stride, coords="-", target="normal"):
     argv = oracle_env.command("freetype", ["freetype-hinted", path, "0",
                                             str(version), str(ppem),
-                                            str(stride), "0", "normal", coords])
+                                            str(stride), "0", target, coords])
     done = subprocess.run(argv, capture_output=True, text=True)
     if done.returncode != 0:
         return None, done.stderr.strip()[-200:]

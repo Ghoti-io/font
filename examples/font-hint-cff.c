@@ -24,7 +24,9 @@
  * Print every glyph's hinted outline of a CFF, CFF2 or Type 1 face at a pixel size, in the
  * form the FreeType oracle driver prints it, so the two can be compared line by line.
  *
- * Usage: font-hint-cff <font> <face> <ppem> <stride> <first> [coords]
+ * Usage: font-hint-cff <font> <face> <ppem> <stride> <first> [coords [auto]]
+ *
+ * `auto` hints with the automatic hinter instead of the face's own stems.
  *
  * `coords` is an optional location for a `CFF2` face: comma-separated normalised coordinates in 2.14, or `-`.
  *
@@ -74,7 +76,8 @@ int main(int argc, char ** argv) {
       c = *end == ',' ? end + 1 : end;
     }
     result = gfnt_hint_context_create(face, (uint32_t)strtoul(argv[3], NULL, 10), GFNT_HINT_VERSION_AUTO,
-        GFNT_HINT_MODE_FONT, variation.count ? &variation : NULL, &ctx, &error);
+        argc > 7 && strcmp(argv[7], "auto") == 0 ? GFNT_HINT_MODE_AUTO : GFNT_HINT_MODE_FONT,
+        variation.count ? &variation : NULL, &ctx, &error);
   }
   if (result != GFNT_OK || gfnt_face_num_glyphs(face, &glyphs, &error) != GFNT_OK) {
     fprintf(stderr, "%s: %s\n", argv[1], gfnt_result_string(result));

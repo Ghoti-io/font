@@ -3531,6 +3531,72 @@ def build_cff_stems(out):
     fb.save(out)
 
 
+def build_latin_boxes(out):
+    """The Latin letters the automatic hinter measures a face by, as boxes and ellipses.
+
+    Capitals are boxes to the capital height, the ascenders and the dotted letters to the ascender height,
+    the small letters to the x-height and the descenders to the descender depth; `o`, `e`, `s`, `c` and `O`
+    are ellipses, so that their extremes are round and overshoot the flat ones. Not a typeface: a face the
+    automatic hinter can be given and its zones known in advance (`make check-oracle-autohint` compares
+    its glyphs with FreeType's).
+    """
+    cap, asc, xh, desc, over = 700, 760, 500, -210, 12
+    order = [".notdef", "space"]
+    glyphs = {".notdef": TTGlyphPen(None).glyph(), "space": TTGlyphPen(None).glyph()}
+    cmap = {0x20: "space"}
+
+    def box(left, bottom, right, top):
+        pen = TTGlyphPen(None)
+        pen.moveTo((left, bottom))
+        pen.lineTo((left, top))
+        pen.lineTo((right, top))
+        pen.lineTo((right, bottom))
+        pen.closePath()
+        return pen.glyph()
+
+    def ellipse(left, bottom, right, top):
+        cx, cy = (left + right) // 2, (bottom + top) // 2
+        pen = TTGlyphPen(None)
+        pen.moveTo((cx, top))
+        pen.qCurveTo((left, top), (left, cy))
+        pen.qCurveTo((left, bottom), (cx, bottom))
+        pen.qCurveTo((right, bottom), (right, cy))
+        pen.qCurveTo((right, top), (cx, top))
+        pen.closePath()
+        return pen.glyph()
+
+    for ch in "THEZQCSDGJBPRUVWXYAKLMNFI":
+        name = {"I": "I"}.get(ch, ch)
+        order.append(name)
+        cmap[ord(ch)] = name
+        glyphs[name] = box(100, 0, 500, cap)
+    for ch in "O":
+        order.append(ch)
+        cmap[ord(ch)] = ch
+        glyphs[ch] = ellipse(80, -over, 520, cap + over)
+    for ch in "fijkdbhl":
+        order.append(ch)
+        cmap[ord(ch)] = ch
+        glyphs[ch] = box(100, 0, 300, asc)
+    for ch in "xzrnmuvwa":
+        order.append(ch)
+        cmap[ord(ch)] = ch
+        glyphs[ch] = box(80, 0, 440, xh)
+    for ch in "oesc":
+        order.append(ch)
+        cmap[ord(ch)] = ch
+        glyphs[ch] = ellipse(60, -over, 440, xh + over)
+    for ch in "pqgjy":
+        if ch in order:
+            continue
+        order.append(ch)
+        cmap[ord(ch)] = ch
+        glyphs[ch] = box(80, desc, 440, xh)
+    fb = truetype("Latin boxes", [subtable(4, 3, 1, cmap)], order=order, glyphs=glyphs,
+        advances={name: 600 for name in order})
+    fb.save(out)
+
+
 def build_cff_cid(out):
     """A CID-keyed font: an `FDArray`, an `FDSelect`, and a charset of CIDs.
 
@@ -5357,6 +5423,9 @@ FIXTURES = {
     "cff-stems.otf": (build_cff_stems,
         "CFF: 270 glyphs of two free horizontal stems each, at widths of 30, 50 and 80 units and gaps of 4 to "
         "150, with no blue zones, for how two stems that would collide are fitted"),
+    "latin-boxes.ttf": (build_latin_boxes,
+        "glyf: the Latin letters a face is measured by, as boxes and ellipses (capitals to 700, ascenders to "
+        "760, small letters to 500, descenders to -210, round ones overshooting by 12), for the automatic hinter"),
     "cff-names.otf": (build_cff_names,
         "CFF: a Top DICT stating FullName and FamilyName as strings of its own, after "
         "the glyph names, for the subsetter's rename"),

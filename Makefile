@@ -1409,6 +1409,10 @@ check-oracle-autohint: ## The automatic hinter's model (blue zones, x-height sca
 check-oracle-autohint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_zones_diff.py
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_edges_diff.py --floor 0.85 --show 0
+	@python3 $(ORACLE)/oracle_run.py freetype -- \
+		python3 $(ORACLE)/hint_cff_diff.py --auto --pool sfnt --files tests/data/fonts/latin-boxes.ttf \
+		--ppem 9,10,11,12,13,14,16,17,20,24,32 --stride 1 --floor 1.0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.78 --show 0
 
 check-oracle-hint-probe: ## Run random hinting programs through this library and FreeType and compare every point
 check-oracle-hint-probe: $(EXAMPLES)

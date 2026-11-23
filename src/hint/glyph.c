@@ -35,6 +35,7 @@
 
 #include "vm_internal.h"
 #include "cff_hint.h"
+#include "autofit.h"
 
 #include <string.h>
 
@@ -724,6 +725,12 @@ GFNT_Result gfnt_hint_glyph_outline_in(const GFNT_Face * face,
   if (!face || !ctx || !out || !status) return GFNT_ERR_INVALID;
   *out = NULL;
   if (advance_out) *advance_out = 0;
+  if (ctx->autofit) {
+    // The automatic hinter: no program, no touch bits, no fault to report.
+    if (fault) memset(fault, 0, sizeof *fault);
+    if (normalised) *normalised = false;
+    return gfnt_autofit_glyph_outline(face, ctx->autofit, glyph, out_allocator, out, status, advance_out, error);
+  }
   if (ctx->charstring) {
     // A CFF, CFF2 or Type 1 face: no program, no touch bits, no fault to report.
     if (fault) memset(fault, 0, sizeof *fault);

@@ -28,6 +28,7 @@
 #include "vm.h"
 #include "vm_internal.h"
 #include "cff_hint.h"
+#include "autofit.h"
 
 #include <ghoti.io/font/hint.h>
 #include "../sfnt/sfnt.h"
@@ -80,12 +81,34 @@ GFNT_Result gfnt_hint_context_create(const GFNT_Face * face, uint32_t ppem,
       && version != GFNT_HINT_VERSION_40) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0, "not a hinting version");
   }
-  if (mode != GFNT_HINT_MODE_FONT && mode != GFNT_HINT_MODE_FONT_STRICT) {
+  if (mode != GFNT_HINT_MODE_FONT && mode != GFNT_HINT_MODE_FONT_STRICT && mode != GFNT_HINT_MODE_AUTO) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0,
-        "a context is made for the font's own program, tolerant or strict");
+        "a context is made for the font's own program, tolerant or strict, or for the automatic hinter");
   }
   if (variation && variation->count && !variation->coords) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0, "a variation with a count and no coordinates");
+  }
+  if (mode == GFNT_HINT_MODE_AUTO) {
+    // The automatic hinter fits any outline face from its shapes and reads no program.
+    GFNT_HintContext * context;
+    GFNT_Result made;
+
+    if (!gfnt_autofit_applies(face)) {
+      return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, 0, 0, 0, "the automatic hinter fits outline faces");
+    }
+    context = face->allocator->calloc_fn(face->allocator->ctx, 1, sizeof *context);
+    if (!context) {
+      return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, 0, "no memory for the hinting context");
+    }
+    context->allocator = face->allocator;
+    context->usable = true;
+    made = gfnt_autofit_create(face, ppem, variation, &context->autofit, error);
+    if (made != GFNT_OK) {
+      face->allocator->free_fn(face->allocator->ctx, context);
+      return made;
+    }
+    *out_context = context;
+    return GFNT_OK;
   }
   if (gfnt_cffhint_applies(face)) {
     // A CFF, CFF2 or Type 1 face has no program: it is hinted by its stems and blue zones.

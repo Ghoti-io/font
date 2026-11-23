@@ -51,6 +51,7 @@
 #include <ghoti.io/font/charstring.h>
 #include <ghoti.io/font/font.h>
 #include <ghoti.io/font/outline.h>
+#include "hint_check.h"
 
 #include "../sfnt_builder.h"
 
@@ -201,6 +202,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
         for (size_t i = 0; i < axes; ++i) {
           still = still && place[i] == 0;
         }
+        gfntfuzz::check_hinting(face, index, 6u + (index * 13u + static_cast<uint32_t>(options)) % 58u, &at);
         const std::vector<int32_t> a = points_of(face, index, &at, &first);
         const std::vector<int32_t> b = points_of(face, index, &at, &second);
 

@@ -32,6 +32,7 @@
 #include <ghoti.io/font/metrics.h>
 #include <ghoti.io/font/name.h>
 #include <ghoti.io/font/outline.h>
+#include "hint_check.h"
 #include <ghoti.io/font/raster.h>
 
 namespace {
@@ -130,6 +131,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
     gfnt_outline_control_box(outline, &control);
     gfnt_outline_dump(outline, sink());
     gfnt_outline_destroy(outline);
+    gfntfuzz::check_hinting(face, glyph, 6u + (glyph * 13u) % 58u, nullptr);
 
     // And through the scan converter at one small size, because the em came from
     // a FontMatrix the file chose and a wrong one lands in the rasteriser.

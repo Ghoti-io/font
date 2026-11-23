@@ -1711,8 +1711,9 @@ agrees:
 faces, fifteen sizes to 64 ppem); a generated face of boxes and ellipses (`latin-boxes.ttf`) at eleven sizes point for
 point; the Latin letters of ten faces at six sizes **79% of 2,946 glyphs exactly and 96% of points**, every advance and
 every x. **What it does not match:** the remaining letters (diagonals' vertices that FreeType treats as weak, the dots of
-`i` and `j` at some sizes, serif tips); the normal target (x fitting); every script but Latin, whose own zones are not
-known, so a glyph of another script is fitted with the Latin ones; and the scene provider does not use the mode yet.
+`i` and `j` at some sizes, serif tips); the normal target (x fitting); scripts other than Latin, Greek and Cyrillic, which have no zones of their own
+and are fitted with the Latin ones (Greek matches FreeType exactly on 71% of the default set's glyphs and Cyrillic on
+79%; a generated Greek face point for point); and the scene provider does not use the mode yet.
 
 ### 8.6 The one unhinted rounding
 

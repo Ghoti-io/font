@@ -89,7 +89,7 @@ typedef struct AfScript {
 
 enum {
   AF_LATIN, AF_GREEK, AF_CYRILLIC, AF_HEBREW, AF_ARABIC, AF_GEORGIAN, AF_ARMENIAN,
-#define AF_X_ENUM(name, standard, t0, t1, t2, t3, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) AF_GEN_##name,
+#define AF_X_ENUM(name, standard, t0, t1, t2, t3, t4, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) AF_GEN_##name,
   AF_GENERATED_SCRIPTS(AF_X_ENUM)
 #undef AF_X_ENUM
   AF_SCRIPTS
@@ -119,8 +119,8 @@ static const struct {
   {{U"اكلطظ", U"ادذ", U"", U"", U"", U"جحخرزصعغ"}, U'ا'},
   {{U"", U"ბზთმნოპსშჩძწხჰ", U"ბზმნპსშჩძწხჰ", U"ვეთოფღ", U"", U"გდეკლფღყც"}, U'ო'},
   {{U"ԲԴԸԼԿՂՈՊՌՐՒԱԵԺՍՏՕ", U"ԲԴԸԼԿՂՈՊՌՐՒԱԵԺՍՏՕ", U"եէժիխկձհճմնվփ", U"ապոռսւօտ", U"ապոռսւօտ", U"բգդզըթլղշչպջրցքիխկվփ"}, U'ո'},
-#define AF_X_ZONES(name, standard, t0, t1, t2, t3, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) \
-  {{t0, t1, t2, U"", U"", t3}, standard},
+#define AF_X_ZONES(name, standard, t0, t1, t2, t3, t4, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) \
+  {{t0, t1, t2, t3, U"", t4}, standard},
   AF_GENERATED_SCRIPTS(AF_X_ZONES)
 #undef AF_X_ZONES
 };
@@ -794,7 +794,7 @@ static const uint32_t af_ranges[AF_SCRIPTS][10] = {
   {0x600, 0x6FF, 0x750, 0x77F, 0xFB50, 0xFDFF, 0xFE70, 0xFEFF, 0, 0},
   {0x10D0, 0x10FF, 0x1C90, 0x1CBF, 0x2D00, 0x2D2F, 0, 0, 0, 0},
   {0x530, 0x58F, 0xFB13, 0xFB17, 0, 0, 0, 0, 0, 0},
-#define AF_X_RANGES(name, standard, t0, t1, t2, t3, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) \
+#define AF_X_RANGES(name, standard, t0, t1, t2, t3, t4, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) \
   {r0, r1, r2, r3, r4, r5, r6, r7, r8, r9},
   AF_GENERATED_SCRIPTS(AF_X_RANGES)
 #undef AF_X_RANGES

@@ -349,3 +349,19 @@ TEST(Autofit, AnArabicLetterIsFittedToTheArabicZones) {
     }
   }
 }
+
+TEST(Autofit, AGeorgianLetterIsFittedToTheGeorgianZones) {
+  // The round letters reach 552 and the tall ones 780: the script has an x-height of its own, which
+  // corrects the scale, so each end lands on a whole pixel by its own zone.
+  Fixture font("latin-greek-boxes.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  for (uint32_t ppem : {8u, 9u, 11u, 12u, 17u}) {
+    SCOPED_TRACE(ppem);
+    for (char32_t letter : {U'ბ', U'მ', U'თ', U'გ', U'ფ'}) {
+      Hinted h = hinted(font.face, glyph_of(font.face, letter), ppem);
+      ASSERT_EQ(h.result, GFNT_OK);
+      EXPECT_EQ(top_of(h) % 64, 0) << (unsigned)letter << " top " << top_of(h);
+      EXPECT_EQ(bottom_of(h) % 64, 0) << (unsigned)letter << " bottom " << bottom_of(h);
+    }
+  }
+}

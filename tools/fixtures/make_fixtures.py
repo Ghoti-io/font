@@ -3598,7 +3598,7 @@ def build_cff_stems(out):
     fb.save(out)
 
 
-def build_latin_boxes(out, cap=700, asc=760, xh=500, desc=-210, over=12, family="Latin boxes", greek=None, hebrew=None, arabic=None):
+def build_latin_boxes(out, cap=700, asc=760, xh=500, desc=-210, over=12, family="Latin boxes", greek=None, hebrew=None, arabic=None, georgian=None):
     """The Latin letters the automatic hinter measures a face by, as boxes and ellipses.
 
     Capitals are boxes to the capital height, the ascenders and the dotted letters to the ascender height,
@@ -3716,6 +3716,22 @@ def build_latin_boxes(out, cap=700, asc=760, xh=500, desc=-210, over=12, family=
             order.append("a" + ch)
             cmap[ord(ch)] = "a" + ch
             glyphs["a" + ch] = box(100, adesc, 500, aheight)
+    if georgian:
+        # Georgian: round letters to an x-height of its own (which corrects the scale), tall ones, and ones
+        # that hang below the baseline.
+        gxh, gasc, gdesc = georgian
+        for ch in "თო":
+            order.append("k" + ch)
+            cmap[ord(ch)] = "k" + ch
+            glyphs["k" + ch] = ellipse(60, -over, 440, gxh + over)
+        for ch in "ბზმნპსშჩძწხჰ":
+            order.append("k" + ch)
+            cmap[ord(ch)] = "k" + ch
+            glyphs["k" + ch] = box(100, 0, 300, gasc)
+        for ch in "გდევკლფღყც":
+            order.append("k" + ch)
+            cmap[ord(ch)] = "k" + ch
+            glyphs["k" + ch] = ellipse(60, gdesc, 440, gxh + over)
     fb = truetype(family, [subtable(4, 3, 1, cmap)], order=order, glyphs=glyphs,
         advances={name: 600 for name in order})
     fb.save(out)
@@ -3724,7 +3740,7 @@ def build_latin_boxes(out, cap=700, asc=760, xh=500, desc=-210, over=12, family=
 def build_latin_greek_boxes(out):
     """The Latin boxes with Greek letters of other heights (capitals 740, ascenders 800, x-height 560), so that
     the Greek zones can be told from the Latin ones."""
-    build_latin_boxes(out, family="Latin and Greek boxes", greek=(740, 800, 560, -230), hebrew=(640, -250), arabic=(900, -300, 450))
+    build_latin_boxes(out, family="Latin and Greek boxes", greek=(740, 800, 560, -230), hebrew=(640, -250), arabic=(900, -300, 450), georgian=(540, 780, -240))
 
 
 def build_latin_boxes_tall(out):
@@ -5571,7 +5587,7 @@ FIXTURES = {
         "scale correction that is skipped when it would move the tallest zone by two pixels"),
     "latin-greek-boxes.ttf": (build_latin_greek_boxes,
         "glyf: the Latin boxes with Greek letters of other heights (capitals 740, ascenders 800, small letters 560), "
-        "Hebrew letters (tops at 640, final forms to -250) and Arabic ones (tall letters to 900, hanging ones to -300), for the automatic hinter's zones of a script of its own"),
+        "Hebrew letters (tops at 640, final forms to -250) Arabic ones (tall letters to 900, hanging ones to -300) and Georgian ones (small letters to 540, tall to 780), for the automatic hinter's zones of a script of its own"),
     "cff-names.otf": (build_cff_names,
         "CFF: a Top DICT stating FullName and FamilyName as strings of its own, after "
         "the glyph names, for the subsetter's rename"),

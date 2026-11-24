@@ -125,7 +125,7 @@ which of them this library takes, and which of those it reads today.
 | | OpenType layout: `GDEF`/`GSUB`/`GPOS` | **required**, implemented: every lookup type, `FeatureVariations`, variation-indexed device tables. `BASE` is read for baseline alignment; `JSTF` is parsed for the justifier (§10.6) |
 | | WOFF 2 | **implemented** (§7.1): one Brotli stream through `compress`, `glyf`/`loca` and `hmtx` transforms undone, collections rebuilt as `ttcf`; the metadata and private blocks are range-checked and not read. **Written** too (§12.4), one font at a time |
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
-| | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); the rest of AAT is not read |
+| | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); `feat` (the feature and setting names) is read by `feat.h`; the rest of AAT is not read |
 | | `.dfont`, `.eot` | absent, §16 |
 | | TrueType hinting | **implemented** (§8.5): the bytecode interpreter in versions 35 and 40, composites and hinted advances, variable faces; on by default. The automatic hinter is built for the light target (§8.5.2) and is a mode the caller asks for |
 | | `CFF`, `CFF2` and Type 1 hinting | **implemented** (§8.5.1): the stems and blue zones the font declares, fitted in y, by rules recovered from FreeType's answers; on by default |
@@ -3696,7 +3696,7 @@ file or the request names it, and nowhere is there a function that pretends.
   document for a glyph, gzip inflated) and carried by a subset that retains glyph ids; the documents
   name glyph ids inside themselves, so a renumbering subset leaves the table out rather than rewrite
   them, and an SVG renderer is the caller's.
-- **The rest of AAT** (`feat`; `kerx` format 3 is read by nothing the oracle runs - HarfBuzz 10.2.0 applies no kerning from a format 3 subtable, random ones included (`kerx_random_diff.py --kinds 3`, 300 fonts, none differ), and this library applies none either; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
+- **The rest of AAT** (`feat` is read, as names, by `feat.h`: it lists features and settings and applies none; `kerx` format 3 is read by nothing the oracle runs - HarfBuzz 10.2.0 applies no kerning from a format 3 subtable, random ones included (`kerx_random_diff.py --kinds 3`, 300 fonts, none differ), and this library applies none either; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.
 - **Synthetic bold and oblique**, LCD filtering, stem darkening.
 - **Hyphenation data**, **`SA` dictionaries**, **Knuth-Plass**, and the layout items listed in §10.7.

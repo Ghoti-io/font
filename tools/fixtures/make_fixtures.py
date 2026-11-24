@@ -1077,6 +1077,31 @@ def build_post_v3(out):
     fb.save(out)
 
 
+def build_feat(out):
+    """An AAT `feat` table: four features, one exclusive with a default, one with a default and not exclusive,
+    one with neither, and one with no settings, in the order Apple's tables list them (types ascending)."""
+    from fontTools.ttLib.tables.DefaultTable import DefaultTable
+    features = [
+        (1, 0x8000 | 0x4000 | 1, 256, [(0, 257), (1, 258), (2, 259)]),
+        (3, 0x8000, 260, [(0, 261), (1, 262), (2, 263), (3, 264)]),
+        (7, 0x4000 | 0, 265, [(0, 266), (1, 267)]),
+        (10, 0, 268, []),
+    ]
+    header = struct.pack(">IHHI", 0x00010000, len(features), 0, 0)
+    offset = len(header) + 12 * len(features)
+    records = b""
+    settings = b""
+    for kind, flags, name, items in features:
+        records += struct.pack(">HHIHh", kind, len(items), offset + len(settings), flags, name)
+        for selector, setting_name in items:
+            settings += struct.pack(">Hh", selector, setting_name)
+    fb = truetype("Feat", unicode_cmap())
+    table = DefaultTable("feat")
+    table.data = header + records + settings
+    fb.font["feat"] = table
+    fb.save(out)
+
+
 def build_name_macroman(out):
     """A Macintosh Roman `name` record with a byte above ASCII.
 
@@ -5528,6 +5553,8 @@ FIXTURES = {
         "post format 2.0: standard indices including 257, and one extra name"),
     "post-v3.ttf": (build_post_v3,
         "post format 3.0: a header that states it has no names"),
+    "feat.ttf": (build_feat,
+        "feat: four AAT features, with exclusive and default flags in each combination and one with no settings"),
     "name-macroman.ttf": (build_name_macroman,
         "name: a Macintosh Roman record holding U+2122 as byte 0xAA"),
     "name-mac-encodings.ttf": (build_name_mac_encodings,

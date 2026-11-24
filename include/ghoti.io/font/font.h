@@ -54,6 +54,7 @@
 #include <ghoti.io/font/name.h>
 #include <ghoti.io/font/math.h>
 #include <ghoti.io/font/stat.h>
+#include <ghoti.io/font/feat.h>
 #include <ghoti.io/font/variation.h>
 #include <ghoti.io/font/macros.h>
 

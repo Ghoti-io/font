@@ -74,7 +74,7 @@ PATTERNS = [
     # of that table's fields. The result's name distinguishes "the font has no
     # such table" from "it has one and this library would not read it", and the
     # second is the half that has to line up with the reference's `unreadable.`.
-    (r"^(head|hhea|OS/2|post|fvar|avar|STAT): absent \((.*)\)$", "declined"),
+    (r"^(head|hhea|OS/2|post|fvar|avar|STAT|feat): absent \((.*)\)$", "declined"),
     (r"^head: version \d+\.\d+, revision 0x([0-9A-F]+), unitsPerEm (\d+), "
      r"flags 0x([0-9A-F]+)$",
      ["head.fontRevision", "head.unitsPerEm", "head.flags"]),
@@ -157,6 +157,9 @@ PATTERNS = [
      "stat-header"),
     (r"^STAT axis (\d+): '(.{4})' name (\d+) ordering (\d+)$", "stat-axis"),
     (r"^STAT value (\d+): (.*)$", "stat-value"),
+    (r"^feat: (\d+) features$", "feat-header"),
+    (r"^feat feature (\d+): type (\d+) flags 0x([0-9A-F]+) name (\d+) settings (\d+)$", "feat-feature"),
+    (r"^feat setting (\d+)\.(\d+): selector (\d+) name (\d+)$", "feat-setting"),
     (r"^glyph name (\d+): '(.*)'$", "glyphname"),
     (r"^glyph names: none in this font$", "glyphnames-absent"),
     (r"^name record \d+: platform (\d+), encoding (\d+), language (\d+), "
@@ -240,6 +243,14 @@ def parse_ours(text):
             elif keys == "stat-value":
                 index, rest = found.groups()
                 values["STAT.value.%d" % int(index)] = rest
+            elif keys == "feat-header":
+                values["feat.header"] = found.group(1)
+            elif keys == "feat-feature":
+                index, kind, flags, name, nsettings = found.groups()
+                values["feat.feature.%d" % int(index)] = "%s %X %s %s" % (kind, int(flags, 16), name, nsettings)
+            elif keys == "feat-setting":
+                feature, index, selector, name = found.groups()
+                values["feat.setting.%d.%d" % (int(feature), int(index))] = "%s %s" % (selector, name)
             elif keys == "glyphname":
                 index, value = found.groups()
                 values["glyphname.%d" % int(index)] = value
@@ -310,7 +321,7 @@ def agree(key, ours, theirs):
         return int(ours, 16) == int(float(theirs))
     if key.startswith(("name.", "glyphname.")):
         return ours == theirs
-    if key.startswith(("directory.", "cmap.subtable.", "fvar.", "avar.", "STAT.", "GSUB.", "GPOS.")):
+    if key.startswith(("directory.", "cmap.subtable.", "fvar.", "avar.", "STAT.", "feat.", "GSUB.", "GPOS.")):
         return ours == theirs
     # Everything else is an integer on both sides; the reference prints some of
     # them as floats where fontTools stores them that way.

@@ -231,6 +231,7 @@ const std::vector<Entry> & every_fixture() {
       {"color-v1.ttf", 8},
       {"svg-docs.ttf", 8},
       {"name-mac-encodings.ttf", kNumGlyphs},
+      {"feat.ttf", kNumGlyphs},
       {"name-mac-cjk-ja-ko.ttf", kNumGlyphs},
       {"name-mac-cjk-zh.ttf", kNumGlyphs},
       {"name-macroman.ttf", kNumGlyphs},

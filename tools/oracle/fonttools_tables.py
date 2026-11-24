@@ -417,6 +417,21 @@ def main(argv):
                                    for r in value.AxisValueRecord)
                 out.write("STAT.value.%d\t%s%s\n" % (index, head, rest))
 
+    # feat, the AAT feature names: each feature's type, raw flags, name and setting count, and its settings.
+    if "feat" in font:
+        feat = readable(font, "feat", out)
+        if feat is not None:
+            names = feat.table.FeatureNames
+            features = names.FeatureName if names else []
+            out.write("feat.header\t%d\n" % len(features))
+            for index, feature in enumerate(features):
+                settings = feature.Settings.Setting if feature.Settings else []
+                out.write("feat.feature.%d\t%d %X %d %d\n" % (index, feature.FeatureType, feature.FeatureFlags,
+                          feature.FeatureNameID, len(settings)))
+                for k, setting in enumerate(settings):
+                    out.write("feat.setting.%d.%d\t%d %d\n" % (index, k, setting.SettingValue,
+                              setting.SettingNameID))
+
     # Glyph names, from whichever table actually holds them - and where neither
     # does, said rather than invented: fontTools makes up "glyph00012" for a
     # TrueType font with `post` format 3.0, and emitting that would score this

@@ -154,6 +154,13 @@ int main(int argc, char ** argv) {
       printf("STAT: absent (%s)\n", gfnt_result_string(result));
     }
   }
+  // `feat`, which names an Apple font's features. A face without one prints nothing.
+  if (gfnt_face_has_feat(face)) {
+    result = gfnt_face_feat_dump(face, stdout);
+    if (result != GFNT_OK) {
+      printf("feat: absent (%s)\n", gfnt_result_string(result));
+    }
+  }
   // What a variable font's layout tables replace at a location. A table with no
   // FeatureVariations prints nothing, and so does the reference.
   {

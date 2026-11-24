@@ -280,8 +280,8 @@ def emit_post_names(out_dir, names):
 #define GHOTI_IO_GFNT_POST_NAMES_H
 
 // Before anything is declared, so that namespace.h's renames are already in
-// effect - CONVENTIONS.md section 4, enforced by check-symbols, which caught
-// the first version of this generator for skipping it.
+// effect (a type named before namespace.h has renamed it is a second type under
+// one spelling); check-symbols enforces it.
 #include <ghoti.io/font/macros.h>
 
 /** @brief How many names the standard Macintosh glyph order has. */
@@ -317,9 +317,8 @@ def emit_mac_encodings(out_dir, tables, chosen):
 #define GHOTI_IO_GFNT_MAC_ENCODINGS_H
 
 // Before anything is declared: this header declares a type
-// (GFNT_MacEncodingRule), which is exactly the case CONVENTIONS.md section 4 is
-// about - a type named before namespace.h has renamed it is a second type under
-// one spelling.
+// (GFNT_MacEncodingRule), and a type named before namespace.h has renamed it is
+// a second type under one spelling.
 #include <ghoti.io/font/macros.h>
 #include <stdint.h>
 
@@ -701,7 +700,7 @@ def emit_cff_strings(out_dir, standard, encoding, charsets, iso_adobe):
 #define GHOTI_IO_GFNT_CFF_STRINGS_H
 
 // Before anything is declared, so that namespace.h's renames are already in
-// effect - CONVENTIONS.md section 4, enforced by check-symbols.
+// effect; check-symbols enforces it.
 #include <ghoti.io/font/macros.h>
 #include <stdint.h>
 

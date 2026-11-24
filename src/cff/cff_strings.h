@@ -39,7 +39,7 @@
 #define GHOTI_IO_GFNT_CFF_STRINGS_H
 
 // Before anything is declared, so that namespace.h's renames are already in
-// effect - CONVENTIONS.md section 4, enforced by check-symbols.
+// effect; check-symbols enforces it.
 #include <ghoti.io/font/macros.h>
 #include <stdint.h>
 

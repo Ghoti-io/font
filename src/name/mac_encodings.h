@@ -39,9 +39,8 @@
 #define GHOTI_IO_GFNT_MAC_ENCODINGS_H
 
 // Before anything is declared: this header declares a type
-// (GFNT_MacEncodingRule), which is exactly the case CONVENTIONS.md section 4 is
-// about - a type named before namespace.h has renamed it is a second type under
-// one spelling.
+// (GFNT_MacEncodingRule), and a type named before namespace.h has renamed it is
+// a second type under one spelling.
 #include <ghoti.io/font/macros.h>
 #include <stdint.h>
 

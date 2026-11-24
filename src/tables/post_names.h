@@ -38,8 +38,8 @@
 #define GHOTI_IO_GFNT_POST_NAMES_H
 
 // Before anything is declared, so that namespace.h's renames are already in
-// effect - CONVENTIONS.md section 4, enforced by check-symbols, which caught
-// the first version of this generator for skipping it.
+// effect (a type named before namespace.h has renamed it is a second type under
+// one spelling); check-symbols enforces it.
 #include <ghoti.io/font/macros.h>
 
 /** @brief How many names the standard Macintosh glyph order has. */

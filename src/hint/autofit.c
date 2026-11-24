@@ -86,7 +86,7 @@ typedef struct AfScript {
   AfZone zones[AF_ZONES];
 } AfScript;
 
-enum { AF_LATIN, AF_GREEK, AF_CYRILLIC, AF_HEBREW, AF_SCRIPTS };
+enum { AF_LATIN, AF_GREEK, AF_CYRILLIC, AF_HEBREW, AF_ARABIC, AF_SCRIPTS };
 
 struct GFNT_Autofit {
   const GFNT_Allocator * allocator;
@@ -109,6 +109,7 @@ static const struct {
   {{U"ΓΒΕΖΘΟΩ", U"ΒΔΖΞΘΟ", U"βθδζλξ", U"οε", U"αεοσ", U"βγημρφχψ"}, U'ο'},
   {{U"БВЕПЗОСЭ", U"БВЕШЗОСЭ", U"", U"хпншезос", U"хпншезос", U"руф"}, U'о'},
   {{U"אבדהחכםרתמסצ", U"אבדהחכםרתמסצ", U"", U"", U"", U"ךןףץק"}, U'ו'},
+  {{U"اكلطظ", U"ادذ", U"", U"", U"", U"جحخرزصعغ"}, U'ا'},
 };
 static const bool af_zone_top[AF_ZONES] = {true, false, true, true, false, false};
 enum { AF_CAP_TOP, AF_CAP_BOT, AF_F_TOP, AF_SMALL_TOP, AF_SMALL_BOT, AF_DESC };
@@ -771,6 +772,7 @@ static const uint32_t af_ranges[AF_SCRIPTS][10] = {
   {0x370, 0x3FF, 0x1F00, 0x1FFF, 0, 0, 0, 0, 0, 0},
   {0x400, 0x52F, 0x1C80, 0x1C8F, 0x2DE0, 0x2DFF, 0xA640, 0xA69F, 0, 0},
   {0x590, 0x5FF, 0xFB1D, 0xFB4F, 0, 0, 0, 0, 0, 0},
+  {0x600, 0x6FF, 0x750, 0x77F, 0xFB50, 0xFDFF, 0xFE70, 0xFEFF, 0, 0},
 };
 
 /** Which glyphs belong to which script: the first script whose range reaches the glyph through the cmap. */
@@ -778,7 +780,8 @@ static GFNT_Result af_script_map(const GFNT_Face * face, GFNT_Autofit * af) {
   size_t count = 0;
   const GFNT_Allocator * a = face->allocator;
 
-  if (!af->scripts[AF_GREEK].present && !af->scripts[AF_CYRILLIC].present && !af->scripts[AF_HEBREW].present) {
+  if (!af->scripts[AF_GREEK].present && !af->scripts[AF_CYRILLIC].present && !af->scripts[AF_HEBREW].present
+      && !af->scripts[AF_ARABIC].present) {
     return GFNT_OK;
   }
   if (gfnt_face_num_glyphs(face, &count, NULL) != GFNT_OK || count == 0) {

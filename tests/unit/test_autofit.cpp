@@ -330,3 +330,22 @@ TEST(Autofit, AHebrewLetterIsFittedToTheHebrewZones) {
     }
   }
 }
+
+TEST(Autofit, AnArabicLetterIsFittedToTheArabicZones) {
+  // The tall letters reach 900, the others 450 and the hanging ones -300: no Latin zone is there, and the
+  // script has no x-height, so the scale is left as it is and each end lands on a whole pixel by its own zone.
+  Fixture font("latin-greek-boxes.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  for (uint32_t ppem : {8u, 9u, 11u, 12u, 17u}) {
+    SCOPED_TRACE(ppem);
+    for (char32_t letter : {U'ا', U'ل', U'د', U'ج', U'ع'}) {
+      Hinted h = hinted(font.face, glyph_of(font.face, letter), ppem);
+      ASSERT_EQ(h.result, GFNT_OK);
+      EXPECT_EQ(bottom_of(h) % 64, 0) << (unsigned)letter << " bottom " << bottom_of(h);
+    }
+    for (char32_t letter : {U'ا', U'ل'}) {
+      Hinted h = hinted(font.face, glyph_of(font.face, letter), ppem);
+      EXPECT_EQ(top_of(h) % 64, 0) << (unsigned)letter << " top " << top_of(h);
+    }
+  }
+}

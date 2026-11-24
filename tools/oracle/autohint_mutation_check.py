@@ -61,6 +61,9 @@ MUTANTS = [
      "the Greek capitals are not mapped to the Greek script"),
     ("{0x590, 0x5FF, 0xFB1D, 0xFB4F, 0, 0, 0, 0, 0, 0},", "{0x5D0, 0x5E0, 0xFB1D, 0xFB4F, 0, 0, 0, 0, 0, 0},",
      "the Hebrew letters after lamed are not mapped to the Hebrew script"),
+    ("{0x600, 0x6FF, 0x750, 0x77F, 0xFB50, 0xFDFF, 0xFE70, 0xFEFF, 0, 0},",
+     "{0x640, 0x6FF, 0x750, 0x77F, 0xFB50, 0xFDFF, 0xFE70, 0xFEFF, 0, 0},",
+     "the Arabic letters before tatweel are not mapped to the Arabic script"),
 ]
 
 SAMPLES = [

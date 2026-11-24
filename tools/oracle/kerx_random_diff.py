@@ -32,7 +32,7 @@ from gsub_random_diff import u16, u32, base_font
 
 SCRATCH = os.path.join(oracle_env.ROOT, "build", "oracle", "kerx-random")
 GL = list(range(1, 9))
-KINDS = (0, 0, 1, 2, 6)
+KINDS = (0, 0, 1, 2, 3, 6)
 CROSS_A, VERT_A, VAR_A = float(os.environ.get('KA_CROSS', .12)), float(os.environ.get('KA_VERT', .08)), float(os.environ.get('KA_VAR', .06))
 AKINDS = (0, 1, 2, 3, 3)    # an Apple `kern` subtable's formats
 ATTACH = (4, 5)   # format 4 with coordinates (5 stands for anchors from `ankr`)
@@ -124,6 +124,19 @@ class Gen:
         o_val = o_ent + len(ent)
         return u32(nclasses, o_cls, o_stt, o_ent, o_val) + cls + stt + ent + pad(u16(*[v & 0xFFFF for v in vals]))
 
+    def kerx3(self):
+        r = self.r
+        glyphs = r.choice((30, 30, 30, 12, 6, 1, 0))
+        kv = r.choice((1, 2, 3, 4, 6, 0))
+        lc = r.choice((1, 2, 3, 4))
+        rc = r.choice((1, 2, 3, 4))
+        over = r.random() < .3          # classes and indices that run past their tables
+        values = b''.join(s16(r.randint(-120, 120)) for _ in range(kv))
+        left = bytes(r.randrange(lc + (2 if over else 0)) for _ in range(glyphs))
+        right = bytes(r.randrange(rc + (2 if over else 0)) for _ in range(glyphs))
+        index = bytes(r.randrange(max(1, kv) + (2 if over else 0)) for _ in range(lc * rc))
+        return u16(glyphs) + bytes([kv, lc, rc, 0]) + values + left + right + index
+
     def kerx4(self, anchors):
         """An attachment machine: coordinates (action kind 2) or `ankr` anchors (kind 1)."""
         r = self.r
@@ -176,7 +189,7 @@ class Gen:
                 self.has_ankr = self.has_ankr or kind == 5
                 kind = 4
             else:
-                body = {0: self.kerx0, 1: self.kerx1, 2: self.kerx2, 6: self.kerx6}[kind]()
+                body = {0: self.kerx0, 1: self.kerx1, 2: self.kerx2, 3: self.kerx3, 6: self.kerx6}[kind]()
             cov = kind | (0x40000000 if self.r.random() < CROSS else 0)
             body = pad(body)
             subs += u32(12 + len(body), cov, 0) + body

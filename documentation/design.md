@@ -3696,7 +3696,7 @@ file or the request names it, and nowhere is there a function that pretends.
   document for a glyph, gzip inflated) and carried by a subset that retains glyph ids; the documents
   name glyph ids inside themselves, so a renumbering subset leaves the table out rather than rewrite
   them, and an SVG renderer is the caller's.
-- **The rest of AAT** (`feat`, `kerx` format 3 and the like; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
+- **The rest of AAT** (`feat`; `kerx` format 3 is read by nothing the oracle runs - HarfBuzz 10.2.0 applies no kerning from a format 3 subtable, random ones included (`kerx_random_diff.py --kinds 3`, 300 fonts, none differ), and this library applies none either; `morx`, `kerx` 0/1/2/4/6 and `trak` are built, §9.6), **`.dfont`**,
   **Windows FNT/FON**, **`.eot`**, **Type 3**, **Type 42**, **Multiple Master**.
 - **Synthetic bold and oblique**, LCD filtering, stem darkening.
 - **Hyphenation data**, **`SA` dictionaries**, **Knuth-Plass**, and the layout items listed in §10.7.

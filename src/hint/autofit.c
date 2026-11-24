@@ -322,8 +322,14 @@ static bool af_horizontal(int d) {
   return d == AF_DIR_LEFT || d == AF_DIR_RIGHT;
 }
 
-/** Horizontal segments: maximal runs of consecutive points whose outgoing vector has one horizontal direction. */
-static void af_segments(AfGlyph * g) {
+/** A flat or round run of points shorter than this fraction of an em (1/AF_MIN_SEGMENT_DIV) is not a segment: it is a tip or a hook,
+ *  and the pixel-grid fitting of its neighbours is what places it. Measured against FreeType's answers: every set improves up to
+ *  about 1/100 of an em and stays level to 1/120. */
+#define AF_MIN_SEGMENT_DIV 100
+
+/** Horizontal segments: maximal runs of consecutive points whose outgoing vector has one horizontal direction.
+ *  Runs shorter than a hundredth of an em, `up` units per em, are left out. */
+static void af_segments(AfGlyph * g, int64_t up) {
   g->seg_count = 0;
   g->seg_point_count = 0;
   for (size_t c = 0; c < g->contours; ++c) {
@@ -372,6 +378,11 @@ static void af_segments(AfGlyph * g) {
           max_y = g->y[p] > max_y ? g->y[p] : max_y;
           min_x = g->x[p] < min_x ? g->x[p] : min_x;
           max_x = g->x[p] > max_x ? g->x[p] : max_x;
+        }
+        if ((max_x - min_x) * AF_MIN_SEGMENT_DIV < up) {
+          g->seg_point_count = s->first;
+          count = m;
+          continue;
         }
         s->dir = d;
         s->pos = af_half(min_y + max_y);
@@ -426,7 +437,7 @@ static void af_link_segments(AfGlyph * g, int64_t up) {
         lo = a->min_x > b->min_x ? a->min_x : b->min_x;
         hi = a->max_x < b->max_x ? a->max_x : b->max_x;
         overlap = hi - lo;
-        if (overlap * 2048 < 16 * up) {
+        if (overlap * 2048 < 12 * up) {
           continue;
         }
         dist = pass == 0 ? b->pos - a->pos : a->pos - b->pos;
@@ -655,7 +666,7 @@ static int32_t af_standard_width(const GFNT_Face * face, const GFNT_Variation * 
     return 0;
   }
   if (af_glyph_load(face->allocator, outline, &g) == GFNT_OK) {
-    af_segments(&g);
+    af_segments(&g, up);
     af_link_segments(&g, up);
     for (size_t i = 0; i < g.seg_count; ++i) {
       if (g.segs[i].link >= 0) {
@@ -1296,7 +1307,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
     gfnt_outline_destroy(source);
     return gfnt_error_set(error, r, 0, 0, glyph, "no memory for a hinted outline");
   }
-  af_segments(&g);
+  af_segments(&g, af->upem);
   af_link_segments(&g, af->upem);
   script = af_script_of(af, glyph);
   af_edges(&g, script->yscale, script->stdw);

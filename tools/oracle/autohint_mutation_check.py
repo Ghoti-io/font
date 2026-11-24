@@ -67,6 +67,8 @@ MUTANTS = [
     ("{0x10D0, 0x10FF, 0x1C90, 0x1CBF, 0x2D00, 0x2D2F, 0, 0, 0, 0},",
      "{0x10E0, 0x10FF, 0x1C90, 0x1CBF, 0x2D00, 0x2D2F, 0, 0, 0, 0},",
      "the first Georgian letters are not mapped to the Georgian script"),
+    ("{0x530, 0x58F, 0xFB13, 0xFB17, 0, 0, 0, 0, 0, 0},", "{0x560, 0x58F, 0xFB13, 0xFB17, 0, 0, 0, 0, 0, 0},",
+     "the Armenian capitals are not mapped to the Armenian script"),
 ]
 
 SAMPLES = [

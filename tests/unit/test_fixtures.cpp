@@ -202,7 +202,7 @@ const std::vector<Entry> & every_fixture() {
       {"cff-stems.otf", 272},
       {"latin-boxes.ttf", 53},
       {"latin-boxes-tall.ttf", 53},
-      {"latin-greek-boxes.ttf", 152},
+      {"latin-greek-boxes.ttf", 203},
       {"cff-subrs.otf", 10},
       {"cff-type1.otf", 8},
       {"cmap-format0.ttf", kNumGlyphs},

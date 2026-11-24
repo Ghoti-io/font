@@ -365,3 +365,19 @@ TEST(Autofit, AGeorgianLetterIsFittedToTheGeorgianZones) {
     }
   }
 }
+
+TEST(Autofit, AnArmenianLetterIsFittedToTheArmenianZones) {
+  // The capitals reach 690, the tall letters 770 and the small ones 500, heights no Latin zone of this face
+  // has: each end lands on a whole pixel by its own zone.
+  Fixture font("latin-greek-boxes.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  for (uint32_t ppem : {8u, 9u, 11u, 12u, 17u}) {
+    SCOPED_TRACE(ppem);
+    for (char32_t letter : {U'Բ', U'Ա', U'ե', U'ո', U'ա', U'բ'}) {
+      Hinted h = hinted(font.face, glyph_of(font.face, letter), ppem);
+      ASSERT_EQ(h.result, GFNT_OK);
+      EXPECT_EQ(top_of(h) % 64, 0) << (unsigned)letter << " top " << top_of(h);
+      EXPECT_EQ(bottom_of(h) % 64, 0) << (unsigned)letter << " bottom " << bottom_of(h);
+    }
+  }
+}

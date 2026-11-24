@@ -1713,11 +1713,11 @@ agrees:
 faces, fifteen sizes to 64 ppem); a generated face of boxes and ellipses (`latin-boxes.ttf`) at eleven sizes point for
 point; the Latin letters of ten faces at six sizes **79% of 2,946 glyphs exactly and 96% of points**, every advance and
 every x. **What it does not match:** the remaining letters (diagonals' vertices that FreeType treats as weak, the dots of
-`i` and `j` at some sizes, serif tips); the normal target (x fitting); scripts other than Latin, Greek, Cyrillic, Hebrew, Arabic and Georgian, which have no zones of their own
+`i` and `j` at some sizes, serif tips); the normal target (x fitting); scripts other than Latin, Greek, Cyrillic, Hebrew, Arabic, Georgian and Armenian, which have no zones of their own
 and are fitted with the Latin ones (Greek matches FreeType exactly on 71% of the default set's glyphs and Cyrillic on
 79%; Hebrew, which has a top zone, the baseline and a descender zone and no x-height, on 92% of the three sans faces
 that have it, and on none of a serif face whose letters end in hooks, whose top FreeType does not align the way it
-does a sans face's; Arabic, which has a top zone for its tall letters, the baseline and a descender zone, on 50% of the two DejaVu faces' glyphs; Georgian, which has an x-height of its own, a tall zone, the baseline and a descender zone, on 86% of the two DejaVu faces' glyphs; a generated Greek, Hebrew, Arabic and Georgian face point for point). Armenian is fitted with the Latin zones, which reproduce its extremes, and matches on 55% to 65%. The scene provider serves the mode
+does a sans face's; Arabic, which has a top zone for its tall letters, the baseline and a descender zone, on 50% of the two DejaVu faces' glyphs; Georgian, which has an x-height of its own, a tall zone, the baseline and a descender zone, on 86% of the two DejaVu faces' glyphs; a generated Greek, Hebrew, Arabic, Georgian and Armenian face point for point). Armenian, which has capitals, tall letters, small letters and descenders of its own, matches on 54% of the glyphs of two Noto and two DejaVu faces (a face with no Latin letters is where Latin zones fail it altogether: 0% before). The scene provider serves the mode
 (`GSHSCENE_HINT_AUTO`, which does not read `gasp`, as the direct render does not).
 
 ### 8.6 The one unhinted rounding

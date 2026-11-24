@@ -41,6 +41,14 @@ SCRIPTS = {"latin": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
            "cyrillic": "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЫЭЮЯабвгдежзийклмнопрстуфхцчшщыэюя"}
 
 
+def script_chars(script):
+    """A named script's letters, or `LO-HI` (hexadecimal code points) for every code point of a range."""
+    if script in SCRIPTS:
+        return SCRIPTS[script]
+    low, high = script.split("-")
+    return "".join(chr(c) for c in range(int(low, 16), int(high, 16) + 1))
+
+
 def main(argv):
     ppems, names, letters, show, floor, points = [9, 11, 12, 14, 17, 24], [], None, 8, 0.0, False
     records = None
@@ -70,7 +78,7 @@ def main(argv):
     with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR") or None) as scratch:
         dump = os.path.join(scratch, "faces.json")
         command = oracle_env.command("fonttools", argv=["python3", os.path.join(here, "autohint_dump.py"), dump]
-                                     + (["chars=" + SCRIPTS[script]] if script else []) + paths,
+                                     + (["chars=" + script_chars(script)] if script else []) + paths,
                                      scratch=scratch)
         done = subprocess.run(command, capture_output=True, text=True)
         if done.returncode != 0:

@@ -1075,7 +1075,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
       delta = g->edges[e->serif].opos - e->opos;
       delta = delta < 0 ? -delta : delta;
     }
-    if (delta < 64 + 16) {
+    if (delta < 64 + 48) {
       e->pos = g->edges[e->serif].pos + (e->opos - g->edges[e->serif].opos);
     }
     else if (!have_anchor) {

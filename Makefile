@@ -1424,6 +1424,7 @@ check-oracle-autohint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script cyrillic --floor 0.78 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script latin --floor 0.62 --show 0 \
 		NotoSans-Regular.ttf NotoSans-Bold.ttf
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_script_gates.py
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script hebrew --floor 0.88 --show 0 \
 		DejaVuSans.ttf DejaVuSans-Bold.ttf LiberationSans-Regular.ttf
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script arabic --floor 0.45 --show 0 \

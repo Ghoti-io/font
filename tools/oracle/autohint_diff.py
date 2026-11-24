@@ -6,7 +6,7 @@
 # This file is part of Ghoti.io Font.
 """This library's automatic hinter against FreeType's light one, on the Latin letters, point by point.
 
-    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--script latin|greek|cyrillic] [--show N] [--points] [--records FILE] [--floor F] [FONT...]
+    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--script latin|greek|cyrillic] [--show N] [--points] [--records FILE] [--floor F] [--points-floor F] [FONT...]
 
 For each face, size and Latin letter, the outline `font-hint-cff <font> ... auto` prints against the one
 `freetype-hinted ... autolight` prints, in 26.6, both axes and the advance. Reports the glyphs identical,
@@ -52,6 +52,7 @@ def script_chars(script):
 def main(argv):
     ppems, names, letters, show, floor, points = [9, 11, 12, 14, 17, 24], [], None, 8, 0.0, False
     records = None
+    points_floor = 0.0
     script = None
     args = argv[1:]
     while args:
@@ -70,6 +71,8 @@ def main(argv):
             points = True
         elif a == "--floor":
             floor = float(args.pop(0))
+        elif a == "--points-floor":
+            points_floor = float(args.pop(0))
         else:
             names.append(a)
     names = names or DEFAULT
@@ -129,7 +132,7 @@ def main(argv):
     print("compared %d glyphs: %d identical (%.1f%%); points %d of %d identical; %d advances differ" % (
         glyphs_total, glyphs_same, 100.0 * glyphs_same / max(1, glyphs_total), points_same, points_total, adv_bad))
     print("most failing letters:", by_letter.most_common(14))
-    return 0 if glyphs_same / max(1, glyphs_total) >= floor else 1
+    return 0 if (glyphs_same / max(1, glyphs_total) >= floor and points_same / max(1, points_total) >= points_floor) else 1
 
 
 if __name__ == "__main__":

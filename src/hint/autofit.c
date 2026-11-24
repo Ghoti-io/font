@@ -61,6 +61,7 @@
 #include "../core/fixed.h"
 #include "../outline/outline.h"
 #include "../sfnt/sfnt.h"
+#include "autofit_scripts.h"
 
 #define AF_ZONES 6
 #define AF_DIR_UP 1
@@ -86,7 +87,13 @@ typedef struct AfScript {
   AfZone zones[AF_ZONES];
 } AfScript;
 
-enum { AF_LATIN, AF_GREEK, AF_CYRILLIC, AF_HEBREW, AF_ARABIC, AF_GEORGIAN, AF_ARMENIAN, AF_SCRIPTS };
+enum {
+  AF_LATIN, AF_GREEK, AF_CYRILLIC, AF_HEBREW, AF_ARABIC, AF_GEORGIAN, AF_ARMENIAN,
+#define AF_X_ENUM(name, standard, t0, t1, t2, t3, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) AF_GEN_##name,
+  AF_GENERATED_SCRIPTS(AF_X_ENUM)
+#undef AF_X_ENUM
+  AF_SCRIPTS
+};
 
 struct GFNT_Autofit {
   const GFNT_Allocator * allocator;
@@ -112,6 +119,10 @@ static const struct {
   {{U"اكلطظ", U"ادذ", U"", U"", U"", U"جحخرزصعغ"}, U'ا'},
   {{U"", U"ბზთმნოპსშჩძწხჰ", U"ბზმნპსშჩძწხჰ", U"ვეთოფღ", U"", U"გდეკლფღყც"}, U'ო'},
   {{U"ԲԴԸԼԿՂՈՊՌՐՒԱԵԺՍՏՕ", U"ԲԴԸԼԿՂՈՊՌՐՒԱԵԺՍՏՕ", U"եէժիխկձհճմնվփ", U"ապոռսւօտ", U"ապոռսւօտ", U"բգդզըթլղշչպջրցքիխկվփ"}, U'ո'},
+#define AF_X_ZONES(name, standard, t0, t1, t2, t3, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) \
+  {{t0, t1, t2, U"", U"", t3}, standard},
+  AF_GENERATED_SCRIPTS(AF_X_ZONES)
+#undef AF_X_ZONES
 };
 static const bool af_zone_top[AF_ZONES] = {true, false, true, true, false, false};
 enum { AF_CAP_TOP, AF_CAP_BOT, AF_F_TOP, AF_SMALL_TOP, AF_SMALL_BOT, AF_DESC };
@@ -701,8 +712,8 @@ static void af_script_build(const GFNT_Face * face, GFNT_Autofit * af, int sc, i
 
   script->yscale = (int32_t)scale;
   for (int z = 0; z < AF_ZONES; ++z) {
-    int32_t flats[16];
-    int32_t rounds[16];
+    int32_t flats[64];
+    int32_t rounds[64];
     size_t nf = 0;
     size_t nr = 0;
 
@@ -713,10 +724,10 @@ static void af_script_build(const GFNT_Face * face, GFNT_Autofit * af, int sc, i
       if (!af_letter_extreme(face, variation, *c, af_zone_top[z], &y, &is_round)) {
         continue;
       }
-      if (is_round && nr < 16u) {
+      if (is_round && nr < 64u) {
         rounds[nr++] = y;
       }
-      else if (!is_round && nf < 16u) {
+      else if (!is_round && nf < 64u) {
         flats[nf++] = y;
       }
     }
@@ -783,6 +794,10 @@ static const uint32_t af_ranges[AF_SCRIPTS][10] = {
   {0x600, 0x6FF, 0x750, 0x77F, 0xFB50, 0xFDFF, 0xFE70, 0xFEFF, 0, 0},
   {0x10D0, 0x10FF, 0x1C90, 0x1CBF, 0x2D00, 0x2D2F, 0, 0, 0, 0},
   {0x530, 0x58F, 0xFB13, 0xFB17, 0, 0, 0, 0, 0, 0},
+#define AF_X_RANGES(name, standard, t0, t1, t2, t3, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) \
+  {r0, r1, r2, r3, r4, r5, r6, r7, r8, r9},
+  AF_GENERATED_SCRIPTS(AF_X_RANGES)
+#undef AF_X_RANGES
 };
 
 /** Which glyphs belong to which script: the first script whose range reaches the glyph through the cmap. */
@@ -790,9 +805,12 @@ static GFNT_Result af_script_map(const GFNT_Face * face, GFNT_Autofit * af) {
   size_t count = 0;
   const GFNT_Allocator * a = face->allocator;
 
-  if (!af->scripts[AF_GREEK].present && !af->scripts[AF_CYRILLIC].present && !af->scripts[AF_HEBREW].present
-      && !af->scripts[AF_ARABIC].present && !af->scripts[AF_GEORGIAN].present
-      && !af->scripts[AF_ARMENIAN].present) {
+  bool any = false;
+
+  for (int sc = AF_GREEK; sc < AF_SCRIPTS; ++sc) {
+    any = any || af->scripts[sc].present;
+  }
+  if (!any) {
     return GFNT_OK;
   }
   if (gfnt_face_num_glyphs(face, &count, NULL) != GFNT_OK || count == 0) {

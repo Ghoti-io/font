@@ -1713,7 +1713,7 @@ agrees:
 faces, fifteen sizes to 64 ppem); a generated face of boxes and ellipses (`latin-boxes.ttf`) at eleven sizes point for
 point; the Latin letters of ten faces at six sizes **81% of 2,946 glyphs exactly and 96% of points** (70% of Noto Sans's and Noto Sans Bold's Latin letters), every advance and
 every x. **What it does not match:** the remaining letters (diagonals' vertices that FreeType treats as weak, the dots of
-`i` and `j` at some sizes, serif tips); the normal target (x fitting); scripts other than Latin, Greek, Cyrillic, Hebrew, Arabic, Georgian and Armenian, which have no zones of their own
+`i` and `j` at some sizes, serif tips); the normal target (x fitting); scripts with no zones of their own (the twenty in `src/hint/autofit_scripts.h` have zones generated from FreeType's answers for one Noto face each, which put a third to nine tenths of their points where FreeType's are - Lisu 96%, Ethiopic 72%, Sinhala 70%, Tamil 65%, Khmer 44%, Cherokee 35% - and almost no glyph exactly, because the interior of a complex letter is the part of the placement rules not reproduced; the rest, and every script not listed, are fitted with the Latin zones)
 and are fitted with the Latin ones (Greek matches FreeType exactly on 71% of the default set's glyphs and Cyrillic on
 79%; Hebrew, which has a top zone, the baseline and a descender zone and no x-height, on 92% of the three sans faces
 that have it, and on none of a serif face whose letters end in hooks, whose top FreeType does not align the way it

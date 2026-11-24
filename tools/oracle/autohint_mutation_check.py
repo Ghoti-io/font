@@ -41,7 +41,7 @@ SOURCE = "src/hint/autofit.c"
 
 MUTANTS = [
     ("if (ax >= 14 * ay) {", "if (ax >= 12 * ay) {", "a segment's direction needs a ratio of 12 and not 14"),
-    ("if (overlap * 2048 < 8 * up) {", "if (overlap * 2048 < 4 * up) {", "two segments link on half the overlap"),
+    ("if (overlap * 2048 < 16 * up) {", "if (overlap * 2048 < 8 * up) {", "two segments link on half the overlap"),
     ("if (threshold > 16) {", "if (threshold > 8) {", "edges merge within eight sixty-fourths at most"),
     ("return li + lo - lt < (lt >> 4);", "return li + lo - lt < (lt >> 3);", "a flat corner is judged at an eighth of its length"),
     ("z->active = dist <= 48 && dist >= -48;", "z->active = dist <= 32 && dist >= -32;", "a blue zone is inactive past half a pixel"),
@@ -51,7 +51,7 @@ MUTANTS = [
     ("int64_t u = cur_len <= 64 ? 32 : 38;", "int64_t u = cur_len <= 64 ? 32 : 32;", "a wide stem centres on the grid the way a narrow one does (upper)"),
     ("int64_t d = cur_len <= 64 ? 32 : 26;", "int64_t d = cur_len <= 64 ? 32 : 32;", "a wide stem centres on the grid the way a narrow one does (lower)"),
     ("if (best_limit > 32) {", "if (best_limit > 16) {", "a serif is held to a quarter pixel and not half"),
-    ("if (delta < 64 + 16) {", "if (delta < 64 + 8) {", "a serif is recognised at a smaller distance"),
+    ("if (delta < 64 + 48) {", "if (delta < 64 + 8) {", "a serif is recognised at a smaller distance"),
     ("e->pos = g->edges[anchor].pos + ((e->opos - g->edges[anchor].opos + 16) & ~(int64_t)31);",
      "e->pos = g->edges[anchor].pos + ((e->opos - g->edges[anchor].opos + 8) & ~(int64_t)31);",
      "an edge left to the half-pixel snap rounds at a quarter and not a half"),
@@ -81,6 +81,8 @@ SAMPLES = [
     ("greek", ["freetype", "--", "python3", "tools/oracle/hint_cff_diff.py", "--auto", "--pool", "sfnt", "--files",
                "tests/data/fonts/latin-greek-boxes.ttf", "--ppem", "8,9,10,11,12,13,14,16,17,20,24,32", "--stride", "1"]),
     ("letters", ["fonttools,freetype", "--", "python3", "tools/oracle/autohint_diff.py", "--show", "0"]),
+    ("noto", ["fonttools,freetype", "--", "python3", "tools/oracle/autohint_diff.py", "--script", "latin", "--show", "0",
+              "NotoSans-Regular.ttf", "NotoSans-Bold.ttf"]),
 ]
 
 

@@ -53,6 +53,13 @@ ROWS = [
     ("A880-A8DF", "NotoSansSaurashtra-Regular.ttf", 0.62),
     ("10480-104AF", "NotoSansOsmanya-Regular.ttf", 0.78),
     ("AA80-AADF", "NotoSansTaiViet-Regular.ttf", 0.77),
+    ("10B00-10B3F", "NotoSansAvestan-Regular.ttf", 0.58),
+    ("10800-1083F", "NotoSansCypriot-Regular.ttf", 0.74),
+    ("102A0-102DF", "NotoSansCarian-Regular.ttf", 0.90),
+    ("11100-1114F", "NotoSansChakma-Regular.ttf", 0.72),
+    ("A900-A92F", "NotoSansKayahLi-Regular.ttf", 0.20),
+    ("1740-175F", "NotoSansBuhid-Regular.ttf", 0.36),
+    ("0840-085F", "NotoSansMandaic-Regular.ttf", 0.12),
 ]
 
 

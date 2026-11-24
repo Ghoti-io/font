@@ -68,6 +68,13 @@ SCRIPTS = [
     ("HANUNOO", [(0x1720, 0x173F)]),
     ("TIBETAN", [(0xF00, 0xFFF)]),
     ("TAIVIET", [(0xAA80, 0xAADF)]),
+    ("KAYAHLI", [(0xA900, 0xA92F)]),
+    ("AVESTAN", [(0x10B00, 0x10B3F)]),
+    ("CYPRIOT", [(0x10800, 0x1083F)]),
+    ("CARIAN", [(0x102A0, 0x102DF)]),
+    ("CHAKMA", [(0x11100, 0x1114F)]),
+    ("BUHID", [(0x1740, 0x175F)]),
+    ("MANDAIC", [(0x0840, 0x085F)]),
 ]
 
 

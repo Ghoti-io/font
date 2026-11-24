@@ -415,7 +415,7 @@ static void af_link_segments(AfGlyph * g, int64_t up) {
         lo = a->min_x > b->min_x ? a->min_x : b->min_x;
         hi = a->max_x < b->max_x ? a->max_x : b->max_x;
         overlap = hi - lo;
-        if (overlap * 2048 < 8 * up) {
+        if (overlap * 2048 < 16 * up) {
           continue;
         }
         dist = pass == 0 ? b->pos - a->pos : a->pos - b->pos;

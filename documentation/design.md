@@ -1711,7 +1711,7 @@ agrees:
 
 **What it reproduces.** Against FreeType (`make check-oracle-autohint`): the zones and scale in 578 of 578 heights (ten
 faces, fifteen sizes to 64 ppem); a generated face of boxes and ellipses (`latin-boxes.ttf`) at eleven sizes point for
-point; the Latin letters of ten faces at six sizes **79% of 2,946 glyphs exactly and 96% of points**, every advance and
+point; the Latin letters of ten faces at six sizes **80% of 2,946 glyphs exactly and 96% of points** (67% of Noto Sans's and Noto Sans Bold's Latin letters), every advance and
 every x. **What it does not match:** the remaining letters (diagonals' vertices that FreeType treats as weak, the dots of
 `i` and `j` at some sizes, serif tips); the normal target (x fitting); scripts other than Latin, Greek, Cyrillic, Hebrew, Arabic, Georgian and Armenian, which have no zones of their own
 and are fitted with the Latin ones (Greek matches FreeType exactly on 71% of the default set's glyphs and Cyrillic on

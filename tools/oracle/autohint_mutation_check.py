@@ -69,6 +69,8 @@ MUTANTS = [
      "the first Georgian letters are not mapped to the Georgian script"),
     ("{0x530, 0x58F, 0xFB13, 0xFB17, 0, 0, 0, 0, 0, 0},", "{0x560, 0x58F, 0xFB13, 0xFB17, 0, 0, 0, 0, 0, 0},",
      "the Armenian capitals are not mapped to the Armenian script"),
+    ("&& ((script->zones[z].shoot > script->zones[z].ref) != af_zone_top[z])) {", "&& false) {",
+     "an overshoot on the wrong side of its flat is kept, not averaged away"),
 ]
 
 SAMPLES = [

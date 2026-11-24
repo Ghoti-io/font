@@ -730,6 +730,12 @@ static void af_script_build(const GFNT_Face * face, GFNT_Autofit * af, int sc, i
     script->present = true;
     script->zones[z].ref = nf ? flats[nf / 2u] : rounds[nr / 2u];
     script->zones[z].shoot = nr ? rounds[nr / 2u] : flats[nf / 2u];
+    // An overshoot on the wrong side of its flat (a round top below the flat ones) is no overshoot: both
+    // go to the middle.
+    if (script->zones[z].shoot != script->zones[z].ref
+        && ((script->zones[z].shoot > script->zones[z].ref) != af_zone_top[z])) {
+      script->zones[z].ref = script->zones[z].shoot = (int32_t)(((int64_t)script->zones[z].ref + script->zones[z].shoot) / 2);
+    }
   }
   script->stdw = af_standard_width(face, variation, af->upem, af_blue_strings[sc].standard);
   if (script->stdw == 0) {

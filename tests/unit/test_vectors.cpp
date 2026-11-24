@@ -320,23 +320,87 @@ TEST(Vectors, TheEncodingIdAloneDoesNotDecideTheMacintoshTable) {
   }
 }
 
-TEST(Vectors, AMultiByteMacintoshEncodingIsRefusedAndNotGuessed) {
-  // Encoding 1 is Macintosh Japanese, which is multi-byte and not tabulated.
-  // The refusal is the answer: a byte-per-codepoint guess would produce
-  // plausible mojibake, which is worse than an error.
+TEST(Vectors, TheSingleByteSelectorNamesNoTableForTheMultiByteEncodings) {
+  // Encodings 1, 2, 3 and 25 are multi-byte: the single-byte selector names no
+  // table for them, and they are decoded by the pair tables the next test reads.
   const auto selector = rows("mac_selector.txt");
   ASSERT_GT(selector.size(), 0u);
 
-  size_t refused = 0;
+  size_t none = 0;
   for (const auto & row : selector) {
     ASSERT_EQ(row.size(), 3u);
     if (row[2] == "-") {
-      ++refused;
+      ++none;
     }
   }
-  EXPECT_EQ(refused, 4u)
-      << "encodings 1, 2, 3 and 25 are the multi-byte ones; the selector "
-         "should name no table for exactly those";
+  EXPECT_EQ(none, 4u);
+}
+
+/** UTF-8 of one codepoint. */
+std::string utf8_of(uint32_t point) {
+  std::string out;
+  if (point < 0x80) {
+    out += static_cast<char>(point);
+  }
+  else if (point < 0x800) {
+    out += static_cast<char>(0xC0 | (point >> 6));
+    out += static_cast<char>(0x80 | (point & 0x3F));
+  }
+  else {
+    out += static_cast<char>(0xE0 | (point >> 12));
+    out += static_cast<char>(0x80 | ((point >> 6) & 0x3F));
+    out += static_cast<char>(0x80 | (point & 0x3F));
+  }
+  return out;
+}
+
+TEST(Vectors, TheMultiByteMacintoshEncodingsDecodeAsTheReferenceDoes) {
+  // Each record of the two fixtures holds every byte from 0x80 and every pair the reference's codec
+  // accepts, in table order; the expected text is built from the committed vector, which is that codec's
+  // answer asked one byte and one pair at a time.
+  const auto vector = rows("mac_cjk.txt");
+  ASSERT_GT(vector.size(), 300u) << "tests/data/vectors/mac_cjk.txt is missing; run `make gen-vectors`";
+  std::map<unsigned, std::string> expected;
+  std::map<unsigned, std::string> pairs;
+  for (const auto & row : vector) {
+    ASSERT_EQ(row.size(), 3u);
+    const unsigned encoding = static_cast<unsigned>(std::stoul(row[0]));
+    std::istringstream tokens(row[2]);
+    std::string token;
+    std::string text;
+    size_t index = 0;
+    while (tokens >> token) {
+      if (token != "-" && (row[1] != "-" || index >= 0x80)) {
+        text += utf8_of(static_cast<uint32_t>(std::stoul(token, nullptr, 16)));
+      }
+      ++index;
+    }
+    EXPECT_EQ(index, 256u) << row[0] << " " << row[1];
+    (row[1] == "-" ? expected : pairs)[encoding] += text;
+  }
+  ASSERT_EQ(expected.size(), 4u);
+  size_t checked = 0;
+  for (const char * name : {"name-mac-cjk-ja-ko.ttf", "name-mac-cjk-zh.ttf"}) {
+    Fixture fixture(name);
+    ASSERT_EQ(fixture.result, GFNT_OK);
+    size_t count = 0;
+    ASSERT_EQ(gfnt_face_name_count(fixture.face, &count, nullptr), GFNT_OK);
+    for (size_t index = 0; index < count; ++index) {
+      GFNT_NameRecord record{};
+      ASSERT_EQ(gfnt_face_name_at(fixture.face, index, &record, nullptr), GFNT_OK);
+      if (record.platform_id != GFNT_PLATFORM_MACINTOSH || record.name_id != 19) {
+        continue;
+      }
+      char * text = nullptr;
+      ASSERT_EQ(gfnt_face_name_decode(fixture.face, &record, nullptr, &text, nullptr, nullptr),
+          GFNT_OK) << "encoding " << record.encoding_id;
+      EXPECT_EQ(std::string(text), expected[record.encoding_id] + pairs[record.encoding_id])
+          << "encoding " << record.encoding_id;
+      gfnt_name_free(nullptr, text);
+      ++checked;
+    }
+  }
+  EXPECT_EQ(checked, 4u);
 }
 
 TEST(Vectors, TheCffStringsAreWhatTheGeneratorWrote) {

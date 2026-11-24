@@ -66,6 +66,8 @@ EXPECTED = [
     os.path.join("tests", "data", "vectors", "standard_glyph_order.txt"),
     os.path.join("tests", "data", "vectors", "mac_encodings.txt"),
     os.path.join("tests", "data", "vectors", "mac_selector.txt"),
+    os.path.join("src", "name", "mac_cjk.h"),
+    os.path.join("tests", "data", "vectors", "mac_cjk.txt"),
     os.path.join("src", "cff", "cff_strings.h"),
     os.path.join("tests", "data", "vectors", "cff_strings.txt"),
 ]

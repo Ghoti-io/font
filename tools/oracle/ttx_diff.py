@@ -323,9 +323,9 @@ def agree(key, ours, theirs):
         return ours == theirs
 
 
-# Macintosh platEncID values this library refuses: the multi-byte CJK encodings,
-# which are a data set of their own rather than a 128-entry table.
-MAC_MULTIBYTE = {1, 2, 3, 25}
+# Macintosh platEncID values this library refuses. None: the multi-byte CJK encodings (1, 2, 3 and 25)
+# are decoded now, from tables asked of fontTools' own codecs, and are compared like any other record.
+MAC_MULTIBYTE = set()
 
 # Microsoft platEncID values that are not UTF-16BE, and are therefore multi-byte
 # legacy encodings this library refuses for the same reason.
@@ -743,7 +743,7 @@ def main(argv):
               "list here, so it stops applying when the warning does"
               % sanitised_fields)
     print("ttx_diff: %d record(s) this library declined and is documented to "
-          "decline - the multi-byte Macintosh and Microsoft encodings only; "
+          "decline - the Microsoft encodings 2 to 6 only; "
           "%d record(s) fontTools itself could not decode"
           % (declined, theirs_declined))
     if mac_coverage:

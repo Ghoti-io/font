@@ -190,13 +190,13 @@ TEST(Name, AMacintoshRecordAboveAsciiIsDecodedThroughItsTable) {
 }
 
 TEST(Name, AnEncodingThisLibraryDoesNotDecodeIsUnsupported) {
-  // Macintosh encoding 1 is Japanese: multi-byte, a data set of its own, and
-  // refused rather than guessed a byte at a time. Encoding 6 used to be the
-  // subject here and is Macintosh Greek, which is now tabulated - a test whose
-  // subject has become supported is a test that would have started asserting
-  // the wrong thing.
+  // Macintosh encoding 4 is Arabic, which this library has no table for and
+  // refuses rather than guess. Encoding 6 (Greek) and encoding 1 (Japanese) used
+  // to be the subjects here and are tabulated now - a test whose subject has
+  // become supported is a test that would have started asserting the wrong
+  // thing.
   Font font({name_table(gfnttest::build_name(
-      {{1, 1, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("whatever")}}))});
+      {{1, 4, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("whatever")}}))});
   GFNT_NameRecord record{};
   ASSERT_EQ(gfnt_face_name_at(font.face, 0, &record, nullptr), GFNT_OK);
   char * out = nullptr;
@@ -460,11 +460,10 @@ TEST(Name, EveryAllocationFailureIsReportedAndLeaksNothing) {
 TEST(NameDump, NamesEveryRecordAndSaysWhenOneCannotBeDecoded) {
   Font font({name_table(gfnttest::build_name({
       {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti Sans")},
-      // Macintosh Japanese: multi-byte, and the only kind of record left that
-      // this library declines. Encoding 6 stood here and is Greek, which is now
-      // tabulated - so the dump would have decoded it and the assertion below
-      // would have been testing nothing.
-      {1, 1, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("whatever")},
+      // Macintosh Arabic, which has no table here. Encodings 1 (Japanese) and
+      // 6 (Greek) stood here and are tabulated now - so the dump would have
+      // decoded them and the assertion below would have been testing nothing.
+      {1, 4, 0, GFNT_NAME_FAMILY, gfnttest::raw_bytes("whatever")},
   }))});
 
   gfnttest::CapturedOutput out;
@@ -648,7 +647,7 @@ TEST(Name, DecodingOneRecordDirectlyReportsWhatTheScanWouldHaveSkipped) {
   // itself and decodes one is entitled to be told *why* it cannot be decoded,
   // which is a different answer from "this font has no such name".
   Font font({name_table(gfnttest::build_name({
-      {1, 1, 11, GFNT_NAME_FAMILY, gfnttest::raw_bytes("\x82\xa0")},
+      {1, 4, 11, GFNT_NAME_FAMILY, gfnttest::raw_bytes("\x82\xa0")},
       {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti")},
   }))});
   GFNT_NameRecord record{};
@@ -663,7 +662,7 @@ TEST(Name, DecodingOneRecordDirectlyReportsWhatTheScanWouldHaveSkipped) {
   // And it names *which* encoding it cannot decode. The specific sentence used
   // to live one function further in, where the decodability check in front of it
   // meant nothing ever reached it, so every caller got the generic one.
-  EXPECT_NE(std::string(error.message).find("multi-byte"), std::string::npos)
+  EXPECT_NE(std::string(error.message).find("Macintosh name encoding"), std::string::npos)
       << error.message;
   EXPECT_EQ(text, nullptr);
 
@@ -674,7 +673,7 @@ TEST(Name, DecodingOneRecordDirectlyReportsWhatTheScanWouldHaveSkipped) {
   EXPECT_EQ(gfnt_face_name_decode(font.face, &unknown, nullptr, &text, nullptr,
       &error), GFNT_ERR_UNSUPPORTED);
   ASSERT_NE(error.message, nullptr);
-  EXPECT_EQ(std::string(error.message).find("multi-byte"), std::string::npos)
+  EXPECT_EQ(std::string(error.message).find("Macintosh name encoding"), std::string::npos)
       << error.message;
 }
 
@@ -770,7 +769,7 @@ TEST(NameDump, ReportsEveryWriteFailureAndEveryRecordItCannotRead) {
   // write that can fail.
   std::vector<uint8_t> name = gfnttest::build_name({
       {3, 1, 0x409, GFNT_NAME_FAMILY, gfnttest::utf16be("Ghoti")},
-      {1, 1, 11, GFNT_NAME_SUBFAMILY, gfnttest::raw_bytes("\x82\xa0")},
+      {1, 4, 11, GFNT_NAME_SUBFAMILY, gfnttest::raw_bytes("\x82\xa0")},
       {1, 0, 0, GFNT_NAME_COPYRIGHT, gfnttest::raw_bytes("Mac")},
   });
   gfnttest::patch_u16(name, gfnttest::name_record_offset(2) + 8, 400);
@@ -781,7 +780,7 @@ TEST(NameDump, ReportsEveryWriteFailureAndEveryRecordItCannotRead) {
   ASSERT_EQ(gfnt_face_name_dump(font.face, out.get()), GFNT_OK);
   const std::string text = out.finish();
   EXPECT_NE(text.find("name: 3 records"), std::string::npos) << text;
-  EXPECT_NE(text.find("name record 1: platform 1, encoding 1"),
+  EXPECT_NE(text.find("name record 1: platform 1, encoding 4"),
       std::string::npos) << text;
   EXPECT_NE(text.find("not decodable"), std::string::npos) << text;
 
@@ -820,4 +819,31 @@ TEST(NameDump, ReportsEveryWriteFailureAndEveryRecordItCannotRead) {
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+TEST(Name, AMacintoshJapaneseRecordIsDecodedAndABrokenOneIsCorrupt) {
+  struct Case {
+    std::string bytes;
+    GFNT_Result result;
+    const char * text;
+  };
+  const Case cases[] = {
+      {"Ab\x82\xa0", GFNT_OK, "Ab\xe3\x81\x82"},            // ASCII, then HIRAGANA A
+      {"\x82", GFNT_ERR_CORRUPT, nullptr},                    // ends inside a character
+      {"\x82\x20", GFNT_ERR_CORRUPT, nullptr},                // a trail byte the lead has no row for
+  };
+  for (const Case & c : cases) {
+    Font font({name_table(gfnttest::build_name({
+        {1, 1, 11, GFNT_NAME_FAMILY, gfnttest::raw_bytes(c.bytes.c_str())}}))});
+    GFNT_NameRecord record{};
+    ASSERT_EQ(gfnt_face_name_at(font.face, 0, &record, nullptr), GFNT_OK);
+    char * out = nullptr;
+    EXPECT_EQ(gfnt_face_name_decode(font.face, &record, nullptr, &out, nullptr, &font.error), c.result)
+        << c.bytes;
+    if (c.result == GFNT_OK) {
+      ASSERT_NE(out, nullptr);
+      EXPECT_STREQ(out, c.text);
+      gfnt_name_free(nullptr, out);
+    }
+  }
 }

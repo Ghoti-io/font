@@ -25,9 +25,11 @@
  *
  * documentation/design.md section 7.2 and M15. The encoding decides the
  * decode: UTF-16BE for the Unicode and Windows platforms, a generated table for
- * the single-byte Macintosh encodings, and ::GFNT_ERR_UNSUPPORTED for the
- * multi-byte ones - which is a different answer from ::GFNT_ERR_CORRUPT,
- * because the font is fine and this library is the one that is short a table.
+ * the Macintosh encodings (single-byte, and the four multi-byte CJK ones by
+ * pair tables), and ::GFNT_ERR_UNSUPPORTED for a Macintosh encoding with no
+ * table - which is a different answer from ::GFNT_ERR_CORRUPT, because the
+ * font is fine and this library is the one that is short a table. A sequence
+ * the multi-byte encodings do not define is ::GFNT_ERR_CORRUPT.
  *
  * **The Macintosh encoding is not chosen by the encoding ID alone.** `platEncID`
  * 0 is keyed by `langID`: it is Mac Roman for most languages and Icelandic,
@@ -51,6 +53,7 @@
 #include "../bitmap/bitmap.h"
 #include "../sfnt/sfnt.h"
 #include "../type1/type1.h"
+#include "mac_cjk.h"
 #include "mac_encodings.h"
 
 /** The `name` tag, spelled once. */
@@ -197,9 +200,18 @@ static int32_t gfnt_name_mac_table(uint16_t encoding, uint16_t language) {
   }
   // An encoding ID with no rule at all is not the same as one whose rule says
   // "no table": the first is an ID this library has never heard of and the
-  // second is a multi-byte encoding it deliberately refuses. Both refuse, and
-  // the diagnostic below tells them apart.
+  // second is a multi-byte CJK encoding, which gfnt_name_mac_cjk() decodes.
   return named ? fallback : GFNT_MAC_TABLE_NONE;
+}
+
+/** The multi-byte Macintosh table of a platEncID, or -1. They are keyed by the encoding alone. */
+static int gfnt_name_mac_cjk(uint16_t encoding) {
+  for (int i = 0; i < GFNT_MAC_CJK_COUNT; ++i) {
+    if (gfnt_mac_cjk_encoding[i] == encoding) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 static bool gfnt_name_decodable(uint16_t platform, uint16_t encoding,
@@ -211,7 +223,8 @@ static bool gfnt_name_decodable(uint16_t platform, uint16_t encoding,
     return true;
   }
   if (platform == GFNT_PLATFORM_MACINTOSH) {
-    return gfnt_name_mac_table(encoding, language) != GFNT_MAC_TABLE_NONE;
+    return gfnt_name_mac_table(encoding, language) != GFNT_MAC_TABLE_NONE
+        || gfnt_name_mac_cjk(encoding) >= 0;
   }
   return false;
 }
@@ -262,6 +275,45 @@ static GFNT_Result gfnt_name_transcode(GFNT_Reader * storage,
     GFNT_Error * error) {
   size_t written = 0;
 
+  if (record->platform_id == GFNT_PLATFORM_MACINTOSH
+      && gfnt_name_mac_cjk(record->encoding_id) >= 0) {
+    const int cjk = gfnt_name_mac_cjk(record->encoding_id);
+    const uint16_t * single = gfnt_mac_cjk_single[cjk];
+
+    for (size_t i = 0; i < record->length; ++i) {
+      uint8_t byte = 0;
+      uint32_t point;
+
+      if (gfnt_reader_u8_at(storage, record->offset + i, &byte) != GFNT_OK) {
+        return GFNT_ERR_CORRUPT;
+      }
+      point = single[byte];
+      if (point == GFNT_MAC_CJK_LEAD) {
+        const GFNT_MacCjkLead * lead = &gfnt_mac_cjk_lead[cjk][byte];
+        uint8_t trail = 0;
+
+        if (i + 1 >= record->length
+            || gfnt_reader_u8_at(storage, record->offset + i + 1, &trail) != GFNT_OK) {
+          return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_NAME_TAG,
+              record->offset + i, GFNT_GLYPH_NONE,
+              "a multi-byte Macintosh name that ends inside a character");
+        }
+        point = GFNT_MAC_CJK_UNDEFINED;
+        if (trail >= lead->first && (size_t)(trail - lead->first) < lead->count) {
+          point = gfnt_mac_cjk_pairs[cjk][lead->offset + (size_t)(trail - lead->first)];
+        }
+        ++i;
+      }
+      if (point == GFNT_MAC_CJK_UNDEFINED) {
+        return gfnt_error_set(error, GFNT_ERR_CORRUPT, GFNT_NAME_TAG,
+            record->offset + i, GFNT_GLYPH_NONE,
+            "a byte sequence the multi-byte Macintosh encoding does not define");
+      }
+      written += gfnt_name_utf8(point, out ? out + written : NULL);
+    }
+    *out_length = written;
+    return GFNT_OK;
+  }
   if (record->platform_id == GFNT_PLATFORM_MACINTOSH) {
     const int32_t table =
         gfnt_name_mac_table(record->encoding_id, record->language_id);
@@ -353,16 +405,13 @@ GFNT_Result gfnt_face_name_decode(const GFNT_Face * face,
   }
   if (!gfnt_name_decodable(record->platform_id, record->encoding_id,
           record->language_id)) {
-    // Which encoding it is, because the two cases are different news: a
-    // Macintosh record in a multi-byte encoding is a table this library has not
-    // imported, and anything else is a platform nobody defines. The specific
-    // sentence used to live in gfnt_name_transcode() below, behind this very
-    // check, so nothing ever reached it and every caller got the general one.
+    // Which kind it is, because the two cases are different news: a Macintosh
+    // record in an encoding this library has no table for, and anything else,
+    // a platform nobody defines.
     return gfnt_error_set(error, GFNT_ERR_UNSUPPORTED, GFNT_NAME_TAG, 0,
         GFNT_GLYPH_NONE,
         record->platform_id == GFNT_PLATFORM_MACINTOSH
-            ? "a Macintosh name encoding this library does not decode: the "
-              "multi-byte CJK encodings are a data set of their own"
+            ? "a Macintosh name encoding this library does not decode"
             : "a name encoding this library does not decode yet");
   }
 

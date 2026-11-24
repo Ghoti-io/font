@@ -961,6 +961,73 @@ MAC_ENCODING_CASES = [
 ]
 
 
+MAC_CJK_CASES = [(1, "x_mac_japanese_ttx"), (2, "x_mac_trad_chinese_ttx"),
+                 (3, "x_mac_korean_ttx"), (25, "x_mac_simp_chinese_ttx")]
+
+
+def build_name_mac_cjk(out, cases=None):
+    """One Macintosh record per multi-byte encoding, holding every byte and pair it defines.
+
+    A single byte from 0x80 up, in order, then every two-byte sequence by lead and by trail, as bytes: the
+    set is what fontTools' own codec accepts, found by asking it (the same question tools/vectors/make_vectors.py
+    answers for the compiled table), so a table that disagrees with the reference anywhere differs here.
+    """
+    import fontTools.encodings.codecs  # noqa: F401 - registers the x_mac_*_ttx codecs
+    fb = FontBuilder(UPEM, isTTF=True)
+    fb.setupGlyphOrder(GLYPH_ORDER)
+    fb.setupGlyf(tt_glyphs())
+    fb.setupHorizontalMetrics({n: (ADVANCES[n], 0) for n in GLYPH_ORDER})
+    fb.setupHorizontalHeader(ascent=ASCENT, descent=DESCENT, lineGap=0)
+    set_cmap(fb, unicode_cmap())
+    fb.setupOS2(version=4, achVendID=VENDOR, **OS2_FIELDS)
+    fb.setupNameTable(names("Name Mac CJK"), mac=False)
+    fb.setupPost(keepGlyphNames=False)
+
+    table = fb.font["name"]
+    for encoding, codec in (cases or MAC_CJK_CASES):
+        data = bytearray()
+        for byte in range(0x80, 0x100):
+            try:
+                bytes([byte]).decode(codec)
+            except UnicodeDecodeError:
+                continue
+            data.append(byte)
+        for lead in range(0x80, 0x100):
+            try:
+                bytes([lead]).decode(codec)
+                continue
+            except UnicodeDecodeError:
+                pass
+            for trail in range(256):
+                try:
+                    bytes([lead, trail]).decode(codec)
+                except UnicodeDecodeError:
+                    continue
+                data += bytes([lead, trail])
+        record = NameRecord()
+        record.platformID = 1
+        record.platEncID = encoding
+        record.langID = 0
+        record.nameID = 19
+        record.string = bytes(data)
+        table.names.append(record)
+    table.names.sort(key=lambda r: (r.platformID, r.platEncID, r.langID,
+                                    r.nameID))
+    pin(fb)
+    fb.save(out)
+
+
+def build_name_mac_cjk_japanese_korean(out):
+    """The Japanese and Korean records of build_name_mac_cjk(): a name table's string offsets are 16 bits, so
+    all four do not fit in one font."""
+    build_name_mac_cjk(out, MAC_CJK_CASES[0:1] + MAC_CJK_CASES[2:3])
+
+
+def build_name_mac_cjk_chinese(out):
+    """The two Chinese records of build_name_mac_cjk()."""
+    build_name_mac_cjk(out, MAC_CJK_CASES[1:2] + MAC_CJK_CASES[3:4])
+
+
 def build_name_mac_encodings(out):
     """One Macintosh record per single-byte encoding, each holding every byte.
 
@@ -5432,6 +5499,10 @@ FIXTURES = {
         "name: a Macintosh Roman record holding U+2122 as byte 0xAA"),
     "name-mac-encodings.ttf": (build_name_mac_encodings,
         "name: every single-byte Macintosh encoding, all 128 high bytes each"),
+    "name-mac-cjk-ja-ko.ttf": (build_name_mac_cjk_japanese_korean,
+        "name: the Macintosh Japanese and Korean encodings, each holding every byte and two-byte sequence it defines"),
+    "name-mac-cjk-zh.ttf": (build_name_mac_cjk_chinese,
+        "name: the Macintosh Traditional and Simplified Chinese encodings, each holding every byte and two-byte sequence it defines"),
     "cff.otf": (build_cff,
         "OTTO flavour: a CFF outline table, every metric table unchanged"),
     "cff-curves.otf": (build_cff_curves,

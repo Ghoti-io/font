@@ -403,6 +403,169 @@ typedef struct GFNT_MacEncodingRule {
     return path, rules
 
 
+MAC_CJK = [(1, "x_mac_japanese_ttx"), (2, "x_mac_trad_chinese_ttx"),
+           (3, "x_mac_korean_ttx"), (25, "x_mac_simp_chinese_ttx")]
+
+
+def cjk_table(codec):
+    """A multi-byte Macintosh encoding, asked of fontTools byte by byte.
+
+    Returns (single, pairs): `single[byte]` is the one codepoint a byte decodes
+    to alone, or None; `pairs[(lead, trail)]` the one codepoint a two-byte
+    sequence decodes to. Every shape this library's decoder assumes is checked
+    here and refused when the reference does otherwise: a byte is either a
+    character or a lead byte, never both; every sequence yields exactly one
+    codepoint of the BMP; and the single bytes below 0x80 are ASCII.
+    """
+    single = {}
+    for byte in range(256):
+        try:
+            text = bytes([byte]).decode(codec)
+        except UnicodeDecodeError:
+            continue
+        if len(text) != 1 or ord(text) > 0xFFFF:
+            raise SystemExit("%s maps 0x%02X to %r" % (codec, byte, text))
+        single[byte] = ord(text)
+    for byte in range(0x80):
+        if single.get(byte) != byte:
+            raise SystemExit("%s is not ASCII at 0x%02X" % (codec, byte))
+    pairs = {}
+    for lead in range(256):
+        if lead in single:
+            for trail in range(256):
+                try:
+                    text = bytes([lead, trail]).decode(codec)
+                except UnicodeDecodeError:
+                    continue
+                if text != chr(single[lead]) + (chr(single[trail])
+                        if trail in single else "\0"):
+                    raise SystemExit("%s: 0x%02X is a character and also "
+                                     "starts a pair" % (codec, lead))
+            continue
+        for trail in range(256):
+            try:
+                text = bytes([lead, trail]).decode(codec)
+            except UnicodeDecodeError:
+                continue
+            if len(text) != 1 or ord(text) > 0xFFFF:
+                raise SystemExit("%s maps 0x%02X 0x%02X to %r"
+                                 % (codec, lead, trail, text))
+            pairs[(lead, trail)] = ord(text)
+    return single, pairs
+
+
+def emit_mac_cjk(out_dir, chosen, tables):
+    """src/name/mac_cjk.h and the text vector the unit tests compare against."""
+    for encoding, codec in MAC_CJK:
+        for language, name in chosen[encoding].items():
+            if name != codec:
+                raise SystemExit("fontTools reads Macintosh encoding %d, "
+                                 "language %d, as %s, not %s; the emitted "
+                                 "selector is by encoding alone"
+                                 % (encoding, language, name, codec))
+    path = os.path.join(out_dir, "src", "name", "mac_cjk.h")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(HEADER % {"what":
+            "The multi-byte Macintosh `name` encodings (Japanese, Traditional\n"
+            " * Chinese, Korean, Simplified Chinese), asked of fontTools' own\n"
+            " * codecs one byte and one pair at a time."})
+        handle.write("""
+#ifndef GHOTI_IO_GFNT_MAC_CJK_H
+#define GHOTI_IO_GFNT_MAC_CJK_H
+
+#include <ghoti.io/font/macros.h>
+#include <stdint.h>
+
+/** @brief How many multi-byte Macintosh encodings are tabulated. */
+#define GFNT_MAC_CJK_COUNT %d
+
+/** @brief A byte with no meaning alone or as the first of a pair. */
+#define GFNT_MAC_CJK_UNDEFINED 0xFFFFu
+
+/** @brief A byte that starts a two-byte sequence. */
+#define GFNT_MAC_CJK_LEAD 0xFFFEu
+
+/** @brief The platEncID of each table. */
+static const uint16_t gfnt_mac_cjk_encoding[GFNT_MAC_CJK_COUNT] = {%s};
+
+/** @brief Where a lead byte's trail bytes are, and which. */
+typedef struct GFNT_MacCjkLead {
+  uint32_t offset;  ///< Into the encoding's pair array.
+  uint8_t first;    ///< The first trail byte it has a row for.
+  uint8_t count;    ///< How many trail bytes the row covers (0: not a lead).
+} GFNT_MacCjkLead;
+""" % (len(MAC_CJK), ", ".join(str(e) for e, _ in MAC_CJK)))
+        for index, (encoding, codec) in enumerate(MAC_CJK):
+            single, pairs = tables[codec]
+            handle.write("\n/* %s (platEncID %d) */\n" % (codec, encoding))
+            handle.write("static const uint16_t gfnt_mac_cjk_single_%d[256] = {\n"
+                         % index)
+            row = []
+            for byte in range(256):
+                if byte in single:
+                    row.append("0x%04X" % single[byte])
+                elif any(l == byte for (l, _) in pairs):
+                    row.append("0xFFFE")
+                else:
+                    row.append("0xFFFF")
+            for i in range(0, 256, 8):
+                handle.write("  " + ", ".join(row[i:i + 8]) + ",\n")
+            handle.write("};\n")
+            flat = []
+            leads = []
+            for lead in range(256):
+                trails = sorted(t for (l, t) in pairs if l == lead)
+                if not trails:
+                    leads.append((0, 0, 0))
+                    continue
+                first, last = trails[0], trails[-1]
+                leads.append((len(flat), first, last - first + 1))
+                for trail in range(first, last + 1):
+                    flat.append(pairs.get((lead, trail), 0xFFFF))
+            handle.write("static const GFNT_MacCjkLead gfnt_mac_cjk_lead_%d[256] = {\n"
+                         % index)
+            for i in range(0, 256, 4):
+                handle.write("  " + ", ".join("{ %d, %d, %d }" % l
+                                               for l in leads[i:i + 4]) + ",\n")
+            handle.write("};\n")
+            handle.write("static const uint16_t gfnt_mac_cjk_pairs_%d[%d] = {\n"
+                         % (index, len(flat)))
+            for i in range(0, len(flat), 12):
+                handle.write("  " + ", ".join("0x%04X" % v
+                                               for v in flat[i:i + 12]) + ",\n")
+            handle.write("};\n")
+        handle.write("\nstatic const uint16_t * const gfnt_mac_cjk_single[GFNT_MAC_CJK_COUNT] = {\n")
+        for index in range(len(MAC_CJK)):
+            handle.write("  gfnt_mac_cjk_single_%d,\n" % index)
+        handle.write("};\nstatic const GFNT_MacCjkLead * const gfnt_mac_cjk_lead[GFNT_MAC_CJK_COUNT] = {\n")
+        for index in range(len(MAC_CJK)):
+            handle.write("  gfnt_mac_cjk_lead_%d,\n" % index)
+        handle.write("};\nstatic const uint16_t * const gfnt_mac_cjk_pairs[GFNT_MAC_CJK_COUNT] = {\n")
+        for index in range(len(MAC_CJK)):
+            handle.write("  gfnt_mac_cjk_pairs_%d,\n" % index)
+        handle.write("};\n\n#endif // GHOTI_IO_GFNT_MAC_CJK_H\n")
+
+    directory = os.path.join(out_dir, "tests", "data", "vectors")
+    os.makedirs(directory, exist_ok=True)
+    text_path = os.path.join(directory, "mac_cjk.txt")
+    with open(text_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write("# The multi-byte Macintosh encodings, from fontTools' codecs.\n"
+                     "# Generated by tools/vectors/make_vectors.py; read by testVectors.\n"
+                     "# <platEncID> <lead byte hex, or - for a single byte> <the codepoints of "
+                     "bytes 0x00.. (single) or trail 0x00.. (pair row), hex, - for none>\n")
+        for encoding, codec in MAC_CJK:
+            single, pairs = tables[codec]
+            handle.write("%d\t-\t%s\n" % (encoding, " ".join(
+                "%04X" % single[b] if b in single else "-" for b in range(256))))
+            for lead in range(256):
+                if any(l == lead for (l, _) in pairs):
+                    handle.write("%d\t%02X\t%s\n" % (encoding, lead, " ".join(
+                        "%04X" % pairs[(lead, t)] if (lead, t) in pairs else "-"
+                        for t in range(256))))
+    return path, text_path
+
+
 def emit_text(out_dir, names, tables, rules, agreed, differ):
     """The same facts as text, committed, so that `make test` can check them."""
     directory = os.path.join(out_dir, "tests", "data", "vectors")
@@ -665,6 +828,8 @@ def main(argv=None):
     written = [emit_post_names(root, names)]
     path, rules = emit_mac_encodings(root, tables, chosen)
     written.append(path)
+    cjk = {codec: cjk_table(codec) for _, codec in MAC_CJK}
+    written.extend(emit_mac_cjk(root, chosen, cjk))
     written.append(emit_text(root, names, tables, rules, agreed, differ))
     standard, encoding, charsets, iso_adobe = cff_tables()
     written.append(emit_cff_strings(root, standard, encoding, charsets,

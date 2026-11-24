@@ -21,7 +21,7 @@ import autohint_zones_gen
 # name, the code point ranges a glyph is of the script by (up to five), and whether to keep it.
 # Scripts whose tallest zone is the one the scale is corrected by (as the x-height is in Latin): measured, per script, by the
 # share of points that equal FreeType's with the zone in the corrected slot and in the plain one.
-CORRECTED = {"COPTIC", "CANADIAN", "GLAGOLITIC", "DESERET", "KHMER", "LAO", "THAI", "MYANMAR"}
+CORRECTED = {"GUJARATI", "GURMUKHI", "SHAVIAN", "COPTIC", "CANADIAN", "GLAGOLITIC", "DESERET", "KHMER", "LAO", "THAI", "MYANMAR"}
 
 SCRIPTS = [
     ("CHEROKEE", [(0x13A0, 0x13FF), (0xAB70, 0xABBF)]),
@@ -48,6 +48,26 @@ SCRIPTS = [
     ("MYANMAR", [(0x1000, 0x109F)]),
     ("DEVANAGARI", [(0x900, 0x97F)]),
     ("BENGALI", [(0x980, 0x9FF)]),
+    ("GUJARATI", [(0xA80, 0xAFF)]),
+    ("GURMUKHI", [(0xA00, 0xA7F)]),
+    ("KANNADA", [(0xC80, 0xCFF)]),
+    ("MALAYALAM", [(0xD00, 0xD7F)]),
+    ("TELUGU", [(0xC00, 0xC7F)]),
+    ("TIFINAGH", [(0x2D30, 0x2D7F)]),
+    ("VAI", [(0xA500, 0xA63F)]),
+    ("BAMUM", [(0xA6A0, 0xA6FF)]),
+    ("OLCHIKI", [(0x1C50, 0x1C7F)]),
+    ("SUNDANESE", [(0x1B80, 0x1BBF)]),
+    ("SAURASHTRA", [(0xA880, 0xA8DF)]),
+    ("LIMBU", [(0x1900, 0x194F)]),
+    ("MONGOLIAN", [(0x1800, 0x18AF)]),
+    ("OSMANYA", [(0x10480, 0x104AF)]),
+    ("SHAVIAN", [(0x10450, 0x1047F)]),
+    ("BUGINESE", [(0x1A00, 0x1A1F)]),
+    ("TAGALOG", [(0x1700, 0x171F)]),
+    ("HANUNOO", [(0x1720, 0x173F)]),
+    ("TIBETAN", [(0xF00, 0xFFF)]),
+    ("TAIVIET", [(0xAA80, 0xAADF)]),
 ]
 
 

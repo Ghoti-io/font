@@ -289,3 +289,18 @@ def merged_bottoms(run, ppems):
                        [[400, d, 1], [400, 392, 1], [600, 392, 1], [600, d, 1]]])
         report.append([0, 1, 4, 5])
     run(labels, glyphs, report, ppems)
+
+
+def curve_entry(run, ppems):
+    """A flat top entered through two off-curve points, as the serif of a roman F: P3 is the last off-curve point,
+    dy below the flat top and dx before its first on-curve point. Does FreeType count P3 as part of the flat
+    segment (and so put it on the edge), or treat it as a weak point between the stem and the flat?"""
+    labels, glyphs, report = [], [], []
+    for dy in (0, 1, 2, 3, 4, 6, 9):
+        for dx in (2, 6, 14, 28, 60):
+            labels.append("dy=%d dx=%d" % (dy, dx))
+            top = 634
+            glyphs.append([[[0, 0, 1], [0, 590, 1], [2, 620, 0], [100 - dx - 28, top - dy, 0], [100, top, 1], [260, top, 1],
+                            [260, 0, 1]]])
+            report.append([1, 2, 3, 4])
+    run(labels, glyphs, report, ppems)

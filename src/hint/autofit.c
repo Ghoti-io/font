@@ -175,10 +175,10 @@ static int af_direction(int64_t dx, int64_t dy) {
   if (ax == 0 && ay == 0) {
     return 0;
   }
-  if (ax >= 14 * ay) {
+  if (ax > 14 * ay) {
     return dx > 0 ? AF_DIR_RIGHT : AF_DIR_LEFT;
   }
-  if (ay >= 14 * ax) {
+  if (ay > 14 * ax) {
     return dy > 0 ? AF_DIR_UP : AF_DIR_DOWN;
   }
   return 0;

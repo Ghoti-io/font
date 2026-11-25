@@ -173,10 +173,11 @@ def bar_and_top(run, ppems):
 def fuzz_boxes(run, ppems):
     """Random rectilinear glyphs: one to three boxes at random heights and thicknesses. Every difference is a
     reproducer already small enough to read; they are listed fewest points first."""
+    import os
     import random
-    rng = random.Random(7)
+    rng = random.Random(int(os.environ.get("PROBE_SEED", "7")))
     labels, glyphs, report = [], [], []
-    for n in range(150):
+    for n in range(int(os.environ.get("PROBE_COUNT", "150"))):
         boxes = []
         x = 0
         for _ in range(rng.choice((1, 1, 2, 2, 3))):
@@ -274,5 +275,17 @@ def near_edges(run, ppems):
         labels.append("L bottom=%d" % b)
         glyphs.append([[[0, b, 1], [0, 420, 1], [200, 420, 1], [200, b, 1]],
                        [[400, 33, 1], [400, 119, 1], [600, 119, 1], [600, 33, 1]]])
+        report.append([0, 1, 4, 5])
+    run(labels, glyphs, report, ppems)
+
+
+def merged_bottoms(run, ppems):
+    """A short box 40..72 beside a tall box d..392 with d swept near 40: when the two bottoms merge into one edge,
+    where does the merged bottom go, and what happens to the short box's top?"""
+    labels, glyphs, report = [], [], []
+    for d in range(26, 70, 4):
+        labels.append("tall bottom=%d" % d)
+        glyphs.append([[[0, 40, 1], [0, 72, 1], [200, 72, 1], [200, 40, 1]],
+                       [[400, d, 1], [400, 392, 1], [600, 392, 1], [600, d, 1]]])
         report.append([0, 1, 4, 5])
     run(labels, glyphs, report, ppems)

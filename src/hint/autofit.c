@@ -1032,15 +1032,19 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
   for (size_t k = 0; k < g->edge_count; ++k) {
     AfEdge * e = &g->edges[k];
 
-    // An edge whose partner is paired with another edge is the odd one out: with no anchor yet it is
-    // rounded to a pixel and becomes the anchor, and the stems are placed from it.
-    if (!have_anchor && !e->done && e->link >= 0 && g->edges[e->link].link != (ptrdiff_t)k) {
-      e->link = -1;
-      e->pos = af_pixround(e->opos);
-      e->done = true;
-      anchor = (ptrdiff_t)k;
-      have_anchor = true;
+    // The first edge in order whose partner is paired with another edge is the odd one out: with no stem
+    // ahead of it it is rounded to a pixel and becomes the anchor, and the stems are placed from it.
+    if (have_anchor || e->done || e->link < 0) {
+      continue;
     }
+    if (g->edges[e->link].link == (ptrdiff_t)k) {
+      break;
+    }
+    e->link = -1;
+    e->pos = af_pixround(e->opos);
+    e->done = true;
+    anchor = (ptrdiff_t)k;
+    have_anchor = true;
   }
   // The stems: the first is the anchor, the rest are placed from it.
   for (size_t k = 0; k < g->edge_count; ++k) {
@@ -1100,7 +1104,6 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
     e->done = true;
     l->done = true;
     af_clamp(g, k);
-    af_clamp(g, (size_t)e->link);
   }
   // Serifs, and what is left.
   for (size_t k = 0; k < g->edge_count; ++k) {

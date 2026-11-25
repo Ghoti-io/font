@@ -428,3 +428,22 @@ def serif_corner(run, ppems):
             glyphs.append([pts])
             report.append([12, 13, 14])
     run(labels, glyphs, report, ppems, upem=2048)
+
+
+NU_OUTLINE = [[685, 295, 1], [944, 532, 0], [951, 755, 1], [953, 810, 0], [929, 901, 1], [888, 1052, 0], [795, 1120, 1],
+              [1070, 1120, 1], [1201, 1064, 0], [1258, 907, 1], [1300, 793, 0], [1300, 715, 1], [1300, 519, 0],
+              [1164, 344, 1], [987, 116, 0], [864, 0, 1], [471, 0, 1], [31, 1120, 1], [389, 1120, 1]]
+
+
+def nu_rotation(run, ppems):
+    """The bold Greek nu (2048 per em) with the contour starting at each point in turn. If the contour's first point
+    matters to FreeType the rows differ from one another; the y of the notch vertex (point 0 in the font) and of the
+    two points after it are printed, as the glyph's own indices move."""
+    labels, glyphs, report = [], [], []
+    n = len(NU_OUTLINE)
+    for r in range(n):
+        pts = [list(NU_OUTLINE[(r + k) % n]) for k in range(n)]
+        labels.append("start at original point %d" % r)
+        glyphs.append([pts])
+        report.append([(0 - r) % n, (1 - r) % n, (2 - r) % n, (5 - r) % n])
+    run(labels, glyphs, report, ppems, upem=2048)

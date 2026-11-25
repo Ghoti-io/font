@@ -660,7 +660,8 @@ static bool af_weak(const AfGlyph * g, size_t i) {
         return true;
       }
     }
-    // Two diagonals: a corner too slight to matter is weak, FreeType's "flat" test.
+    // Two diagonals: a corner too slight to matter is weak, FreeType's "flat" test (a corner of exactly a sixteenth
+    // of the chord's length still counts: measured: the Greek letters of two serif faces at 1000 units per em).
     size_t p = g->far_prev[i];
     size_t n = g->far_next[i];
     int64_t ix = g->x[i] - g->x[p];
@@ -676,7 +677,7 @@ static bool af_weak(const AfGlyph * g, size_t i) {
     li = af_hypot(ix, iy);
     lo = af_hypot(ox, oy);
     lt = af_hypot(sx, sy);
-    return li + lo - lt < (lt >> 4);
+    return li + lo - lt <= (lt >> 4);
   }
   return false;
 }

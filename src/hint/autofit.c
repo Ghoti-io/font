@@ -925,12 +925,13 @@ static GFNT_Result af_script_map(const GFNT_Face * face, GFNT_Autofit * af) {
  * a macron, a dieresis, a tilde or a cedilla sits where its own stem rule puts it, and not on the ascender or the
  * descender the nearest zone would give it. Found by measurement, over the real faces, with the zones taken off
  * each range in turn: the spacing and combining marks of the Latin script, the ASCII circumflex, low line and grave,
- * and the Latin-1 marks that look like them. The superscript digits and the ordinal indicators are letters.
+ * and the Latin-1 marks that look like them, the Greek tonos and dialytika tonos and ypogegrammeni, and the
+ * combining marks of Cyrillic. The superscript digits and the ordinal indicators are letters.
  */
 static const uint32_t af_nonbase_ranges[][2] = {
   {0x5E, 0x60}, {0x7E, 0x7E}, {0xA8, 0xA9}, {0xAE, 0xB0}, {0xB4, 0xB4}, {0xB7, 0xB9}, {0xBC, 0xBE},
-  {0x2B9, 0x2DF}, {0x2E5, 0x2FF}, {0x300, 0x36F}, {0x1AB0, 0x1AFF}, {0x1DC0, 0x1DFF}, {0x20D0, 0x20FF},
-  {0xFE20, 0xFE2F},
+  {0x2B9, 0x2DF}, {0x2E5, 0x2FF}, {0x300, 0x36F}, {0x37A, 0x37A}, {0x384, 0x385}, {0x483, 0x489}, {0x1AB0, 0x1AFF},
+  {0x1DC0, 0x1DFF}, {0x20D0, 0x20FF}, {0xFE20, 0xFE2F},
 };
 
 /** Which glyphs of the face are marks, through its cmap. */

@@ -27,6 +27,38 @@ from fontTools.ttLib.tables._g_l_y_f import Glyph, GlyphCoordinates
 CODEPOINTS = list(range(0x250, 0x2B0))
 
 
+# The Greek probes use code points FreeType's Greek style covers and that carry no accent: archaic and symbol letters.
+GREEK_CODEPOINTS = list(range(0x3D8, 0x3F0))
+
+
+def greek_letters(upem, overshoot=12, heights=None):
+    """The Greek letters FreeType reads the Greek zones from, as boxes and round letters with the Latin proportions."""
+    u = upem / 1000.0
+    h = heights or {}
+    cap, xh, asc, desc, over = (int(h.get("cap", 700) * u), int(h.get("xh", 500) * u), int(h.get("asc", 720) * u),
+                                int(h.get("desc", -200) * u), int(overshoot * u))
+    w = int(500 * u)
+    out = []
+
+    def box(x0, y0, x1, y1):
+        return [[x0, y0, 1], [x0, y1, 1], [x1, y1, 1], [x1, y0, 1]]
+
+    for cp in list(range(0x391, 0x3A2)) + list(range(0x3A3, 0x3AA)):
+        if cp in (0x398, 0x39F, 0x3A9, 0x3A3):
+            out.append((cp, [ellipse(int(50 * u), -over, w, cap + over)]))
+        else:
+            out.append((cp, [box(int(50 * u), 0, w, cap)]))
+    for cp in range(0x3B1, 0x3CA):
+        ch = chr(cp)
+        if ch in "αεοσςω":
+            out.append((cp, [ellipse(int(50 * u), -over, w, xh + over)]))
+            continue
+        top = asc if ch in "βθδζλξ" else xh
+        bottom = desc if ch in "γημρφχψςβζξ" else 0
+        out.append((cp, [box(int(50 * u), bottom, w, top)]))
+    return out
+
+
 def glyph_of(contours):
     from fontTools.ttLib.tables._g_l_y_f import Glyph
     g = Glyph()
@@ -53,11 +85,13 @@ def ellipse(x0, y0, x1, y1):
             [x0, y0 + 1, 0]]
 
 
-def base_letters(upem, overshoot=12):
+def base_letters(upem, overshoot=12, heights=None):
     """The Latin letters a script's zones and standard width are read from: boxes, with a round `o`, in the
     proportions of an ordinary text face (cap height 0.7, x-height 0.5, ascender 0.72, descender -0.2)."""
     u = upem / 1000.0
-    cap, xh, asc, desc, over = int(700 * u), int(500 * u), int(720 * u), int(-200 * u), int(overshoot * u)
+    h = heights or {}
+    cap, xh, asc, desc, over = (int(h.get("cap", 700) * u), int(h.get("xh", 500) * u), int(h.get("asc", 720) * u),
+                                int(h.get("desc", -200) * u), int(overshoot * u))
     out = []
     w = int(500 * u)
     stem = int(80 * u)
@@ -84,12 +118,15 @@ def main():
     spec = json.load(open(sys.argv[1]))
     upem = spec.get("upem", 1000)
     n = len(spec["glyphs"])
+    greek = spec.get("script") == "greek"
+    codepoints = GREEK_CODEPOINTS if greek else CODEPOINTS
+    letters = greek_letters if greek else base_letters
     names = [".notdef"] + ["g%d" % i for i in range(n)]
-    assert n <= len(CODEPOINTS), "at most %d glyphs per font" % len(CODEPOINTS)
-    cmap = {CODEPOINTS[i]: "g%d" % i for i in range(n)}
+    assert n <= len(codepoints), "at most %d glyphs per font" % len(codepoints)
+    cmap = {codepoints[i]: "g%d" % i for i in range(n)}
     base = spec.get("base", True)
     if base:
-        for cp, contours in base_letters(upem, spec.get("overshoot", 12)):
+        for cp, contours in letters(upem, spec.get("overshoot", 12), spec.get("heights")):
             name = "u%04X" % cp
             names.append(name)
             cmap[cp] = name
@@ -100,7 +137,7 @@ def main():
     for i, g in enumerate(spec["glyphs"]):
         glyphs["g%d" % i] = glyph_of(g["contours"])
     if base:
-        for cp, contours in base_letters(upem, spec.get("overshoot", 12)):
+        for cp, contours in letters(upem, spec.get("overshoot", 12), spec.get("heights")):
             glyphs["u%04X" % cp] = glyph_of(contours)
     fb.setupGlyf(glyphs)
     fb.setupHorizontalMetrics({name: (upem, 0) for name in names})

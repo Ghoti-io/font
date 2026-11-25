@@ -447,3 +447,56 @@ def nu_rotation(run, ppems):
         glyphs.append([pts])
         report.append([(0 - r) % n, (1 - r) % n, (2 - r) % n, (5 - r) % n])
     run(labels, glyphs, report, ppems, upem=2048)
+
+
+def nu_greek(run, ppems):
+    """The bold Greek nu mapped to a Greek code point in a font that has the Greek letters FreeType reads its zones
+    from. nu_rotation matched under a Latin style; if this differs the weak call belongs to the Greek style."""
+    labels, glyphs, report = ["nu, Greek style"], [[[list(p) for p in NU_OUTLINE]]], [[0, 1, 2, 5]]
+    run(labels, glyphs, report, ppems, upem=2048, script="greek")
+    # DejaVu's own x-height is 1120 of 2048 with round letters 27 over; put the zones where the nu's top is.
+    run(["nu, zones at its top"], glyphs, report, ppems, upem=2048, script="greek", overshoot=13,
+        heights={"xh": 547, "cap": 729, "asc": 760, "desc": -236})
+
+
+def nu_vertex(run, ppems):
+    """nu_greek with its zones on the nu's top and the notch vertex (point 0) moved: x along the left diagonal's
+    inner edge and y. A strong vertex is placed between the two edges (ours: 303 at y=295), a weak one rides the top
+    edge's shift (FreeType: 323)."""
+    labels, glyphs, report = [], [], []
+    for y in (200, 295, 400, 520):
+        for x in (560, 620, 685, 740, 800):
+            pts = [list(p) for p in NU_OUTLINE]
+            pts[0] = [x, y, 1]
+            labels.append("x=%d y=%d" % (x, y))
+            glyphs.append([pts])
+            report.append([0, 1])
+    run(labels, glyphs, report, ppems, upem=2048, script="greek", overshoot=13,
+        heights={"xh": 547, "cap": 729, "asc": 760, "desc": -236})
+
+
+def nu_neighbours(run, ppems):
+    """nu_greek (zones on the nu's top) with the neighbours of the notch vertex changed. Reported: the vertex's y,
+    whose value tells weak (FreeType's 323 at 32 ppem) from strong (303)."""
+    labels, glyphs, report = [], [], []
+
+    def variant(label, edit):
+        pts = [list(p) for p in NU_OUTLINE]
+        edit(pts)
+        labels.append(label)
+        glyphs.append([pts])
+        report.append([0, 1])
+
+    variant("as is", lambda p: None)
+    variant("next point on-curve", lambda p: p[1].__setitem__(2, 1))
+    variant("next point on-curve, nearer", lambda p: p.__setitem__(1, [760, 360, 1]))
+    variant("previous point off-curve", lambda p: p[18].__setitem__(2, 0))
+    variant("both neighbours on-curve", lambda p: (p[1].__setitem__(2, 1), p.__setitem__(1, [760, 360, 1])))
+    variant("next far on-curve (600, 700)", lambda p: p.__setitem__(1, [600, 700, 1]))
+    variant("vertex off-curve", lambda p: p[0].__setitem__(2, 0))
+    variant("next on-curve and lower (no extremum)", lambda p: p.__setitem__(1, [760, 200, 1]))
+    variant("next on-curve, lower, far", lambda p: p.__setitem__(1, [900, 100, 1]))
+    variant("vertex is a local maximum", lambda p: (p.__setitem__(0, [685, 295, 1]), p.__setitem__(1, [760, 200, 1]),
+                                                     p.__setitem__(18, [389, 120, 1])))
+    run(labels, glyphs, report, ppems, upem=2048, script="greek", overshoot=13,
+        heights={"xh": 547, "cap": 729, "asc": 760, "desc": -236})

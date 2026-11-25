@@ -28,11 +28,11 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 SCRATCH = os.path.join(ROOT, "build", "scratch", "probe")
 
 
-def build(glyphs, upem=1000, name="probe", overshoot=12):
+def build(glyphs, upem=1000, name="probe", overshoot=12, script="latin", heights=None):
     os.makedirs(SCRATCH, exist_ok=True)
     spec = os.path.join(SCRATCH, name + ".json")
     out = os.path.join(SCRATCH, name + ".ttf")
-    json.dump({"upem": upem, "overshoot": overshoot, "glyphs": [{"contours": g} for g in glyphs]}, open(spec, "w"))
+    json.dump({"upem": upem, "overshoot": overshoot, "script": script, "heights": heights or {}, "glyphs": [{"contours": g} for g in glyphs]}, open(spec, "w"))
     command = oracle_env.command("fonttools", ["python3", os.path.join(HERE, "autohint_probe_font.py"), spec, out],
                                  scratch=SCRATCH)
     done = subprocess.run(command, capture_output=True, text=True)
@@ -50,9 +50,9 @@ def hint(path, ppem):
     return mine, theirs
 
 
-def run(labels, glyphs, report, ppems, upem=1000, name="probe", show=True, overshoot=12):
+def run(labels, glyphs, report, ppems, upem=1000, name="probe", show=True, overshoot=12, script="latin", heights=None):
     """Print, per glyph and size, the y of the reported points: ours then FreeType's, marked where they differ."""
-    path = build(glyphs, upem, name, overshoot)
+    path = build(glyphs, upem, name, overshoot, script, heights)
     rows = []
     for ppem in ppems:
         mine, theirs = hint(path, ppem)

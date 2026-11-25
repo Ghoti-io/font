@@ -610,3 +610,100 @@ def alpha_start(run, ppems):
         glyphs.append([[list(p) for p in outer], hole])
         report.append([len(outer) + (0 - r) % 3])
     run(labels, glyphs, report, ppems, upem=2048)
+
+
+Y_OUTLINE = [[659, -104, 1], [581, -304, 0], [433, -426, 0], [309, -426, 1], [162, -426, 1], [162, -272, 1],
+             [270, -272, 1], [346, -272, 0], [430, -200, 0], [481, -66, 1], [514, 18, 1], [61, 1120, 1],
+             [256, 1120, 1], [606, 244, 1], [956, 1120, 1], [1151, 1120, 1]]
+
+
+def y_tail(run, ppems):
+    """The tail of DejaVu Sans' y (2048 per em), whose points 9 and 10 FreeType places between the edges where this
+    library interpolates them along the contour. The pair is moved and the points after the curve changed to find
+    what makes FreeType call them strong."""
+    labels, glyphs, report = [], [], []
+
+    def variant(label, edit):
+        pts = [list(p) for p in Y_OUTLINE]
+        pts = edit(pts)
+        labels.append(label)
+        glyphs.append([pts])
+        report.append([9, 10])
+
+    variant("as is", lambda p: p)
+    variant("point 10 higher", lambda p: (p.__setitem__(10, [514, 118, 1]), p)[1])
+    variant("point 10 on the line to 11", lambda p: (p.__setitem__(10, [490, 120, 1]), p)[1])
+    variant("point 9 off-curve", lambda p: (p[9].__setitem__(2, 0), p)[1])
+    variant("point 8 on-curve", lambda p: (p[8].__setitem__(2, 1), p)[1])
+    variant("point 7 on-curve", lambda p: (p[7].__setitem__(2, 1), p)[1])
+    variant("curve straightened (7, 8 removed)", lambda p: p[:7] + p[9:])
+    variant("no tail", lambda p: p[:9] + p[11:])
+    run(labels, glyphs, report, ppems, upem=2048)
+
+
+def i_dot(run, ppems):
+    """An i: a stem to the x-height and a dot above it whose top is swept through the ascender zone (720 per
+    thousand). FreeType leaves the dot of DejaVu's i above the pixel the zone would give; this shows when it does."""
+    labels, glyphs, report = [], [], []
+    for height in (120, 160):
+        for top in (680, 700, 710, 720, 730, 740, 760):
+            labels.append("dot %d..%d" % (top - height, top))
+            glyphs.append([[[0, 0, 1], [0, 500, 1], [110, 500, 1], [110, 0, 1]],
+                           [[0, top - height, 1], [0, top, 1], [110, top, 1], [110, top - height, 1]]])
+            report.append([5, 6])
+    run(labels, glyphs, report, ppems)
+
+
+def i_dejavu(run, ppems):
+    """DejaVu Sans' i (2048 per em, zones at its own heights): the dot's top is on the ascender and FreeType puts it
+    14 sixty-fourths above the pixel at 11 ppem where this library snaps it. The dot is then moved and resized."""
+    labels, glyphs, report = [], [], []
+    heights = {"xh": 1120, "cap": 1493, "asc": 1556, "desc": -426}
+    for label, (b, t) in (("as is 1323..1556", (1323, 1556)), ("dot 1423..1556", (1423, 1556)),
+                          ("dot 1323..1456", (1323, 1456)), ("dot 1223..1556", (1223, 1556)),
+                          ("dot 1356..1556", (1356, 1556)), ("dot 1300..1540", (1300, 1540))):
+        labels.append(label)
+        glyphs.append([[[193, 1120, 1], [377, 1120, 1], [377, 0, 1], [193, 0, 1]],
+                       [[193, t, 1], [377, t, 1], [377, b, 1], [193, b, 1]]])
+        report.append([4, 6])
+    run(labels, glyphs, report, ppems, upem=2048, overshoot=27, heights=heights)
+
+
+def stem_gap(run, ppems):
+    """A stem to the x-height (500) and a second box above it whose top is on the ascender (720) and whose bottom is
+    swept up from the stem's top. FreeType keeps a pixel between the second box's bottom and the edge below it (DejaVu's
+    i dot at small sizes); the rows show where that happens. Printed: the stem's top, the box's bottom and top."""
+    labels, glyphs, report = [], [], []
+    for bottom in range(505, 700, 15):
+        labels.append("box %d..720" % bottom)
+        glyphs.append([[[0, 0, 1], [0, 500, 1], [100, 500, 1], [100, 0, 1]],
+                       [[0, bottom, 1], [0, 720, 1], [100, 720, 1], [100, bottom, 1]]])
+        report.append([1, 4, 5])
+    run(labels, glyphs, report, ppems)
+
+
+def i_dot_sweep(run, ppems):
+    """i_dejavu with the dot's bottom swept (top on the ascender at 1556): where FreeType keeps the dot's bottom above
+    the stem's top by a floor and this library does not. Printed: the stem's top and the dot's bottom and top."""
+    labels, glyphs, report = [], [], []
+    heights = {"xh": 1120, "cap": 1493, "asc": 1556, "desc": -426}
+    for b in range(1160, 1440, 20):
+        labels.append("dot %d..1556" % b)
+        glyphs.append([[[193, 1120, 1], [377, 1120, 1], [377, 0, 1], [193, 0, 1]],
+                       [[193, 1556, 1], [377, 1556, 1], [377, b, 1], [193, b, 1]]])
+        report.append([0, 6, 4])
+    run(labels, glyphs, report, ppems, upem=2048, overshoot=27, heights=heights)
+
+
+def accent_box(run, ppems):
+    """A letter to the x-height (1120 per 2048 em) with a box above it standing for an acute accent (1262..1638): at
+    9 and 12 ppem FreeType puts the real accent half a pixel above where this library does. Printed: the box's
+    bottom and top, ours then FreeType's."""
+    labels, glyphs, report = [], [], []
+    heights = {"xh": 1120, "cap": 1493, "asc": 1556, "desc": -426}
+    for bottom, top in ((1262, 1638), (1262, 1600), (1262, 1560), (1300, 1638), (1200, 1638), (1330, 1638), (1262, 1700)):
+        labels.append("box %d..%d" % (bottom, top))
+        glyphs.append([[[193, 1120, 1], [900, 1120, 1], [900, 0, 1], [193, 0, 1]],
+                       [[400, top, 1], [700, top, 1], [700, bottom, 1], [400, bottom, 1]]])
+        report.append([4, 6])
+    run(labels, glyphs, report, ppems, upem=2048, overshoot=27, heights=heights)

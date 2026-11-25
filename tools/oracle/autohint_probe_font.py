@@ -110,6 +110,11 @@ def base_letters(upem, overshoot=12, heights=None):
             continue
         top = asc if c in "bdfhkl" else xh
         bottom = desc if c in "gjpqy" else 0
+        if c in "ij":
+            # A dot on the ascender, as a real i and j have; FreeType reads its ascender zone from these tops too.
+            out.append((ord(c), [box(int(50 * u), bottom, int(130 * u), xh),
+                                 box(int(50 * u), asc - int(120 * u), int(130 * u), asc)]))
+            continue
         out.append((ord(c), [box(int(50 * u), bottom, w, top)]))
     return out
 

@@ -105,6 +105,7 @@ struct GFNT_Autofit {
   AfScript scripts[AF_SCRIPTS];
   uint8_t * script_of;  ///< The script of each glyph; absent for a face with no cmap letters of another script.
   uint32_t glyph_count;
+  uint8_t * nonbase;    ///< 1 for a glyph FreeType does not fit to the blue zones (a mark or an accent); absent when none.
 };
 
 /** The letters each zone is named for, per script, and the letter the standard stem width comes from. */
@@ -919,6 +920,44 @@ static GFNT_Result af_script_map(const GFNT_Face * face, GFNT_Autofit * af) {
   return GFNT_OK;
 }
 
+/**
+ * The code points of glyphs that are marks or accents and not letters. FreeType fits them without the blue zones:
+ * a macron, a dieresis, a tilde or a cedilla sits where its own stem rule puts it, and not on the ascender or the
+ * descender the nearest zone would give it. Found by measurement, over the real faces, with the zones taken off
+ * each range in turn: the spacing and combining marks of the Latin script, the ASCII circumflex, low line and grave,
+ * and the Latin-1 marks that look like them. The superscript digits and the ordinal indicators are letters.
+ */
+static const uint32_t af_nonbase_ranges[][2] = {
+  {0x5E, 0x60}, {0x7E, 0x7E}, {0xA8, 0xA9}, {0xAE, 0xB0}, {0xB4, 0xB4}, {0xB7, 0xB9}, {0xBC, 0xBE},
+  {0x2B9, 0x2DF}, {0x2E5, 0x2FF}, {0x300, 0x36F}, {0x1AB0, 0x1AFF}, {0x1DC0, 0x1DFF}, {0x20D0, 0x20FF},
+  {0xFE20, 0xFE2F},
+};
+
+/** Which glyphs of the face are marks, through its cmap. */
+static GFNT_Result af_nonbase_map(const GFNT_Face * face, GFNT_Autofit * af) {
+  size_t count = 0;
+  const GFNT_Allocator * a = face->allocator;
+
+  if (gfnt_face_num_glyphs(face, &count, NULL) != GFNT_OK || count == 0) {
+    return GFNT_OK;
+  }
+  af->nonbase = a->calloc_fn(a->ctx, count, 1);
+  if (!af->nonbase) {
+    return GFNT_ERR_OOM;
+  }
+  af->glyph_count = (uint32_t)count;
+  for (size_t r = 0; r < sizeof af_nonbase_ranges / sizeof af_nonbase_ranges[0]; ++r) {
+    for (uint32_t cp = af_nonbase_ranges[r][0]; cp <= af_nonbase_ranges[r][1]; ++cp) {
+      uint32_t glyph = 0;
+
+      if (gfnt_face_glyph_for_codepoint(face, cp, &glyph, NULL) == GFNT_OK && glyph != 0 && glyph < count) {
+        af->nonbase[glyph] = 1;
+      }
+    }
+  }
+  return GFNT_OK;
+}
+
 /** The script a glyph is fitted with: its own when the face has that script's letters, else Latin. */
 static const AfScript * af_script_of(const GFNT_Autofit * af, uint32_t glyph) {
   if (af->script_of && glyph < af->glyph_count && af->script_of[glyph] < AF_SCRIPTS
@@ -969,7 +1008,7 @@ GFNT_Result gfnt_autofit_create(const GFNT_Face * face, uint32_t ppem, const GFN
   for (int sc = 0; sc < AF_SCRIPTS; ++sc) {
     af_script_build(face, af, sc, scale);
   }
-  if (af_script_map(face, af) != GFNT_OK) {
+  if (af_script_map(face, af) != GFNT_OK || af_nonbase_map(face, af) != GFNT_OK) {
     gfnt_autofit_destroy(af);
     return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, 0, "no memory for the automatic hinter");
   }
@@ -986,6 +1025,9 @@ void gfnt_autofit_destroy(GFNT_Autofit * af) {
   }
   if (af->script_of) {
     af->allocator->free_fn(af->allocator->ctx, af->script_of);
+  }
+  if (af->nonbase) {
+    af->allocator->free_fn(af->allocator->ctx, af->nonbase);
   }
   af->allocator->free_fn(af->allocator->ctx, af);
 }
@@ -1020,7 +1062,7 @@ static void af_align_linked(AfEdge * base, AfEdge * stem) {
   stem->done = true;
 }
 
-static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * script) {
+static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * script, bool nonbase) {
   int64_t yscale = script->yscale;
   int64_t best_limit = af_mulfix(af->upem / 40, yscale);
   ptrdiff_t anchor = -1;
@@ -1046,7 +1088,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
       const AfZone * zone = &script->zones[z];
       int64_t d;
 
-      if (!zone->present || !zone->active || zone->top != e->top) {
+      if (nonbase || !zone->present || !zone->active || zone->top != e->top) {
         continue;
       }
       d = af_mulfix(e->fpos - zone->ref, yscale);
@@ -1395,7 +1437,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   af_link_segments(&g, af->upem);
   script = af_script_of(af, glyph);
   af_edges(&g, script->yscale, script->stdw);
-  af_fit_edges(&g, af, script);
+  af_fit_edges(&g, af, script, af->nonbase && glyph < af->glyph_count && af->nonbase[glyph]);
   af_fit_points(&g, script);
   r = gfnt_outline_create(allocator ? allocator : face->allocator, &result, error);
   for (size_t c = 0; r == GFNT_OK && c < g.contours; ++c) {

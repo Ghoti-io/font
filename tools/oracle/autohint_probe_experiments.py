@@ -304,3 +304,31 @@ def curve_entry(run, ppems):
                             [260, 0, 1]]])
             report.append([1, 2, 3, 4])
     run(labels, glyphs, report, ppems)
+
+
+def curve_exit(run, ppems):
+    """curve_entry mirrored: a flat top left through off-curve points. P3 is the first off-curve point after the
+    flat's last on-curve point, dy below the top and dx + 28 after it."""
+    labels, glyphs, report = [], [], []
+    for dy in (0, 1, 2, 3, 4, 6, 9):
+        for dx in (2, 6, 14, 28, 60):
+            labels.append("dy=%d dx=%d" % (dy, dx))
+            top = 634
+            glyphs.append([[[0, 0, 1], [0, 590, 1], [20, top, 1], [160, top, 1], [160 + dx + 28, top - dy, 0],
+                            [300, 620, 0], [300, 0, 1]]])
+            report.append([2, 3, 4, 5])
+    run(labels, glyphs, report, ppems)
+
+
+def curve_exit_two(run, ppems):
+    """The flat top ends in an off-curve point at the same height, then a second off-curve point dy lower and dx + 28
+    on, then an on-curve point: the shape of the top right of a bold roman r."""
+    labels, glyphs, report = [], [], []
+    for dy in (0, 1, 2, 3, 4, 6, 9):
+        for dx in (2, 6, 14, 28, 60):
+            labels.append("dy=%d dx=%d" % (dy, dx))
+            top = 634
+            glyphs.append([[[0, 0, 1], [0, 590, 1], [20, top, 1], [160, top, 1], [178, top, 0],
+                            [178 + dx + 28, top - dy, 0], [330, top - 8, 1], [330, 0, 1]]])
+            report.append([3, 4, 5, 6])
+    run(labels, glyphs, report, ppems)

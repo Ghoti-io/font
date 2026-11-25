@@ -407,3 +407,24 @@ def near_limit(run, ppems):
         glyphs.append([pts])
         report.append([11, 12, 13])
     run(labels, glyphs, report, ppems, upem=upem)
+
+
+T_OUTLINE = [[315, 0, 1], [315, 53, 1], [528, 80, 1], [528, 1255, 1], [477, 1255, 1], [224, 1255, 0], [131, 1235, 1],
+             [104, 1026, 1], [37, 1026, 1], [37, 1341, 1], [1217, 1341, 1], [1217, 1026, 1], [1149, 1026, 1],
+             [1122, 1235, 1], [1092, 1242, 0], [890, 1253, 0], [770, 1253, 1], [721, 1253, 1], [721, 80, 1],
+             [934, 53, 1], [934, 0, 1]]
+
+
+def serif_corner(run, ppems):
+    """The right serif of a roman T (2048 per em): point 13 is the vertex between the near-vertical serif edge and
+    the first off-curve point of the top. Its x and y are swept; whether FreeType interpolates it (weak) or places
+    it between the edges (strong) shows in its y, and so does what ours does."""
+    labels, glyphs, report = [], [], []
+    for y in (1235, 1215, 1190):
+        for x in range(1096, 1170, 4):
+            pts = [list(p) for p in T_OUTLINE]
+            pts[13] = [x, y, 1]
+            labels.append("x=%d y=%d" % (x, y))
+            glyphs.append([pts])
+            report.append([12, 13, 14])
+    run(labels, glyphs, report, ppems, upem=2048)

@@ -939,11 +939,8 @@ static int64_t af_stem_center(int64_t org_center, int64_t cur_len) {
 static void af_clamp(AfGlyph * g, size_t k) {
   AfEdge * e = &g->edges[k];
 
-  if (k > 0 && e->pos < g->edges[k - 1u].pos) {
+  if (k > 0 && g->edges[k - 1u].done && e->pos < g->edges[k - 1u].pos) {
     e->pos = g->edges[k - 1u].pos;
-  }
-  if (k + 1u < g->edge_count && g->edges[k + 1u].done && e->pos > g->edges[k + 1u].pos) {
-    e->pos = g->edges[k + 1u].pos;
   }
 }
 

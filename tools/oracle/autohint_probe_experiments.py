@@ -249,3 +249,30 @@ def merged_tops_sweep(run, ppems):
                        [[400, a, 1], [400, 294, 1], [600, 294, 1], [600, a, 1]]])
         report.append([0, 4, 1])
     run(labels, glyphs, report, ppems)
+
+
+def blue_stem_width(run, ppems):
+    """A box sitting on the baseline (bottom 0) with a growing height: where does FreeType put its top, and does it
+    keep the scaled height or fit it to the pixel grid?"""
+    labels, glyphs, report = [], [], []
+    for h in range(40, 200, 10):
+        labels.append("baseline h=%d" % h)
+        glyphs.append([[[0, 0, 1], [0, h, 1], [200, h, 1], [200, 0, 1]]])
+        report.append([0, 1])
+    for h in range(40, 200, 10):
+        labels.append("floating h=%d" % h)
+        glyphs.append([[[0, 233, 1], [0, 233 + h, 1], [200, 233 + h, 1], [200, 233, 1]]])
+        report.append([0, 1])
+    run(labels, glyphs, report, ppems)
+
+
+def near_edges(run, ppems):
+    """Box S = 33..119 (on the baseline blue) beside box L = b..420, with b swept across S's top: the edges of
+    S's top and L's bottom come within a few font units of each other, on opposite sides."""
+    labels, glyphs, report = [], [], []
+    for b in range(60, 200, 8):
+        labels.append("L bottom=%d" % b)
+        glyphs.append([[[0, b, 1], [0, 420, 1], [200, 420, 1], [200, b, 1]],
+                       [[400, 33, 1], [400, 119, 1], [600, 119, 1], [600, 33, 1]]])
+        report.append([0, 1, 4, 5])
+    run(labels, glyphs, report, ppems)

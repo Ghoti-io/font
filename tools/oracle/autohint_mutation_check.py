@@ -45,6 +45,8 @@ MUTANTS = [
     ("#define AF_NEAR_NUM 16", "#define AF_NEAR_NUM 1", "points closer than eight thousandths of an em are not near"),
     ("if (overlap * 2048 < 12 * up) {", "if (overlap * 2048 < 24 * up) {", "two segments link only on twice the overlap"),
     ("if (threshold > 16) {", "if (threshold > 8) {", "edges merge within eight sixty-fourths at most"),
+    ("if (g->first[c] == i && g->count[c] > 0) {", "if (g->first[c] == i && g->count[c] > 99) {",
+     "a contour's first point is judged as any other"),
     ("return li + lo - lt < (lt >> 4);", "return li + lo - lt < (lt >> 3);", "a flat corner is judged at an eighth of its length"),
     ("z->active = dist <= 48 && dist >= -48;", "z->active = dist <= 32 && dist >= -32;", "a blue zone is inactive past half a pixel"),
     ("if (delta2 < 32) {", "if (delta2 < 16) {", "an overshoot under half a pixel is flattened only below a quarter"),

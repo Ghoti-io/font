@@ -652,6 +652,13 @@ static bool af_weak(const AfGlyph * g, size_t i) {
     return true;
   }
   if (g->in_dir[i] == 0 && g->out_dir[i] == 0) {
+    // The first point of a contour has no incoming vector for FreeType's flat test, so a corner there is
+    // always flat: a weak point, however sharp it is (the apex of the counter of an A that starts a contour).
+    for (size_t c = 0; c < g->contours; ++c) {
+      if (g->first[c] == i && g->count[c] > 0) {
+        return true;
+      }
+    }
     // Two diagonals: a corner too slight to matter is weak, FreeType's "flat" test.
     size_t p = g->far_prev[i];
     size_t n = g->far_next[i];

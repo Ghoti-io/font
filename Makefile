@@ -1419,10 +1419,10 @@ check-oracle-autohint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py freetype -- \
 		python3 $(ORACLE)/hint_cff_diff.py --auto --pool sfnt --files tests/data/fonts/latin-greek-boxes.ttf \
 		--ppem 8,9,10,11,12,13,14,16,17,20,24,32 --stride 1 --floor 1.0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.78 --show 0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script greek --floor 0.70 --show 0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script cyrillic --floor 0.78 --show 0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script latin --floor 0.62 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.88 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script greek --floor 0.79 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script cyrillic --floor 0.83 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script latin --floor 0.80 --show 0 \
 		NotoSans-Regular.ttf NotoSans-Bold.ttf
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_script_gates.py
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script hebrew --floor 0.88 --show 0 \

@@ -500,3 +500,113 @@ def nu_neighbours(run, ppems):
                                                      p.__setitem__(18, [389, 120, 1])))
     run(labels, glyphs, report, ppems, upem=2048, script="greek", overshoot=13,
         heights={"xh": 547, "cap": 729, "asc": 760, "desc": -236})
+
+
+ALPHA_OUTLINE = [[[700, 1294, 1], [426, 551, 1], [975, 551, 1]],
+                 [[586, 1493, 1], [815, 1493, 1], [1384, 0, 1], [1174, 0, 1], [1038, 383, 1], [365, 383, 1],
+                  [229, 0, 1], [16, 0, 1]]]
+
+
+def alpha_apex(run, ppems):
+    """The capital Alpha (2048 per em): the apex of the triangular counter (point 0) is a corner of two diagonals and
+    the highest point of its contour. Its height is swept; FreeType places it differently from ours at every size."""
+    labels, glyphs, report = [], [], []
+    for y in (700, 900, 1100, 1294, 1400):
+        for dx in (-200, 0, 200):
+            hole = [[700 + dx, y, 1], [426, 551, 1], [975, 551, 1]]
+            labels.append("apex x=%d y=%d" % (700 + dx, y))
+            glyphs.append([hole, [list(p) for p in ALPHA_OUTLINE[1]]])
+            report.append([0, 1, 2])
+    run(labels, glyphs, report, ppems, upem=2048, script="greek", overshoot=27,
+        heights={"xh": 1120, "cap": 1493, "asc": 1556, "desc": -426})
+
+
+V_OUTLINE = [[586, 0, 1], [16, 1493, 1], [227, 1493, 1], [700, 236, 1], [1174, 1493, 1], [1384, 1493, 1], [815, 0, 1]]
+
+
+def v_notch(run, ppems):
+    """The capital V (2048 per em): the notch (point 3) is a corner of two diagonals and the lowest point of its
+    contour, like the apex of Alpha's counter, but FreeType places it between the edges, not along the contour."""
+    labels, glyphs, report = [], [], []
+    for y in (100, 236, 500, 800, 1100, 1400):
+        pts = [list(p) for p in V_OUTLINE]
+        pts[3] = [700, y, 1]
+        labels.append("notch y=%d" % y)
+        glyphs.append([pts])
+        report.append([3])
+    run(labels, glyphs, report, ppems, upem=2048)
+
+
+def v_variants(run, ppems):
+    """The V notch (point 3 of V_OUTLINE, y=500) with its surroundings changed, to find what makes FreeType treat it
+    as weak the way it does the apex of Alpha's counter."""
+    labels, glyphs, report = [], [], []
+
+    def variant(label, edit, idx=3):
+        pts = [list(p) for p in V_OUTLINE]
+        pts[3] = [700, 500, 1]
+        pts = edit(pts)
+        labels.append(label)
+        glyphs.append([pts])
+        report.append([idx])
+
+    variant("as is", lambda p: p)
+    variant("neighbours at different heights", lambda p: (p.__setitem__(4, [1174, 1400, 1]), p)[1])
+    variant("one neighbour lower", lambda p: (p.__setitem__(2, [227, 1000, 1]), p)[1])
+    variant("both neighbours lower",
+            lambda p: (p.__setitem__(2, [227, 1000, 1]), p.__setitem__(4, [1174, 1000, 1]), p)[2])
+    variant("reversed contour", lambda p: p[::-1], idx=3)
+    variant("neighbours joined (triangle)", lambda p: [p[3], p[2], p[4]], idx=0)
+    variant("triangle reversed", lambda p: [p[3], p[4], p[2]], idx=0)
+    run(labels, glyphs, report, ppems, upem=2048)
+
+
+def v_flipped(run, ppems):
+    """V_OUTLINE turned upside down (y -> 1493 - y), so the notch is a peak whose neighbours lie on the lower edge,
+    as the apex of Alpha's counter does. Whether FreeType's call on the notch depends on which way it points."""
+    labels, glyphs, report = [], [], []
+    for y in (100, 500, 1000, 1400):
+        pts = [[x, 1493 - yy, on] for x, yy, on in V_OUTLINE]
+        pts[3] = [700, 1493 - y, 1]
+        labels.append("flipped notch y=%d" % (1493 - y))
+        glyphs.append([pts[::-1]])
+        report.append([3])
+    run(labels, glyphs, report, ppems, upem=2048)
+
+
+def alpha_hole(run, ppems):
+    """Alpha's triangular counter (apex at y=1100) with its shape changed: FreeType calls the apex of the plain
+    triangle weak and the notch of a V strong, and this looks for what separates them."""
+    labels, glyphs, report = [], [], []
+    outer = [list(p) for p in ALPHA_OUTLINE[1]]
+
+    def variant(label, hole, idx=0):
+        labels.append(label)
+        glyphs.append([hole, [list(p) for p in outer]])
+        report.append([idx])
+
+    variant("triangle", [[700, 1100, 1], [426, 551, 1], [975, 551, 1]])
+    variant("bottom has a middle point", [[700, 1100, 1], [426, 551, 1], [700, 551, 1], [975, 551, 1]])
+    variant("bottom not flat", [[700, 1100, 1], [426, 551, 1], [975, 600, 1]])
+    variant("bottom edge below the crossbar", [[700, 1100, 1], [426, 420, 1], [975, 420, 1]])
+    variant("hole as a notch of the outer contour", [[700, 1100, 1], [975, 551, 1], [426, 551, 1]])
+    variant("apex off-centre", [[500, 1100, 1], [426, 551, 1], [975, 551, 1]])
+    variant("bottom as two flats", [[700, 1100, 1], [426, 551, 1], [700, 551, 1], [701, 560, 1], [975, 551, 1]])
+    run(labels, glyphs, report, ppems, upem=2048)
+
+
+def alpha_start(run, ppems):
+    """Alpha's triangular counter (apex at y=1100) with the contour starting at each of its three points in turn.
+    The apex is the first point of the contour in the fonts where FreeType places it as a weak point."""
+    labels, glyphs, report = [], [], []
+    outer = [list(p) for p in ALPHA_OUTLINE[1]]
+    tri = [[700, 1100, 1], [426, 551, 1], [975, 551, 1]]
+    for r in range(3):
+        hole = [list(tri[(r + k) % 3]) for k in range(3)]
+        labels.append("hole starts at point %d (apex is %d of 3)" % (r, (0 - r) % 3))
+        glyphs.append([hole, [list(p) for p in outer]])
+        report.append([(0 - r) % 3])
+        labels.append("outer first, hole starts at point %d" % r)
+        glyphs.append([[list(p) for p in outer], hole])
+        report.append([len(outer) + (0 - r) % 3])
+    run(labels, glyphs, report, ppems, upem=2048)

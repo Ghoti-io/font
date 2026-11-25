@@ -237,3 +237,15 @@ def merged_tops(run, ppems):
                        [[400, 173, 1], [400, 294 + delta, 1], [600, 294 + delta, 1], [600, 173, 1]]])
         report.append([0, 1, 4, 5])
     run(labels, glyphs, report, ppems)
+
+
+def merged_tops_sweep(run, ppems):
+    """merged_tops with the second box's bottom moved: B = 103..294 fixed, A = a..294. Prints B's bottom, A's
+    bottom, the shared top (ours then FreeType's) and the unhinted y of each for comparison."""
+    labels, glyphs, report = [], [], []
+    for a in range(110, 290, 15):
+        labels.append("A bottom=%d" % a)
+        glyphs.append([[[0, 103, 1], [0, 294, 1], [200, 294, 1], [200, 103, 1]],
+                       [[400, a, 1], [400, 294, 1], [600, 294, 1], [600, a, 1]]])
+        report.append([0, 4, 1])
+    run(labels, glyphs, report, ppems)

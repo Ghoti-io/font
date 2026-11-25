@@ -42,6 +42,7 @@ SOURCE = "src/hint/autofit.c"
 MUTANTS = [
     ("#define AF_MIN_SEGMENT_DIV 100", "#define AF_MIN_SEGMENT_DIV 20", "a run under a twentieth of an em is no segment"),
     ("if (ax > 14 * ay) {", "if (ax > 12 * ay) {", "a segment's direction needs a ratio of 12 and not 14"),
+    ("#define AF_NEAR_NUM 16", "#define AF_NEAR_NUM 1", "points closer than eight thousandths of an em are not near"),
     ("if (overlap * 2048 < 12 * up) {", "if (overlap * 2048 < 24 * up) {", "two segments link only on twice the overlap"),
     ("if (threshold > 16) {", "if (threshold > 8) {", "edges merge within eight sixty-fourths at most"),
     ("return li + lo - lt < (lt >> 4);", "return li + lo - lt < (lt >> 3);", "a flat corner is judged at an eighth of its length"),

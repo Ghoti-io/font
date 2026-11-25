@@ -329,7 +329,59 @@ static bool af_horizontal(int d) {
 
 /** Horizontal segments: maximal runs of consecutive points whose outgoing vector has one horizontal direction.
  *  Runs shorter than a hundredth of an em, `up` units per em, are left out. */
+/* Two points are near each other when neither coordinate differs by more than this many 2048ths of an em. The
+ * direction of a vector that ends on a near point is taken to the point after it, and a flat run goes across them. */
+#define AF_NEAR_NUM 16
+#define AF_NEAR_DEN 2048
+
+/** Whether a vector is shorter than the near limit along both axes. */
+static bool af_near(int64_t dx, int64_t dy, int64_t up) {
+  int64_t ax = dx < 0 ? -dx : dx;
+  int64_t ay = dy < 0 ? -dy : dy;
+
+  return (ax > ay ? ax : ay) * AF_NEAR_DEN < up * AF_NEAR_NUM;
+}
+
+/** The first point after p, along its contour, that is not near it; the next one when every other point is. */
+static size_t af_reach(const AfGlyph * g, size_t p, int64_t up) {
+  size_t j = g->next[p];
+  size_t guard = 0;
+
+  while (j != p && guard++ < g->n) {
+    int64_t dx = g->x[j] - g->x[p];
+    int64_t dy = g->y[j] - g->y[p];
+
+    if (!af_near(dx, dy, up)) {
+      return j;
+    }
+    j = g->next[j];
+  }
+  return g->next[p];
+}
+
+/** Directions seen past points that sit very close to each other: a point's vectors reach the nearest point that is not near. */
+static void af_near_directions(AfGlyph * g, int64_t up) {
+  for (size_t i = 0; i < g->n; ++i) {
+    size_t j = af_reach(g, i, up);
+    size_t k = g->prev[i];
+    size_t guard = 0;
+
+    while (k != i && guard++ < g->n) {
+      int64_t dx = g->x[i] - g->x[k];
+      int64_t dy = g->y[i] - g->y[k];
+
+      if (!af_near(dx, dy, up)) {
+        break;
+      }
+      k = g->prev[k];
+    }
+    g->out_dir[i] = (int8_t)af_direction(g->x[j] - g->x[i], g->y[j] - g->y[i]);
+    g->in_dir[i] = (int8_t)af_direction(g->x[i] - g->x[k], g->y[i] - g->y[k]);
+  }
+}
+
 static void af_segments(AfGlyph * g, int64_t up) {
+  af_near_directions(g, up);
   g->seg_count = 0;
   g->seg_point_count = 0;
   for (size_t c = 0; c < g->contours; ++c) {
@@ -361,13 +413,22 @@ static void af_segments(AfGlyph * g, int64_t up) {
         int64_t min_x;
         int64_t max_x;
 
+        size_t at = i;
+
         s->first = g->seg_point_count;
         g->seg_points[g->seg_point_count++] = i;
-        while (m < n && g->out_dir[start + (begin + m) % n] == d) {
-          g->seg_points[g->seg_point_count++] = start + (begin + m) % n;
-          ++m;
+        for (;;) {
+          size_t reach = af_reach(g, at, up);
+
+          while (at != reach && m < n) {
+            at = g->next[at];
+            g->seg_points[g->seg_point_count++] = at;
+            ++m;
+          }
+          if (m >= n || g->out_dir[at] != d) {
+            break;
+          }
         }
-        g->seg_points[g->seg_point_count++] = start + (begin + m) % n;   // where the last horizontal vector arrives
         s->count = g->seg_point_count - s->first;
         min_y = max_y = g->y[g->seg_points[s->first]];
         min_x = max_x = g->x[g->seg_points[s->first]];

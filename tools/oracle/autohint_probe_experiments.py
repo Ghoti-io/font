@@ -332,3 +332,78 @@ def curve_exit_two(run, ppems):
                             [178 + dx + 28, top - dy, 0], [330, top - 8, 1], [330, 0, 1]]])
             report.append([3, 4, 5, 6])
     run(labels, glyphs, report, ppems)
+
+
+L_OUTLINE = [[21, 0, 1], [257, 0, 1], [257, 15, 1], [194, 18, 0], [183, 28, 0], [182, 84, 1], [182, 681, 1], [178, 683, 1],
+             [127, 667, 0], [90, 656, 0], [19, 639, 1], [19, 623, 1], [25, 623, 1], [36, 624, 0], [48, 625, 0], [56, 625, 1],
+             [88, 625, 0], [98, 611, 0], [98, 564, 1], [98, 87, 1], [97, 33, 0], [83, 19, 0], [21, 15, 1]]
+
+
+def roman_l(run, ppems):
+    """The l of a roman text face (23 points) with the short flat run at the foot of its flag changed: the run's
+    two points (11 and 12) move vertically, which decides whether they join the longer flat run that follows."""
+    labels, glyphs, report = [], [], []
+    for y in (620, 621, 622, 623, 624, 625, 626):
+        for x2 in (22, 25, 30, 36):
+            pts = [list(p) for p in L_OUTLINE]
+            pts[11][1] = y
+            pts[12] = [x2, y, 1]
+            labels.append("y=%d x2=%d" % (y, x2))
+            glyphs.append([pts])
+            report.append([10, 11, 12, 13, 14, 15])
+    run(labels, glyphs, report, ppems)
+
+
+def roman_l_join(run, ppems):
+    """roman_l with the short run fixed at y=623 and the off-curve point after it (point 13) moved: dx along and dy
+    above the run. Points 11 and 12 reaching the edge value (480) means FreeType counted them in the flat segment."""
+    labels, glyphs, report = [], [], []
+    for dy in (-2, -1, 0, 1, 2, 3):
+        for dx in (4, 6, 8, 11, 14, 20, 30):
+            pts = [list(p) for p in L_OUTLINE]
+            pts[13] = [25 + dx, 623 + dy, 0]
+            pts[14] = [25 + dx + 12, 625, 0]
+            pts[15] = [25 + dx + 20, 625, 1]
+            labels.append("dy=%d dx=%d" % (dy, dx))
+            glyphs.append([pts])
+            report.append([11, 12, 13])
+    run(labels, glyphs, report, ppems)
+
+
+def direction_grid(run, ppems):
+    import os
+    off = os.environ.get("PROBE_OFF") == "1"
+    """Is the vector from the end of a flat top to the next on-curve point itself flat? A top (0,T)-(160,T) and a
+    point B at (160 + dx, T - dy): B at the edge's value means FreeType put the vector in the segment, below it means
+    it did not. Both ours and FreeType's y of B are printed for a grid of dy and dx."""
+    labels, glyphs, report = [], [], []
+    for dy in (1, 2, 3, 4, 6, 8):
+        for ratio in (8, 9, 10, 10.5, 11, 11.5, 12, 13, 14, 14.5, 15, 16, 20):
+            dx = int(round(ratio * dy))
+            if dx != ratio * dy and abs(dx - ratio * dy) > 0.5:
+                continue
+            labels.append("dy=%d dx=%d (%.1f)" % (dy, dx, dx / dy))
+            glyphs.append([[[0, 0, 1], [0, 634, 1], [160, 634, 1], [160 + dx, 634 - dy, 0 if off else 1], [160 + dx + 100, 400, 1],
+                            [160 + dx + 100, 0, 1]]])
+            report.append([2, 3])
+    run(labels, glyphs, report, ppems)
+
+
+def near_limit(run, ppems):
+    """roman_l with the short run of length L and the off-curve point after it 11 along and 1 above: the run joins the
+    edge on the far side only when its last point counts as near its first, so the L at which the join stops is the
+    limit. The upem scales it (a font of 2048 units has L doubled)."""
+    import os
+    upem = int(os.environ.get("PROBE_UPEM", "1000"))
+    k = upem / 1000.0
+    labels, glyphs, report = [], [], []
+    for L in range(3, 31):
+        pts = [[int(round(v[0] * k)), int(round(v[1] * k)), v[2]] for v in L_OUTLINE]
+        pts[12] = [pts[11][0] + int(round(L * k)), pts[11][1], 1]
+        pts[13] = [pts[12][0] + int(round(11 * k)), pts[11][1] + int(round(1 * k)), 0]
+        pts[14] = [pts[13][0] + int(round(12 * k)), pts[15][1] - int(round(30 * k)), 0]
+        pts[15] = [pts[14][0] + int(round(8 * k)), pts[15][1] - int(round(60 * k)), 1]
+        labels.append("L=%d" % L)
+        glyphs.append([pts])
+        report.append([11, 12, 13])
+    run(labels, glyphs, report, ppems, upem=upem)

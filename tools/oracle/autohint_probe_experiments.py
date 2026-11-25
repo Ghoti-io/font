@@ -707,3 +707,23 @@ def accent_box(run, ppems):
                        [[400, top, 1], [700, top, 1], [700, bottom, 1], [400, bottom, 1]]])
         report.append([4, 6])
     run(labels, glyphs, report, ppems, upem=2048, overshoot=27, heights=heights)
+
+
+def near_axis(run, ppems):
+    """roman_l with the vector from point 11 to point 12 given as (dx, dy) and point 13 left where it was: whether
+    11 and 12 reach the edge value (480) says whether FreeType counted 12 near 11 for that vector, and so whether
+    "near" is a limit on the length, on one axis, or on both. 1000 per em."""
+    labels, glyphs, report = [], [], []
+    for dy in (0, 2, 4, 6, 9, 12):
+        for dx in (0, 3, 6, 9, 12, 16, 20):
+            if dx == 0 and dy == 0:
+                continue
+            pts = [list(p) for p in L_OUTLINE]
+            pts[12] = [pts[11][0] + dx, pts[11][1] + dy, 1]
+            pts[13] = [pts[12][0] + 11, pts[12][1] + 1, 0]
+            pts[14] = [pts[13][0] + 12, 625, 0]
+            pts[15] = [pts[14][0] + 20, 625, 1]
+            labels.append("dx=%d dy=%d" % (dx, dy))
+            glyphs.append([pts])
+            report.append([11, 12])
+    run(labels, glyphs, report, ppems)

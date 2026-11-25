@@ -22,8 +22,9 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib.tables._g_l_y_f import Glyph, GlyphCoordinates
 
 
-CODEPOINTS = (list(range(0x250, 0x2B0)) + list(range(0x1D00, 0x1D2C)) + list(range(0x1D6B, 0x1D78))
-              + list(range(0x1D79, 0x1D80)))
+# U+0250..U+02AF only. FreeType gives the phonetic extensions from U+1D00 their own style (small capitals, with
+# blue zones of their own), so a shape mapped there is hinted by other rules than the plain Latin ones under test.
+CODEPOINTS = list(range(0x250, 0x2B0))
 
 
 def glyph_of(contours):

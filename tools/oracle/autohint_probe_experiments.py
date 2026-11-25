@@ -177,7 +177,7 @@ def fuzz_boxes(run, ppems):
     import random
     rng = random.Random(int(os.environ.get("PROBE_SEED", "7")))
     labels, glyphs, report = [], [], []
-    for n in range(int(os.environ.get("PROBE_COUNT", "150"))):
+    for n in range(int(os.environ.get("PROBE_COUNT", "96"))):
         boxes = []
         x = 0
         for _ in range(rng.choice((1, 1, 2, 2, 3))):

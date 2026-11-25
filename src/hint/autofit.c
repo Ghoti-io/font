@@ -223,6 +223,8 @@ typedef struct AfGlyph {
   bool * on;
   int8_t * in_dir;
   int8_t * out_dir;
+  size_t * far_prev;  ///< The nearest earlier point on the contour that is not near.
+  size_t * far_next;  ///< The nearest later point that is not near.
   size_t * prev;
   size_t * next;
   size_t * first;      ///< First point of each contour.
@@ -258,7 +260,7 @@ static GFNT_Result af_glyph_load(const GFNT_Allocator * a, const GFNT_Outline * 
   memset(g, 0, sizeof *g);
   g->n = n;
   g->contours = contours;
-  bytes = cap * (sizeof(int64_t) * 3u + sizeof(bool) * 2u + sizeof(int8_t) * 2u + sizeof(size_t) * 2u)
+  bytes = cap * (sizeof(int64_t) * 3u + sizeof(bool) * 2u + sizeof(int8_t) * 2u + sizeof(size_t) * 4u)
       + (contours ? contours : 1u) * sizeof(size_t) * 2u
       + cap * (sizeof(AfSeg) + sizeof(AfEdge)) + (cap * 2u + 4u) * sizeof(size_t) + 64u;
   block = a->calloc_fn(a->ctx, 1, bytes);
@@ -275,6 +277,8 @@ static GFNT_Result af_glyph_load(const GFNT_Allocator * a, const GFNT_Outline * 
   AF_TAKE(y, int64_t, cap);
   AF_TAKE(out_y, int64_t, cap);
   AF_TAKE(prev, size_t, cap);
+  AF_TAKE(far_prev, size_t, cap);
+  AF_TAKE(far_next, size_t, cap);
   AF_TAKE(next, size_t, cap);
   AF_TAKE(first, size_t, contours ? contours : 1u);
   AF_TAKE(count, size_t, contours ? contours : 1u);
@@ -367,14 +371,13 @@ static void af_near_directions(AfGlyph * g, int64_t up) {
     size_t guard = 0;
 
     while (k != i && guard++ < g->n) {
-      int64_t dx = g->x[i] - g->x[k];
-      int64_t dy = g->y[i] - g->y[k];
-
-      if (!af_near(dx, dy, up)) {
+      if (!af_near(g->x[i] - g->x[k], g->y[i] - g->y[k], up)) {
         break;
       }
       k = g->prev[k];
     }
+    g->far_next[i] = j;
+    g->far_prev[i] = k;
     g->out_dir[i] = (int8_t)af_direction(g->x[j] - g->x[i], g->y[j] - g->y[i]);
     g->in_dir[i] = (int8_t)af_direction(g->x[i] - g->x[k], g->y[i] - g->y[k]);
   }
@@ -650,8 +653,8 @@ static bool af_weak(const AfGlyph * g, size_t i) {
   }
   if (g->in_dir[i] == 0 && g->out_dir[i] == 0) {
     // Two diagonals: a corner too slight to matter is weak, FreeType's "flat" test.
-    size_t p = g->prev[i];
-    size_t n = g->next[i];
+    size_t p = g->far_prev[i];
+    size_t n = g->far_next[i];
     int64_t ix = g->x[i] - g->x[p];
     int64_t iy = g->y[i] - g->y[p];
     int64_t ox = g->x[n] - g->x[i];

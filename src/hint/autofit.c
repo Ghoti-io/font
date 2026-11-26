@@ -1414,8 +1414,15 @@ static void af_fit_points(AfGlyph * g, const AfScript * script) {
     }
     for (size_t k = 0; k < seg->count; ++k) {
       size_t p = g->seg_points[seg->first + k];
+      const AfEdge * ed = &g->edges[seg->edge];
 
-      g->out_y[p] = g->edges[seg->edge].pos;
+      g->out_y[p] = ed->pos;
+      // In x, a segment on an edge that is no stem keeps its own scaled offset from the edge: E's three arm ends,
+      // grouped as one edge 31 and 18 units apart, are fitted apart by those distances (in y, and on a stem's edge,
+      // every point takes the edge's position).
+      if (g->x_axis && ed->link < 0) {
+        g->out_y[p] = ed->pos + af_mulfix(seg->pos - ed->fpos, yscale);
+      }
       g->touched[p] = true;
     }
   }

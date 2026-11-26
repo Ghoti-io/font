@@ -1624,17 +1624,21 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
     af_fit_points(&gx, &xaxis);
   }
   if (af->xy && gx.edge_count > 0) {
-    // The outline is not moved; the advance ends at the rightmost edge's fitted position plus its scaled bearing,
-    // rounded, and a glyph with no advance (a mark) keeps none. Over 5,401 glyphs of three faces whose x all agree,
-    // this gives FreeType's advance for 5,122; moving the origin by the left edge's rounded change, or adding that
-    // change, gives fewer.
+    // The outline is not moved; the advance ends at the rightmost point's fitted position plus its scaled bearing,
+    // rounded, and a glyph with no advance (a mark) keeps none. Taken from the rightmost edge instead, 430 of the
+    // default set's glyphs have another advance than FreeType's, and 357 from the point; moving the origin by the
+    // left edge's rounded change, or adding that change, gives more.
     int32_t units = 0;
 
     if (gfnt_face_glyph_advance(face, glyph, variation, &units, NULL) == GFNT_OK) {
-      const AfEdge * e2 = &gx.edges[gx.edge_count - 1u];
       int64_t old_advance = af_mulfix(units, af->scale);
 
-      advance = units == 0 ? 0 : af_pixround(e2->pos + (old_advance - e2->opos));
+      size_t rp = 0;
+
+      for (size_t i = 1; i < g.n; ++i) {
+        rp = g.x[i] > g.x[rp] ? i : rp;
+      }
+      advance = units == 0 ? 0 : af_pixround(gx.out_y[rp] + (old_advance - af_mulfix(g.x[rp], af->scale)));
     }
   }
   r = gfnt_outline_create(allocator ? allocator : face->allocator, &result, error);

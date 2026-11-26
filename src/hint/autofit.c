@@ -1431,7 +1431,10 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
             ? before->pos
             : before->pos + af_muldiv(e->opos - before->opos, after->pos - before->pos, after->opos - before->opos);
       }
-      else if (x_axis && (before || after)) {
+      else if (x_axis && (before || after) && e->serif >= 0) {
+        // In x a serif edge with a placed neighbour on one side only moves with it; a lone edge that is no serif
+        // (the terminals of a C) is placed from the anchor in half pixels, as in y (DejaVu Sans C at 12, 14, 17
+        // and 24 px).
         const AfEdge * near = before ? before : after;
 
         e->pos = e->opos + (near->pos - near->opos);

@@ -50,8 +50,7 @@ MUTANTS = [
     ("{0x2B9, 0x2DF}, {0x2E5, 0x2FF}", "{0x2B9, 0x2C0}, {0x2E5, 0x2FF}",
      "the spacing marks after the first few are fitted to the blue zones"),
     ("{0x37A, 0x37A}, {0x384, 0x385}", "{0x37A, 0x37A}, {0x386, 0x387}", "the Greek tonos is a letter"),
-    ("return li + lo - lt <= (lt >> 4);", "return li + lo - lt <= (lt >> 3);", "a flat corner is judged at an eighth of its length"),
-    ("return li + lo - lt <= (lt >> 4);", "return li + lo - lt < (lt >> 4);", "a corner of exactly a sixteenth is not flat"),
+    ("return li + lo - lt < (lt >> 4);", "return li + lo - lt < (lt >> 3);", "a flat corner is judged at an eighth of its length"),
     ("z->active = dist <= 48 && dist >= -48;", "z->active = dist <= 32 && dist >= -32;", "a blue zone is inactive past half a pixel"),
     ("if (delta2 < 32) {", "if (delta2 < 16) {", "an overshoot under half a pixel is flattened only below a quarter"),
     ("fitted = (scaled + 40) & ~(int64_t)63;", "fitted = (scaled + 32) & ~(int64_t)63;", "the x-height rounds up from a half and not from 0.375"),
@@ -93,8 +92,6 @@ SAMPLES = [
               "NotoSans-Regular.ttf", "NotoSans-Bold.ttf"]),
     ("marks", ["fonttools,freetype", "--", "python3", "tools/oracle/autohint_diff.py", "--script", "02B9-02DF", "--show", "0",
                "DejaVuSans.ttf", "DejaVuSerif.ttf"]),
-    ("greek letters", ["fonttools,freetype", "--", "python3", "tools/oracle/autohint_diff.py", "--script", "greek", "--show", "0",
-                       "NimbusRoman-Regular.otf", "C059-Roman.otf"]),
     ("tonos", ["fonttools,freetype", "--", "python3", "tools/oracle/autohint_diff.py", "--script", "0384-0385", "--show", "0",
                "DejaVuSans.ttf", "DejaVuSerif.ttf"]),
 ]

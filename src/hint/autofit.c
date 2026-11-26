@@ -238,6 +238,10 @@ typedef struct AfGlyph {
   size_t * count;      ///< Points in it.
   bool clockwise;
   bool x_axis;         ///< The outline is turned a quarter and its "y" is x (::GFNT_HINT_MODE_AUTO_XY).
+  /** With x_axis, the y scale: two segments link only where they overlap by a pixel at it, so the ends of a serif
+   *  slab shorter than a pixel are not a stem across the slab but move with the stem they flank (measured with a
+   *  serif I of every slab height at 9 and 12 px: they link from 64/64 and not at 61/64 or 59/64). */
+  int64_t cross_scale;
   AfSeg * segs;
   size_t seg_count;
   size_t * seg_points;
@@ -516,7 +520,7 @@ static void af_link_segments(AfGlyph * g, int64_t up) {
         lo = a->min_x > b->min_x ? a->min_x : b->min_x;
         hi = a->max_x < b->max_x ? a->max_x : b->max_x;
         overlap = hi - lo;
-        if (overlap * 2048 < 12 * up) {
+        if (overlap * 2048 < 12 * up || (g->x_axis && af_mulfix(overlap, g->cross_scale) < 64)) {
           continue;
         }
         dist = pass == 0 ? b->pos - a->pos : a->pos - b->pos;
@@ -1114,29 +1118,28 @@ static void af_clamp(AfGlyph * g, size_t k) {
 }
 
 /**
- * Whether the stem between edges @p a and @p b keeps its scaled width when widths are snapped: when an edge further
- * along links one way to the stem's nearer edge (a serif lands on it from above, as the stem top of an L or the apex
- * of an A on the bar below them). A serif landing on the far edge from below (a Γ) leaves the snap in place, and in x
- * no serif does (either sense loses glyphs). Found with `autohint_probe.py` shapes (`xy_serif_stem`); the width is
- * then kept under three pixels and rounded above.
+ * Whether a stem placed from @p base keeps its scaled width in y when widths are snapped: when an edge above the base
+ * links one way to it (a serif lands on it from above, as the stem top of an L on its bar or the apex of an A on its
+ * crossbar). A serif from below onto the base (a Γ), or from above onto the other edge (a top bar with a stem rising
+ * from it), leaves the snap in place, and in x no serif does (either sense loses glyphs). Found with
+ * `autohint_probe.py` shapes; the width is then kept under three pixels and rounded above.
  */
-static bool af_keeps_width(const AfGlyph * g, const AfEdge * a, const AfEdge * b) {
-  const AfEdge * lower = a->fpos < b->fpos ? a : b;
-  ptrdiff_t k = lower - g->edges;
+static bool af_keeps_width(const AfGlyph * g, const AfEdge * base) {
+  ptrdiff_t k = base - g->edges;
 
   if (g->x_axis) {
     return false;
   }
   for (size_t f = 0; f < g->edge_count; ++f) {
-    if (g->edges[f].serif == k && g->edges[f].fpos > lower->fpos) {
+    if (g->edges[f].serif == k && g->edges[f].fpos > base->fpos) {
       return true;
     }
   }
   return false;
 }
 
-static int64_t af_fitted_width(const AfGlyph * g, const AfEdge * a, const AfEdge * b, int64_t dist, int64_t standard) {
-  if (af_keeps_width(g, a, b)) {
+static int64_t af_fitted_width(const AfGlyph * g, const AfEdge * base, int64_t dist, int64_t standard) {
+  if (af_keeps_width(g, base)) {
     return dist < 3 * 64 ? dist : af_pixround(dist);
   }
   return af_snap_width(dist, standard);
@@ -1147,7 +1150,7 @@ static void af_align_linked(const AfGlyph * g, AfEdge * base, AfEdge * stem, boo
   int64_t dist = stem->opos - base->opos;
 
   if (snap) {
-    dist = dist < 0 ? -af_fitted_width(g, base, stem, -dist, standard) : af_fitted_width(g, base, stem, dist, standard);
+    dist = dist < 0 ? -af_fitted_width(g, base, -dist, standard) : af_fitted_width(g, base, dist, standard);
   }
   stem->pos = base->pos + dist;
   stem->done = true;
@@ -1156,6 +1159,13 @@ static void af_align_linked(const AfGlyph * g, AfEdge * base, AfEdge * stem, boo
 static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * script, bool nonbase, bool snap,
     int64_t standard, bool x_axis) {
   int64_t yscale = script->yscale;
+
+  // A face whose standard width is under 40/64 of a pixel at the size is fitted with its stems' own widths, as the
+  // light target fits them: measured over ten faces at six sizes, where the scaled standard width of 39 (Liberation
+  // Sans at 9 px) snaps nothing and 40 (C059 at 14 px) snaps.
+  if (standard < 40) {
+    snap = false;
+  }
   int64_t best_limit = af_mulfix(af->upem / 40, yscale);
   ptrdiff_t anchor = -1;
   bool have_anchor = false;
@@ -1267,7 +1277,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
       continue;
     }
     org_len = l->opos - e->opos;
-    cur_len = snap ? af_fitted_width(g, e, l, org_len, standard) : org_len;
+    cur_len = snap ? af_fitted_width(g, e, org_len, standard) : org_len;
     if (!have_anchor) {
       int64_t org_center = e->opos + (org_len >> 1);
 
@@ -1554,6 +1564,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
     xaxis.yscale = af->scale;
     xaxis.stdw = script->xstdw;
     gx.x_axis = true;
+    gx.cross_scale = script->yscale;
     af_segments(&gx, af->upem);
     af_link_segments(&gx, af->upem);
     af_edges(&gx, xaxis.yscale, xaxis.stdw);

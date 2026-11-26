@@ -1427,6 +1427,8 @@ check-oracle-autohint: $(EXAMPLES)
 		--ppem 8,9,10,11,12,13,14,16,17,20,24,32 --stride 1 --floor 1.0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.898 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --target normal --floor 0.647 --advance-floor 0.894 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --target normal --script greek --floor 0.584 --advance-floor 0.841 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --target normal --script cyrillic --floor 0.547 --advance-floor 0.853 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script greek --floor 0.806 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script cyrillic --floor 0.843 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script latin --floor 0.816 --show 0 \

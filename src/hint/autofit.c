@@ -1125,6 +1125,18 @@ static int64_t af_snap_width(int64_t dist, int64_t standard) {
   return dist + frac;
 }
 
+/**
+ * A stem anchor's rounded position. In x a positive side bearing is not rounded away: an anchor from 16/64 to 31/64
+ * of a pixel right of the origin goes to one pixel, not onto the origin (a stem swept across a probe face; DejaVu
+ * Sans Bold o; Nimbus Sans Z, whose anchor is a bar's end paired one way). A lone edge made the anchor is rounded
+ * plainly: the rule there loses more glyphs than it gains.
+ */
+static int64_t af_anchor_round(int64_t opos, bool x_axis) {
+  int64_t pos = af_pixround(opos);
+
+  return x_axis && pos <= 0 && opos > 0 ? 64 : pos;
+}
+
 static void af_clamp(AfGlyph * g, size_t k) {
   AfEdge * e = &g->edges[k];
 
@@ -1272,7 +1284,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
       break;
     }
     e->link = -1;
-    e->pos = af_pixround(e->opos);
+    e->pos = af_anchor_round(e->opos, x_axis);
     e->done = true;
     anchor = (ptrdiff_t)k;
     have_anchor = true;
@@ -1303,12 +1315,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
         e->pos = af_stem_center(org_center, cur_len) - (cur_len >> 1);
       }
       else {
-        e->pos = af_pixround(e->opos);
-        // A positive side bearing is not rounded away: a first wide stem from 16/64 to 31/64 of a pixel right of
-        // the origin goes to one pixel, not to the origin (a stem swept across a probe face; DejaVu Sans Bold o).
-        if (x_axis && e->pos <= 0 && e->opos > 0) {
-          e->pos = 64;
-        }
+        e->pos = af_anchor_round(e->opos, x_axis);
       }
       l->pos = e->pos + cur_len;
       anchor = (ptrdiff_t)k;

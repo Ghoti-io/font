@@ -1156,6 +1156,21 @@ static int64_t af_anchor_round(int64_t opos, bool x_axis) {
   return x_axis && pos <= 0 && opos > 0 ? 64 : pos;
 }
 
+/** Whether some segment of edge @p a and some segment of edge @p b overlap along the other axis. */
+static bool af_edges_overlap(const AfGlyph * g, ptrdiff_t a, ptrdiff_t b) {
+  for (size_t i = 0; i < g->seg_count; ++i) {
+    if (g->segs[i].edge != a) {
+      continue;
+    }
+    for (size_t j = 0; j < g->seg_count; ++j) {
+      if (g->segs[j].edge == b && g->segs[i].min_x < g->segs[j].max_x && g->segs[j].min_x < g->segs[i].max_x) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static void af_clamp(AfGlyph * g, size_t k) {
   AfEdge * e = &g->edges[k];
 
@@ -1215,6 +1230,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
   }
   int64_t best_limit = af_mulfix(af->upem / 40, yscale);
   ptrdiff_t anchor = -1;
+  ptrdiff_t last_stem = -1;
   bool have_anchor = false;
 
   if (best_limit > 32) {
@@ -1341,7 +1357,11 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
       have_anchor = true;
     }
     else {
-      int64_t org_pos = g->edges[anchor].pos + (e->opos - g->edges[anchor].opos);
+      // Placed from the anchor, or in x from the stem placed last when the two face each other across the other
+      // axis (the third stem of an m from the second, not the first; the stems of a B's bowls, one above the other,
+      // from the anchor). In y the same costs the light target Greek and Cyrillic glyphs.
+      ptrdiff_t from = x_axis && last_stem >= 0 && af_edges_overlap(g, last_stem, (ptrdiff_t)k) ? last_stem : anchor;
+      int64_t org_pos = g->edges[from].pos + (e->opos - g->edges[from].opos);
       int64_t org_center = org_pos + (org_len >> 1);
 
       if (l->done) {
@@ -1367,6 +1387,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
     }
     e->done = true;
     l->done = true;
+    last_stem = (ptrdiff_t)k;
     af_clamp(g, k);
   }
   // Serifs, and what is left.

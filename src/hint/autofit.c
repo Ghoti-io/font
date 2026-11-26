@@ -1279,13 +1279,20 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
     org_len = l->opos - e->opos;
     cur_len = snap ? af_fitted_width(g, e, org_len, standard) : org_len;
     if (!have_anchor) {
-      int64_t org_center = e->opos + (org_len >> 1);
+      // Centred on the original edge plus half the fitted width (the same as half the original in the light
+      // target, whose widths are not changed): DejaVu Sans h at 14 px, centre 123 and not 121, goes to 154.
+      int64_t org_center = e->opos + (cur_len >> 1);
 
       if (cur_len < 96) {
         e->pos = af_stem_center(org_center, cur_len) - (cur_len >> 1);
       }
       else {
         e->pos = af_pixround(e->opos);
+        // A positive side bearing is not rounded away: a first wide stem from 16/64 to 31/64 of a pixel right of
+        // the origin goes to one pixel, not to the origin (a stem swept across a probe face; DejaVu Sans Bold o).
+        if (x_axis && e->pos <= 0 && e->opos > 0) {
+          e->pos = 64;
+        }
       }
       l->pos = e->pos + cur_len;
       anchor = (ptrdiff_t)k;
@@ -1526,7 +1533,6 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   GFNT_Result r;
   const GFNT_Variation * variation;
   const AfScript * script;
-  int64_t shift = 0;
   int64_t advance = -1;
 
   gfnt_error_clear(error);
@@ -1572,17 +1578,17 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
     af_fit_points(&gx, &xaxis);
   }
   if (af->xy && gx.edge_count > 0) {
-    // The side bearings follow the outermost edges: the origin moves by the rounded change of the left one, and the
-    // advance ends at the right one's fitted position plus its scaled bearing, rounded.
+    // The outline is not moved; the advance ends at the rightmost edge's fitted position plus its scaled bearing,
+    // rounded, and a glyph with no advance (a mark) keeps none. Over 5,401 glyphs of three faces whose x all agree,
+    // this gives FreeType's advance for 5,122; moving the origin by the left edge's rounded change, or adding that
+    // change, gives fewer.
     int32_t units = 0;
 
     if (gfnt_face_glyph_advance(face, glyph, variation, &units, NULL) == GFNT_OK) {
-      const AfEdge * e1 = &gx.edges[0];
       const AfEdge * e2 = &gx.edges[gx.edge_count - 1u];
       int64_t old_advance = af_mulfix(units, af->scale);
 
-      shift = af_pixround(e1->pos - e1->opos);
-      advance = af_pixround(e2->pos + (old_advance - e2->opos)) - shift;
+      advance = units == 0 ? 0 : af_pixround(e2->pos + (old_advance - e2->opos));
     }
   }
   r = gfnt_outline_create(allocator ? allocator : face->allocator, &result, error);
@@ -1594,7 +1600,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
       GFNT_Point original;
 
       gfnt_outline_point_at(source, i, &original, &tag);
-      p.x = af->xy ? (int32_t)(gx.out_y[i] - shift) : (int32_t)af_mulfix(g.x[i], af->scale);
+      p.x = af->xy ? (int32_t)gx.out_y[i] : (int32_t)af_mulfix(g.x[i], af->scale);
       p.y = (int32_t)g.out_y[i];
       r = gfnt_outline_add_point(result, p, tag, error);
     }

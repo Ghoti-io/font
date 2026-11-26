@@ -6,10 +6,11 @@
 # This file is part of Ghoti.io Font.
 """This library's automatic hinter against FreeType's light one, on the Latin letters, point by point.
 
-    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--script latin|greek|cyrillic] [--show N] [--points] [--records FILE] [--floor F] [--points-floor F] [FONT...]
+    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--script latin|greek|cyrillic] [--show N] [--points] [--records FILE] [--floor F] [--points-floor F] [--target light|normal] [FONT...]
 
 For each face, size and Latin letter, the outline `font-hint-cff <font> ... auto` prints against the one
-`freetype-hinted ... autolight` prints, in 26.6, both axes and the advance. Reports the glyphs identical,
+`freetype-hinted ... autolight` prints, in 26.6, both axes and the advance; with `--target normal`, ours in
+both axes (`autoxy`) against FreeType's normal target (`auto`). Reports the glyphs identical,
 the points identical and the letters that fail most; exits nonzero below `--floor`. The model the engine
 was written from is `autohint_edges_model.py`, whose own comparison is `autohint_edges_diff.py`.
 """
@@ -54,6 +55,7 @@ def main(argv):
     records = None
     points_floor = 0.0
     script = None
+    target = "light"
     args = argv[1:]
     while args:
         a = args.pop(0)
@@ -71,6 +73,8 @@ def main(argv):
             points = True
         elif a == "--floor":
             floor = float(args.pop(0))
+        elif a == "--target":
+            target = args.pop(0)
         elif a == "--points-floor":
             points_floor = float(args.pop(0))
         else:
@@ -95,8 +99,8 @@ def main(argv):
         letters_of = {g["gid"]: ch for ch, g in faces[os.path.basename(path)]["glyphs"].items()
                       if letters is None or ch in letters}
         for ppem in ppems:
-            mine = hint_cff_diff.ours(path, ppem, 1, "-", True)
-            theirs, _ = hint_diff.theirs(path, 35, ppem, 1, "-", "autolight")
+            mine = hint_cff_diff.ours(path, ppem, 1, "-", "autoxy" if target == "normal" else True)
+            theirs, _ = hint_diff.theirs(path, 35, ppem, 1, "-", "auto" if target == "normal" else "autolight")
             if mine is None or theirs is None:
                 continue
             for gid, ch in letters_of.items():

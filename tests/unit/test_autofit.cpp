@@ -213,6 +213,55 @@ TEST(Autofit, XIsScaledAndNeverMovedAndTheAdvanceIsAWholePixel) {
   gfnt_hint_context_destroy(context);
 }
 
+namespace {
+
+int32_t x_extent(const Hinted & h) {
+  int32_t lo = INT32_MAX;
+  int32_t hi = INT32_MIN;
+  for (const auto & p : h.points) {
+    lo = p.first < lo ? p.first : lo;
+    hi = p.first > hi ? p.first : hi;
+  }
+  return hi - lo;
+}
+
+}  // namespace
+
+// Fitting both axes: H (400 units across) is within 40/64 of a pixel of the standard width, the 380 of `o`, at every
+// size up to 30 px, so it takes that width; the light target leaves it at its own.
+TEST(Autofit, BothAxesGiveAStemNearTheStandardWidthTheStandardWidth) {
+  Fixture font("latin-boxes.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  for (uint32_t ppem : {9u, 11u, 12u, 14u, 17u, 20u, 24u, 30u}) {
+    SCOPED_TRACE(ppem);
+    Hinted h = hinted(font.face, glyph_of(font.face, 'H'), ppem, GFNT_HINT_MODE_AUTO_XY);
+    Hinted o = hinted(font.face, glyph_of(font.face, 'o'), ppem, GFNT_HINT_MODE_AUTO_XY);
+    Hinted light = hinted(font.face, glyph_of(font.face, 'H'), ppem, GFNT_HINT_MODE_AUTO);
+    ASSERT_EQ(h.result, GFNT_OK);
+    ASSERT_EQ(o.result, GFNT_OK);
+    EXPECT_EQ(h.status, GFNT_HINT_STATUS_HINTED);
+    EXPECT_EQ(x_extent(h), x_extent(o));
+    EXPECT_NE(x_extent(light), x_extent(o));
+    EXPECT_EQ(h.advance % 64, 0);
+    EXPECT_EQ(top_of(h) % 64, 0);
+  }
+}
+
+// A stem far from the standard width and three pixels or wider is a whole number of pixels across: f, 200 units, from
+// 15 px.
+TEST(Autofit, BothAxesPutAWideStemOnAWholeNumberOfPixels) {
+  Fixture font("latin-boxes.ttf");
+  ASSERT_EQ(font.result, GFNT_OK);
+  for (uint32_t ppem : {15u, 16u, 17u, 20u, 24u, 32u}) {
+    SCOPED_TRACE(ppem);
+    Hinted f = hinted(font.face, glyph_of(font.face, 'f'), ppem, GFNT_HINT_MODE_AUTO_XY);
+    Hinted light = hinted(font.face, glyph_of(font.face, 'f'), ppem, GFNT_HINT_MODE_AUTO);
+    ASSERT_EQ(f.result, GFNT_OK);
+    EXPECT_EQ(x_extent(f) % 64, 0);
+    EXPECT_EQ(x_extent(light), (int32_t)((200 * ppem * 64 + 500) / 1000));
+  }
+}
+
 TEST(Autofit, TheSameGlyphAskedTwiceGivesTheSameOutline) {
   Fixture font("latin-boxes.ttf");
   ASSERT_EQ(font.result, GFNT_OK);

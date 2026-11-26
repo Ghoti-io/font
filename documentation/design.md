@@ -127,7 +127,7 @@ which of them this library takes, and which of those it reads today.
 | | `CFF2` outlines, including their variation (`blend`, `vsindex`) | **implemented** (§7.7) |
 | | AAT: `morx`/`mort`, `kerx` (formats 0, 1, 2, 4, 6), `trak` | **implemented** in shaping (§9.6); `feat` (the feature and setting names) is read by `feat.h`; the rest of AAT is not read |
 | | `.dfont`, `.eot` | absent, §16 |
-| | TrueType hinting | **implemented** (§8.5): the bytecode interpreter in versions 35 and 40, composites and hinted advances, variable faces; on by default. The automatic hinter is built for the light target (§8.5.2) and is a mode the caller asks for |
+| | TrueType hinting | **implemented** (§8.5): the bytecode interpreter in versions 35 and 40, composites and hinted advances, variable faces; on by default. The automatic hinter is built for the light target and, as a first stage, for both axes (§8.5.2); it is a mode the caller asks for |
 | | `CFF`, `CFF2` and Type 1 hinting | **implemented** (§8.5.1): the stems and blue zones the font declares, fitted in y, by rules recovered from FreeType's answers; on by default |
 | **standalone bitmap** | PCF, BDF, PSF 1/2 | **implemented**, including the `.gz` they usually arrive in. 1,885 of them on a stock Linux box |
 | | GNU Unifont `.hex` | implemented |
@@ -1719,6 +1719,18 @@ and are fitted with the Latin ones (Greek matches FreeType exactly on 71% of the
 that have it, and on none of a serif face whose letters end in hooks, whose top FreeType does not align the way it
 does a sans face's; Arabic, which has a top zone for its tall letters, the baseline and a descender zone, on 50% of the two DejaVu faces' glyphs; Georgian, which has an x-height of its own, a tall zone, the baseline and a descender zone, on 86% of the two DejaVu faces' glyphs; a generated Greek, Hebrew, Arabic, Georgian and Armenian face point for point). Armenian, which has capitals, tall letters, small letters and descenders of its own, matches on 54% of the glyphs of two Noto and two DejaVu faces (a face with no Latin letters is where Latin zones fail it altogether: 0% before). The scene provider serves the mode
 (`GSHSCENE_HINT_AUTO`, which does not read `gasp`, as the direct render does not).
+
+**Both axes** (`GFNT_HINT_MODE_AUTO_XY`, FreeType's normal target, compared with `autohint_diff.py --target normal`): x is
+fitted by the same steps on the outline turned a quarter, with no zones, the uncorrected scale and the thinnest vertical
+stem of the standard letter as the standard width. In both axes a stem's width is snapped rather than kept: at least
+56/64 px; the standard width when within 40/64 of it; under three pixels the fraction kept below 10/64, made 10/64 below a
+half, 54/64 below 54/64 and kept above; from three pixels a whole number of pixels. In y a stem keeps its scaled width
+when a serif from above lands on its lower edge (the bar of an L, the crossbar of an A). In x an edge with a fitted
+neighbour on one side only moves with it, and the origin and the advance follow the outermost x edges (the left one's
+change, rounded, moves the origin; the advance ends at the right one plus its scaled bearing, rounded). It reproduces both
+generated faces at every size point for point, and 36.8% of the default set's glyphs (DejaVu Sans 80%, Nimbus Sans 68%,
+Liberation Sans 54%, the serif faces 1-20%: serifs in x are not yet placed as FreeType places them). The scene provider
+does not offer it yet.
 
 ### 8.6 The one unhinted rounding
 

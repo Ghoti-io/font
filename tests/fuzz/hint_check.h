@@ -64,7 +64,7 @@ inline void check_hinting(GFNT_Face * face, uint32_t glyph, uint32_t ppem, const
     }
   }
   // The font's own hint program and the automatic hinter, which share every property checked here.
-  for (GFNT_HintMode mode : {GFNT_HINT_MODE_FONT, GFNT_HINT_MODE_AUTO}) {
+  for (GFNT_HintMode mode : {GFNT_HINT_MODE_FONT, GFNT_HINT_MODE_AUTO, GFNT_HINT_MODE_AUTO_XY}) {
     GFNT_HintContext * context = nullptr;
 
     if (gfnt_hint_context_create(face, ppem, GFNT_HINT_VERSION_AUTO, mode, variation, &context, &error)

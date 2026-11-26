@@ -81,14 +81,15 @@ GFNT_Result gfnt_hint_context_create(const GFNT_Face * face, uint32_t ppem,
       && version != GFNT_HINT_VERSION_40) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0, "not a hinting version");
   }
-  if (mode != GFNT_HINT_MODE_FONT && mode != GFNT_HINT_MODE_FONT_STRICT && mode != GFNT_HINT_MODE_AUTO) {
+  if (mode != GFNT_HINT_MODE_FONT && mode != GFNT_HINT_MODE_FONT_STRICT && mode != GFNT_HINT_MODE_AUTO
+      && mode != GFNT_HINT_MODE_AUTO_XY) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0,
         "a context is made for the font's own program, tolerant or strict, or for the automatic hinter");
   }
   if (variation && variation->count && !variation->coords) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, 0, "a variation with a count and no coordinates");
   }
-  if (mode == GFNT_HINT_MODE_AUTO) {
+  if (mode == GFNT_HINT_MODE_AUTO || mode == GFNT_HINT_MODE_AUTO_XY) {
     // The automatic hinter fits any outline face from its shapes and reads no program.
     GFNT_HintContext * context;
     GFNT_Result made;
@@ -102,7 +103,7 @@ GFNT_Result gfnt_hint_context_create(const GFNT_Face * face, uint32_t ppem,
     }
     context->allocator = face->allocator;
     context->usable = true;
-    made = gfnt_autofit_create(face, ppem, variation, &context->autofit, error);
+    made = gfnt_autofit_create(face, ppem, variation, mode == GFNT_HINT_MODE_AUTO_XY, &context->autofit, error);
     if (made != GFNT_OK) {
       face->allocator->free_fn(face->allocator->ctx, context);
       return made;

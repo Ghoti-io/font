@@ -127,7 +127,10 @@ typedef enum GFNT_HintMode {
   GFNT_HINT_MODE_FONT = 0,
   GFNT_HINT_MODE_NONE,         ///< The outline as drawn, scaled and not fitted.
   GFNT_HINT_MODE_FONT_STRICT,  ///< As ::GFNT_HINT_MODE_FONT, but a program that fails fails the call.
-  GFNT_HINT_MODE_AUTO          ///< The automatic hinter (light, y only), whatever the face declares; no program is read.
+  GFNT_HINT_MODE_AUTO,         ///< The automatic hinter (light, y only), whatever the face declares; no program is read.
+  /** The automatic hinter in both axes: stems are fitted across as well as up, their widths snapped toward the face's
+   *  standard widths, and the advance follows the fitted side bearings. No program is read. */
+  GFNT_HINT_MODE_AUTO_XY
 } GFNT_HintMode;
 
 /** Which interpreter behaviour a TrueType program runs under. */

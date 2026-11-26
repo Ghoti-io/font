@@ -21,7 +21,8 @@
 /**
  * @file
  *
- * The automatic hinter, light target: y only, from the shapes of the face's own letters.
+ * The automatic hinter, from the shapes of the face's own letters: the light target (y only) and, for
+ * ::GFNT_HINT_MODE_AUTO_XY, the normal one (both axes, stem widths snapped).
  *
  * A face with no hint data of its own is fitted from its outlines. Recovered by experiment against
  * FreeType's light automatic hinter (tools/oracle/autohint_*.py, `autohint_edges_model.py` being this
@@ -46,8 +47,11 @@
  *      distance, and off-curve points and those in a straight run along their contour between the
  *      touched points.
  *
- * Everything is 26.6 and 16.16 integers as FreeType's, so that the rounding agrees. x is scaled and
- * not moved. Latin, Greek and Cyrillic have zones of their own, found from the face's letters of each;
+ * Everything is 26.6 and 16.16 integers as FreeType's, so that the rounding agrees. In the light target x is
+ * scaled and not moved. Fitting both axes (FreeType's normal target), x is fitted by the same code on the outline
+ * turned a quarter, with no zones, the uncorrected scale and the thinnest vertical stem of the standard letter; in
+ * both axes a stem's width is snapped (af_snap_width) instead of kept, an edge with a fitted neighbour on one side
+ * only moves with it in x, and the origin and advance follow the outermost x edges. Latin, Greek and Cyrillic have zones of their own, found from the face's letters of each;
  * a glyph of any other script, or of one the face has no letters of, is fitted with the Latin ones.
  */
 
@@ -84,6 +88,7 @@ typedef struct AfScript {
   bool present;       ///< The face has letters of the script to take the zones from.
   int32_t yscale;     ///< The scale with the x-height correction.
   int32_t stdw;       ///< The standard horizontal stem width, font units.
+  int32_t xstdw;      ///< The standard vertical stem width, font units (for ::GFNT_HINT_MODE_AUTO_XY).
   AfZone zones[AF_ZONES];
 } AfScript;
 
@@ -102,6 +107,7 @@ struct GFNT_Autofit {
   GFNT_F2Dot14 * coords;
   GFNT_Variation variation;
   int32_t scale;      ///< 26.6 pixels per font unit, 16.16, uncorrected.
+  bool xy;            ///< Fit x as well, and snap stem widths (::GFNT_HINT_MODE_AUTO_XY).
   AfScript scripts[AF_SCRIPTS];
   uint8_t * script_of;  ///< The script of each glyph; absent for a face with no cmap letters of another script.
   uint32_t glyph_count;
@@ -119,7 +125,7 @@ static const struct {
   {{U"אבדהחכםרתמסצ", U"אבדהחכםרתמסצ", U"", U"", U"", U"ךןףץק"}, U'ו'},
   {{U"اكلطظ", U"ادذ", U"", U"", U"", U"جحخرزصعغ"}, U'ا'},
   {{U"", U"ბზთმნოპსშჩძწხჰ", U"ბზმნპსშჩძწხჰ", U"ვეთოფღ", U"", U"გდეკლფღყც"}, U'ო'},
-  {{U"ԲԴԸԼԿՂՈՊՌՐՒԱԵԺՍՏՕ", U"ԲԴԸԼԿՂՈՊՌՐՒԱԵԺՍՏՕ", U"եէժիխկձհճմնվփ", U"ապոռսւօտ", U"ապոռսւօտ", U"բգդզըթլղշչպջրցքիխկվփ"}, U'ո'},
+  {{U"ԲԴԸԼԿՂՈՊՌՐՒԱԵԺՍՏՕ", U"ԲԴԸԼԿՂՈՊՌՐՒԱԵԺՍՏՕ", U"եէժիխկձհճմնվփ", U"ապոռսւօտ", U"ապոռսւօտ", U"բգդզըթլղշչպջրցքիխկվփ"}, U'ս'},
 #define AF_X_ZONES(name, standard, t0, t1, t2, t3, t4, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9) \
   {{t0, t1, t2, t3, U"", t4}, standard},
   AF_GENERATED_SCRIPTS(AF_X_ZONES)
@@ -231,6 +237,7 @@ typedef struct AfGlyph {
   size_t * first;      ///< First point of each contour.
   size_t * count;      ///< Points in it.
   bool clockwise;
+  bool x_axis;         ///< The outline is turned a quarter and its "y" is x (::GFNT_HINT_MODE_AUTO_XY).
   AfSeg * segs;
   size_t seg_count;
   size_t * seg_points;
@@ -250,7 +257,7 @@ static void af_glyph_free(const GFNT_Allocator * a, AfGlyph * g) {
 }
 
 /** Read an outline into a glyph's point arrays, in font units. */
-static GFNT_Result af_glyph_load(const GFNT_Allocator * a, const GFNT_Outline * outline, AfGlyph * g) {
+static GFNT_Result af_glyph_load(const GFNT_Allocator * a, const GFNT_Outline * outline, bool rotate, AfGlyph * g) {
   size_t n = gfnt_outline_point_count(outline);
   size_t contours = gfnt_outline_contour_count(outline);
   size_t cap = n ? n : 1u;
@@ -309,6 +316,13 @@ static GFNT_Result af_glyph_load(const GFNT_Allocator * a, const GFNT_Outline * 
     // The outline is 26.6 of a font unit; the hinter works in whole units.
     g->x[i] = ((int64_t)p.x + 32) >> 6;
     g->y[i] = ((int64_t)p.y + 32) >> 6;
+    if (rotate) {
+      // A quarter turn, which keeps the contours' orientation: the y code then fits what was x.
+      int64_t t = g->x[i];
+
+      g->x[i] = -g->y[i];
+      g->y[i] = t;
+    }
     g->on[i] = tag == GFNT_POINT_ON;
   }
   for (size_t i = 0; i < n; ++i) {
@@ -709,7 +723,7 @@ static bool af_letter_extreme(const GFNT_Face * face, const GFNT_Variation * var
   if (gfnt_face_glyph_outline(face, glyph, variation, NULL, &outline, NULL) != GFNT_OK) {
     return false;
   }
-  if (af_glyph_load(a, outline, &g) == GFNT_OK && g.n > 0) {
+  if (af_glyph_load(a, outline, false, &g) == GFNT_OK && g.n > 0) {
     size_t best = 0;
 
     for (size_t i = 1; i < g.n; ++i) {
@@ -726,8 +740,10 @@ static bool af_letter_extreme(const GFNT_Face * face, const GFNT_Variation * var
   return found;
 }
 
-/** The thinnest horizontal stem of a script's standard letter (`o` in Latin), font units; 0 when the face has none. */
-static int32_t af_standard_width(const GFNT_Face * face, const GFNT_Variation * variation, int64_t up, uint32_t cp) {
+/** The thinnest horizontal stem (or, with @p rotate, vertical stem) of a script's standard letter (`o` in Latin), font
+ *  units; 0 when the face has none. */
+static int32_t af_standard_width(const GFNT_Face * face, const GFNT_Variation * variation, int64_t up, uint32_t cp,
+    bool rotate) {
   uint32_t glyph = 0;
   GFNT_Outline * outline = NULL;
   AfGlyph g;
@@ -737,7 +753,7 @@ static int32_t af_standard_width(const GFNT_Face * face, const GFNT_Variation * 
       || gfnt_face_glyph_outline(face, glyph, variation, NULL, &outline, NULL) != GFNT_OK) {
     return 0;
   }
-  if (af_glyph_load(face->allocator, outline, &g) == GFNT_OK) {
+  if (af_glyph_load(face->allocator, outline, rotate, &g) == GFNT_OK) {
     af_segments(&g, up);
     af_link_segments(&g, up);
     for (size_t i = 0; i < g.seg_count; ++i) {
@@ -831,9 +847,13 @@ static void af_script_build(const GFNT_Face * face, GFNT_Autofit * af, int sc, i
       script->zones[z].ref = script->zones[z].shoot = (int32_t)(((int64_t)script->zones[z].ref + script->zones[z].shoot) / 2);
     }
   }
-  script->stdw = af_standard_width(face, variation, af->upem, af_blue_strings[sc].standard);
+  script->stdw = af_standard_width(face, variation, af->upem, af_blue_strings[sc].standard, false);
   if (script->stdw == 0) {
     script->stdw = 50 * af->upem / 2048;
+  }
+  script->xstdw = af_standard_width(face, variation, af->upem, af_blue_strings[sc].standard, true);
+  if (script->xstdw == 0) {
+    script->xstdw = 50 * af->upem / 2048;
   }
   if (script->zones[AF_SMALL_TOP].present) {
     int64_t tallest = 0;
@@ -968,7 +988,7 @@ static const AfScript * af_script_of(const GFNT_Autofit * af, uint32_t glyph) {
   return &af->scripts[AF_LATIN];
 }
 
-GFNT_Result gfnt_autofit_create(const GFNT_Face * face, uint32_t ppem, const GFNT_Variation * variation,
+GFNT_Result gfnt_autofit_create(const GFNT_Face * face, uint32_t ppem, const GFNT_Variation * variation, bool xy,
     GFNT_Autofit ** out, GFNT_Error * error) {
   GFNT_Autofit * af;
   const GFNT_Allocator * a;
@@ -994,6 +1014,7 @@ GFNT_Result gfnt_autofit_create(const GFNT_Face * face, uint32_t ppem, const GFN
   af->allocator = a;
   af->ppem = ppem;
   af->upem = upem;
+  af->xy = xy;
   if (variation && variation->count) {
     af->coords = a->calloc_fn(a->ctx, variation->count, sizeof *af->coords);
     if (!af->coords) {
@@ -1050,6 +1071,40 @@ static int64_t af_stem_center(int64_t org_center, int64_t cur_len) {
   return e1 < e2 ? p1 - u : p1 + d;
 }
 
+/**
+ * A stem's fitted width, 26.6, in ::GFNT_HINT_MODE_AUTO_XY (the light target keeps the scaled width): at least 56;
+ * the standard width when within 40 of it (and then at least 48); under three pixels, the fraction of a pixel kept
+ * below 10, made 10 below a half, 54 below 54 and kept above; from three pixels, a whole number of pixels.
+ * Measured with one bar against a range of standard widths and sizes (`autohint_probe.py`, `xy_width`).
+ */
+static int64_t af_snap_width(int64_t dist, int64_t standard) {
+  int64_t delta;
+  int64_t frac;
+
+  if (dist < 56) {
+    dist = 56;
+  }
+  delta = dist - standard;
+  if ((delta < 0 ? -delta : delta) < 40) {
+    return standard < 48 ? 48 : standard;
+  }
+  if (dist >= 3 * 64) {
+    return af_pixround(dist);
+  }
+  frac = dist & 63;
+  dist &= ~(int64_t)63;
+  if (frac < 10) {
+    return dist + frac;
+  }
+  if (frac < 32) {
+    return dist + 10;
+  }
+  if (frac < 54) {
+    return dist + 54;
+  }
+  return dist + frac;
+}
+
 static void af_clamp(AfGlyph * g, size_t k) {
   AfEdge * e = &g->edges[k];
 
@@ -1058,12 +1113,48 @@ static void af_clamp(AfGlyph * g, size_t k) {
   }
 }
 
-static void af_align_linked(AfEdge * base, AfEdge * stem) {
-  stem->pos = base->pos + (stem->opos - base->opos);
+/**
+ * Whether the stem between edges @p a and @p b keeps its scaled width when widths are snapped: when an edge further
+ * along links one way to the stem's nearer edge (a serif lands on it from above, as the stem top of an L or the apex
+ * of an A on the bar below them). A serif landing on the far edge from below (a Γ) leaves the snap in place, and in x
+ * no serif does (either sense loses glyphs). Found with `autohint_probe.py` shapes (`xy_serif_stem`); the width is
+ * then kept under three pixels and rounded above.
+ */
+static bool af_keeps_width(const AfGlyph * g, const AfEdge * a, const AfEdge * b) {
+  const AfEdge * lower = a->fpos < b->fpos ? a : b;
+  ptrdiff_t k = lower - g->edges;
+
+  if (g->x_axis) {
+    return false;
+  }
+  for (size_t f = 0; f < g->edge_count; ++f) {
+    if (g->edges[f].serif == k && g->edges[f].fpos > lower->fpos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static int64_t af_fitted_width(const AfGlyph * g, const AfEdge * a, const AfEdge * b, int64_t dist, int64_t standard) {
+  if (af_keeps_width(g, a, b)) {
+    return dist < 3 * 64 ? dist : af_pixround(dist);
+  }
+  return af_snap_width(dist, standard);
+}
+
+/** Place @p stem from its linked @p base: at the scaled distance, or with @p snap at its fitted width. */
+static void af_align_linked(const AfGlyph * g, AfEdge * base, AfEdge * stem, bool snap, int64_t standard) {
+  int64_t dist = stem->opos - base->opos;
+
+  if (snap) {
+    dist = dist < 0 ? -af_fitted_width(g, base, stem, -dist, standard) : af_fitted_width(g, base, stem, dist, standard);
+  }
+  stem->pos = base->pos + dist;
   stem->done = true;
 }
 
-static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * script, bool nonbase) {
+static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * script, bool nonbase, bool snap,
+    int64_t standard, bool x_axis) {
   int64_t yscale = script->yscale;
   int64_t best_limit = af_mulfix(af->upem / 40, yscale);
   ptrdiff_t anchor = -1;
@@ -1136,7 +1227,7 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
     edge1->pos = blue;
     edge1->done = true;
     if (edge2 && !edge2->has_blue) {
-      af_align_linked(edge1, edge2);
+      af_align_linked(g, edge1, edge2, snap, standard);
     }
     if (!have_anchor) {
       anchor = (ptrdiff_t)k;
@@ -1172,11 +1263,11 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
     }
     l = &g->edges[e->link];
     if (l->has_blue) {
-      af_align_linked(l, e);
+      af_align_linked(g, l, e, snap, standard);
       continue;
     }
     org_len = l->opos - e->opos;
-    cur_len = org_len;
+    cur_len = snap ? af_fitted_width(g, e, l, org_len, standard) : org_len;
     if (!have_anchor) {
       int64_t org_center = e->opos + (org_len >> 1);
 
@@ -1259,6 +1350,11 @@ static void af_fit_edges(AfGlyph * g, const GFNT_Autofit * af, const AfScript * 
         e->pos = after->opos == before->opos
             ? before->pos
             : before->pos + af_muldiv(e->opos - before->opos, after->pos - before->pos, after->opos - before->opos);
+      }
+      else if (x_axis && (before || after)) {
+        const AfEdge * near = before ? before : after;
+
+        e->pos = e->opos + (near->pos - near->opos);
       }
       else {
         e->pos = g->edges[anchor].pos + ((e->opos - g->edges[anchor].opos + 16) & ~(int64_t)31);
@@ -1415,22 +1511,31 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   GFNT_Outline * source = NULL;
   GFNT_Outline * result = NULL;
   AfGlyph g;
+  AfGlyph gx;
+  AfScript xaxis;
   GFNT_Result r;
   const GFNT_Variation * variation;
   const AfScript * script;
+  int64_t shift = 0;
+  int64_t advance = -1;
 
   gfnt_error_clear(error);
   if (!face || !af || !out_outline || !out_status) {
     return GFNT_ERR_INVALID;
   }
   *out_outline = NULL;
+  memset(&gx, 0, sizeof gx);
   variation = af->variation.count ? &af->variation : NULL;
   r = gfnt_face_glyph_outline(face, glyph, variation, NULL, &source, error);
   if (r != GFNT_OK) {
     return r;
   }
-  r = af_glyph_load(face->allocator, source, &g);
+  r = af_glyph_load(face->allocator, source, false, &g);
+  if (r == GFNT_OK && af->xy) {
+    r = af_glyph_load(face->allocator, source, true, &gx);
+  }
   if (r != GFNT_OK) {
+    af_glyph_free(face->allocator, &g);
     gfnt_outline_destroy(source);
     return gfnt_error_set(error, r, 0, 0, glyph, "no memory for a hinted outline");
   }
@@ -1438,8 +1543,37 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   af_link_segments(&g, af->upem);
   script = af_script_of(af, glyph);
   af_edges(&g, script->yscale, script->stdw);
-  af_fit_edges(&g, af, script, af->nonbase && glyph < af->glyph_count && af->nonbase[glyph]);
+  af_fit_edges(&g, af, script, af->nonbase && glyph < af->glyph_count && af->nonbase[glyph], af->xy,
+      af_mulfix(script->stdw, script->yscale), false);
   af_fit_points(&g, script);
+  if (af->xy) {
+    // x is fitted by the same code on the outline turned a quarter: no blue zones, the uncorrected scale and the
+    // vertical standard width.
+    memset(&xaxis, 0, sizeof xaxis);
+    xaxis.present = true;
+    xaxis.yscale = af->scale;
+    xaxis.stdw = script->xstdw;
+    gx.x_axis = true;
+    af_segments(&gx, af->upem);
+    af_link_segments(&gx, af->upem);
+    af_edges(&gx, xaxis.yscale, xaxis.stdw);
+    af_fit_edges(&gx, af, &xaxis, true, true, af_mulfix(xaxis.stdw, xaxis.yscale), true);
+    af_fit_points(&gx, &xaxis);
+  }
+  if (af->xy && gx.edge_count > 0) {
+    // The side bearings follow the outermost edges: the origin moves by the rounded change of the left one, and the
+    // advance ends at the right one's fitted position plus its scaled bearing, rounded.
+    int32_t units = 0;
+
+    if (gfnt_face_glyph_advance(face, glyph, variation, &units, NULL) == GFNT_OK) {
+      const AfEdge * e1 = &gx.edges[0];
+      const AfEdge * e2 = &gx.edges[gx.edge_count - 1u];
+      int64_t old_advance = af_mulfix(units, af->scale);
+
+      shift = af_pixround(e1->pos - e1->opos);
+      advance = af_pixround(e2->pos + (old_advance - e2->opos)) - shift;
+    }
+  }
   r = gfnt_outline_create(allocator ? allocator : face->allocator, &result, error);
   for (size_t c = 0; r == GFNT_OK && c < g.contours; ++c) {
     r = gfnt_outline_begin_contour(result, error);
@@ -1449,7 +1583,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
       GFNT_Point original;
 
       gfnt_outline_point_at(source, i, &original, &tag);
-      p.x = (int32_t)af_mulfix(g.x[i], af->scale);
+      p.x = af->xy ? (int32_t)(gx.out_y[i] - shift) : (int32_t)af_mulfix(g.x[i], af->scale);
       p.y = (int32_t)g.out_y[i];
       r = gfnt_outline_add_point(result, p, tag, error);
     }
@@ -1463,12 +1597,16 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
       int32_t units = 0;
 
       *out_advance = 0;
-      if (gfnt_face_glyph_advance(face, glyph, variation, &units, NULL) == GFNT_OK) {
+      if (advance >= 0) {
+        *out_advance = (int32_t)advance;
+      }
+      else if (gfnt_face_glyph_advance(face, glyph, variation, &units, NULL) == GFNT_OK) {
         *out_advance = (int32_t)(af_pixround(af_mulfix(units, af->scale)));
       }
     }
   }
   af_glyph_free(face->allocator, &g);
+  af_glyph_free(face->allocator, &gx);
   gfnt_outline_destroy(result);
   gfnt_outline_destroy(source);
   return r;

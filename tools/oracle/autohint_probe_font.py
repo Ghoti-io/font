@@ -85,7 +85,13 @@ def ellipse(x0, y0, x1, y1):
             [x0, y0 + 1, 0]]
 
 
-def base_letters(upem, overshoot=12, heights=None):
+def ring(x0, y0, x1, y1, stem):
+    """An ellipse with a counter: the outer contour clockwise, the inner `stem` units inside it, counter-clockwise."""
+    inner = ellipse(x0 + stem, y0 + stem, x1 - stem, y1 - stem)
+    return [ellipse(x0, y0, x1, y1), [inner[0]] + inner[:0:-1]]
+
+
+def base_letters(upem, overshoot=12, heights=None, o_stem=None, rings=None):
     """The Latin letters a script's zones and standard width are read from: boxes, with a round `o`, in the
     proportions of an ordinary text face (cap height 0.7, x-height 0.5, ascender 0.72, descender -0.2)."""
     u = upem / 1000.0
@@ -99,13 +105,25 @@ def base_letters(upem, overshoot=12, heights=None):
     def box(x0, y0, x1, y1):
         return [[x0, y0, 1], [x0, y1, 1], [x1, y1, 1], [x1, y0, 1]]
 
+    rings = rings or {}
     for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        if c in rings:
+            out.append((ord(c), ring(int(50 * u), -over if c in "COSQG" else 0, w, cap + (over if c in "COSQG" else 0), int(rings[c] * u))))
+            continue
         if c in "COSQG":
             out.append((ord(c), [ellipse(int(50 * u), -over, w, cap + over)]))
         else:
             out.append((ord(c), [box(int(50 * u), 0, w, cap)]))
     for c in "abcdefghijklmnopqrstuvwxyz":
+        if c in rings:
+            round_ = c in "oecas"
+            out.append((ord(c), ring(int(50 * u), -over if round_ else 0, w, xh + (over if round_ else 0), int(rings[c] * u))))
+            continue
         if c in "oecas":
+            if c == "o" and o_stem:
+                # A ring, so that the standard widths read from `o` are `o_stem` in both axes.
+                out.append((ord(c), ring(int(50 * u), -over, w, xh + over, int(o_stem * u))))
+                continue
             out.append((ord(c), [ellipse(int(50 * u), -over, w, xh + over)]))
             continue
         top = asc if c in "bdfhkl" else xh
@@ -130,8 +148,15 @@ def main():
     assert n <= len(codepoints), "at most %d glyphs per font" % len(codepoints)
     cmap = {codepoints[i]: "g%d" % i for i in range(n)}
     base = spec.get("base", True)
+    extra = {"o_stem": spec["o_stem"]} if spec.get("o_stem") and not greek else {}
+    if spec.get("rings") and not greek:
+        extra["rings"] = spec["rings"]
+    base_set = letters(upem, spec.get("overshoot", 12), spec.get("heights"), **extra) if base else []
+    # "letters" replaces base letters by code point: {"o": contours}, for the letters a hinter measures a face by.
+    replace = {ord(k): v for k, v in spec.get("letters", {}).items()}
+    base_set = [(cp, replace.get(cp, contours)) for cp, contours in base_set]
     if base:
-        for cp, contours in letters(upem, spec.get("overshoot", 12), spec.get("heights")):
+        for cp, contours in base_set:
             name = "u%04X" % cp
             names.append(name)
             cmap[cp] = name
@@ -142,7 +167,7 @@ def main():
     for i, g in enumerate(spec["glyphs"]):
         glyphs["g%d" % i] = glyph_of(g["contours"])
     if base:
-        for cp, contours in letters(upem, spec.get("overshoot", 12), spec.get("heights")):
+        for cp, contours in base_set:
             glyphs["u%04X" % cp] = glyph_of(contours)
     fb.setupGlyf(glyphs)
     fb.setupHorizontalMetrics({name: (upem, 0) for name in names})

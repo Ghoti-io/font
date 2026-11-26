@@ -26,7 +26,7 @@
  *
  * Usage: font-hint-cff <font> <face> <ppem> <stride> <first> [coords [auto]]
  *
- * `auto` hints with the automatic hinter instead of the face's own stems.
+ * `auto` hints with the automatic hinter instead of the face's own stems, `autoxy` with it in both axes.
  *
  * `coords` is an optional location for a `CFF2` face: comma-separated normalised coordinates in 2.14, or `-`.
  *
@@ -76,7 +76,9 @@ int main(int argc, char ** argv) {
       c = *end == ',' ? end + 1 : end;
     }
     result = gfnt_hint_context_create(face, (uint32_t)strtoul(argv[3], NULL, 10), GFNT_HINT_VERSION_AUTO,
-        argc > 7 && strcmp(argv[7], "auto") == 0 ? GFNT_HINT_MODE_AUTO : GFNT_HINT_MODE_FONT,
+        argc > 7 && strcmp(argv[7], "auto") == 0     ? GFNT_HINT_MODE_AUTO
+        : argc > 7 && strcmp(argv[7], "autoxy") == 0 ? GFNT_HINT_MODE_AUTO_XY
+                                                     : GFNT_HINT_MODE_FONT,
         variation.count ? &variation : NULL, &ctx, &error);
   }
   if (result != GFNT_OK || gfnt_face_num_glyphs(face, &glyphs, &error) != GFNT_OK) {

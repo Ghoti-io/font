@@ -48,12 +48,13 @@ typedef struct GFNT_Autofit GFNT_Autofit;
  * @param face An outline face: `glyf`, `CFF`, `CFF2` or Type 1.
  * @param ppem The pixel size.
  * @param variation The location of a variable face, or NULL.
+ * @param xy Fit both axes (::GFNT_HINT_MODE_AUTO_XY) rather than y alone.
  * @param out Receives the context; free it with ::gfnt_autofit_destroy().
  * @param error Receives a diagnostic, or NULL.
  * @return ::GFNT_OK; ::GFNT_ERR_UNSUPPORTED for a face with no outlines; ::GFNT_ERR_INVALID;
  *   ::GFNT_ERR_OOM.
  */
-GFNT_Result gfnt_autofit_create(const GFNT_Face * face, uint32_t ppem, const GFNT_Variation * variation,
+GFNT_Result gfnt_autofit_create(const GFNT_Face * face, uint32_t ppem, const GFNT_Variation * variation, bool xy,
     GFNT_Autofit ** out, GFNT_Error * error);
 
 /** Free a context. NULL is ignored. */

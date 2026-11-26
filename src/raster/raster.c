@@ -658,12 +658,12 @@ GFNT_Result gfnt_face_render_glyph(const GFNT_Face * face, uint32_t glyph,
   }
   mode = options ? options->hint_mode : GFNT_HINT_MODE_FONT;
   if (mode != GFNT_HINT_MODE_FONT && mode != GFNT_HINT_MODE_NONE
-      && mode != GFNT_HINT_MODE_FONT_STRICT && mode != GFNT_HINT_MODE_AUTO) {
+      && mode != GFNT_HINT_MODE_FONT_STRICT && mode != GFNT_HINT_MODE_AUTO && mode != GFNT_HINT_MODE_AUTO_XY) {
     return gfnt_error_set(error, GFNT_ERR_INVALID, 0, 0, glyph, "not a hinting mode");
   }
   // The font's own request not to grid-fit at a size (`gasp`) is a statement about its program; the
   // automatic hinter is asked for by the caller and does not read one.
-  if (mode != GFNT_HINT_MODE_NONE && (mode == GFNT_HINT_MODE_AUTO || gfnt_face_gasp_gridfit(face, ppem))) {
+  if (mode != GFNT_HINT_MODE_NONE && (mode == GFNT_HINT_MODE_AUTO || mode == GFNT_HINT_MODE_AUTO_XY || gfnt_face_gasp_gridfit(face, ppem))) {
     GFNT_HintContext * context = NULL;
 
     result = gfnt_hint_context_create(face, ppem,

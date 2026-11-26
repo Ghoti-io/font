@@ -6,7 +6,7 @@
 # This file is part of Ghoti.io Font.
 """Hinted CFF and Type 1 outlines, this library against FreeType, point by point (plan C4).
 
-    hint_cff_diff.py [--pool sfnt|type1] [--ppem N[,N...]] [--stride N] [--fonts N] [--fonts-skip N] [--files PATH[,PATH...]] [--auto]
+    hint_cff_diff.py [--pool sfnt|type1] [--ppem N[,N...]] [--stride N] [--fonts N] [--fonts-skip N] [--files PATH[,PATH...]] [--auto | --autoxy]
 
 For each glyph of each CFF-flavoured font (or Type 1 program) at each size, the outline this
 library hints from its stems and blue zones is compared with FreeType's, as integers in 26.6.
@@ -29,7 +29,7 @@ DRIVER = os.path.join(ROOT, "build", "linux", "release", "apps", "examples", "fo
 
 
 def ours(path, ppem, stride, coords="-", auto=False):
-    done = subprocess.run([DRIVER, path, "0", str(ppem), str(stride), "0", coords] + (["auto"] if auto else []),
+    done = subprocess.run([DRIVER, path, "0", str(ppem), str(stride), "0", coords] + ([auto if isinstance(auto, str) else "auto"] if auto else []),
                           capture_output=True, text=True)
     if done.returncode != 0:
         return None
@@ -56,6 +56,8 @@ def main(argv):
             coords = args.pop(0)
         elif a == "--auto":
             auto = True
+        elif a == "--autoxy":
+            auto = "autoxy"
         elif a == "--only":
             only = args.pop(0)
         elif a == "--files":
@@ -76,7 +78,7 @@ def main(argv):
     for path in paths:
         for ppem in ppems:
             mine = ours(path, ppem, stride, coords, auto)
-            theirs, _ = hint_diff.theirs(path, 35, ppem, stride, coords, "autolight" if auto else "normal")
+            theirs, _ = hint_diff.theirs(path, 35, ppem, stride, coords, "auto" if auto == "autoxy" else "autolight" if auto else "normal")
             if mine is None or theirs is None:
                 continue
             for glyph, answer in sorted(mine.items()):

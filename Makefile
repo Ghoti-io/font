@@ -1426,7 +1426,7 @@ check-oracle-autohint: $(EXAMPLES)
 		python3 $(ORACLE)/hint_cff_diff.py --autoxy --pool sfnt --files tests/data/fonts/latin-greek-boxes.ttf \
 		--ppem 8,9,10,11,12,13,14,16,17,20,24,32 --stride 1 --floor 1.0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.898 --show 0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --target normal --floor 0.633 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --target normal --floor 0.633 --advance-floor 0.878 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script greek --floor 0.806 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script cyrillic --floor 0.843 --show 0
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script latin --floor 0.816 --show 0 \

@@ -6,12 +6,13 @@
 # This file is part of Ghoti.io Font.
 """This library's automatic hinter against FreeType's light one, on the Latin letters, point by point.
 
-    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--script latin|greek|cyrillic] [--show N] [--points] [--records FILE] [--floor F] [--points-floor F] [--target light|normal] [FONT...]
+    autohint_diff.py [--ppem N[,N...]] [--letters ABC...] [--script latin|greek|cyrillic] [--show N] [--points] [--records FILE] [--floor F] [--points-floor F] [--advance-floor F] [--target light|normal] [FONT...]
 
 For each face, size and Latin letter, the outline `font-hint-cff <font> ... auto` prints against the one
 `freetype-hinted ... autolight` prints, in 26.6, both axes and the advance; with `--target normal`, ours in
 both axes (`autoxy`) against FreeType's normal target (`auto`). Reports the glyphs identical,
-the points identical and the letters that fail most; exits nonzero below `--floor`. The model the engine
+the points identical and the letters that fail most; exits nonzero below `--floor` (glyphs), `--points-floor`
+(points) or `--advance-floor` (the fraction of glyphs whose advance is FreeType's). The model the engine
 was written from is `autohint_edges_model.py`, whose own comparison is `autohint_edges_diff.py`.
 """
 import collections
@@ -54,6 +55,7 @@ def main(argv):
     ppems, names, letters, show, floor, points = [9, 11, 12, 14, 17, 24], [], None, 8, 0.0, False
     records = None
     points_floor = 0.0
+    advance_floor = 0.0
     script = None
     target = "light"
     args = argv[1:]
@@ -77,6 +79,8 @@ def main(argv):
             target = args.pop(0)
         elif a == "--points-floor":
             points_floor = float(args.pop(0))
+        elif a == "--advance-floor":
+            advance_floor = float(args.pop(0))
         else:
             names.append(a)
     names = names or DEFAULT
@@ -136,7 +140,9 @@ def main(argv):
     print("compared %d glyphs: %d identical (%.1f%%); points %d of %d identical; %d advances differ" % (
         glyphs_total, glyphs_same, 100.0 * glyphs_same / max(1, glyphs_total), points_same, points_total, adv_bad))
     print("most failing letters:", by_letter.most_common(14))
-    return 0 if (glyphs_same / max(1, glyphs_total) >= floor and points_same / max(1, points_total) >= points_floor) else 1
+    advances_same = (glyphs_total - adv_bad) / max(1, glyphs_total)
+    return 0 if (glyphs_same / max(1, glyphs_total) >= floor and points_same / max(1, points_total) >= points_floor
+                 and advances_same >= advance_floor) else 1
 
 
 if __name__ == "__main__":

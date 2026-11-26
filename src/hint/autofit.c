@@ -1607,6 +1607,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   const GFNT_Variation * variation;
   const AfScript * script;
   int64_t advance = -1;
+  int64_t xshift = 0;
   int64_t * light_y = NULL;
   bool nonbase;
 
@@ -1681,7 +1682,13 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
       for (size_t i = 1; i < g.n; ++i) {
         rp = g.x[i] > g.x[rp] ? i : rp;
       }
-      advance = units == 0 ? 0 : af_pixround(gx.out_y[rp] + (old_advance - af_mulfix(g.x[rp], af->scale)));
+      // The outline is moved right, by whole pixels, when its leftmost edge has moved left by half a pixel or more
+      // (DejaVu Sans J at 12 px, whose hook's end goes 34/64 left: every point is a pixel right of where the fitting
+      // put it). Moved the other way it stays: moving it left as well loses glyphs.
+      int64_t d = af_pixround(gx.edges[0].pos - gx.edges[0].opos);
+
+      xshift = d < 0 ? -d : 0;
+      advance = units == 0 ? 0 : af_pixround(gx.out_y[rp] + xshift + (old_advance - af_mulfix(g.x[rp], af->scale)));
     }
   }
   r = gfnt_outline_create(allocator ? allocator : face->allocator, &result, error);
@@ -1693,7 +1700,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
       GFNT_Point original;
 
       gfnt_outline_point_at(source, i, &original, &tag);
-      p.x = af->xy ? (int32_t)gx.out_y[i] : (int32_t)af_mulfix(g.x[i], af->scale);
+      p.x = af->xy ? (int32_t)(gx.out_y[i] + xshift) : (int32_t)af_mulfix(g.x[i], af->scale);
       p.y = (int32_t)g.out_y[i];
       r = gfnt_outline_add_point(result, p, tag, error);
     }

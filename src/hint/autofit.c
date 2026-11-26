@@ -204,6 +204,8 @@ typedef struct AfSeg {
   int64_t pos;
   bool round;
   bool top;
+  bool shortseg;     ///< With AfGlyph::cross_fit: under a pixel long by that measure.
+  bool dead;         ///< Left out of the edges.
   ptrdiff_t link;
   ptrdiff_t serif;
   ptrdiff_t edge;
@@ -239,8 +241,9 @@ typedef struct AfGlyph {
   bool clockwise;
   bool x_axis;         ///< The outline is turned a quarter and its "y" is x (::GFNT_HINT_MODE_AUTO_XY).
   /** With x_axis, each point's y as the light target fits it: an x segment shorter than a pixel by that measure is
-   *  no segment, so the ends of a serif slab under a pixel tall move with the stem they flank and a small dot keeps
-   *  its scaled place. Measured with a serif I of every slab height at 12, 16 and 24 px: the slab's ends are a stem
+   *  no edge (unless it is round and linked to a longer one; see af_edges), so the ends of a serif slab under a pixel
+   *  tall move with the stem they flank and a small dot keeps its scaled place (a round dot beside a stem: fitted
+   *  from a light height of 68/64, not at 60). Measured with a serif I of every slab height at 12, 16 and 24 px: the slab's ends are a stem
    *  exactly when its top is fitted 64/64 or more above its bottom (63 is not), whatever its scaled height; at the
    *  snapped (normal) height, or the scaled one, no single threshold fits all three sizes. */
   const int64_t * cross_fit;
@@ -478,7 +481,9 @@ static void af_segments(AfGlyph * g, int64_t up) {
           min_x = g->x[p] < min_x ? g->x[p] : min_x;
           max_x = g->x[p] > max_x ? g->x[p] : max_x;
         }
-        if ((max_x - min_x) * AF_MIN_SEGMENT_DIV < up || (g->cross_fit && af_cross_length(g, s) < 64)) {
+        s->shortseg = g->cross_fit && af_cross_length(g, s) < 64;
+        s->dead = false;
+        if ((max_x - min_x) * AF_MIN_SEGMENT_DIV < up) {
           g->seg_point_count = s->first;
           count = m;
           continue;
@@ -567,9 +572,23 @@ static void af_edges(AfGlyph * g, int64_t yscale, int64_t stdw) {
     threshold = 16;
   }
   g->edge_count = 0;
+  // A short segment (AfGlyph::cross_fit) is left out, unless it is round and links to one that is not short: the
+  // inner curve of an s, under a pixel tall, is a stem with the long outer one in FreeType's fitting, while a round
+  // dot (both its sides short) and a serif slab's flat ends are no edges at all.
+  for (size_t i = 0; i < g->seg_count; ++i) {
+    AfSeg * s = &g->segs[i];
+    ptrdiff_t partner = s->link >= 0 ? s->link : s->serif;
+
+    s->dead = s->shortseg && (!s->round || partner < 0 || g->segs[partner].shortseg);
+  }
   for (size_t i = 0; i < g->seg_count; ++i) {
     AfSeg * s = &g->segs[i];
     ptrdiff_t found = -1;
+
+    if (s->dead) {
+      s->edge = -1;
+      continue;
+    }
 
     for (size_t e = 0; e < g->edge_count; ++e) {
       int64_t d = af_mulfix(g->edges[e].fpos - s->pos, yscale);

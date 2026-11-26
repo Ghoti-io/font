@@ -238,10 +238,12 @@ typedef struct AfGlyph {
   size_t * count;      ///< Points in it.
   bool clockwise;
   bool x_axis;         ///< The outline is turned a quarter and its "y" is x (::GFNT_HINT_MODE_AUTO_XY).
-  /** With x_axis, the y scale: two segments link only where they overlap by a pixel at it, so the ends of a serif
-   *  slab shorter than a pixel are not a stem across the slab but move with the stem they flank (measured with a
-   *  serif I of every slab height at 9 and 12 px: they link from 64/64 and not at 61/64 or 59/64). */
-  int64_t cross_scale;
+  /** With x_axis, each point's y as the light target fits it: an x segment shorter than a pixel by that measure is
+   *  no segment, so the ends of a serif slab under a pixel tall move with the stem they flank and a small dot keeps
+   *  its scaled place. Measured with a serif I of every slab height at 12, 16 and 24 px: the slab's ends are a stem
+   *  exactly when its top is fitted 64/64 or more above its bottom (63 is not), whatever its scaled height; at the
+   *  snapped (normal) height, or the scaled one, no single threshold fits all three sizes. */
+  const int64_t * cross_fit;
   AfSeg * segs;
   size_t seg_count;
   size_t * seg_points;
@@ -402,6 +404,20 @@ static void af_near_directions(AfGlyph * g, int64_t up) {
   }
 }
 
+/** The extent of a segment's points along the other axis, as AfGlyph::cross_fit measures them. */
+static int64_t af_cross_length(const AfGlyph * g, const AfSeg * s) {
+  int64_t lo = INT64_MAX;
+  int64_t hi = INT64_MIN;
+
+  for (size_t k = 0; k < s->count; ++k) {
+    int64_t v = g->cross_fit[g->seg_points[s->first + k]];
+
+    lo = v < lo ? v : lo;
+    hi = v > hi ? v : hi;
+  }
+  return hi - lo;
+}
+
 static void af_segments(AfGlyph * g, int64_t up) {
   af_near_directions(g, up);
   g->seg_count = 0;
@@ -462,7 +478,7 @@ static void af_segments(AfGlyph * g, int64_t up) {
           min_x = g->x[p] < min_x ? g->x[p] : min_x;
           max_x = g->x[p] > max_x ? g->x[p] : max_x;
         }
-        if ((max_x - min_x) * AF_MIN_SEGMENT_DIV < up) {
+        if ((max_x - min_x) * AF_MIN_SEGMENT_DIV < up || (g->cross_fit && af_cross_length(g, s) < 64)) {
           g->seg_point_count = s->first;
           count = m;
           continue;
@@ -520,7 +536,7 @@ static void af_link_segments(AfGlyph * g, int64_t up) {
         lo = a->min_x > b->min_x ? a->min_x : b->min_x;
         hi = a->max_x < b->max_x ? a->max_x : b->max_x;
         overlap = hi - lo;
-        if (overlap * 2048 < 12 * up || (g->x_axis && af_mulfix(overlap, g->cross_scale) < 64)) {
+        if (overlap * 2048 < 12 * up) {
           continue;
         }
         dist = pass == 0 ? b->pos - a->pos : a->pos - b->pos;
@@ -1534,6 +1550,8 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   const GFNT_Variation * variation;
   const AfScript * script;
   int64_t advance = -1;
+  int64_t * light_y = NULL;
+  bool nonbase;
 
   gfnt_error_clear(error);
   if (!face || !af || !out_outline || !out_status) {
@@ -1558,9 +1576,23 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   af_segments(&g, af->upem);
   af_link_segments(&g, af->upem);
   script = af_script_of(af, glyph);
+  nonbase = af->nonbase && glyph < af->glyph_count && af->nonbase[glyph];
   af_edges(&g, script->yscale, script->stdw);
-  af_fit_edges(&g, af, script, af->nonbase && glyph < af->glyph_count && af->nonbase[glyph], af->xy,
-      af_mulfix(script->stdw, script->yscale), false);
+  if (af->xy) {
+    // The light target's y, kept for the x segments' lengths, then the snapped one.
+    af_fit_edges(&g, af, script, nonbase, false, af_mulfix(script->stdw, script->yscale), false);
+    af_fit_points(&g, script);
+    light_y = face->allocator->calloc_fn(face->allocator->ctx, g.n ? g.n : 1u, sizeof *light_y);
+    if (!light_y) {
+      af_glyph_free(face->allocator, &g);
+      af_glyph_free(face->allocator, &gx);
+      gfnt_outline_destroy(source);
+      return gfnt_error_set(error, GFNT_ERR_OOM, 0, 0, glyph, "no memory for a hinted outline");
+    }
+    memcpy(light_y, g.out_y, g.n * sizeof *light_y);
+    af_edges(&g, script->yscale, script->stdw);
+  }
+  af_fit_edges(&g, af, script, nonbase, af->xy, af_mulfix(script->stdw, script->yscale), false);
   af_fit_points(&g, script);
   if (af->xy) {
     // x is fitted by the same code on the outline turned a quarter: no blue zones, the uncorrected scale and the
@@ -1570,7 +1602,7 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
     xaxis.yscale = af->scale;
     xaxis.stdw = script->xstdw;
     gx.x_axis = true;
-    gx.cross_scale = script->yscale;
+    gx.cross_fit = light_y;
     af_segments(&gx, af->upem);
     af_link_segments(&gx, af->upem);
     af_edges(&gx, xaxis.yscale, xaxis.stdw);
@@ -1624,6 +1656,9 @@ GFNT_Result gfnt_autofit_glyph_outline(const GFNT_Face * face, const GFNT_Autofi
   }
   af_glyph_free(face->allocator, &g);
   af_glyph_free(face->allocator, &gx);
+  if (light_y) {
+    face->allocator->free_fn(face->allocator->ctx, light_y);
+  }
   gfnt_outline_destroy(result);
   gfnt_outline_destroy(source);
   return r;

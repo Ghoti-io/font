@@ -1409,7 +1409,7 @@ check-oracle-hint-cff: $(EXAMPLES)
 check-oracle-autohint: ## The automatic hinter's model (blue zones, x-height scale, edges and stems, points) against FreeType's
 check-oracle-autohint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_zones_diff.py
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_edges_diff.py --floor 0.85 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_edges_diff.py --floor 0.859 --show 0
 	@python3 $(ORACLE)/oracle_run.py freetype -- \
 		python3 $(ORACLE)/hint_cff_diff.py --auto --pool sfnt --files tests/data/fonts/latin-boxes.ttf \
 		--ppem 9,10,11,12,13,14,16,17,20,24,32 --stride 1 --floor 1.0
@@ -1419,25 +1419,25 @@ check-oracle-autohint: $(EXAMPLES)
 	@python3 $(ORACLE)/oracle_run.py freetype -- \
 		python3 $(ORACLE)/hint_cff_diff.py --auto --pool sfnt --files tests/data/fonts/latin-greek-boxes.ttf \
 		--ppem 8,9,10,11,12,13,14,16,17,20,24,32 --stride 1 --floor 1.0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.88 --show 0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script greek --floor 0.79 --show 0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script cyrillic --floor 0.83 --show 0
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script latin --floor 0.80 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --floor 0.898 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script greek --floor 0.806 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script cyrillic --floor 0.843 --show 0
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script latin --floor 0.816 --show 0 \
 		NotoSans-Regular.ttf NotoSans-Bold.ttf
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script 02B9-02DF --floor 0.95 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script 02B9-02DF --floor 0.977 --show 0 \
 		DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSerif.ttf LiberationSans-Regular.ttf LiberationSerif-Regular.ttf
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script 0300-036F --floor 0.88 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script 0300-036F --floor 0.907 --show 0 \
 		DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSerif.ttf LiberationSans-Regular.ttf LiberationSerif-Regular.ttf
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script 0384-0385 --floor 0.95 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script 0384-0385 --floor 0.96 --show 0 \
 		DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSerif.ttf LiberationSans-Regular.ttf LiberationSerif-Regular.ttf
 	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_script_gates.py
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script hebrew --floor 0.88 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script hebrew --floor 0.946 --show 0 \
 		DejaVuSans.ttf DejaVuSans-Bold.ttf LiberationSans-Regular.ttf
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script arabic --floor 0.45 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script arabic --floor 0.544 --show 0 \
 		DejaVuSans.ttf DejaVuSans-Bold.ttf
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script georgian --floor 0.80 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script georgian --floor 0.870 --show 0 \
 		DejaVuSans.ttf DejaVuSans-Bold.ttf
-	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script armenian --floor 0.45 --show 0 \
+	@python3 $(ORACLE)/oracle_run.py fonttools,freetype -- python3 $(ORACLE)/autohint_diff.py --script armenian --floor 0.651 --show 0 \
 		NotoSansArmenian-Regular.ttf NotoSansArmenian-Bold.ttf DejaVuSans.ttf DejaVuSans-Bold.ttf
 
 check-oracle-hint-probe: ## Run random hinting programs through this library and FreeType and compare every point
